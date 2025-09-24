@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-scanner"
-version = "0.1.0"
+version = "1.0.0"
 description = "A tool to scan MCP servers and tools for security vulnerabilities"
 authors = [
     {name = "Cisco"},
@@ -12,7 +12,11 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 classifiers = [
-    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers"
 ]
 dependencies = [
     "mcp[cli]>=1.13.1",
