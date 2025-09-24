@@ -1,0 +1,21 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+  - repo: https://github.com/google/addlicense
+    rev: 499ed7f28389eb4a08c2d7e40b1637cfd7f65381
+    hooks:
+      - id: addlicense
+        args: [ "-v", "-s",
+                "-c", "Cisco Systems, Inc. and its affiliates",
+                "-l", "apache",
+                "mcpscanner", "examples" ]
+        types: [ python ]
+  - repo: https://github.com/psf/black
+    rev: 24.3.0
+    hooks:
+      - id: black
+        language_version: python3
