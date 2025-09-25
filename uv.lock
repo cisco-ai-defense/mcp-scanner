@@ -250,7 +250,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.110.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "litellm", specifier = ">=1.0.0" },
+    { name = "litellm", specifier = "<1.77.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.13.1" },
     { name = "pydantic", specifier = ">=2.6.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
