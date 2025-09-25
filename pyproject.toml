@@ -26,7 +26,7 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
-    "litellm>=1.0.0",
+    "litellm<1.77.0",
 ]
 
 [dependency-groups]
