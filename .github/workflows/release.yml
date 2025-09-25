@@ -17,7 +17,7 @@ jobs:
         shell: bash
     environment:
       name: pypi
-      url: https://pypi.org/p/mcp-scanner
+      url: https://pypi.org/p/cisco-ai-mcp-scanner
     permissions:
       id-token: write
     steps:

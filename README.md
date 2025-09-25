@@ -31,6 +31,14 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - A valid Cisco AI Defense API Key (optional)
 - LLM Provider API Key (optional)
 
+### Installing from PyPI
+
+```bash
+uv venv -p <Python version less than or equal to 3.13> /path/to/your/choice/of/venv/directory
+source /path/to/your/choice/of/venv/directory/bin/activate
+uv pip install cisco-ai-mcp-scanner
+```
+
 ### Installing from Source
 
 ```bash
@@ -45,9 +53,6 @@ source /path/to/your/choice/of/venv/directory/bin/activate
 uv pip install .
 # Or install in development mode
 uv pip install -e .
-
-
-
 ```
 
 ## Quick Start
@@ -82,7 +87,7 @@ export MCP_SCANNER_LLM_API_VERSION="2024-02-01"
 export MCP_SCANNER_LLM_MODEL="azure/gpt-4"
 ```
 
-### Quick Start
+### Quick Start Examples
 
 The fastest way to get started is using the `mcp-scanner` CLI command. Global flags (like `--analyzers`, `--format`, etc.) must be placed before a subcommand.
 
