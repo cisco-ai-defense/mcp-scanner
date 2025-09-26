@@ -301,7 +301,6 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 https://www.cisco.com/site/us/en/products/security/ai-defense/index.html
 
 ## License
-
-Distributed under the `Apache 2.0` License. See [LICENSE](LICENSE) for more information.
+Distributed under the `Apache 2.0` License. See [LICENSE](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/LICENSE) for more information.
 
 Project Link: [https://github.com/cisco-ai-defense/mcp-scanner](https://github.com/cisco-ai-defense/mcp-scanner)
