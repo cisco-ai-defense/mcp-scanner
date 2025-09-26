@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cisco-ai-mcp-scanner"
-version = "1.0.4"
+name = "mcp-scanner"
+version = "1.0.5"
 description = "A tool to scan MCP servers and tools for security vulnerabilities"
 authors = [
     {name = "Cisco"},
@@ -12,11 +12,7 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 classifiers = [
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Operating System :: OS Independent",
-    "Intended Audience :: Developers"
+    "Private :: Do Not Upload",
 ]
 dependencies = [
     "mcp[cli]>=1.13.1",
@@ -26,7 +22,7 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
-    "litellm<1.77.0",
+    "litellm>=1.0.0",
 ]
 
 [dependency-groups]
