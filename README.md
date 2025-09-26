@@ -222,7 +222,7 @@ Once running, the API server provides endpoints for:
 - **`/scan-all-tools`** - Scan all tools on an MCP server
 - **`/health`** - Health check endpoint
 
-Documentation is available in [docs/api-reference.md](docs/api-reference.md) or as interactive documentation at `http://localhost:8000/docs` when the server is running.
+Documentation is available in [docs/api-reference.md](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md) or as interactive documentation at `http://localhost:8000/docs` when the server is running.
 
 ## Output Formats
 
@@ -289,11 +289,11 @@ http://127.0.0.1:8002/sse     safe_command  SAFE       SAFE     SAFE     SAFE   
 
 For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs) directory:
 
-- **[Architecture](docs/architecture.md)** - System architecture and components
-- **[Authentication](docs/authentication.md)** - OAuth and security configuration
-- **[Programmatic Usage](docs/programmatic-usage.md)** - Programmatic usage examples and advanced usage
-- **[API Reference](docs/api-reference.md)** - Complete REST API documentation
-- **[Output Formats](docs/output-formats.md)** - Detailed output format options
+- **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
+- **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration
+- **[Programmatic Usage](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/programmatic-usage.md)** - Programmatic usage examples and advanced usage
+- **[API Reference](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md)** - Complete REST API documentation
+- **[Output Formats](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/output-formats.md)** - Detailed output format options
 
 
 ## Contact Cisco for obtaining an AI Defense subscription
