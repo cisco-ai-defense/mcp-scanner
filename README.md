@@ -287,7 +287,7 @@ http://127.0.0.1:8002/sse     safe_command  SAFE       SAFE     SAFE     SAFE   
 
 ## Documentation
 
-For detailed documentation, see the [docs/](docs/) directory:
+For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs) directory:
 
 - **[Architecture](docs/architecture.md)** - System architecture and components
 - **[Authentication](docs/authentication.md)** - OAuth and security configuration
