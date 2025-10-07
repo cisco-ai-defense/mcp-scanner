@@ -31,6 +31,11 @@ from mcpscanner.core.analyzers.base import BaseAnalyzer
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.auth import Auth, AuthType
 from mcpscanner.core.mcp_models import StdioServer
+from mcpscanner.core.exceptions import (
+    MCPConnectionError,
+    MCPAuthenticationError,
+    MCPServerNotFoundError,
+)
 
 
 # Mock MCPTool for testing
@@ -537,10 +542,11 @@ async def test_get_mcp_session_connection_error(config):
 
     with patch("mcpscanner.core.scanner.sse_client") as mock_sse_client:
         mock_context = AsyncMock()
-        mock_context.__aenter__.side_effect = ConnectionError("Connection failed")
+        # Simulate a connection error that will be caught and converted
+        mock_context.__aenter__.side_effect = Exception("nodename nor servname provided")
         mock_sse_client.return_value = mock_context
 
-        with pytest.raises(ConnectionError, match="Unable to connect to MCP server"):
+        with pytest.raises(MCPConnectionError, match="Unable to connect to MCP server"):
             await scanner._get_mcp_session("https://test.com/sse")
 
 
@@ -629,8 +635,8 @@ async def test_scan_stdio_server_tools_no_command(config):
     server_config = StdioServer(command="")
     scanner = Scanner(config)
 
-    # The scanner will try to connect before validating command, so we expect ConnectionError
-    with pytest.raises(ConnectionError, match="Unable to connect to stdio MCP server"):
+    # The scanner will try to connect before validating command, so we expect MCPConnectionError
+    with pytest.raises(MCPConnectionError, match="Unable to connect to stdio MCP server"):
         await scanner.scan_stdio_server_tools(
             server_config, analyzers=[AnalyzerEnum.YARA]
         )
@@ -769,3 +775,107 @@ async def test_scan_remote_server_tools_with_http_headers(config):
         mock_analyze_tool.assert_called_once()
         call_args = mock_analyze_tool.call_args
         assert call_args[0][2] == headers  # Third argument is http_headers
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_session_401_unauthorized_streamable_http(config):
+    """Test _get_mcp_session with 401 authentication error for streamable HTTP endpoint."""
+    scanner = Scanner(config)
+    
+    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
+        mock_context = AsyncMock()
+        
+        # Create a mock HTTPStatusError with 401
+        class MockHTTPStatusError(Exception):
+            def __init__(self):
+                super().__init__("Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0'")
+        
+        # BaseExceptionGroup with 401 error (simulates what MCP library does)
+        error_group = BaseExceptionGroup(
+            "unhandled errors",
+            [MockHTTPStatusError()]
+        )
+        
+        mock_context.__aenter__.side_effect = error_group
+        mock_client.return_value = mock_context
+        
+        with pytest.raises(MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"):
+            await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0")
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_session_401_unauthorized_via_exception_group(config):
+    """Test _get_mcp_session with 401 authentication error via BaseExceptionGroup (SSE endpoint)."""
+    scanner = Scanner(config)
+    
+    with patch("mcpscanner.core.scanner.sse_client") as mock_sse_client:
+        mock_context = AsyncMock()
+        
+        # Create a mock HTTPStatusError
+        class MockHTTPStatusError(Exception):
+            def __init__(self):
+                super().__init__("Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0/sse'")
+        
+        # BaseExceptionGroup with 401 error
+        error_group = BaseExceptionGroup(
+            "unhandled errors",
+            [MockHTTPStatusError()]
+        )
+        
+        mock_context.__aenter__.side_effect = error_group
+        mock_sse_client.return_value = mock_context
+        
+        with pytest.raises(MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"):
+            await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0/sse")
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_session_403_forbidden(config):
+    """Test _get_mcp_session with 403 forbidden error."""
+    scanner = Scanner(config)
+    
+    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
+        mock_context = AsyncMock()
+        
+        class MockHTTPStatusError(Exception):
+            def __init__(self):
+                super().__init__("Client error '403 Forbidden' for url 'https://api.mcpanalytics.ai/auth0'")
+        
+        error_group = BaseExceptionGroup(
+            "unhandled errors",
+            [MockHTTPStatusError()]
+        )
+        
+        mock_context.__aenter__.side_effect = error_group
+        mock_client.return_value = mock_context
+        
+        with pytest.raises(MCPAuthenticationError, match="Access denied.*authentication credentials"):
+            await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0")
+
+
+@pytest.mark.asyncio
+async def test_get_mcp_session_404_not_found(config):
+    """Test _get_mcp_session with 404 not found error."""
+    scanner = Scanner(config)
+    
+    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
+        mock_context = AsyncMock()
+        
+        class MockHTTPStatusError(Exception):
+            def __init__(self):
+                super().__init__("Client error '404 Not Found' for url 'https://api.mcpanalytics.ai/nonexistent'")
+        
+        error_group = BaseExceptionGroup(
+            "unhandled errors",
+            [MockHTTPStatusError()]
+        )
+        
+        mock_context.__aenter__.side_effect = error_group
+        mock_client.return_value = mock_context
+        
+        with pytest.raises(MCPServerNotFoundError, match="MCP server endpoint not found.*verify the URL"):
+            await scanner._get_mcp_session("https://api.mcpanalytics.ai/nonexistent")
+
+
+# Note: DNS resolution failure test is covered by manual testing with https://test.alpic.ai
+# The CancelledError path is difficult to mock reliably due to the async context manager setup
