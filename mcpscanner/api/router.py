@@ -231,12 +231,22 @@ async def scan_tool_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        result = await scanner.scan_remote_server_tool(
-            server_url=request.server_url,
-            tool_name=request.tool_name,
-            analyzers=request.analyzers,
-            http_headers=http_headers,
-        )
+        # Conditionally pass auth token if provided
+        if hasattr(request, 'authtoken') and request.authtoken is not None:
+            result = await scanner.scan_remote_server_tool(
+                auth=request.authtoken,
+                server_url=request.server_url,
+                tool_name=request.tool_name,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+            )
+        else:
+            result = await scanner.scan_remote_server_tool(
+                server_url=request.server_url,
+                tool_name=request.tool_name,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+            )
         # Only warn if analyzers actually failed to run
         if len(result.findings) == 0 and len(result.analyzers) == 0:
             logger.warning(
@@ -297,11 +307,20 @@ async def scan_all_tools_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        results = await scanner.scan_remote_server_tools(
-            server_url=request.server_url,
-            analyzers=request.analyzers,
-            http_headers=http_headers,
-        )
+        # Conditionally pass auth token if provided
+        if hasattr(request, 'authtoken') and request.authtoken is not None:
+            results = await scanner.scan_remote_server_tools(
+                auth=request.authtoken,
+                server_url=request.server_url,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+            )
+        else:
+            results = await scanner.scan_remote_server_tools(
+                server_url=request.server_url,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+            )
         logger.debug(f"Scanner completed - scanned {len(results)} tools")
 
         api_results = [
