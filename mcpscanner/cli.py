@@ -143,15 +143,17 @@ async def scan_mcp_server_direct(
 
         return json_results
 
-    except ConnectionError as e:
-        print(f"❌ Connection Error: {e}")
-        if verbose:
-            print("💡 Troubleshooting tips:")
-            print(f"   • Make sure an MCP server is running at {server_url}")
-            print("   • Verify the URL is correct (including protocol and port)")
-            print("   • Check if the server is accessible from your network")
-        return []
     except Exception as e:
+        # Handle MCP-specific exceptions gracefully
+        if e.__class__.__name__ in ('MCPConnectionError', 'MCPAuthenticationError', 'MCPServerNotFoundError'):
+            print(f"❌ Connection Error: {e}")
+            if verbose:
+                print("💡 Troubleshooting tips:")
+                print(f"   • Make sure an MCP server is running at {server_url}")
+                print("   • Verify the URL is correct (including protocol and port)")
+                print("   • Check if the server is accessible from your network")
+            return []
+        # All other exceptions
         print(f"❌ Error scanning server: {e}")
         if verbose:
             traceback.print_exc()
@@ -681,7 +683,42 @@ async def main():
 
 def cli_entry_point():
     """Entry point for the mcp-scanner CLI command."""
-    asyncio.run(main())
+    import sys
+    import logging
+    import warnings
+    
+    # Suppress warnings from MCP library cleanup issues
+    warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*never awaited.*")
+    warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*async.*generator.*")
+    
+    # Suppress asyncio shutdown errors from MCP library cleanup bugs
+    def custom_exception_handler(loop, context):
+        exception = context.get("exception")
+        message = context.get("message", "")
+        
+        # Suppress RuntimeError from MCP library task cleanup
+        if isinstance(exception, RuntimeError) and "cancel scope" in str(exception):
+            return
+        # Suppress task destroyed warnings
+        if "Task was destroyed but it is pending" in message:
+            return
+        # Suppress other MCP library cleanup errors
+        if "streamablehttp_client" in message or "async_generator" in message:
+            return
+        # For other exceptions, use default handling
+        loop.default_exception_handler(context)
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.set_exception_handler(custom_exception_handler)
+    
+    try:
+        loop.run_until_complete(main())
+    finally:
+        # Suppress warnings during loop close
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            loop.close()
 
 
 if __name__ == "__main__":

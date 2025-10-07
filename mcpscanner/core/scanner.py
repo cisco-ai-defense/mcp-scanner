@@ -21,7 +21,11 @@ This module contains the unified scanner class that combines API and YARA analyz
 
 import asyncio
 import json
+import logging as stdlib_logging
+import warnings
 from typing import Any, Dict, List, Optional, Tuple, Callable
+
+import httpx
 
 # MCP client imports
 from mcp.client.session import ClientSession
@@ -41,6 +45,11 @@ from .auth import (
     Auth,
     AuthType,
     create_oauth_provider_from_auth,
+)
+from .exceptions import (
+    MCPConnectionError,
+    MCPAuthenticationError,
+    MCPServerNotFoundError,
 )
 from .models import AnalyzerEnum
 from .mcp_models import StdioServer, RemoteServer
@@ -272,6 +281,23 @@ class Scanner:
             findings=all_findings,
         )
 
+    def _check_http_error_in_logs(self, msg: str) -> Optional[int]:
+        """Check if a log message contains an HTTP error status code.
+        
+        Args:
+            msg: Log message to check
+            
+        Returns:
+            HTTP status code if found (401, 403, 404), None otherwise
+        """
+        if "401" in msg or "Unauthorized" in msg:
+            return 401
+        elif "403" in msg or "Forbidden" in msg:
+            return 403
+        elif "404" in msg or "Not Found" in msg:
+            return 404
+        return None
+
     async def _close_mcp_session(self, client_context, session):
         """Close MCP session and client context safely.
 
@@ -283,16 +309,28 @@ class Scanner:
         if session:
             try:
                 await session.__aexit__(None, None, None)
+            except (asyncio.CancelledError, GeneratorExit, RuntimeError, BaseExceptionGroup):
+                # Suppress cleanup errors from MCP library bugs
+                # These are expected when connection fails
+                pass
             except Exception as e:
-                logger.warning(f"Error closing session: {e}")
+                # Log unexpected errors
+                if "cancel scope" not in str(e) and "TaskGroup" not in str(e):
+                    logger.warning(f"Error closing session: {e}")
 
         # Close client context
         if client_context:
             try:
                 # Ensure we're in the same task context for cleanup
                 await client_context.__aexit__(None, None, None)
+            except (asyncio.CancelledError, GeneratorExit, RuntimeError, BaseExceptionGroup):
+                # Suppress cleanup errors from MCP library bugs
+                # These are expected when connection fails
+                pass
             except Exception as e:
-                logger.warning(f"Error closing client context: {e}")
+                # Log unexpected errors
+                if "cancel scope" not in str(e) and "TaskGroup" not in str(e):
+                    logger.warning(f"Error closing client context: {e}")
 
     async def _get_mcp_session(
         self, server_url: str, auth: Optional[Auth] = None
@@ -365,36 +403,131 @@ class Scanner:
 
         client_context_opened = None
         session = None
+        http_status_code = None
+        capture_handler = None
+        httpx_logger = None
+        original_httpx_level = None
+        original_propagate = None
+        
+        # Set up httpx logging capture to detect HTTP errors
+        httpx_logger = stdlib_logging.getLogger("httpx")
+        original_httpx_level = httpx_logger.level
+        original_propagate = httpx_logger.propagate
+        
+        class StatusCodeCapture(stdlib_logging.Handler):
+            def __init__(self):
+                super().__init__(level=stdlib_logging.INFO)
+                
+            def emit(self, record):
+                nonlocal http_status_code
+                # Capture the status code silently (don't propagate to console)
+                http_status_code = self._check_http_error_in_logs(record.getMessage()) or http_status_code
+        
+        capture_handler = StatusCodeCapture()
+        capture_handler._check_http_error_in_logs = self._check_http_error_in_logs
+        
+        # Temporarily set httpx logger to INFO to ensure it emits logs we can capture
+        # Disable propagation only if we're raising the log level to avoid console output
+        httpx_logger.addHandler(capture_handler)
+        if httpx_logger.level > stdlib_logging.INFO or httpx_logger.level == stdlib_logging.NOTSET:
+            httpx_logger.setLevel(stdlib_logging.INFO)
+            httpx_logger.propagate = False  # Prevent console output
+        
         try:
             logger.debug(f'Attempting to connect to MCP server: server="{server_url}"')
-            client_context_opened = await client_context.__aenter__()
-            streams = client_context_opened
-            read, write, *_ = streams
-            session = ClientSession(read, write)
-            await session.__aenter__()
-            logger.debug(f'Initializing MCP session: server="{server_url}"')
-            await session.initialize()
+            # Suppress async generator warnings from MCP library cleanup bugs
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*async.*generator.*")
+                client_context_opened = await client_context.__aenter__()
+                streams = client_context_opened
+                read, write, *_ = streams
+                session = ClientSession(read, write)
+                await session.__aenter__()
+                logger.debug(f'Initializing MCP session: server="{server_url}"')
+                await session.initialize()
             logger.debug(f'Successfully connected to MCP server: server="{server_url}"')
             return client_context, session
+        except (asyncio.CancelledError, GeneratorExit) as e:
+            # These exceptions often wrap HTTP errors from the MCP library
+            await self._close_mcp_session(client_context, session)
+            
+            # Check if we captured an HTTP error status code from logs
+            if http_status_code == 401:
+                raise MCPAuthenticationError(
+                    f"Authentication failed for MCP server at {server_url}. "
+                    f"This server requires OAuth or Bearer token authentication. "
+                    f"Use --bearer-token <token> or configure OAuth."
+                ) from e
+            elif http_status_code == 403:
+                raise MCPAuthenticationError(
+                    f"Access denied to MCP server at {server_url}. "
+                    f"Check your authentication credentials."
+                ) from e
+            elif http_status_code == 404:
+                raise MCPServerNotFoundError(
+                    f"MCP server endpoint not found at {server_url}. "
+                    f"Please verify the URL is correct."
+                ) from e
+            
+            # Generic cancellation error
+            raise MCPConnectionError(
+                f"Connection to MCP server at {server_url} was cancelled. "
+                f"This may indicate the server is not reachable, not responding, or requires authentication."
+            ) from e
+        except BaseExceptionGroup as eg:
+            # ExceptionGroup from MCP library - check for HTTP errors
+            await self._close_mcp_session(client_context, session)
+            
+            # Get the first error for inspection
+            first_error = eg.exceptions[0] if eg.exceptions else eg
+            error_str = str(first_error)
+            
+            # Check if we captured an HTTP error status code from logs, or check error string
+            detected_code = http_status_code or self._check_http_error_in_logs(error_str)
+            
+            if detected_code == 401:
+                raise MCPAuthenticationError(
+                    f"Authentication failed for MCP server at {server_url}. "
+                    f"This server requires OAuth or Bearer token authentication. "
+                    f"Use --bearer-token <token> or configure OAuth. "
+                    f"Original error: {first_error}"
+                ) from eg
+            elif detected_code == 403:
+                raise MCPAuthenticationError(
+                    f"Access denied to MCP server at {server_url}. "
+                    f"Check your authentication credentials. "
+                    f"Original error: {first_error}"
+                ) from eg
+            elif detected_code == 404:
+                raise MCPServerNotFoundError(
+                    f"MCP server endpoint not found at {server_url}. "
+                    f"Please verify the URL is correct. "
+                    f"Original error: {first_error}"
+                ) from eg
+            
+            # Generic ExceptionGroup error
+            raise MCPConnectionError(
+                f"Error connecting to MCP server at {server_url}: {first_error}"
+            ) from eg
         except Exception as e:
-            if session:
-                try:
-                    await session.__aexit__(None, None, None)
-                except Exception:
-                    pass
-            if client_context_opened:
-                try:
-                    await client_context.__aexit__(None, None, None)
-                except Exception:
-                    pass
-
-            if "ConnectError" in str(type(e)) or "connection" in str(e).lower():
-                raise ConnectionError(
+            # Try to clean up resources on any error
+            await self._close_mcp_session(client_context, session)
+            # Convert connection errors to more user-friendly messages
+            if "ConnectError" in str(type(e)) or "connection" in str(e).lower() or "nodename nor servname" in str(e):
+                raise MCPConnectionError(
                     f"Unable to connect to MCP server at {server_url}. "
                     f"Please verify the server is running and accessible. "
                     f"Original error: {e}"
                 ) from e
             raise
+        finally:
+            # Clean up httpx logger handler and restore original settings
+            if capture_handler and httpx_logger:
+                httpx_logger.removeHandler(capture_handler)
+                if original_httpx_level is not None:
+                    httpx_logger.setLevel(original_httpx_level)
+                if original_propagate is not None:
+                    httpx_logger.propagate = original_propagate
 
     async def scan_remote_server_tool(
         self,
@@ -471,11 +604,15 @@ class Scanner:
             server_url (str): The URL of the MCP server to scan.
             auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
+            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
 
         Returns:
             List[ScanResult]: The results of the scan for each tool.
 
         Raises:
+            MCPAuthenticationError: If authentication fails (HTTP 401/403).
+            MCPServerNotFoundError: If the server endpoint is not found (HTTP 404).
+            MCPConnectionError: If unable to connect to the server (network issues, DNS failure, etc).
             ValueError: If the server URL is invalid or empty.
         """
         if not server_url:
@@ -575,7 +712,7 @@ class Scanner:
             logger.error(
                 f"Timeout connecting to stdio server {server_config.command} after {timeout}s"
             )
-            raise ConnectionError(
+            raise MCPConnectionError(
                 f"Timeout connecting to stdio MCP server with command {server_config.command}. "
                 f"Server took longer than {timeout} seconds to start."
             )
@@ -594,7 +731,7 @@ class Scanner:
                     await client_context.__aexit__(None, None, None)
                 except:
                     pass
-            raise ConnectionError(
+            raise MCPConnectionError(
                 f"Connection cancelled for stdio MCP server with command {server_config.command}. "
                 f"This may indicate the server failed to start properly."
             )
@@ -613,7 +750,7 @@ class Scanner:
                     await client_context.__aexit__(None, None, None)
                 except:
                     pass
-            raise ConnectionError(
+            raise MCPConnectionError(
                 f"Unable to connect to stdio MCP server with command {server_config.command}. "
                 f"Please verify the command is correct and executable. "
                 f"Original error: {e}"

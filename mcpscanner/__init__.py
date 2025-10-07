@@ -31,6 +31,12 @@ from .core.auth import (
     Auth,
     AuthType,
 )
+from .core.exceptions import (
+    MCPScannerError,
+    MCPConnectionError,
+    MCPAuthenticationError,
+    MCPServerNotFoundError,
+)
 from .api.api import app as api_app
 from .api.router import get_scanner, router
 from .config.config import Config
@@ -53,6 +59,10 @@ __all__ = [
     "InMemoryTokenStorage",
     "OAuthHandler",
     "create_oauth_provider_from_config",
+    "MCPScannerError",
+    "MCPConnectionError",
+    "MCPAuthenticationError",
+    "MCPServerNotFoundError",
     "api_app",
     "AnalyzerEnum",
     "get_scanner",

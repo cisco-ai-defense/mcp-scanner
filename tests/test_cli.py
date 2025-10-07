@@ -29,9 +29,9 @@ from mcpscanner.cli import (
     scan_mcp_server_direct,
     display_results,
 )
+from mcpscanner import Config, ScanResult
 from mcpscanner.core.models import AnalyzerEnum
-from mcpscanner.config.config import Config
-from mcpscanner.core.result import ScanResult
+from mcpscanner.core.exceptions import MCPConnectionError
 
 
 class TestCliHelperFunctions:
@@ -247,7 +247,7 @@ class TestScanMcpServerDirect:
         """Test scan_mcp_server_direct with connection error."""
         with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
             mock_scanner = AsyncMock()
-            mock_scanner.scan_remote_server_tools.side_effect = ConnectionError(
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
                 "Connection failed"
             )
             mock_scanner_class.return_value = mock_scanner
