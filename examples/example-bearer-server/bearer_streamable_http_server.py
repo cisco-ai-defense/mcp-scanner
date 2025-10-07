@@ -14,7 +14,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-
 from mcp.server.fastmcp import FastMCP
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -23,7 +22,7 @@ import uvicorn
 EXPECTED_TOKEN = "test-bearer-token"
 
 # Create an MCP server instance
-mcp = FastMCP("Bearer-Protected SSE Server")
+mcp = FastMCP("Bearer-Protected streamable http Server")
 
 
 @mcp.tool()
@@ -42,8 +41,8 @@ def add(a: int, b: int) -> int:
     return a + b
 
 
-# Build the SSE FastAPI app
-app: FastAPI = mcp.sse_app()
+# Build the Streamable FastAPI app
+app: FastAPI = mcp.streamable_http_app()
 
 
 @app.middleware("http")
