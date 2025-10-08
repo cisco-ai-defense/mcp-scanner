@@ -139,7 +139,8 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
   -H "accept: application/json" \
   -H "Content-Type: application/json" \
   -d '{
-    "server_url": "https://mcp-server.example.com/mcp",
+    "server_url": "https://mcp-server.example.com/mcp", 
+    "authtoken": ""
     "analyzers": ["api", "llm"],
     "output_format": "by_severity",
     "severity_filter": "all",
