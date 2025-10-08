@@ -18,6 +18,7 @@ from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ..core.auth import Auth
 from ..core.models import (
     AllToolsScanResponse,
     AnalyzerEnum,
@@ -231,22 +232,16 @@ async def scan_tool_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        # Conditionally pass auth token if provided
-        if hasattr(request, 'authtoken') and request.authtoken is not None:
-            result = await scanner.scan_remote_server_tool(
-                auth=request.authtoken,
-                server_url=request.server_url,
-                tool_name=request.tool_name,
-                analyzers=request.analyzers,
-                http_headers=http_headers,
-            )
-        else:
-            result = await scanner.scan_remote_server_tool(
-                server_url=request.server_url,
-                tool_name=request.tool_name,
-                analyzers=request.analyzers,
-                http_headers=http_headers,
-            )
+        # Create Auth object if bearer token is provided
+        auth = Auth.bearer(request.authtoken) if hasattr(request, 'authtoken') and request.authtoken else None
+
+        result = await scanner.scan_remote_server_tool(
+            server_url=request.server_url,
+            tool_name=request.tool_name,
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+        )
         # Only warn if analyzers actually failed to run
         if len(result.findings) == 0 and len(result.analyzers) == 0:
             logger.warning(
@@ -307,20 +302,15 @@ async def scan_all_tools_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        # Conditionally pass auth token if provided
-        if hasattr(request, 'authtoken') and request.authtoken is not None:
-            results = await scanner.scan_remote_server_tools(
-                auth=request.authtoken,
-                server_url=request.server_url,
-                analyzers=request.analyzers,
-                http_headers=http_headers,
-            )
-        else:
-            results = await scanner.scan_remote_server_tools(
-                server_url=request.server_url,
-                analyzers=request.analyzers,
-                http_headers=http_headers,
-            )
+        # Create Auth object if bearer token is provided
+        auth = Auth.bearer(request.authtoken) if hasattr(request, 'authtoken') and request.authtoken else None
+
+        results = await scanner.scan_remote_server_tools(
+            server_url=request.server_url,
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+        )
         logger.debug(f"Scanner completed - scanned {len(results)} tools")
 
         api_results = [
