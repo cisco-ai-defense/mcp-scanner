@@ -38,7 +38,7 @@ from ..core.result import (
 )
 from ..core.scanner import Scanner, ScannerFactory
 from ..utils.logging_config import get_logger
-from ..core.models import AuthType
+from ..core.auth import AuthType
 router = APIRouter()
 logger = get_logger(__name__)
 
