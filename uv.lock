@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11, <3.14"
 
 [[package]]
@@ -220,7 +220,7 @@ wheels = [
 
 [[package]]
 name = "cisco-ai-mcp-scanner"
-version = "1.0.8"
+version = "1.0.9"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
