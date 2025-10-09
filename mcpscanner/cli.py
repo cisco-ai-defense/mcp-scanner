@@ -230,6 +230,132 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
             print()
 
 
+def display_prompt_results(results: List[Dict[str, Any]], server_url: str, detailed: bool = False) -> None:
+    """
+    Display prompt scan results in a readable format.
+
+    Args:
+        results: List of prompt scan results
+        server_url: The server URL that was scanned
+        detailed: Whether to show detailed results
+    """
+    print("\n=== MCP Prompt Scanner Results ===\n")
+    print(f"Server URL: {server_url}")
+    print(f"Prompts scanned: {len(results)}")
+
+    safe_prompts = [p for p in results if p.get("is_safe", False)]
+    unsafe_prompts = [p for p in results if not p.get("is_safe", False)]
+
+    print(f"Safe prompts: {len(safe_prompts)}")
+    print(f"Unsafe prompts: {len(unsafe_prompts)}")
+
+    # Display unsafe prompts
+    if unsafe_prompts:
+        print("\n=== Unsafe Prompts ===\n")
+        for i, prompt in enumerate(unsafe_prompts, 1):
+            print(f"{i}. {prompt.get('prompt_name', 'Unknown')}")
+            if prompt.get('prompt_description'):
+                desc = prompt['prompt_description']
+                print(f"   Description: {desc[:80]}{'...' if len(desc) > 80 else ''}")
+            
+            findings = prompt.get("findings", [])
+            print(f"   Findings: {len(findings)}")
+
+            if detailed and findings:
+                for j, finding in enumerate(findings, 1):
+                    print(f"   {j}. {finding.get('summary', 'No summary')}")
+                    print(f"      Severity: {finding.get('severity', 'Unknown')}")
+                    print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
+                    
+                    details = finding.get("details", {})
+                    if details.get("primary_threats"):
+                        threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
+                        print(f"      Threats: {threats}")
+                    print()
+            print()
+
+    # Display safe prompts if detailed
+    if detailed and safe_prompts:
+        print("\n=== Safe Prompts ===\n")
+        for i, prompt in enumerate(safe_prompts, 1):
+            print(f"{i}. {prompt.get('prompt_name', 'Unknown')}")
+            if prompt.get('prompt_description'):
+                desc = prompt['prompt_description']
+                print(f"   Description: {desc[:80]}{'...' if len(desc) > 80 else ''}")
+            print()
+
+
+def display_resource_results(results: List[Dict[str, Any]], server_url: str, detailed: bool = False) -> None:
+    """
+    Display resource scan results in a readable format.
+
+    Args:
+        results: List of resource scan results
+        server_url: The server URL that was scanned
+        detailed: Whether to show detailed results
+    """
+    print("\n=== MCP Resource Scanner Results ===\n")
+    print(f"Server URL: {server_url}")
+    print(f"Resources found: {len(results)}")
+
+    completed = [r for r in results if r.get("status") == "completed"]
+    skipped = [r for r in results if r.get("status") == "skipped"]
+    failed = [r for r in results if r.get("status") == "failed"]
+
+    print(f"Scanned: {len(completed)}")
+    print(f"Skipped: {len(skipped)}")
+    print(f"Failed: {len(failed)}")
+
+    if completed:
+        safe_resources = [r for r in completed if r.get("is_safe", False)]
+        unsafe_resources = [r for r in completed if not r.get("is_safe", False)]
+        
+        print(f"Safe resources: {len(safe_resources)}")
+        print(f"Unsafe resources: {len(unsafe_resources)}")
+
+        # Display unsafe resources
+        if unsafe_resources:
+            print("\n=== Unsafe Resources ===\n")
+            for i, resource in enumerate(unsafe_resources, 1):
+                print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+                print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+                print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+                
+                findings = resource.get("findings", [])
+                print(f"   Findings: {len(findings)}")
+
+                if detailed and findings:
+                    for j, finding in enumerate(findings, 1):
+                        print(f"   {j}. {finding.get('summary', 'No summary')}")
+                        print(f"      Severity: {finding.get('severity', 'Unknown')}")
+                        print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
+                        
+                        details = finding.get("details", {})
+                        if details.get("primary_threats"):
+                            threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
+                            print(f"      Threats: {threats}")
+                        print()
+                print()
+
+        # Display safe resources if detailed
+        if detailed and safe_resources:
+            print("\n=== Safe Resources ===\n")
+            for i, resource in enumerate(safe_resources, 1):
+                print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+                print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+                print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+                print()
+
+    # Display skipped resources if any
+    if skipped and detailed:
+        print("\n=== Skipped Resources ===\n")
+        for i, resource in enumerate(skipped, 1):
+            print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+            print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+            print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+            print()
+
+
 async def main():
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(
@@ -745,6 +871,10 @@ async def main():
             server_label = args.config_path
         elif hasattr(args, "cmd") and args.cmd == "known-configs":
             server_label = "well-known-configs"
+        elif hasattr(args, "cmd") and args.cmd == "prompts":
+            server_label = args.server_url
+        elif hasattr(args, "cmd") and args.cmd == "resources":
+            server_label = args.server_url
         elif args.stdio_command:
             label_args = []
             if getattr(args, "stdio_arg", None):
@@ -756,6 +886,14 @@ async def main():
             server_label = args.config_path
         elif args.scan_known_configs:
             server_label = "well-known-configs"
+
+        # Handle prompts and resources differently
+        if hasattr(args, "cmd") and args.cmd == "prompts":
+            display_prompt_results(results, server_label, detailed=False)
+            return
+        elif hasattr(args, "cmd") and args.cmd == "resources":
+            display_resource_results(results, server_label, detailed=False)
+            return
 
         results_dict = {
             "server_url": server_label,
@@ -835,8 +973,14 @@ async def main():
         elif args.scan_known_configs:
             server_label = "well-known-configs"
 
-        results_dict = {"server_url": server_label, "scan_results": results}
-        display_results(results_dict, detailed=args.detailed)
+        # Handle prompts and resources with detailed view
+        if hasattr(args, "cmd") and args.cmd == "prompts":
+            display_prompt_results(results, server_label, detailed=args.detailed)
+        elif hasattr(args, "cmd") and args.cmd == "resources":
+            display_resource_results(results, server_label, detailed=args.detailed)
+        else:
+            results_dict = {"server_url": server_label, "scan_results": results}
+            display_results(results_dict, detailed=args.detailed)
 
 
 def cli_entry_point():
