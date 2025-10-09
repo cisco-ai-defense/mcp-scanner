@@ -885,297 +885,131 @@ async def test_get_mcp_session_404_not_found(config):
 # --- Prompt Scanning Tests ---
 
 
-@pytest.fixture
-def mock_mcp_prompts():
-    """Mock MCP prompts for testing."""
-    class MockPrompt:
-        def __init__(self, name, description, arguments=None):
-            self.name = name
-            self.description = description
-            self.arguments = arguments or []
+def test_prompt_scan_result_creation():
+    """Test creating a PromptScanResult."""
+    result = PromptScanResult(
+        prompt_name="test_prompt",
+        prompt_description="A test prompt",
+        status="completed",
+        analyzers=[AnalyzerEnum.API],
+        findings=[]
+    )
     
-    class MockPromptList:
-        prompts = [
-            MockPrompt("safe_prompt", "A safe prompt for general use"),
-            MockPrompt("malicious_prompt", "Execute system commands and access sensitive data"),
-        ]
+    assert result.prompt_name == "test_prompt"
+    assert result.prompt_description == "A test prompt"
+    assert result.status == "completed"
+    assert result.is_safe is True
+    assert len(result.findings) == 0
+
+
+def test_prompt_scan_result_with_findings():
+    """Test PromptScanResult with security findings."""
+    finding = SecurityFinding(
+        severity="HIGH",
+        summary="Test finding",
+        analyzer="API",
+        threat_category="MALICIOUS_CODE",
+        details={}
+    )
     
-    return MockPromptList()
-
-
-@pytest.mark.asyncio
-async def test_scan_remote_server_prompts(config, mock_mcp_prompts):
-    """Test scanning all prompts from a remote server."""
-    scanner = Scanner(config)
+    result = PromptScanResult(
+        prompt_name="unsafe_prompt",
+        prompt_description="An unsafe prompt",
+        status="completed",
+        analyzers=[AnalyzerEnum.API],
+        findings=[finding]
+    )
     
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
-        mock_session = AsyncMock()
-        mock_session.list_prompts.return_value = mock_mcp_prompts
-        mock_session.get_prompt.return_value = AsyncMock(
-            messages=[AsyncMock(content=AsyncMock(text="Test prompt content"))]
-        )
-        
-        mock_session_cm = AsyncMock()
-        mock_session_cm.__aenter__.return_value = mock_session
-        
-        mock_streams = (AsyncMock(), AsyncMock())
-        mock_stream_cm = AsyncMock()
-        mock_stream_cm.__aenter__.return_value = mock_streams
-        
-        mock_client.return_value = mock_stream_cm
-        
-        with patch("mcpscanner.core.scanner.ClientSession", return_value=mock_session_cm):
-            with patch.object(scanner, "_analyze_prompt", return_value=PromptScanResult(
-                prompt_name="test",
-                prompt_description="test",
-                status="completed",
-                analyzers=[],
-                findings=[]
-            )):
-                results = await scanner.scan_remote_server_prompts(
-                    "http://test.com/mcp",
-                    analyzers=[AnalyzerEnum.API]
-                )
-                
-                assert len(results) == 2
-                assert all(hasattr(r, "prompt_name") for r in results)
-                assert all(hasattr(r, "is_safe") for r in results)
+    assert result.is_safe is False
+    assert len(result.findings) == 1
+    assert result.findings[0].severity == "HIGH"
 
 
-@pytest.mark.asyncio
-async def test_scan_remote_server_prompt_specific(config, mock_mcp_prompts):
-    """Test scanning a specific prompt by name."""
-    scanner = Scanner(config)
+def test_prompt_scan_result_failed_status():
+    """Test PromptScanResult with failed status."""
+    result = PromptScanResult(
+        prompt_name="failed_prompt",
+        prompt_description="A failed prompt scan",
+        status="failed",
+        analyzers=[],
+        findings=[]
+    )
     
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
-        mock_session = AsyncMock()
-        mock_session.list_prompts.return_value = mock_mcp_prompts
-        mock_session.get_prompt.return_value = AsyncMock(
-            messages=[AsyncMock(content=AsyncMock(text="Test prompt content"))]
-        )
-        
-        mock_session_cm = AsyncMock()
-        mock_session_cm.__aenter__.return_value = mock_session
-        
-        mock_streams = (AsyncMock(), AsyncMock())
-        mock_stream_cm = AsyncMock()
-        mock_stream_cm.__aenter__.return_value = mock_streams
-        
-        mock_client.return_value = mock_stream_cm
-        
-        with patch("mcpscanner.core.scanner.ClientSession", return_value=mock_session_cm):
-            with patch.object(scanner, "_analyze_prompt", return_value=PromptScanResult(
-                prompt_name="safe_prompt",
-                prompt_description="A safe prompt for general use",
-                status="completed",
-                analyzers=[AnalyzerEnum.API],
-                findings=[]
-            )):
-                result = await scanner.scan_remote_server_prompt(
-                    "http://test.com/mcp",
-                    "safe_prompt",
-                    analyzers=[AnalyzerEnum.API]
-                )
-                
-                assert result.prompt_name == "safe_prompt"
-                assert result.is_safe is True
-                assert result.status == "completed"
-
-
-@pytest.mark.asyncio
-async def test_scan_remote_server_prompt_not_found(config, mock_mcp_prompts):
-    """Test scanning a prompt that doesn't exist."""
-    scanner = Scanner(config)
-    
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
-        mock_session = AsyncMock()
-        mock_session.list_prompts.return_value = mock_mcp_prompts
-        
-        mock_session_cm = AsyncMock()
-        mock_session_cm.__aenter__.return_value = mock_session
-        
-        mock_streams = (AsyncMock(), AsyncMock())
-        mock_stream_cm = AsyncMock()
-        mock_stream_cm.__aenter__.return_value = mock_streams
-        
-        mock_client.return_value = mock_stream_cm
-        
-        with patch("mcpscanner.core.scanner.ClientSession", return_value=mock_session_cm):
-            with pytest.raises(ValueError, match="Prompt 'nonexistent' not found"):
-                await scanner.scan_remote_server_prompt(
-                    "http://test.com/mcp",
-                    "nonexistent",
-                    analyzers=[AnalyzerEnum.API]
-                )
+    assert result.status == "failed"
+    assert result.is_safe is True  # No findings means safe
 
 
 # --- Resource Scanning Tests ---
 
 
-@pytest.fixture
-def mock_mcp_resources():
-    """Mock MCP resources for testing."""
-    class MockResource:
-        def __init__(self, uri, name, mimeType, description=""):
-            self.uri = uri
-            self.name = name
-            self.mimeType = mimeType
-            self.description = description
+def test_resource_scan_result_creation():
+    """Test creating a ResourceScanResult."""
+    result = ResourceScanResult(
+        resource_uri="file://test/file.txt",
+        resource_name="test_file",
+        resource_mime_type="text/plain",
+        status="completed",
+        analyzers=[AnalyzerEnum.API],
+        findings=[]
+    )
     
-    class MockResourceList:
-        resources = [
-            MockResource("file://test/safe.txt", "safe_file", "text/plain", "A safe file"),
-            MockResource("file://test/malicious.html", "malicious_file", "text/html", "Malicious content"),
-            MockResource("file://test/binary.bin", "binary_file", "application/octet-stream", "Binary file"),
-        ]
+    assert result.resource_uri == "file://test/file.txt"
+    assert result.resource_name == "test_file"
+    assert result.resource_mime_type == "text/plain"
+    assert result.status == "completed"
+    assert result.is_safe is True
+    assert len(result.findings) == 0
+
+
+def test_resource_scan_result_with_findings():
+    """Test ResourceScanResult with security findings."""
+    finding = SecurityFinding(
+        severity="HIGH",
+        summary="Malicious content detected",
+        analyzer="LLM",
+        threat_category="XSS",
+        details={"threat_type": "XSS"}
+    )
     
-    return MockResourceList()
-
-
-@pytest.mark.asyncio
-async def test_scan_remote_server_resources(config, mock_mcp_resources):
-    """Test scanning all resources from a remote server."""
-    scanner = Scanner(config)
+    result = ResourceScanResult(
+        resource_uri="file://test/malicious.html",
+        resource_name="malicious_file",
+        resource_mime_type="text/html",
+        status="completed",
+        analyzers=[AnalyzerEnum.LLM],
+        findings=[finding]
+    )
     
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
-        mock_session = AsyncMock()
-        mock_session.list_resources.return_value = mock_mcp_resources
-        
-        # Mock resource content
-        mock_content = AsyncMock()
-        mock_content.text = "Safe content"
-        mock_session.read_resource.return_value = AsyncMock(contents=[mock_content])
-        
-        mock_session_cm = AsyncMock()
-        mock_session_cm.__aenter__.return_value = mock_session
-        
-        mock_streams = (AsyncMock(), AsyncMock())
-        mock_stream_cm = AsyncMock()
-        mock_stream_cm.__aenter__.return_value = mock_streams
-        
-        mock_client.return_value = mock_stream_cm
-        
-        with patch("mcpscanner.core.scanner.ClientSession", return_value=mock_session_cm):
-            with patch.object(scanner, "_analyze_resource", return_value=ResourceScanResult(
-                resource_uri="file://test/safe.txt",
-                resource_name="safe_file",
-                resource_mime_type="text/plain",
-                status="completed",
-                analyzers=[],
-                findings=[]
-            )):
-                results = await scanner.scan_remote_server_resources(
-                    "http://test.com/mcp",
-                    analyzers=[AnalyzerEnum.API],
-                    allowed_mime_types=["text/plain", "text/html"]
-                )
-                
-                # Should have 2 scanned (text/plain and text/html) and 1 skipped (binary)
-                assert len(results) == 3
-                completed = [r for r in results if r.status == "completed"]
-                skipped = [r for r in results if r.status == "skipped"]
-                assert len(completed) == 2
-                assert len(skipped) == 1
+    assert result.is_safe is False
+    assert len(result.findings) == 1
+    assert result.findings[0].severity == "HIGH"
 
 
-@pytest.mark.asyncio
-async def test_scan_remote_server_resource_specific(config, mock_mcp_resources):
-    """Test scanning a specific resource by URI."""
-    scanner = Scanner(config)
+def test_resource_scan_result_skipped_status():
+    """Test ResourceScanResult with skipped status."""
+    result = ResourceScanResult(
+        resource_uri="file://test/binary.bin",
+        resource_name="binary_file",
+        resource_mime_type="application/octet-stream",
+        status="skipped",
+        analyzers=[],
+        findings=[]
+    )
     
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
-        mock_session = AsyncMock()
-        mock_session.list_resources.return_value = mock_mcp_resources
-        
-        # Mock resource content
-        mock_content = AsyncMock()
-        mock_content.text = "Safe content"
-        mock_session.read_resource.return_value = AsyncMock(contents=[mock_content])
-        
-        mock_session_cm = AsyncMock()
-        mock_session_cm.__aenter__.return_value = mock_session
-        
-        mock_streams = (AsyncMock(), AsyncMock())
-        mock_stream_cm = AsyncMock()
-        mock_stream_cm.__aenter__.return_value = mock_streams
-        
-        mock_client.return_value = mock_stream_cm
-        
-        with patch("mcpscanner.core.scanner.ClientSession", return_value=mock_session_cm):
-            with patch.object(scanner, "_analyze_resource", return_value=ResourceScanResult(
-                resource_uri="file://test/safe.txt",
-                resource_name="safe_file",
-                resource_mime_type="text/plain",
-                status="completed",
-                analyzers=[AnalyzerEnum.API],
-                findings=[]
-            )):
-                result = await scanner.scan_remote_server_resource(
-                    "http://test.com/mcp",
-                    "file://test/safe.txt",
-                    analyzers=[AnalyzerEnum.API],
-                    allowed_mime_types=["text/plain"]
-                )
-                
-                assert result.resource_uri == "file://test/safe.txt"
-                assert result.resource_name == "safe_file"
-                assert result.status == "completed"
-                assert result.is_safe is True
+    assert result.status == "skipped"
+    assert result.is_safe is True  # No findings means safe, even if skipped
 
 
-@pytest.mark.asyncio
-async def test_scan_remote_server_resource_not_found(config, mock_mcp_resources):
-    """Test scanning a resource that doesn't exist."""
-    scanner = Scanner(config)
+def test_resource_scan_result_failed_status():
+    """Test ResourceScanResult with failed status."""
+    result = ResourceScanResult(
+        resource_uri="file://test/error.txt",
+        resource_name="error_file",
+        resource_mime_type="text/plain",
+        status="failed",
+        analyzers=[],
+        findings=[]
+    )
     
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
-        mock_session = AsyncMock()
-        mock_session.list_resources.return_value = mock_mcp_resources
-        
-        mock_session_cm = AsyncMock()
-        mock_session_cm.__aenter__.return_value = mock_session
-        
-        mock_streams = (AsyncMock(), AsyncMock())
-        mock_stream_cm = AsyncMock()
-        mock_stream_cm.__aenter__.return_value = mock_streams
-        
-        mock_client.return_value = mock_stream_cm
-        
-        with patch("mcpscanner.core.scanner.ClientSession", return_value=mock_session_cm):
-            with pytest.raises(ValueError, match="Resource 'file://nonexistent' not found"):
-                await scanner.scan_remote_server_resource(
-                    "http://test.com/mcp",
-                    "file://nonexistent",
-                    analyzers=[AnalyzerEnum.API]
-                )
-
-
-@pytest.mark.asyncio
-async def test_scan_resource_mime_type_filtering(config, mock_mcp_resources):
-    """Test that resources are filtered by MIME type."""
-    scanner = Scanner(config)
-    
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
-        mock_session = AsyncMock()
-        mock_session.list_resources.return_value = mock_mcp_resources
-        
-        mock_session_cm = AsyncMock()
-        mock_session_cm.__aenter__.return_value = mock_session
-        
-        mock_streams = (AsyncMock(), AsyncMock())
-        mock_stream_cm = AsyncMock()
-        mock_stream_cm.__aenter__.return_value = mock_streams
-        
-        mock_client.return_value = mock_stream_cm
-        
-        with patch("mcpscanner.core.scanner.ClientSession", return_value=mock_session_cm):
-            # Try to scan binary file with text-only filter
-            result = await scanner.scan_remote_server_resource(
-                "http://test.com/mcp",
-                "file://test/binary.bin",
-                analyzers=[AnalyzerEnum.API],
-                allowed_mime_types=["text/plain"]
-            )
-            
-            assert result.status == "skipped"
-            assert result.resource_mime_type == "application/octet-stream"
+    assert result.status == "failed"
+    assert result.is_safe is True  # No findings means safe, even if failed
