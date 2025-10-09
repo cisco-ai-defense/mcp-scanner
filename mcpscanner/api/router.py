@@ -32,6 +32,8 @@ from ..core.models import (
 from ..core.report_generator import ReportGenerator
 from ..core.result import (
     ScanResult,
+    PromptScanResult,
+    ResourceScanResult,
     get_highest_severity,
     group_findings_by_analyzer,
     process_scan_results,
@@ -359,3 +361,440 @@ async def scan_all_tools_endpoint(
     except Exception as e:
         logger.error(f"Unexpected error in full server scan: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning tools: {str(e)}")
+
+
+@router.post(
+    "/scan-prompt",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_prompt_endpoint(
+    request: SpecificToolScanRequest,  # Reuse this model, tool_name becomes prompt_name
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan a specific prompt on an MCP server."""
+    logger.debug(f"Starting specific prompt scan - server: {request.server_url}, prompt: {request.tool_name}")
+
+    try:
+        scanner = scanner_factory(request.analyzers)
+
+        # Extract HTTP headers for analyzers
+        http_headers = dict(http_request.headers)
+
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)
+
+        result = await scanner.scan_remote_server_prompt(
+            server_url=request.server_url,
+            prompt_name=request.tool_name,  # tool_name field used as prompt_name
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+        )
+        logger.debug(f"Scanner completed - scanned prompt: {request.tool_name}")
+
+        # Convert result to API format
+        analyzer_groups = group_findings_by_analyzer(result.findings)
+        grouped_findings = {}
+
+        for analyzer_name in ["API", "YARA", "LLM"]:
+            vulns = analyzer_groups.get(analyzer_name, [])
+            
+            if vulns:
+                threat_names = []
+                severities = []
+                
+                for vuln in vulns:
+                    severities.append(vuln.severity)
+                    if hasattr(vuln, "details") and vuln.details and "threat_type" in vuln.details:
+                        threat_type = vuln.details["threat_type"]
+                        if threat_type not in threat_names:
+                            threat_names.append(threat_type)
+                
+                analyzer_severity = get_highest_severity(severities)
+                
+                if len(threat_names) == 0:
+                    threat_summary = "No specific threats identified"
+                elif len(threat_names) == 1:
+                    threat_summary = f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
+                else:
+                    threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
+                
+                grouped_findings[analyzer_name.lower() + "_analyzer"] = {
+                    "severity": analyzer_severity,
+                    "threat_names": threat_names,
+                    "threat_summary": threat_summary,
+                    "total_findings": len(vulns),
+                }
+            else:
+                # Check if analyzer was run
+                ran_analyzer_values = [str(a.value) if hasattr(a, "value") else str(a) for a in result.analyzers]
+                analyzer_was_run = analyzer_name.lower() in ran_analyzer_values
+                
+                grouped_findings[analyzer_name.lower() + "_analyzer"] = {
+                    "severity": "SAFE" if analyzer_was_run else "UNKNOWN",
+                    "threat_names": [],
+                    "threat_summary": "No threats detected" if analyzer_was_run else "Analyzer not run",
+                    "total_findings": 0,
+                }
+
+        response = {
+            "server_url": request.server_url,
+            "prompt_name": result.prompt_name,
+            "prompt_description": result.prompt_description,
+            "status": result.status,
+            "is_safe": result.is_safe,
+            "findings": grouped_findings,
+        }
+
+        logger.debug(f"Prompt scan completed successfully for {request.tool_name}")
+        return response
+
+    except ValueError as e:
+        logger.error(f"ValueError in prompt scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in prompt scan: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scanning prompt: {str(e)}")
+
+
+@router.post(
+    "/scan-all-prompts",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_all_prompts_endpoint(
+    request: APIScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan all prompts on an MCP server."""
+    logger.debug(f"Starting all prompts scan - server: {request.server_url}")
+
+    try:
+        scanner = scanner_factory(request.analyzers)
+
+        # Extract HTTP headers for analyzers
+        http_headers = dict(http_request.headers)
+
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)
+
+        results = await scanner.scan_remote_server_prompts(
+            server_url=request.server_url,
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+        )
+        logger.debug(f"Scanner completed - scanned {len(results)} prompts")
+
+        # Convert results to API format
+        prompt_results = []
+        for result in results:
+            analyzer_groups = group_findings_by_analyzer(result.findings)
+            grouped_findings = {}
+
+            for analyzer_name in ["API", "YARA", "LLM"]:
+                vulns = analyzer_groups.get(analyzer_name, [])
+                
+                if vulns:
+                    threat_names = []
+                    severities = []
+                    
+                    for vuln in vulns:
+                        severities.append(vuln.severity)
+                        if hasattr(vuln, "details") and vuln.details and "threat_type" in vuln.details:
+                            threat_type = vuln.details["threat_type"]
+                            if threat_type not in threat_names:
+                                threat_names.append(threat_type)
+                    
+                    analyzer_severity = get_highest_severity(severities)
+                    
+                    if len(threat_names) == 0:
+                        threat_summary = "No specific threats identified"
+                    elif len(threat_names) == 1:
+                        threat_summary = f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
+                    else:
+                        threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
+                    
+                    grouped_findings[analyzer_name.lower() + "_analyzer"] = {
+                        "severity": analyzer_severity,
+                        "threat_names": threat_names,
+                        "threat_summary": threat_summary,
+                        "total_findings": len(vulns),
+                    }
+                else:
+                    # Check if analyzer was run
+                    ran_analyzer_values = [str(a.value) if hasattr(a, "value") else str(a) for a in result.analyzers]
+                    analyzer_was_run = analyzer_name.lower() in ran_analyzer_values
+                    
+                    grouped_findings[analyzer_name.lower() + "_analyzer"] = {
+                        "severity": "SAFE" if analyzer_was_run else "UNKNOWN",
+                        "threat_names": [],
+                        "threat_summary": "No threats detected" if analyzer_was_run else "Analyzer not run",
+                        "total_findings": 0,
+                    }
+
+            prompt_results.append({
+                "prompt_name": result.prompt_name,
+                "prompt_description": result.prompt_description,
+                "status": result.status,
+                "is_safe": result.is_safe,
+                "findings": grouped_findings,
+            })
+
+        response = {
+            "server_url": request.server_url,
+            "total_prompts": len(results),
+            "safe_prompts": sum(1 for r in results if r.is_safe),
+            "unsafe_prompts": sum(1 for r in results if not r.is_safe),
+            "prompts": prompt_results,
+        }
+
+        logger.debug(f"Prompt scan completed successfully - {len(results)} prompts processed")
+        return response
+
+    except ValueError as e:
+        logger.error(f"ValueError in prompt scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in prompt scan: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scanning prompts: {str(e)}")
+
+
+@router.post(
+    "/scan-resource",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_resource_endpoint(
+    request: SpecificToolScanRequest,  # Reuse this model, tool_name becomes resource_uri
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan a specific resource on an MCP server."""
+    logger.debug(f"Starting specific resource scan - server: {request.server_url}, resource: {request.tool_name}")
+
+    try:
+        scanner = scanner_factory(request.analyzers)
+
+        # Extract HTTP headers for analyzers
+        http_headers = dict(http_request.headers)
+
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)
+
+        # Default allowed MIME types
+        allowed_mime_types = ["text/plain", "text/html"]
+
+        result = await scanner.scan_remote_server_resource(
+            server_url=request.server_url,
+            resource_uri=request.tool_name,  # tool_name field used as resource_uri
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+            allowed_mime_types=allowed_mime_types,
+        )
+        logger.debug(f"Scanner completed - scanned resource: {request.tool_name}")
+
+        # Convert result to API format
+        if result.status == "completed":
+            analyzer_groups = group_findings_by_analyzer(result.findings)
+            grouped_findings = {}
+
+            for analyzer_name in ["API", "LLM"]:  # Only API and LLM for resources
+                vulns = analyzer_groups.get(analyzer_name, [])
+                
+                if vulns:
+                    threat_names = []
+                    severities = []
+                    
+                    for vuln in vulns:
+                        severities.append(vuln.severity)
+                        if hasattr(vuln, "details") and vuln.details and "threat_type" in vuln.details:
+                            threat_type = vuln.details["threat_type"]
+                            if threat_type not in threat_names:
+                                threat_names.append(threat_type)
+                    
+                    analyzer_severity = get_highest_severity(severities)
+                    
+                    if len(threat_names) == 0:
+                        threat_summary = "No specific threats identified"
+                    elif len(threat_names) == 1:
+                        threat_summary = f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
+                    else:
+                        threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
+                    
+                    grouped_findings[analyzer_name.lower() + "_analyzer"] = {
+                        "severity": analyzer_severity,
+                        "threat_names": threat_names,
+                        "threat_summary": threat_summary,
+                        "total_findings": len(vulns),
+                    }
+                else:
+                    # Check if analyzer was run
+                    ran_analyzer_values = [str(a.value) if hasattr(a, "value") else str(a) for a in result.analyzers]
+                    analyzer_was_run = analyzer_name.lower() in ran_analyzer_values
+                    
+                    grouped_findings[analyzer_name.lower() + "_analyzer"] = {
+                        "severity": "SAFE" if analyzer_was_run else "UNKNOWN",
+                        "threat_names": [],
+                        "threat_summary": "No threats detected" if analyzer_was_run else "Analyzer not run",
+                        "total_findings": 0,
+                    }
+        else:
+            grouped_findings = {}
+
+        response = {
+            "server_url": request.server_url,
+            "resource_uri": result.resource_uri,
+            "resource_name": result.resource_name,
+            "resource_mime_type": result.resource_mime_type,
+            "status": result.status,
+            "is_safe": result.is_safe if result.status == "completed" else None,
+            "findings": grouped_findings,
+        }
+
+        logger.debug(f"Resource scan completed successfully for {request.tool_name}")
+        return response
+
+    except ValueError as e:
+        logger.error(f"ValueError in resource scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in resource scan: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scanning resource: {str(e)}")
+
+
+@router.post(
+    "/scan-all-resources",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_all_resources_endpoint(
+    request: APIScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan all resources on an MCP server."""
+    logger.debug(f"Starting all resources scan - server: {request.server_url}")
+
+    try:
+        scanner = scanner_factory(request.analyzers)
+
+        # Extract HTTP headers for analyzers
+        http_headers = dict(http_request.headers)
+
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)
+
+        # Default allowed MIME types
+        allowed_mime_types = ["text/plain", "text/html"]
+
+        results = await scanner.scan_remote_server_resources(
+            server_url=request.server_url,
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+            allowed_mime_types=allowed_mime_types,
+        )
+        logger.debug(f"Scanner completed - scanned {len(results)} resources")
+
+        # Convert results to API format
+        resource_results = []
+        for result in results:
+            if result.status == "completed":
+                analyzer_groups = group_findings_by_analyzer(result.findings)
+                grouped_findings = {}
+
+                for analyzer_name in ["API", "LLM"]:  # Only API and LLM for resources
+                    vulns = analyzer_groups.get(analyzer_name, [])
+                    
+                    if vulns:
+                        threat_names = []
+                        severities = []
+                        
+                        for vuln in vulns:
+                            severities.append(vuln.severity)
+                            if hasattr(vuln, "details") and vuln.details and "threat_type" in vuln.details:
+                                threat_type = vuln.details["threat_type"]
+                                if threat_type not in threat_names:
+                                    threat_names.append(threat_type)
+                        
+                        analyzer_severity = get_highest_severity(severities)
+                        
+                        if len(threat_names) == 0:
+                            threat_summary = "No specific threats identified"
+                        elif len(threat_names) == 1:
+                            threat_summary = f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
+                        else:
+                            threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
+                        
+                        grouped_findings[analyzer_name.lower() + "_analyzer"] = {
+                            "severity": analyzer_severity,
+                            "threat_names": threat_names,
+                            "threat_summary": threat_summary,
+                            "total_findings": len(vulns),
+                        }
+                    else:
+                        # Check if analyzer was run
+                        ran_analyzer_values = [str(a.value) if hasattr(a, "value") else str(a) for a in result.analyzers]
+                        analyzer_was_run = analyzer_name.lower() in ran_analyzer_values
+                        
+                        grouped_findings[analyzer_name.lower() + "_analyzer"] = {
+                            "severity": "SAFE" if analyzer_was_run else "UNKNOWN",
+                            "threat_names": [],
+                            "threat_summary": "No threats detected" if analyzer_was_run else "Analyzer not run",
+                            "total_findings": 0,
+                        }
+
+                resource_results.append({
+                    "resource_uri": result.resource_uri,
+                    "resource_name": result.resource_name,
+                    "resource_mime_type": result.resource_mime_type,
+                    "status": result.status,
+                    "is_safe": result.is_safe,
+                    "findings": grouped_findings,
+                })
+            else:
+                # Skipped or failed resources
+                resource_results.append({
+                    "resource_uri": result.resource_uri,
+                    "resource_name": result.resource_name,
+                    "resource_mime_type": result.resource_mime_type,
+                    "status": result.status,
+                    "is_safe": None,
+                    "findings": {},
+                })
+
+        completed = [r for r in results if r.status == "completed"]
+        response = {
+            "server_url": request.server_url,
+            "total_resources": len(results),
+            "scanned_resources": len(completed),
+            "skipped_resources": sum(1 for r in results if r.status == "skipped"),
+            "failed_resources": sum(1 for r in results if r.status == "failed"),
+            "safe_resources": sum(1 for r in completed if r.is_safe),
+            "unsafe_resources": sum(1 for r in completed if not r.is_safe),
+            "allowed_mime_types": allowed_mime_types,
+            "resources": resource_results,
+        }
+
+        logger.debug(f"Resource scan completed successfully - {len(results)} resources processed")
+        return response
+
+    except ValueError as e:
+        logger.error(f"ValueError in resource scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in resource scan: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scanning resources: {str(e)}")

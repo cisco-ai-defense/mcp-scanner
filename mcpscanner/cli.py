@@ -249,7 +249,7 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Subcommands for scan modes (remote, stdio, config, known-configs)
+    # Subcommands for scan modes (remote, stdio, config, known-configs, prompts, resources)
     subparsers = parser.add_subparsers(dest="cmd")
 
     p_remote = subparsers.add_parser(
@@ -263,6 +263,47 @@ async def main():
     p_remote.add_argument(
         "--bearer-token",
         help="Bearer token to use for remote MCP server authentication (Authorization: Bearer <token>)",
+    )
+
+    # Prompts subcommand
+    p_prompts = subparsers.add_parser(
+        "prompts", help="Scan prompts on an MCP server"
+    )
+    p_prompts.add_argument(
+        "--server-url",
+        required=True,
+        help="URL of the MCP server to scan",
+    )
+    p_prompts.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+    p_prompts.add_argument(
+        "--prompt-name",
+        help="Scan a specific prompt by name (if not provided, scans all prompts)",
+    )
+
+    # Resources subcommand
+    p_resources = subparsers.add_parser(
+        "resources", help="Scan resources on an MCP server"
+    )
+    p_resources.add_argument(
+        "--server-url",
+        required=True,
+        help="URL of the MCP server to scan",
+    )
+    p_resources.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+    p_resources.add_argument(
+        "--resource-uri",
+        help="Scan a specific resource by URI (if not provided, scans all resources)",
+    )
+    p_resources.add_argument(
+        "--mime-types",
+        default="text/plain,text/html",
+        help="Comma-separated list of allowed MIME types (default: %(default)s)",
     )
 
     # API key and endpoint configuration
@@ -484,6 +525,123 @@ async def main():
             for scan_results in results_by_cfg.values():
                 flattened.extend(scan_results)
             results = await results_to_json(flattened)
+
+        elif args.cmd == "prompts":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            
+            if args.prompt_name:
+                # Scan specific prompt
+                result = await scanner.scan_remote_server_prompt(
+                    server_url=args.server_url,
+                    prompt_name=args.prompt_name,
+                    auth=auth,
+                    analyzers=selected_analyzers,
+                )
+                # Convert PromptScanResult to dict format
+                results = [{
+                    "prompt_name": result.prompt_name,
+                    "prompt_description": result.prompt_description,
+                    "status": result.status,
+                    "is_safe": result.is_safe,
+                    "findings": [
+                        {
+                            "severity": f.severity,
+                            "summary": f.summary,
+                            "analyzer": f.analyzer,
+                            "details": f.details,
+                        }
+                        for f in result.findings
+                    ],
+                }]
+            else:
+                # Scan all prompts
+                prompt_results = await scanner.scan_remote_server_prompts(
+                    server_url=args.server_url,
+                    auth=auth,
+                    analyzers=selected_analyzers,
+                )
+                results = [
+                    {
+                        "prompt_name": r.prompt_name,
+                        "prompt_description": r.prompt_description,
+                        "status": r.status,
+                        "is_safe": r.is_safe,
+                        "findings": [
+                            {
+                                "severity": f.severity,
+                                "summary": f.summary,
+                                "analyzer": f.analyzer,
+                                "details": f.details,
+                            }
+                            for f in r.findings
+                        ],
+                    }
+                    for r in prompt_results
+                ]
+
+        elif args.cmd == "resources":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            
+            # Parse MIME types
+            allowed_mime_types = [m.strip() for m in args.mime_types.split(",")]
+            
+            if args.resource_uri:
+                # Scan specific resource
+                result = await scanner.scan_remote_server_resource(
+                    server_url=args.server_url,
+                    resource_uri=args.resource_uri,
+                    auth=auth,
+                    analyzers=selected_analyzers,
+                    allowed_mime_types=allowed_mime_types,
+                )
+                # Convert ResourceScanResult to dict format
+                results = [{
+                    "resource_uri": str(result.resource_uri),
+                    "resource_name": result.resource_name,
+                    "resource_mime_type": result.resource_mime_type,
+                    "status": result.status,
+                    "is_safe": result.is_safe if result.status == "completed" else None,
+                    "findings": [
+                        {
+                            "severity": f.severity,
+                            "summary": f.summary,
+                            "analyzer": f.analyzer,
+                            "details": f.details,
+                        }
+                        for f in result.findings
+                    ],
+                }]
+            else:
+                # Scan all resources
+                resource_results = await scanner.scan_remote_server_resources(
+                    server_url=args.server_url,
+                    auth=auth,
+                    analyzers=selected_analyzers,
+                    allowed_mime_types=allowed_mime_types,
+                )
+                results = [
+                    {
+                        "resource_uri": str(r.resource_uri),
+                        "resource_name": r.resource_name,
+                        "resource_mime_type": r.resource_mime_type,
+                        "status": r.status,
+                        "is_safe": r.is_safe if r.status == "completed" else None,
+                        "findings": [
+                            {
+                                "severity": f.severity,
+                                "summary": f.summary,
+                                "analyzer": f.analyzer,
+                                "details": f.details,
+                            }
+                            for f in r.findings
+                        ],
+                    }
+                    for r in resource_results
+                ]
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:

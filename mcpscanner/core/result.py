@@ -25,6 +25,116 @@ from typing import Any, Dict, List
 from .analyzers.base import SecurityFinding
 
 
+class PromptScanResult:
+    """Aggregates all findings from a prompt scan.
+
+    Attributes:
+        prompt_name (str): The name of the scanned prompt.
+        prompt_description (str): The description of the scanned prompt.
+        status (str): The status of the scan (e.g., "completed", "failed").
+        findings (List[SecurityFinding]): The security findings found during the scan.
+    """
+
+    def __init__(
+        self,
+        prompt_name: str,
+        prompt_description: str,
+        status: str,
+        analyzers: List[str],
+        findings: List[SecurityFinding],
+        server_source: str = None,
+        server_name: str = None,
+    ):
+        """Initialize a new PromptScanResult instance.
+
+        Args:
+            prompt_name (str): The name of the scanned prompt.
+            prompt_description (str): The description of the scanned prompt.
+            status (str): The status of the scan.
+            analyzers (List[str]): List of analyzers used.
+            findings (List[SecurityFinding]): The security findings found during the scan.
+            server_source (str): The source server/config for this result.
+            server_name (str): The name of the server from config.
+        """
+        self.prompt_name = prompt_name
+        self.prompt_description = prompt_description
+        self.status = status
+        self.analyzers = analyzers
+        self.findings = findings
+        self.server_source = server_source
+        self.server_name = server_name
+
+    @property
+    def is_safe(self) -> bool:
+        """Check if the scan result indicates the prompt is safe.
+
+        Returns:
+            bool: True if no security findings were found, False otherwise.
+        """
+        return len(self.findings) == 0
+
+    def __str__(self) -> str:
+        """Return a string representation of the prompt scan result."""
+        return f"PromptScanResult(prompt_name={self.prompt_name}, status={self.status}, findings={self.findings})"
+
+
+class ResourceScanResult:
+    """Aggregates all findings from a resource scan.
+
+    Attributes:
+        resource_uri (str): The URI of the scanned resource.
+        resource_name (str): The name of the scanned resource.
+        resource_mime_type (str): The MIME type of the resource.
+        status (str): The status of the scan (e.g., "completed", "failed", "skipped").
+        findings (List[SecurityFinding]): The security findings found during the scan.
+    """
+
+    def __init__(
+        self,
+        resource_uri: str,
+        resource_name: str,
+        resource_mime_type: str,
+        status: str,
+        analyzers: List[str],
+        findings: List[SecurityFinding],
+        server_source: str = None,
+        server_name: str = None,
+    ):
+        """Initialize a new ResourceScanResult instance.
+
+        Args:
+            resource_uri (str): The URI of the scanned resource.
+            resource_name (str): The name of the scanned resource.
+            resource_mime_type (str): The MIME type of the resource.
+            status (str): The status of the scan.
+            analyzers (List[str]): List of analyzers used.
+            findings (List[SecurityFinding]): The security findings found during the scan.
+            server_source (str): The source server/config for this result.
+            server_name (str): The name of the server from config.
+        """
+        self.resource_uri = resource_uri
+        self.resource_name = resource_name
+        self.resource_mime_type = resource_mime_type
+        self.status = status
+        self.analyzers = analyzers
+        self.findings = findings
+        self.server_source = server_source
+        self.server_name = server_name
+
+    @property
+    def is_safe(self) -> bool:
+        """Check if the scan result indicates the resource is safe.
+
+        Returns:
+            bool: True if no security findings were found, False otherwise.
+        """
+        return len(self.findings) == 0
+
+    def __str__(self) -> str:
+        """Return a string representation of the resource scan result."""
+        return f"ResourceScanResult(resource_uri={self.resource_uri}, mime_type={self.resource_mime_type}, status={self.status}, findings={len(self.findings)})"
+
+
 class ScanResult:
     """Aggregates all findings from a scan.
 
