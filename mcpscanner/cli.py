@@ -230,6 +230,101 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
             print()
 
 
+def display_prompt_results_table(results: List[Dict[str, Any]], server_url: str) -> None:
+    """Display prompt scan results in table format."""
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        print("⚠️  tabulate package not installed. Install with: pip install tabulate")
+        print("Falling back to summary format...\n")
+        display_prompt_results(results, server_url, detailed=False)
+        return
+    
+    print("\n=== MCP Prompt Scanner Results (Table) ===\n")
+    print(f"Server URL: {server_url}\n")
+    
+    # Prepare table data
+    table_data = []
+    for result in results:
+        status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        prompt_name = result.get("prompt_name", "Unknown")
+        desc = result.get("prompt_description", "")
+        desc_short = desc[:40] + "..." if len(desc) > 40 else desc
+        findings_count = len(result.get("findings", []))
+        status = result.get("status", "unknown")
+        
+        table_data.append([
+            status_icon,
+            prompt_name,
+            desc_short,
+            findings_count,
+            status
+        ])
+    
+    headers = ["Status", "Prompt Name", "Description", "Findings", "Scan Status"]
+    print(tabulate(table_data, headers=headers, tablefmt="grid"))
+    
+    # Summary
+    safe = sum(1 for r in results if r.get("is_safe", False))
+    unsafe = sum(1 for r in results if not r.get("is_safe", False))
+    print(f"\n📊 Summary: {len(results)} total | {safe} safe | {unsafe} unsafe")
+
+
+def display_resource_results_table(results: List[Dict[str, Any]], server_url: str) -> None:
+    """Display resource scan results in table format."""
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        print("⚠️  tabulate package not installed. Install with: pip install tabulate")
+        print("Falling back to summary format...\n")
+        display_resource_results(results, server_url, detailed=False)
+        return
+    
+    print("\n=== MCP Resource Scanner Results (Table) ===\n")
+    print(f"Server URL: {server_url}\n")
+    
+    # Prepare table data
+    table_data = []
+    for result in results:
+        status = result.get("status", "unknown")
+        
+        if status == "completed":
+            status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        elif status == "skipped":
+            status_icon = "⏭️"
+        else:
+            status_icon = "❌"
+        
+        resource_name = result.get("resource_name", "Unknown")
+        uri = result.get("resource_uri", "N/A")
+        uri_short = uri[:40] + "..." if len(uri) > 40 else uri
+        mime_type = result.get("resource_mime_type", "unknown")
+        findings_count = len(result.get("findings", [])) if status == "completed" else "-"
+        
+        table_data.append([
+            status_icon,
+            resource_name,
+            uri_short,
+            mime_type,
+            findings_count,
+            status
+        ])
+    
+    headers = ["Status", "Resource Name", "URI", "MIME Type", "Findings", "Scan Status"]
+    print(tabulate(table_data, headers=headers, tablefmt="grid"))
+    
+    # Summary
+    completed = [r for r in results if r.get("status") == "completed"]
+    skipped = [r for r in results if r.get("status") == "skipped"]
+    failed = [r for r in results if r.get("status") == "failed"]
+    safe = sum(1 for r in completed if r.get("is_safe", False))
+    unsafe = sum(1 for r in completed if not r.get("is_safe", False))
+    
+    print(f"\n📊 Summary: {len(results)} total | {len(completed)} scanned | {len(skipped)} skipped | {len(failed)} failed")
+    if completed:
+        print(f"   Security: {safe} safe | {unsafe} unsafe")
+
+
 def display_prompt_results(results: List[Dict[str, Any]], server_url: str, detailed: bool = False) -> None:
     """
     Display prompt scan results in a readable format.
@@ -889,10 +984,16 @@ async def main():
 
         # Handle prompts and resources differently
         if hasattr(args, "cmd") and args.cmd == "prompts":
-            display_prompt_results(results, server_label, detailed=False)
+            if args.format == "table":
+                display_prompt_results_table(results, server_label)
+            else:
+                display_prompt_results(results, server_label, detailed=False)
             return
         elif hasattr(args, "cmd") and args.cmd == "resources":
-            display_resource_results(results, server_label, detailed=False)
+            if args.format == "table":
+                display_resource_results_table(results, server_label)
+            else:
+                display_resource_results(results, server_label, detailed=False)
             return
 
         results_dict = {
