@@ -26,7 +26,7 @@ from typing import Optional, List, Callable, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import httpx
-from pydantic import AnyUrl, SecretStr
+from pydantic import AnyUrl, SecretStr, BaseModel
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 
@@ -37,12 +37,20 @@ from ..utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-class AuthType(Enum):
+class AuthType(str, Enum):
     """Authentication type enumeration."""
 
     OAUTH = "oauth"
     BEARER = "bearer"
     NONE = "none"
+
+class APIAuthConfig(BaseModel):
+    """Authentication configuration for MCP scanner requests."""
+    
+    auth_type: AuthType = AuthType.NONE
+    bearer_token: Optional[str] = None
+    api_key: Optional[str] = None
+    header_name: Optional[str] = None
 
 
 class Auth:

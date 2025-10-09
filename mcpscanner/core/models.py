@@ -25,7 +25,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
-
+from .auth import APIAuthConfig, AuthType
 
 class OutputFormat(str, Enum):
     """Available output formats."""
@@ -266,6 +266,7 @@ class ErrorInfo(BaseModel):
         return v.strip()
 
 
+
 class APIScanRequest(BaseModel):
     """Base request for scanning MCP servers via API."""
 
@@ -281,6 +282,7 @@ class APIScanRequest(BaseModel):
     hide_safe: bool = False
     show_stats: bool = False
     rules_path: Optional[str] = None
+    auth: Optional[APIAuthConfig] = None
 
 
 class SpecificToolScanRequest(APIScanRequest):

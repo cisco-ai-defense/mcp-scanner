@@ -38,7 +38,7 @@ from ..core.result import (
 )
 from ..core.scanner import Scanner, ScannerFactory
 from ..utils.logging_config import get_logger
-
+from ..core.auth import AuthType
 router = APIRouter()
 logger = get_logger(__name__)
 
@@ -232,8 +232,11 @@ async def scan_tool_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        # Create Auth object if bearer token is provided
-        auth = Auth.bearer(request.authtoken) if hasattr(request, 'authtoken') and request.authtoken else None
+        
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)  
 
         result = await scanner.scan_remote_server_tool(
             server_url=request.server_url,
@@ -302,8 +305,10 @@ async def scan_all_tools_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        # Create Auth object if bearer token is provided
-        auth = Auth.bearer(request.authtoken) if hasattr(request, 'authtoken') and request.authtoken else None
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)  
 
         results = await scanner.scan_remote_server_tools(
             server_url=request.server_url,
