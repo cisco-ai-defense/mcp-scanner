@@ -5,8 +5,8 @@ The MCP Scanner is organized into the following components:
 ## Core Components
 
 - **Config**: Manages API configuration including API key and endpoint URL.
-- **Scanner**: Main class for scanning MCP servers and tools.
-- **Result**: Contains the `ScanResult` class and utility methods for processing scan results.
+- **Scanner**: Main class for scanning MCP servers, tools, prompts, and resources.
+- **Result**: Contains result classes (`ScanResult`, `PromptScanResult`, `ResourceScanResult`) and utility methods for processing scan results.
 
 ## Analyzers
 
@@ -21,8 +21,10 @@ The MCP Scanner is organized into the following components:
 
 ## Data Models
 
-- **Vulnerability**: Represents a single vulnerability finding.
-- **ScanResult**: Aggregates all findings from a scan.
+- **SecurityFinding**: Represents a single security finding from an analyzer.
+- **ScanResult**: Aggregates all findings from a tool scan.
+- **PromptScanResult**: Aggregates all findings from a prompt scan.
+- **ResourceScanResult**: Aggregates all findings from a resource scan.
 
 ## Configuration
 
