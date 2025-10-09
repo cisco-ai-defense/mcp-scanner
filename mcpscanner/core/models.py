@@ -266,6 +266,22 @@ class ErrorInfo(BaseModel):
         return v.strip()
 
 
+class AuthType(str, Enum):
+    """Authentication type enumeration."""
+    BEARER = "bearer"
+    API_KEY = "api_key"
+    NONE = "none"
+
+
+class Auth(BaseModel):
+    """Authentication configuration for MCP scanner requests."""
+    
+    auth_type: AuthType = AuthType.NONE
+    bearer_token: Optional[str] = None
+    api_key: Optional[str] = None
+    header_name: Optional[str] = None
+
+
 class APIScanRequest(BaseModel):
     """Base request for scanning MCP servers via API."""
 
@@ -281,6 +297,7 @@ class APIScanRequest(BaseModel):
     hide_safe: bool = False
     show_stats: bool = False
     rules_path: Optional[str] = None
+    auth: Optional[Auth] = None
 
 
 class SpecificToolScanRequest(APIScanRequest):
