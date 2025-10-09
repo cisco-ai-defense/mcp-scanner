@@ -66,7 +66,6 @@ curl -X POST "http://localhost:8001/scan-tool" \
   -d '{
     "server_url": "https://mcp-server.example.com/mcp",
     "analyzers": ["api", "yara", "llm"],
-    "authtoken": "test-token-example",
     "output_format": "raw",
     "severity_filter": "all",
     "analyzer_filter": null,
@@ -87,7 +86,6 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
     "server_url": "https://mcp-server.example.com/mcp",
     "analyzers": ["api", "yara", "llm"],
     "output_format": "raw",
-    "authtoken": "test-token-example"
     "severity_filter": "all",
     "analyzer_filter": null,
     "tool_filter": null,
@@ -106,8 +104,7 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
   -H "Content-Type: application/json" \
   -d '{
     "server_url": "https://mcp-server.example.com/mcp",
-    "analyzers": ["api", "llm"],
-    "authtoken": "test-example-token",
+    "analyzers": ["api", "llm"], 
     "output_format": "summary",
     "severity_filter": "all",
     "analyzer_filter": null,
@@ -127,8 +124,11 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
     "server_url": "https://mcp-server.example.com/mcp",
     "analyzers": ["api", "yara", "llm"],
     "output_format": "table",
-    "authtoken": "test-example-token",
     "severity_filter": "high",
+    "auth": {
+      "auth_type": "bearer",
+      "bearer_token": "test-bearer-token"
+    },
     "analyzer_filter": null,
     "tool_filter": null,
     "hide_safe": true,
@@ -143,8 +143,7 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
   -H "accept: application/json" \
   -H "Content-Type: application/json" \
   -d '{
-    "server_url": "https://mcp-server.example.com/mcp", 
-    "authtoken": "test-example-token",
+    "server_url": "https://mcp-server.example.com/mcp",   
     "analyzers": ["api", "llm"],
     "output_format": "by_severity",
     "severity_filter": "all",
