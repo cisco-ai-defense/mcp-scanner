@@ -15,10 +15,11 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
+- **Comprehensive Scanning**: Scan MCP tools, prompts, and resources for security vulnerabilities
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
 - **Custom Endpoints**: Configure the API endpoint to support any Cisco AI Defense environments.
-- **MCP Server Integration**: Connect directly to MCP servers to scan tools with flexible authentication.
+- **MCP Server Integration**: Connect directly to MCP servers to scan tools, prompts, and resources with flexible authentication.
 - **Customizable YARA Rules**: Add your own YARA rules to detect specific patterns.
 - **Comprehensive Vulnerability Reporting**: Detailed reports on detected vulnerabilities.
 
@@ -113,6 +114,7 @@ mcp-scanner-api --host 0.0.0.0 --port 8080
 ```python
 import asyncio
 from mcpscanner import Config, Scanner
+from mcpscanner.core.models import AnalyzerEnum
 
 async def main():
     # Create configuration with your API keys
@@ -125,16 +127,35 @@ async def main():
     scanner = Scanner(config)
     
     # Scan all tools on a remote server
-    results = await scanner.scan_remote_server_tools(
+    tool_results = await scanner.scan_remote_server_tools(
         "https://mcp.deepwki.com/mcp",
-        api_scan=True,    # Cisco AI Defense
-        yara_scan=True,   # YARA rules
-        llm_scan=True     # LLM analysis
+        analyzers=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
     )
     
-    # Print results
-    for result in results:
+    # Print tool results
+    for result in tool_results:
         print(f"Tool: {result.tool_name}, Safe: {result.is_safe}")
+    
+    # Scan all prompts on a server
+    prompt_results = await scanner.scan_remote_server_prompts(
+        "http://127.0.0.1:8000/mcp",
+        analyzers=[AnalyzerEnum.LLM]
+    )
+    
+    # Print prompt results
+    for result in prompt_results:
+        print(f"Prompt: {result.prompt_name}, Safe: {result.is_safe}")
+    
+    # Scan all resources on a server
+    resource_results = await scanner.scan_remote_server_resources(
+        "http://127.0.0.1:8000/mcp",
+        analyzers=[AnalyzerEnum.LLM],
+        allowed_mime_types=["text/plain", "text/html"]
+    )
+    
+    # Print resource results
+    for result in resource_results:
+        print(f"Resource: {result.resource_name}, Safe: {result.is_safe}, Status: {result.status}")
 
 # Run the scanner
 asyncio.run(main())
@@ -142,10 +163,12 @@ asyncio.run(main())
 
 #### Subcommands Overview
 
-- remote: scan a remote MCP server (SSE or streamable HTTP). Supports `--server-url`, optional `--bearer-token`.
-- stdio: launch and scan a stdio MCP server. Requires `--stdio-command`; accepts `--stdio-args`, `--stdio-env`, optional `--stdio-tool`.
-- config: scan servers from a specific MCP config file. Requires `--config-path`; optional `--bearer-token`.
-- known-configs: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
+- **remote**: scan a remote MCP server (SSE or streamable HTTP). Supports `--server-url`, optional `--bearer-token`.
+- **stdio**: launch and scan a stdio MCP server. Requires `--stdio-command`; accepts `--stdio-args`, `--stdio-env`, optional `--stdio-tool`.
+- **config**: scan servers from a specific MCP config file. Requires `--config-path`; optional `--bearer-token`.
+- **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
+- **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`.
+- **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
 
@@ -202,6 +225,46 @@ mcp-scanner --analyzers yara --format by_tool \
   config --config-path "$HOME/.codeium/windsurf/mcp_config.json" --bearer-token "$TOKEN"
 ```
 
+#### Scan Prompts
+
+```bash
+# Scan all prompts on an MCP server
+mcp-scanner --analyzers llm prompts --server-url http://127.0.0.1:8000/mcp
+
+# Scan all prompts with detailed output
+mcp-scanner --analyzers llm --detailed prompts --server-url http://127.0.0.1:8000/mcp
+
+# Scan all prompts with table format
+mcp-scanner --analyzers llm --format table prompts --server-url http://127.0.0.1:8000/mcp
+
+# Scan a specific prompt by name
+mcp-scanner --analyzers llm prompts --server-url http://127.0.0.1:8000/mcp --prompt-name "greet_user"
+
+# Get raw JSON output
+mcp-scanner --analyzers llm --raw prompts --server-url http://127.0.0.1:8000/mcp
+```
+
+#### Scan Resources
+
+```bash
+# Scan all resources on an MCP server
+mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp
+
+# Scan all resources with detailed output
+mcp-scanner --analyzers llm --detailed resources --server-url http://127.0.0.1:8000/mcp
+
+# Scan all resources with table format
+mcp-scanner --analyzers llm --format table resources --server-url http://127.0.0.1:8000/mcp
+
+# Scan a specific resource by URI
+mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
+  --resource-uri "file://test/document.txt"
+
+# Scan with custom MIME type filtering
+mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
+  --mime-types "text/plain,text/html,application/json"
+```
+
 ### API Server Usage
 
 The API server provides a REST interface to the MCP scanner functionality, allowing you to integrate security scanning into web applications, CI/CD pipelines, or other services. It exposes the same scanning capabilities as the CLI tool but through HTTP endpoints.
@@ -220,6 +283,10 @@ mcp-scanner-api --reload
 Once running, the API server provides endpoints for:
 - **`/scan-tool`** - Scan a specific tool on an MCP server
 - **`/scan-all-tools`** - Scan all tools on an MCP server
+- **`/scan-prompt`** - Scan a specific prompt on an MCP server
+- **`/scan-all-prompts`** - Scan all prompts on an MCP server
+- **`/scan-resource`** - Scan a specific resource on an MCP server
+- **`/scan-all-resources`** - Scan all resources on an MCP server
 - **`/health`** - Health check endpoint
 
 Documentation is available in [docs/api-reference.md](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md) or as interactive documentation at `http://localhost:8000/docs` when the server is running.
