@@ -203,11 +203,171 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
 
 ## API Endpoints
 
-### POST /scan-tool
+### Tools
+
+#### POST /scan-tool
 Scan a specific tool on an MCP server.
 
-### POST /scan-all-tools  
+**Parameters:**
+- `server_url` (required): URL of the MCP server
+- `tool_name` (required): Name of the tool to scan
+- `analyzers`: List of analyzers to use
+- `auth`: Authentication configuration (optional)
+
+#### POST /scan-all-tools  
 Scan all tools available on an MCP server.
+
+**Parameters:**
+- `server_url` (required): URL of the MCP server
+- `analyzers`: List of analyzers to use
+- `auth`: Authentication configuration (optional)
+
+### Prompts
+
+#### POST /scan-prompt
+Scan a specific prompt on an MCP server.
+
+**Parameters:**
+- `server_url` (required): URL of the MCP server
+- `prompt_name` (required): Name of the prompt to scan
+- `analyzers`: List of analyzers to use (API, YARA, LLM)
+- `auth`: Authentication configuration (optional)
+
+**Example:**
+```bash
+curl -X POST "http://localhost:8001/scan-prompt" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_url": "http://127.0.0.1:8000/mcp",
+    "prompt_name": "greet_user",
+    "analyzers": ["llm"]
+  }'
+```
+
+#### POST /scan-all-prompts
+Scan all prompts available on an MCP server.
+
+**Parameters:**
+- `server_url` (required): URL of the MCP server
+- `analyzers`: List of analyzers to use (API, YARA, LLM)
+- `auth`: Authentication configuration (optional)
+
+**Example:**
+```bash
+curl -X POST "http://localhost:8001/scan-all-prompts" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_url": "http://127.0.0.1:8000/mcp",
+    "analyzers": ["llm"]
+  }'
+```
+
+**Response:**
+```json
+{
+  "server_url": "http://127.0.0.1:8000/mcp",
+  "total_prompts": 5,
+  "safe_prompts": 3,
+  "unsafe_prompts": 2,
+  "prompts": [
+    {
+      "prompt_name": "greet_user",
+      "prompt_description": "Generate a greeting prompt",
+      "status": "completed",
+      "is_safe": true,
+      "findings": {
+        "llm_analyzer": {
+          "severity": "SAFE",
+          "threat_names": [],
+          "threat_summary": "No threats detected",
+          "total_findings": 0
+        }
+      }
+    }
+  ]
+}
+```
+
+### Resources
+
+#### POST /scan-resource
+Scan a specific resource on an MCP server.
+
+**Parameters:**
+- `server_url` (required): URL of the MCP server
+- `resource_uri` (required): URI of the resource to scan
+- `analyzers`: List of analyzers to use (API, LLM)
+- `allowed_mime_types`: List of MIME types to scan (default: ["text/plain"])
+- `auth`: Authentication configuration (optional)
+
+**Example:**
+```bash
+curl -X POST "http://localhost:8001/scan-resource" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_url": "http://127.0.0.1:8000/mcp",
+    "resource_uri": "file://test/document.txt",
+    "analyzers": ["llm"],
+    "allowed_mime_types": ["text/plain", "text/html"]
+  }'
+```
+
+#### POST /scan-all-resources
+Scan all resources available on an MCP server.
+
+**Parameters:**
+- `server_url` (required): URL of the MCP server
+- `analyzers`: List of analyzers to use (API, LLM)
+- `allowed_mime_types`: List of MIME types to scan (default: ["text/plain"])
+- `auth`: Authentication configuration (optional)
+
+**Example:**
+```bash
+curl -X POST "http://localhost:8001/scan-all-resources" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_url": "http://127.0.0.1:8000/mcp",
+    "analyzers": ["llm"],
+    "allowed_mime_types": ["text/plain", "text/html", "application/json"]
+  }'
+```
+
+**Response:**
+```json
+{
+  "server_url": "http://127.0.0.1:8000/mcp",
+  "total_resources": 3,
+  "scanned": 2,
+  "skipped": 1,
+  "safe_resources": 1,
+  "unsafe_resources": 1,
+  "resources": [
+    {
+      "resource_uri": "file://test/safe.txt",
+      "resource_name": "safe_file",
+      "resource_mime_type": "text/plain",
+      "status": "completed",
+      "is_safe": true,
+      "findings": {
+        "llm_analyzer": {
+          "severity": "SAFE",
+          "threat_names": [],
+          "threat_summary": "No threats detected",
+          "total_findings": 0
+        }
+      }
+    },
+    {
+      "resource_uri": "file://test/binary.bin",
+      "resource_name": "binary_file",
+      "resource_mime_type": "application/octet-stream",
+      "status": "skipped",
+      "is_safe": null,
+      "findings": {}
+    }
+  ]
+}
+```
 
 ## API Documentation
 
