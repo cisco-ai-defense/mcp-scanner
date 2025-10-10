@@ -76,11 +76,9 @@ class ScanResult:
 class ToolScanResult(ScanResult):
     """Aggregates all findings from a tool scan.
 
-    Attributes:
+    Inherits all attributes from ScanResult and adds:
         tool_name (str): The name of the scanned tool.
         tool_description (str): The description of the scanned tool.
-        status (str): The status of the scan (e.g., "completed", "failed").
-        findings (List[SecurityFinding]): The security findings found during the scan.
     """
 
     def __init__(
@@ -98,11 +96,11 @@ class ToolScanResult(ScanResult):
         Args:
             tool_name (str): The name of the scanned tool.
             tool_description (str): The description of the scanned tool.
-            status (str): The status of the scan.
-            analyzers (List[str]): List of analyzers used.
-            findings (List[SecurityFinding]): The security findings found during the scan.
-            server_source (str): The source server/config for this result.
-            server_name (str): The name of the server from config.
+            status (str): Inherited - The status of the scan.
+            analyzers (List[str]): Inherited - List of analyzers used.
+            findings (List[SecurityFinding]): Inherited - The security findings.
+            server_source (str): Inherited - The source server/config.
+            server_name (str): Inherited - The name of the server from config.
         """
         self.tool_name = tool_name
         self.tool_description = tool_description
@@ -116,11 +114,9 @@ class ToolScanResult(ScanResult):
 class PromptScanResult(ScanResult):
     """Aggregates all findings from a prompt scan.
 
-    Attributes:
+    Inherits all attributes from ScanResult and adds:
         prompt_name (str): The name of the scanned prompt.
         prompt_description (str): The description of the scanned prompt.
-        status (str): The status of the scan (e.g., "completed", "failed").
-        findings (List[SecurityFinding]): The security findings found during the scan.
     """
 
     def __init__(
@@ -138,11 +134,11 @@ class PromptScanResult(ScanResult):
         Args:
             prompt_name (str): The name of the scanned prompt.
             prompt_description (str): The description of the scanned prompt.
-            status (str): The status of the scan.
-            analyzers (List[str]): List of analyzers used.
-            findings (List[SecurityFinding]): The security findings found during the scan.
-            server_source (str): The source server/config for this result.
-            server_name (str): The name of the server from config.
+            status (str): Inherited - The status of the scan.
+            analyzers (List[str]): Inherited - List of analyzers used.
+            findings (List[SecurityFinding]): Inherited - The security findings.
+            server_source (str): Inherited - The source server/config.
+            server_name (str): Inherited - The name of the server from config.
         """
         self.prompt_name = prompt_name
         self.prompt_description = prompt_description
@@ -156,12 +152,10 @@ class PromptScanResult(ScanResult):
 class ResourceScanResult(ScanResult):
     """Aggregates all findings from a resource scan.
 
-    Attributes:
+    Inherits all attributes from ScanResult and adds:
         resource_uri (str): The URI of the scanned resource.
         resource_name (str): The name of the scanned resource.
         resource_mime_type (str): The MIME type of the resource.
-        status (str): The status of the scan (e.g., "completed", "failed", "skipped").
-        findings (List[SecurityFinding]): The security findings found during the scan.
     """
 
     def __init__(
@@ -181,11 +175,11 @@ class ResourceScanResult(ScanResult):
             resource_uri (str): The URI of the scanned resource.
             resource_name (str): The name of the scanned resource.
             resource_mime_type (str): The MIME type of the resource.
-            status (str): The status of the scan.
-            analyzers (List[str]): List of analyzers used.
-            findings (List[SecurityFinding]): The security findings found during the scan.
-            server_source (str): The source server/config for this result.
-            server_name (str): The name of the server from config.
+            status (str): Inherited - The status of the scan.
+            analyzers (List[str]): Inherited - List of analyzers used.
+            findings (List[SecurityFinding]): Inherited - The security findings.
+            server_source (str): Inherited - The source server/config.
+            server_name (str): Inherited - The name of the server from config.
         """
         self.resource_uri = resource_uri
         self.resource_name = resource_name
