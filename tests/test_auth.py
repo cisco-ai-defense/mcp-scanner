@@ -21,6 +21,7 @@ from typing import Dict, Any
 from mcpscanner.core.auth import (
     Auth,
     AuthType,
+    APIAuthConfig,
     BearerAuth,
     InMemoryTokenStorage,
     OAuthHandler,
@@ -36,6 +37,7 @@ class TestAuthType:
         """Test all AuthType enum values."""
         assert AuthType.BEARER.value == "bearer"
         assert AuthType.OAUTH.value == "oauth"
+        assert AuthType.APIKEY.value == "apikey"
         assert AuthType.NONE.value == "none"
 
 
@@ -345,3 +347,208 @@ class TestAuthNegativeFlows:
         assert (
             authenticated_request.headers["Authorization"] == f"Bearer {special_token}"
         )
+
+
+class TestAPIAuthConfig:
+    """Test cases for APIAuthConfig class."""
+
+    def test_api_auth_config_creation_default(self):
+        """Test creating APIAuthConfig with default values."""
+        from mcpscanner.core.auth import APIAuthConfig
+        
+        auth_config = APIAuthConfig()
+
+        assert auth_config.auth_type == AuthType.NONE
+        assert auth_config.bearer_token is None
+        assert auth_config.api_key is None
+        assert auth_config.api_key_header is None
+
+    def test_api_auth_config_creation_bearer(self):
+        """Test creating APIAuthConfig with bearer token."""
+        from mcpscanner.core.auth import APIAuthConfig
+        
+        auth_config = APIAuthConfig(
+            auth_type=AuthType.BEARER,
+            bearer_token="test_bearer_token"
+        )
+
+        assert auth_config.auth_type == AuthType.BEARER
+        assert auth_config.bearer_token == "test_bearer_token"
+        assert auth_config.api_key is None
+        assert auth_config.api_key_header is None
+
+    def test_api_auth_config_creation_api_key(self):
+        """Test creating APIAuthConfig with API key."""
+        from mcpscanner.core.auth import APIAuthConfig
+        
+        auth_config = APIAuthConfig(
+            auth_type=AuthType.APIKEY,
+            api_key="test_api_key",
+            api_key_header="X-API-Key"
+        )
+
+        assert auth_config.auth_type == AuthType.APIKEY
+        assert auth_config.api_key == "test_api_key"
+        assert auth_config.api_key_header == "X-API-Key"
+        assert auth_config.bearer_token is None
+
+    def test_api_auth_config_creation_all_fields(self):
+        """Test creating APIAuthConfig with all fields."""
+        from mcpscanner.core.auth import APIAuthConfig
+        
+        auth_config = APIAuthConfig(
+            auth_type=AuthType.APIKEY,
+            bearer_token="bearer_token",
+            api_key="api_key_value",
+            api_key_header="Custom-Header"
+        )
+
+        assert auth_config.auth_type == AuthType.APIKEY
+        assert auth_config.bearer_token == "bearer_token"
+        assert auth_config.api_key == "api_key_value"
+        assert auth_config.api_key_header == "Custom-Header"
+
+
+class TestAuthAPIKey:
+    """Test cases for API Key authentication functionality."""
+
+    def test_auth_creation_api_key(self):
+        """Test creating Auth with API key type."""
+        auth = Auth(
+            enabled=True,
+            auth_type=AuthType.APIKEY,
+            bearer_token="api_key_token"
+        )
+
+        assert auth.enabled is True
+        assert auth.type == AuthType.APIKEY
+        assert auth.bearer_token == "api_key_token"
+        assert auth.client_id is None
+        assert auth.client_secret is None
+
+    def test_auth_api_key_properties(self):
+        """Test API key auth properties and methods."""
+        auth = Auth(
+            enabled=True,
+            auth_type=AuthType.APIKEY,
+            bearer_token="test_api_key"
+        )
+
+        assert auth.enabled is True
+        assert not auth.is_oauth()
+        assert not auth.is_bearer()
+        assert auth.type == AuthType.APIKEY
+
+    def test_auth_api_key_disabled(self):
+        """Test API key auth when disabled."""
+        auth = Auth(
+            enabled=False,
+            auth_type=AuthType.APIKEY,
+            bearer_token="test_api_key"
+        )
+
+        assert auth.enabled is False
+        assert not auth.is_oauth()
+        assert not auth.is_bearer()
+        assert auth.type == AuthType.APIKEY
+
+    @classmethod
+    def test_auth_api_key_classmethod(cls):
+        """Test creating API key auth using potential class method."""
+        # Note: This would require adding an api_key class method to Auth
+        # Similar to oauth() and bearer() methods
+        auth = Auth(
+            enabled=True,
+            auth_type=AuthType.APIKEY,
+            bearer_token="test_api_key"
+        )
+
+        assert auth.enabled is True
+        assert auth.type == AuthType.APIKEY
+        assert auth.bearer_token == "test_api_key"
+
+
+class TestAuthTypeEnum:
+    """Test cases for updated AuthType enum with API key support."""
+
+    def test_auth_type_api_key_value(self):
+        """Test APIKEY AuthType enum value."""
+        assert AuthType.APIKEY.value == "apikey"
+
+    def test_all_auth_type_values(self):
+        """Test all AuthType enum values including APIKEY."""
+        assert AuthType.BEARER.value == "bearer"
+        assert AuthType.OAUTH.value == "oauth"
+        assert AuthType.APIKEY.value == "apikey"
+        assert AuthType.NONE.value == "none"
+
+    def test_auth_type_comparison_api_key(self):
+        """Test AuthType comparison with APIKEY."""
+        auth_type = AuthType.APIKEY
+        
+        assert auth_type == AuthType.APIKEY
+        assert auth_type != AuthType.BEARER
+        assert auth_type != AuthType.OAUTH
+        assert auth_type != AuthType.NONE
+
+
+class TestAPIKeyAuthNegativeFlows:
+    """Test negative flows and edge cases for API key authentication."""
+
+    def test_api_auth_config_none_api_key(self):
+        """Test APIAuthConfig with None API key."""
+        from mcpscanner.core.auth import APIAuthConfig
+        
+        auth_config = APIAuthConfig(
+            auth_type=AuthType.APIKEY,
+            api_key=None,
+            api_key_header="X-API-Key"
+        )
+
+        assert auth_config.auth_type == AuthType.APIKEY
+        assert auth_config.api_key is None
+        assert auth_config.api_key_header == "X-API-Key"
+
+    def test_api_auth_config_empty_header_name(self):
+        """Test APIAuthConfig with empty header name."""
+        from mcpscanner.core.auth import APIAuthConfig
+        
+        auth_config = APIAuthConfig(
+            auth_type=AuthType.APIKEY,
+            api_key="test_key",
+            api_key_header=""
+        )
+
+        assert auth_config.auth_type == AuthType.APIKEY
+        assert auth_config.api_key == "test_key"
+        assert auth_config.api_key_header == ""
+
+    def test_api_auth_config_none_header_name(self):
+        """Test APIAuthConfig with None header name."""
+        from mcpscanner.core.auth import APIAuthConfig
+        
+        auth_config = APIAuthConfig(
+            auth_type=AuthType.APIKEY,
+            api_key="test_key",
+            api_key_header=None
+        )
+
+        assert auth_config.auth_type == AuthType.APIKEY
+        assert auth_config.api_key == "test_key"
+        assert auth_config.api_key_header is None
+
+    def test_auth_api_key_with_oauth_fields(self):
+        """Test Auth with APIKEY type but OAuth fields present."""
+        auth = Auth(
+            enabled=True,
+            auth_type=AuthType.APIKEY,
+            bearer_token="api_key_value",
+            client_id="should_be_ignored",
+            client_secret="should_also_be_ignored"
+        )
+
+        assert auth.type == AuthType.APIKEY
+        assert auth.bearer_token == "api_key_value"
+        assert auth.client_id == "should_be_ignored"  # These should still be set
+        assert auth.client_secret == "should_also_be_ignored"
+        assert not auth.is_oauth()  # But this should return False

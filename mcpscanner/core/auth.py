@@ -42,6 +42,7 @@ class AuthType(str, Enum):
 
     OAUTH = "oauth"
     BEARER = "bearer"
+    APIKEY = "apikey"
     NONE = "none"
 
 class APIAuthConfig(BaseModel):
@@ -50,7 +51,7 @@ class APIAuthConfig(BaseModel):
     auth_type: AuthType = AuthType.NONE
     bearer_token: Optional[str] = None
     api_key: Optional[str] = None
-    header_name: Optional[str] = None
+    api_key_header: Optional[str] = None
 
 
 class Auth:
@@ -77,6 +78,8 @@ class Auth:
         redirect_handler: Optional[Callable[[str], None]] = None,
         callback_handler: Optional[Callable[[], Tuple[str, Optional[str]]]] = None,
         bearer_token: Optional[str] = None,
+        api_key : Optional[str] = None,
+        api_key_header : Optional[str] = None
     ):
         """Initialize Auth configuration.
 
@@ -102,10 +105,31 @@ class Auth:
         self.redirect_handler = redirect_handler
         self.callback_handler = callback_handler
         self.bearer_token = bearer_token
+        self.api_key = api_key
+        self.api_key_header = api_key_header
 
     def __bool__(self) -> bool:
         """Return True if authentication is enabled."""
         return self.enabled
+
+    @classmethod 
+    def apikey(
+        cls,
+        api_key: str,
+        api_key_header: str) -> "Auth":
+        """Create API key authentication configuration.
+        Args:
+            api_key (str): The API key value.
+            api_key_header (str): The HTTP header name for the API key (e.g., "X-API-Key").
+        Returns:
+            Auth: Configured API key authentication instance.
+        """
+        return cls(
+            enabled=True,
+            auth_type=AuthType.APIKEY,
+            api_key=api_key,
+            api_key_header=api_key_header
+        )
 
     @classmethod
     def oauth(
@@ -163,6 +187,9 @@ class Auth:
             bearer_token=bearer_token,
         )
 
+    def is_apikey(self) -> bool:
+        """Check if this is API key authentication."""
+        return self.enabled and self.type == AuthType.APIKEY
     def is_oauth(self) -> bool:
         """Check if this is OAuth authentication."""
         return self.enabled and self.type == AuthType.OAUTH
@@ -444,4 +471,25 @@ class BearerAuth(httpx.Auth):
             request: The HTTP request to authenticate.
         """
         request.headers["Authorization"] = f"Bearer {self.token.get_secret_value()}"
+        yield request
+
+class ApiKeyAuth(httpx.Auth):
+    """API Key authentication for HTTP requests."""
+
+    def __init__(self, api_key_header: str, api_key: str):
+        """Initialize API Key authentication.
+
+        Args:
+            api_key_header (str): The HTTP header name for the API key (e.g., "X-API-Key").
+            api_key (str): The API key value.
+        """
+        self.api_key_header = api_key_header
+        self.api_key = SecretStr(api_key)
+    def auth_flow(self, request):
+        """Add API key to request headers.
+
+        Args:
+            request: The HTTP request to authenticate.
+        """
+        request.headers[self.api_key_header] = self.api_key.get_secret_value()
         yield request
