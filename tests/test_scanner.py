@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 
 from mcpscanner import Config, Scanner
-from mcpscanner import ScanResult
+from mcpscanner import ToolScanResult
 from mcpscanner import ApiAnalyzer
 from mcpscanner import YaraAnalyzer
 from mcpscanner.core.models import AnalyzerEnum
@@ -148,7 +148,7 @@ async def test_scan_remote_server_tool_method(config):
         ),
     ):
 
-        mock_analyze_tool.return_value = ScanResult(
+        mock_analyze_tool.return_value = ToolScanResult(
             tool_name="safe_tool",
             tool_description="This is a safe tool",
             status="completed",
@@ -247,14 +247,14 @@ async def test_scan_remote_server_tools_method(config):
 
         # Configure mock_analyze_tool to return a different result for each tool
         mock_analyze_tool.side_effect = [
-            ScanResult(
+            ToolScanResult(
                 tool_name="tool1",
                 tool_description="Tool 1",
                 status="completed",
                 analyzers=["API"],
                 findings=[],
             ),
-            ScanResult(
+            ToolScanResult(
                 tool_name="tool2",
                 tool_description="Tool 2",
                 status="completed",
@@ -604,14 +604,14 @@ async def test_scan_stdio_server_tools(config):
 
         mock_get_session.return_value = (AsyncMock(), mock_session)
         mock_analyze_tool.side_effect = [
-            ScanResult(
+            ToolScanResult(
                 tool_name="stdio_tool1",
                 tool_description="Tool 1",
                 status="completed",
                 analyzers=["API"],
                 findings=[],
             ),
-            ScanResult(
+            ToolScanResult(
                 tool_name="stdio_tool2",
                 tool_description="Tool 2",
                 status="completed",
@@ -662,7 +662,7 @@ async def test_scan_stdio_server_tool(config):
     ):
 
         mock_get_session.return_value = (AsyncMock(), mock_session)
-        mock_analyze_tool.return_value = ScanResult(
+        mock_analyze_tool.return_value = ToolScanResult(
             tool_name="target_tool",
             tool_description="Target tool",
             status="completed",
@@ -723,7 +723,7 @@ async def test_scan_remote_server_tool_with_auth(config):
     ):
 
         mock_get_session.return_value = (AsyncMock(), mock_session)
-        mock_analyze_tool.return_value = ScanResult(
+        mock_analyze_tool.return_value = ToolScanResult(
             tool_name="auth_tool",
             tool_description="Authenticated tool",
             status="completed",
@@ -757,7 +757,7 @@ async def test_scan_remote_server_tools_with_http_headers(config):
     ):
 
         mock_get_session.return_value = (AsyncMock(), mock_session)
-        mock_analyze_tool.return_value = ScanResult(
+        mock_analyze_tool.return_value = ToolScanResult(
             tool_name="header_tool",
             tool_description="Tool with headers",
             status="completed",

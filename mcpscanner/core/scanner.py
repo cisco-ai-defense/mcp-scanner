@@ -54,7 +54,7 @@ from .exceptions import (
 from .models import AnalyzerEnum
 from .mcp_models import StdioServer, RemoteServer
 from ..config.config_parser import MCPConfigScanner
-from .result import ScanResult, PromptScanResult, ResourceScanResult
+from .result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
 
@@ -164,7 +164,7 @@ class Scanner:
         tool: MCPTool,
         analyzers: List[AnalyzerEnum],
         http_headers: Optional[dict] = None,
-    ) -> ScanResult:
+    ) -> ToolScanResult:
         """Analyze a single MCP tool using specified analyzers.
 
         Args:
@@ -273,7 +273,7 @@ class Scanner:
         # Combine enum analyzers and custom analyzer names
         all_analyzers = list(analyzers) + custom_analyzer_names
 
-        return ScanResult(
+        return ToolScanResult(
             tool_name=name,
             tool_description=description,
             status="completed",
@@ -665,7 +665,7 @@ class Scanner:
         auth: Optional[Auth] = None,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
-    ) -> ScanResult:
+    ) -> ToolScanResult:
         """Scan a specific tool on an MCP server.
 
         Args:
@@ -726,7 +726,7 @@ class Scanner:
         auth: Optional[Auth] = None,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
-    ) -> List[ScanResult]:
+    ) -> List[ToolScanResult]:
         """Scan all tools on an MCP server.
 
         Args:
@@ -736,7 +736,7 @@ class Scanner:
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
 
         Returns:
-            List[ScanResult]: The results of the scan for each tool.
+            List[ToolScanResult]: The results of the scan for each tool.
 
         Raises:
             MCPAuthenticationError: If authentication fails (HTTP 401/403).
@@ -890,7 +890,7 @@ class Scanner:
         server_config: StdioServer,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
-    ) -> List[ScanResult]:
+    ) -> List[ToolScanResult]:
         """Scan tools from a stdio MCP server.
 
         Args:
@@ -949,7 +949,7 @@ class Scanner:
         tool_name: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
-    ) -> ScanResult:
+    ) -> ToolScanResult:
         """Scan a specific tool on a stdio MCP server.
 
         Args:
@@ -1008,14 +1008,14 @@ class Scanner:
         self,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
-    ) -> Dict[str, List[ScanResult]]:
+    ) -> Dict[str, List[ToolScanResult]]:
         """Scan all well-known MCP configuration files and their servers.
 
         Args:
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
 
         Returns:
-            Dict[str, List[ScanResult]]: Dictionary mapping config file paths to scan results.
+            Dict[str, List[ToolScanResult]]: Dictionary mapping config file paths to scan results.
         """
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -1101,7 +1101,7 @@ class Scanner:
         config_path: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
-    ) -> List[ScanResult]:
+    ) -> List[ToolScanResult]:
         """Scan all servers in a specific MCP configuration file.
 
         Args:
@@ -1109,7 +1109,7 @@ class Scanner:
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
 
         Returns:
-            List[ScanResult]: The results of scanning all servers in the config file.
+            List[ToolScanResult]: The results of scanning all servers in the config file.
         """
         # Default to all analyzers if none specified
         if analyzers is None:

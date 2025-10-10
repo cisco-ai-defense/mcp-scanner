@@ -41,7 +41,7 @@ from .api.api import app as api_app
 from .api.router import get_scanner, router
 from .config.config import Config
 from .core.scanner import Scanner, ScannerFactory
-from .core.result import ScanResult, PromptScanResult, ResourceScanResult
+from .core.result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult
 from .core.models import AnalyzerEnum
 
 __all__ = [
@@ -54,6 +54,7 @@ __all__ = [
     "Scanner",
     "ScannerFactory",
     "ScanResult",
+    "ToolScanResult",
     "PromptScanResult",
     "ResourceScanResult",
     "Auth",

@@ -291,6 +291,19 @@ class SpecificToolScanRequest(APIScanRequest):
     tool_name: str
 
 
+class SpecificPromptScanRequest(APIScanRequest):
+    """Request for scanning a single, specific prompt via API."""
+
+    prompt_name: str
+
+
+class SpecificResourceScanRequest(APIScanRequest):
+    """Request for scanning a single, specific resource via API."""
+
+    resource_uri: str
+    allowed_mime_types: Optional[List[str]] = ["text/plain", "text/html"]
+
+
 class AnalyzerFinding(BaseModel):
     """Analyzer finding with grouped structure."""
 

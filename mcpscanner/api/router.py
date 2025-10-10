@@ -27,6 +27,8 @@ from ..core.models import (
     OutputFormat,
     SeverityFilter,
     SpecificToolScanRequest,
+    SpecificPromptScanRequest,
+    SpecificResourceScanRequest,
     ToolScanResult,
 )
 from ..core.report_generator import ReportGenerator
@@ -369,12 +371,12 @@ async def scan_all_tools_endpoint(
     tags=["Scanning"],
 )
 async def scan_prompt_endpoint(
-    request: SpecificToolScanRequest,  # Reuse this model, tool_name becomes prompt_name
+    request: SpecificPromptScanRequest,
     http_request: Request,
     scanner_factory: ScannerFactory = Depends(get_scanner),
 ):
     """Scan a specific prompt on an MCP server."""
-    logger.debug(f"Starting specific prompt scan - server: {request.server_url}, prompt: {request.tool_name}")
+    logger.debug(f"Starting specific prompt scan - server: {request.server_url}, prompt: {request.prompt_name}")
 
     try:
         scanner = scanner_factory(request.analyzers)
@@ -389,12 +391,12 @@ async def scan_prompt_endpoint(
 
         result = await scanner.scan_remote_server_prompt(
             server_url=request.server_url,
-            prompt_name=request.tool_name,  # tool_name field used as prompt_name
+            prompt_name=request.prompt_name,
             auth=auth,
             analyzers=request.analyzers,
             http_headers=http_headers,
         )
-        logger.debug(f"Scanner completed - scanned prompt: {request.tool_name}")
+        logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
 
         # Convert result to API format
         analyzer_groups = group_findings_by_analyzer(result.findings)
@@ -573,12 +575,12 @@ async def scan_all_prompts_endpoint(
     tags=["Scanning"],
 )
 async def scan_resource_endpoint(
-    request: SpecificToolScanRequest,  # Reuse this model, tool_name becomes resource_uri
+    request: SpecificResourceScanRequest,
     http_request: Request,
     scanner_factory: ScannerFactory = Depends(get_scanner),
 ):
     """Scan a specific resource on an MCP server."""
-    logger.debug(f"Starting specific resource scan - server: {request.server_url}, resource: {request.tool_name}")
+    logger.debug(f"Starting specific resource scan - server: {request.server_url}, resource: {request.resource_uri}")
 
     try:
         scanner = scanner_factory(request.analyzers)
@@ -591,18 +593,18 @@ async def scan_resource_endpoint(
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)
 
-        # Default allowed MIME types
-        allowed_mime_types = ["text/plain", "text/html"]
+        # Use allowed MIME types from request or default
+        allowed_mime_types = request.allowed_mime_types or ["text/plain", "text/html"]
 
         result = await scanner.scan_remote_server_resource(
             server_url=request.server_url,
-            resource_uri=request.tool_name,  # tool_name field used as resource_uri
+            resource_uri=request.resource_uri,
             auth=auth,
             analyzers=request.analyzers,
             http_headers=http_headers,
             allowed_mime_types=allowed_mime_types,
         )
-        logger.debug(f"Scanner completed - scanned resource: {request.tool_name}")
+        logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
 
         # Convert result to API format
         if result.status == "completed":

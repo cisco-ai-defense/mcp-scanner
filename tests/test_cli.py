@@ -29,7 +29,7 @@ from mcpscanner.cli import (
     scan_mcp_server_direct,
     display_results,
 )
-from mcpscanner import Config, ScanResult
+from mcpscanner import Config, ToolScanResult
 from mcpscanner.core.models import AnalyzerEnum
 from mcpscanner.core.exceptions import MCPConnectionError
 
@@ -119,14 +119,14 @@ class TestScanMcpServerDirect:
     def mock_scan_results(self):
         """Mock scan results."""
         return [
-            ScanResult(
+            ToolScanResult(
                 tool_name="safe_tool",
                 tool_description="Safe tool",
                 status="completed",
                 analyzers=["API"],
                 findings=[],
             ),
-            ScanResult(
+            ToolScanResult(
                 tool_name="unsafe_tool",
                 tool_description="Unsafe tool",
                 status="completed",
