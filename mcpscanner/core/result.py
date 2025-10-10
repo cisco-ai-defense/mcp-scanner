@@ -104,9 +104,9 @@ class ToolScanResult(ScanResult):
             server_source (str): The source server/config for this result.
             server_name (str): The name of the server from config.
         """
-        super().__init__(status, analyzers, findings, server_source, server_name)
         self.tool_name = tool_name
         self.tool_description = tool_description
+        super().__init__(status, analyzers, findings, server_source, server_name)
 
     def __str__(self) -> str:
         """Return a string representation of the tool scan result."""
@@ -144,9 +144,9 @@ class PromptScanResult(ScanResult):
             server_source (str): The source server/config for this result.
             server_name (str): The name of the server from config.
         """
-        super().__init__(status, analyzers, findings, server_source, server_name)
         self.prompt_name = prompt_name
         self.prompt_description = prompt_description
+        super().__init__(status, analyzers, findings, server_source, server_name)
 
     def __str__(self) -> str:
         """Return a string representation of the prompt scan result."""
@@ -187,10 +187,10 @@ class ResourceScanResult(ScanResult):
             server_source (str): The source server/config for this result.
             server_name (str): The name of the server from config.
         """
-        super().__init__(status, analyzers, findings, server_source, server_name)
         self.resource_uri = resource_uri
         self.resource_name = resource_name
         self.resource_mime_type = resource_mime_type
+        super().__init__(status, analyzers, findings, server_source, server_name)
 
     def __str__(self) -> str:
         """Return a string representation of the resource scan result."""
