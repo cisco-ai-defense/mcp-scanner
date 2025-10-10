@@ -1794,7 +1794,9 @@ class Scanner:
             
             target_resource = None
             for resource in resource_list.resources:
-                if resource.uri == resource_uri:
+                # Convert AnyUrl to string for comparison
+                resource_uri_str = str(resource.uri) if hasattr(resource.uri, '__str__') else resource.uri
+                if resource_uri_str == resource_uri:
                     target_resource = resource
                     break
             

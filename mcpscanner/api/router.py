@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -57,10 +57,23 @@ def get_scanner() -> ScannerFactory:
     )
 
 
-def _convert_scanner_result_to_api_result(
-    scanner_result: ScanResult, scanner: Scanner
-) -> ToolScanResult:
-    """Convert a scanner result to an API result with grouped analyzer findings."""
+def _group_findings_for_api(
+    scanner_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult],
+    scanner: Scanner
+) -> Dict[str, Any]:
+    """
+    Extract and group findings by analyzer for API response.
+    
+    This helper function processes findings from any scan result type and returns
+    a dictionary of grouped findings suitable for API responses.
+    
+    Args:
+        scanner_result: The scan result (tool, prompt, or resource)
+        scanner: The scanner instance
+        
+    Returns:
+        Dict with analyzer findings grouped by analyzer name
+    """
     analyzer_groups = group_findings_by_analyzer(scanner_result.findings)
     grouped_findings = {}
 
@@ -132,8 +145,19 @@ def _convert_scanner_result_to_api_result(
             # If the analyzer was run but found nothing, it's SAFE.
             # We check if the internal name is in the list of analyzers that were part of the scan.
             ran_analyzers = [f for f in scanner_result.analyzers]
+            
+            # Get result identifier based on type for logging
+            if isinstance(scanner_result, ToolScanResult):
+                result_id = scanner_result.tool_name
+            elif isinstance(scanner_result, PromptScanResult):
+                result_id = scanner_result.prompt_name
+            elif isinstance(scanner_result, ResourceScanResult):
+                result_id = scanner_result.resource_uri
+            else:
+                result_id = "unknown"
+            
             logger.debug(
-                f"Scanner Result {scanner_result.tool_name} findings: {scanner_result.findings}"
+                f"Scanner Result {result_id} findings: {scanner_result.findings}"
             )
             logger.debug(
                 f"Ran Analyzers: {ran_analyzers} Internal Name: {internal_name}"
@@ -171,6 +195,15 @@ def _convert_scanner_result_to_api_result(
             "total_findings": len(vulns),
         }
 
+    return grouped_findings
+
+
+def _convert_scanner_result_to_api_result(
+    scanner_result: ScanResult, scanner: Scanner
+) -> ToolScanResult:
+    """Convert a scanner result to an API result with grouped analyzer findings."""
+    grouped_findings = _group_findings_for_api(scanner_result, scanner)
+    
     return ToolScanResult(
         tool_name=scanner_result.tool_name,
         status=scanner_result.status,
@@ -402,50 +435,8 @@ async def scan_prompt_endpoint(
         )
         logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
 
-        # Convert result to API format
-        analyzer_groups = group_findings_by_analyzer(result.findings)
-        grouped_findings = {}
-
-        for analyzer_name in ["API", "YARA", "LLM"]:
-            vulns = analyzer_groups.get(analyzer_name, [])
-            
-            if vulns:
-                threat_names = []
-                severities = []
-                
-                for vuln in vulns:
-                    severities.append(vuln.severity)
-                    if hasattr(vuln, "details") and vuln.details and "threat_type" in vuln.details:
-                        threat_type = vuln.details["threat_type"]
-                        if threat_type not in threat_names:
-                            threat_names.append(threat_type)
-                
-                analyzer_severity = get_highest_severity(severities)
-                
-                if len(threat_names) == 0:
-                    threat_summary = "No specific threats identified"
-                elif len(threat_names) == 1:
-                    threat_summary = f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
-                else:
-                    threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
-                
-                grouped_findings[analyzer_name.lower() + "_analyzer"] = {
-                    "severity": analyzer_severity,
-                    "threat_names": threat_names,
-                    "threat_summary": threat_summary,
-                    "total_findings": len(vulns),
-                }
-            else:
-                # Check if analyzer was run
-                ran_analyzer_values = [str(a.value) if hasattr(a, "value") else str(a) for a in result.analyzers]
-                analyzer_was_run = analyzer_name.lower() in ran_analyzer_values
-                
-                grouped_findings[analyzer_name.lower() + "_analyzer"] = {
-                    "severity": "SAFE" if analyzer_was_run else "UNKNOWN",
-                    "threat_names": [],
-                    "threat_summary": "No threats detected" if analyzer_was_run else "Analyzer not run",
-                    "total_findings": 0,
-                }
+        # Convert result to API format using helper function
+        grouped_findings = _group_findings_for_api(result, scanner)
 
         response = {
             "server_url": request.server_url,
@@ -456,7 +447,7 @@ async def scan_prompt_endpoint(
             "findings": grouped_findings,
         }
 
-        logger.debug(f"Prompt scan completed successfully for {request.tool_name}")
+        logger.debug(f"Prompt scan completed successfully for {request.prompt_name}")
         return response
 
     except ValueError as e:
@@ -502,49 +493,8 @@ async def scan_all_prompts_endpoint(
         # Convert results to API format
         prompt_results = []
         for result in results:
-            analyzer_groups = group_findings_by_analyzer(result.findings)
-            grouped_findings = {}
-
-            for analyzer_name in ["API", "YARA", "LLM"]:
-                vulns = analyzer_groups.get(analyzer_name, [])
-                
-                if vulns:
-                    threat_names = []
-                    severities = []
-                    
-                    for vuln in vulns:
-                        severities.append(vuln.severity)
-                        if hasattr(vuln, "details") and vuln.details and "threat_type" in vuln.details:
-                            threat_type = vuln.details["threat_type"]
-                            if threat_type not in threat_names:
-                                threat_names.append(threat_type)
-                    
-                    analyzer_severity = get_highest_severity(severities)
-                    
-                    if len(threat_names) == 0:
-                        threat_summary = "No specific threats identified"
-                    elif len(threat_names) == 1:
-                        threat_summary = f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
-                    else:
-                        threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
-                    
-                    grouped_findings[analyzer_name.lower() + "_analyzer"] = {
-                        "severity": analyzer_severity,
-                        "threat_names": threat_names,
-                        "threat_summary": threat_summary,
-                        "total_findings": len(vulns),
-                    }
-                else:
-                    # Check if analyzer was run
-                    ran_analyzer_values = [str(a.value) if hasattr(a, "value") else str(a) for a in result.analyzers]
-                    analyzer_was_run = analyzer_name.lower() in ran_analyzer_values
-                    
-                    grouped_findings[analyzer_name.lower() + "_analyzer"] = {
-                        "severity": "SAFE" if analyzer_was_run else "UNKNOWN",
-                        "threat_names": [],
-                        "threat_summary": "No threats detected" if analyzer_was_run else "Analyzer not run",
-                        "total_findings": 0,
-                    }
+            # Use helper function to group findings
+            grouped_findings = _group_findings_for_api(result, scanner)
 
             prompt_results.append({
                 "prompt_name": result.prompt_name,
@@ -610,51 +560,9 @@ async def scan_resource_endpoint(
         )
         logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
 
-        # Convert result to API format
+        # Convert result to API format using helper function
         if result.status == "completed":
-            analyzer_groups = group_findings_by_analyzer(result.findings)
-            grouped_findings = {}
-
-            for analyzer_name in ["API", "LLM"]:  # Only API and LLM for resources
-                vulns = analyzer_groups.get(analyzer_name, [])
-                
-                if vulns:
-                    threat_names = []
-                    severities = []
-                    
-                    for vuln in vulns:
-                        severities.append(vuln.severity)
-                        if hasattr(vuln, "details") and vuln.details and "threat_type" in vuln.details:
-                            threat_type = vuln.details["threat_type"]
-                            if threat_type not in threat_names:
-                                threat_names.append(threat_type)
-                    
-                    analyzer_severity = get_highest_severity(severities)
-                    
-                    if len(threat_names) == 0:
-                        threat_summary = "No specific threats identified"
-                    elif len(threat_names) == 1:
-                        threat_summary = f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
-                    else:
-                        threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
-                    
-                    grouped_findings[analyzer_name.lower() + "_analyzer"] = {
-                        "severity": analyzer_severity,
-                        "threat_names": threat_names,
-                        "threat_summary": threat_summary,
-                        "total_findings": len(vulns),
-                    }
-                else:
-                    # Check if analyzer was run
-                    ran_analyzer_values = [str(a.value) if hasattr(a, "value") else str(a) for a in result.analyzers]
-                    analyzer_was_run = analyzer_name.lower() in ran_analyzer_values
-                    
-                    grouped_findings[analyzer_name.lower() + "_analyzer"] = {
-                        "severity": "SAFE" if analyzer_was_run else "UNKNOWN",
-                        "threat_names": [],
-                        "threat_summary": "No threats detected" if analyzer_was_run else "Analyzer not run",
-                        "total_findings": 0,
-                    }
+            grouped_findings = _group_findings_for_api(result, scanner)
         else:
             grouped_findings = {}
 
@@ -668,7 +576,7 @@ async def scan_resource_endpoint(
             "findings": grouped_findings,
         }
 
-        logger.debug(f"Resource scan completed successfully for {request.tool_name}")
+        logger.debug(f"Resource scan completed successfully for {request.resource_uri}")
         return response
 
     except ValueError as e:
@@ -719,49 +627,8 @@ async def scan_all_resources_endpoint(
         resource_results = []
         for result in results:
             if result.status == "completed":
-                analyzer_groups = group_findings_by_analyzer(result.findings)
-                grouped_findings = {}
-
-                for analyzer_name in ["API", "LLM"]:  # Only API and LLM for resources
-                    vulns = analyzer_groups.get(analyzer_name, [])
-                    
-                    if vulns:
-                        threat_names = []
-                        severities = []
-                        
-                        for vuln in vulns:
-                            severities.append(vuln.severity)
-                            if hasattr(vuln, "details") and vuln.details and "threat_type" in vuln.details:
-                                threat_type = vuln.details["threat_type"]
-                                if threat_type not in threat_names:
-                                    threat_names.append(threat_type)
-                        
-                        analyzer_severity = get_highest_severity(severities)
-                        
-                        if len(threat_names) == 0:
-                            threat_summary = "No specific threats identified"
-                        elif len(threat_names) == 1:
-                            threat_summary = f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
-                        else:
-                            threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
-                        
-                        grouped_findings[analyzer_name.lower() + "_analyzer"] = {
-                            "severity": analyzer_severity,
-                            "threat_names": threat_names,
-                            "threat_summary": threat_summary,
-                            "total_findings": len(vulns),
-                        }
-                    else:
-                        # Check if analyzer was run
-                        ran_analyzer_values = [str(a.value) if hasattr(a, "value") else str(a) for a in result.analyzers]
-                        analyzer_was_run = analyzer_name.lower() in ran_analyzer_values
-                        
-                        grouped_findings[analyzer_name.lower() + "_analyzer"] = {
-                            "severity": "SAFE" if analyzer_was_run else "UNKNOWN",
-                            "threat_names": [],
-                            "threat_summary": "No threats detected" if analyzer_was_run else "Analyzer not run",
-                            "total_findings": 0,
-                        }
+                # Use helper function to group findings
+                grouped_findings = _group_findings_for_api(result, scanner)
 
                 resource_results.append({
                     "resource_uri": result.resource_uri,

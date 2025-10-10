@@ -191,11 +191,13 @@ class ResourceScanResult(ScanResult):
         return f"ResourceScanResult(resource_uri={self.resource_uri}, mime_type={self.resource_mime_type}, status={self.status}, findings={len(self.findings)})"
 
 
-def process_scan_results(results: List[ScanResult]) -> Dict[str, Any]:
+def process_scan_results(
+    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]]
+) -> Dict[str, Any]:
     """Process a list of scan results and return summary statistics.
 
     Args:
-        results (List[ScanResult]): A list of scan results to process.
+        results: A list of scan results (tools, prompts, or resources) to process.
 
     Returns:
         Dict[str, Any]: A dictionary containing summary statistics about the scan results.
@@ -354,6 +356,9 @@ def format_results_as_json(
     results = []
 
     for scan_result in scan_results:
+        # Initialize result_dict to None
+        result_dict = None
+        
         # Build result dict based on type
         if isinstance(scan_result, ToolScanResult):
             result_dict = {
@@ -378,8 +383,10 @@ def format_results_as_json(
                 "findings": {},
                 "is_safe": scan_result.is_safe,
             }
-        else:
-            continue  # Skip unknown types
+        
+        # Skip unknown types
+        if result_dict is None:
+            continue
 
         # Group findings by analyzer
         analyzer_groups = group_findings_by_analyzer(scan_result.findings)
