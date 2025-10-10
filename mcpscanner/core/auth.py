@@ -51,7 +51,6 @@ class APIAuthConfig(BaseModel):
     auth_type: AuthType = AuthType.NONE
     bearer_token: Optional[str] = None
     api_key: Optional[str] = None
-    header_name: Optional[str] = None
     api_key_header: Optional[str] = None
 
 
@@ -117,11 +116,11 @@ class Auth:
     def apikey(
         cls,
         api_key: str,
-        header_name: str) -> "Auth":
+        api_key_header: str) -> "Auth":
         """Create API key authentication configuration.
         Args:
             api_key (str): The API key value.
-            header_name (str): The HTTP header name for the API key (e.g., "X-API-Key").
+            api_key_header (str): The HTTP header name for the API key (e.g., "X-API-Key").
         Returns:
             Auth: Configured API key authentication instance.
         """
@@ -129,7 +128,7 @@ class Auth:
             enabled=True,
             auth_type=AuthType.APIKEY,
             api_key=api_key,
-            api_key_header=header_name
+            api_key_header=api_key_header
         )
 
     @classmethod
@@ -477,14 +476,14 @@ class BearerAuth(httpx.Auth):
 class ApiKeyAuth(httpx.Auth):
     """API Key authentication for HTTP requests."""
 
-    def __init__(self, header_name: str, api_key: str):
+    def __init__(self, api_key_header: str, api_key: str):
         """Initialize API Key authentication.
 
         Args:
-            header_name (str): The HTTP header name for the API key (e.g., "X-API-Key").
+            api_key_header (str): The HTTP header name for the API key (e.g., "X-API-Key").
             api_key (str): The API key value.
         """
-        self.header_name = header_name
+        self.api_key_header = api_key_header
         self.api_key = SecretStr(api_key)
     def auth_flow(self, request):
         """Add API key to request headers.
@@ -492,5 +491,5 @@ class ApiKeyAuth(httpx.Auth):
         Args:
             request: The HTTP request to authenticate.
         """
-        request.headers[self.header_name] = self.api_key.get_secret_value()
+        request.headers[self.api_key_header] = self.api_key.get_secret_value()
         yield request
