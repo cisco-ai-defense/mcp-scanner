@@ -16,8 +16,12 @@ The MCP Scanner is organized into the following components:
 
 ## Utility Methods
 
+All utility methods support Union types (v2.0.0+), accepting `ToolScanResult`, `PromptScanResult`, or `ResourceScanResult`:
+
 - **process_scan_results**: Processes a list of scan results and returns summary statistics.
-- **filter_results_by_severity**: Filters scan results by severity level (high, medium, low).
+- **filter_results_by_severity**: Filters scan results by severity level (high, medium, low). Preserves the original result type.
+- **format_results_as_json**: Formats scan results as JSON, dynamically handling all three result types.
+- **format_results_by_analyzer**: Formats results grouped by analyzer, with appropriate naming based on result type.
 
 ## Data Models
 

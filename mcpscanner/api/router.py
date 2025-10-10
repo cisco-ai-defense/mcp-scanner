@@ -241,6 +241,8 @@ async def scan_tool_endpoint(
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)  
+            if request.auth.auth_type == AuthType.APIKEY:
+                auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
 
         result = await scanner.scan_remote_server_tool(
             server_url=request.server_url,
@@ -313,6 +315,8 @@ async def scan_all_tools_endpoint(
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)  
+            if request.auth.auth_type == AuthType.APIKEY:
+                auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
 
         results = await scanner.scan_remote_server_tools(
             server_url=request.server_url,

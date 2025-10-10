@@ -496,6 +496,15 @@ class Scanner:
                 logger.debug(
                     f'Using explicit Bearer authentication for MCP server: server="{server_url}"'
                 )
+            elif auth and auth.type == AuthType.APIKEY:
+                if not getattr(auth, "api_key", None) or not getattr(auth, "api_key_header", None):
+                    raise ValueError(
+                        "APIKEY authentication selected but no api key or api header value provided"
+                    )
+                extra_headers[auth.api_key_header] = auth.api_key
+                logger.debug(
+                    f'Using APIKEY authentication for MCP server: server="{server_url}"'
+                )
             elif auth:
                 logger.debug(
                     f'Using explicit authentication (type: {auth.type}) for MCP server: server="{server_url}"'

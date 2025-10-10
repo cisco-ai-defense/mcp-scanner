@@ -91,7 +91,13 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
     "tool_filter": null,
     "hide_safe": false,
     "show_stats": false,
-    "rules_path": null
+    "rules_path": null,
+    "auth": {
+      "enabled": true,
+      "auth_type": "apikey",
+      "api_key": "key1",
+      "api_key_header": "X-My-ApiKey"
+    }
   }'
 ```
 
