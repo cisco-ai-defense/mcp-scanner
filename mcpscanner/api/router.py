@@ -23,7 +23,7 @@ from ..core.models import (
     AllToolsScanResponse,
     AnalyzerEnum,
     APIScanRequest,
-    FormattedScanResponse,
+    FormattedToolScanResponse,
     OutputFormat,
     SeverityFilter,
     SpecificToolScanRequest,
@@ -212,7 +212,7 @@ def _convert_scanner_result_to_tool_api_result(
     )
 
 
-def _format_scan_results(
+def _format_tool_scan_results(
     results: List[ScanResult],
     output_format: OutputFormat,
     severity_filter: SeverityFilter = SeverityFilter.ALL,
@@ -250,7 +250,7 @@ def _format_scan_results(
 
 @router.post(
     "/scan-tool",
-    response_model=Union[ToolScanResult, FormattedScanResponse],
+    response_model=Union[ToolScanResult, FormattedToolScanResponse],
     tags=["Scanning"],
 )
 async def scan_tool_endpoint(
@@ -296,7 +296,7 @@ async def scan_tool_endpoint(
             logger.debug("Returning raw API result")
             return api_result
 
-        formatted_output = _format_scan_results(
+        formatted_output = _format_tool_scan_results(
             results=[result],
             output_format=request.output_format,
             severity_filter=request.severity_filter,
@@ -306,7 +306,7 @@ async def scan_tool_endpoint(
             show_stats=request.show_stats,
         )
 
-        response = FormattedScanResponse(
+        response = FormattedToolScanResponse(
             server_url=request.server_url,
             output_format=request.output_format.value,
             formatted_output=formatted_output,
@@ -327,7 +327,7 @@ async def scan_tool_endpoint(
 
 @router.post(
     "/scan-all-tools",
-    response_model=Union[AllToolsScanResponse, FormattedScanResponse],
+    response_model=Union[AllToolsScanResponse, FormattedToolScanResponse],
     tags=["Scanning"],
 )
 async def scan_all_tools_endpoint(
@@ -369,7 +369,7 @@ async def scan_all_tools_endpoint(
                 server_url=request.server_url, scan_results=api_results
             )
 
-        formatted_output = _format_scan_results(
+        formatted_output = _format_tool_scan_results(
             results=results,
             output_format=request.output_format,
             severity_filter=request.severity_filter,
@@ -379,7 +379,7 @@ async def scan_all_tools_endpoint(
             show_stats=request.show_stats,
         )
 
-        response = FormattedScanResponse(
+        response = FormattedToolScanResponse(
             server_url=request.server_url,
             output_format=request.output_format.value,
             formatted_output=formatted_output,

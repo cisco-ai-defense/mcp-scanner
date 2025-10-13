@@ -684,7 +684,7 @@ class Scanner:
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
 
         Returns:
-            ScanResult: The result of the scan.
+            ToolScanResult: The result of the scan.
 
         Raises:
             ValueError: If the tool is not found on the server.
@@ -908,7 +908,7 @@ class Scanner:
             timeout: Connection timeout in seconds
 
         Returns:
-            List of scan results
+            List[ToolScanResult]: List of tool scan results
         """
         if timeout is None:
             timeout = 60
@@ -968,7 +968,7 @@ class Scanner:
             timeout (Optional[int]): Timeout for the connection.
 
         Returns:
-            ScanResult: The result of the scan.
+            ToolScanResult: The result of the scan.
 
         Raises:
             ValueError: If the tool is not found on the server.

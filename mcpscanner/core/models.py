@@ -328,11 +328,10 @@ class AllToolsScanResponse(BaseModel):
     scan_results: List[ToolScanResult]
 
 
-class FormattedScanResponse(BaseModel):
-    """Formatted scan response with custom output format.
+class FormattedToolScanResponse(BaseModel):
+    """Formatted tool scan response with custom output format.
 
-    Note: This model is used for formatted responses from tool, prompt, and resource scans.
-    The name is kept for backward compatibility with v1.x.
+    This model is used for formatted responses from tool scans.
     """
 
     server_url: str
