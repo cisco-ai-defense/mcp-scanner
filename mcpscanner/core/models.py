@@ -330,7 +330,7 @@ class AllToolsScanResponse(BaseModel):
 
 class FormattedScanResponse(BaseModel):
     """Formatted scan response with custom output format.
-    
+
     Note: This model is used for formatted responses from tool, prompt, and resource scans.
     The name is kept for backward compatibility with v1.x.
     """

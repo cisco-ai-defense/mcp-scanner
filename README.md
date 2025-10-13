@@ -1,4 +1,4 @@
-# MCP Scanner 
+# MCP Scanner
 
 A Python tool for scanning MCP (Model Context Protocol) servers and tools for potential security vulnerabilities. The MCP Scanner combines Cisco AI Defense inspect API, YARA rules and LLM-as-a-judge to detect malicious MCP tools.
 
@@ -122,37 +122,37 @@ async def main():
         api_key="your_cisco_api_key",
         llm_provider_api_key="your_llm_api_key"
     )
-    
+
     # Create scanner
     scanner = Scanner(config)
-    
+
     # Scan all tools on a remote server
     tool_results = await scanner.scan_remote_server_tools(
         "https://mcp.deepwki.com/mcp",
         analyzers=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
     )
-    
+
     # Print tool results
     for result in tool_results:
         print(f"Tool: {result.tool_name}, Safe: {result.is_safe}")
-    
+
     # Scan all prompts on a server
     prompt_results = await scanner.scan_remote_server_prompts(
         "http://127.0.0.1:8000/mcp",
         analyzers=[AnalyzerEnum.LLM]
     )
-    
+
     # Print prompt results
     for result in prompt_results:
         print(f"Prompt: {result.prompt_name}, Safe: {result.is_safe}")
-    
+
     # Scan all resources on a server
     resource_results = await scanner.scan_remote_server_resources(
         "http://127.0.0.1:8000/mcp",
         analyzers=[AnalyzerEnum.LLM],
         allowed_mime_types=["text/plain", "text/html"]
     )
-    
+
     # Print resource results
     for result in resource_results:
         print(f"Resource: {result.resource_name}, Safe: {result.is_safe}, Status: {result.status}")
@@ -297,7 +297,7 @@ The scanner supports multiple output formats:
 
 - **`summary`**: Concise overview with key findings
 - **`detailed`**: Comprehensive analysis with full findings breakdown
-- **`table`**: Clean tabular format  
+- **`table`**: Clean tabular format
 - **`by_severity`**: Results grouped by severity level
 - **`raw`**: Raw JSON output
 
@@ -346,10 +346,10 @@ mcp-scanner --server-url http://127.0.0.1:8002/sse --format table
 
 Scan Target: http://127.0.0.1:8002/sse
 
-Scan Target                   Tool Name     Status     API      YARA     LLM      Severity   
+Scan Target                   Tool Name     Status     API      YARA     LLM      Severity
 -----------------------------------------------------------------------------------------
-http://127.0.0.1:8002/sse     exec_secrets  UNSAFE     HIGH     HIGH     HIGH     HIGH      
-http://127.0.0.1:8002/sse     safe_command  SAFE       SAFE     SAFE     SAFE     SAFE  
+http://127.0.0.1:8002/sse     exec_secrets  UNSAFE     HIGH     HIGH     HIGH     HIGH
+http://127.0.0.1:8002/sse     safe_command  SAFE       SAFE     SAFE     SAFE     SAFE
 ```
 
 ## Documentation

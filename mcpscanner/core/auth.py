@@ -47,7 +47,7 @@ class AuthType(str, Enum):
 
 class APIAuthConfig(BaseModel):
     """Authentication configuration for MCP scanner requests."""
-    
+
     auth_type: AuthType = AuthType.NONE
     bearer_token: Optional[str] = None
     api_key: Optional[str] = None
@@ -112,7 +112,7 @@ class Auth:
         """Return True if authentication is enabled."""
         return self.enabled
 
-    @classmethod 
+    @classmethod
     def apikey(
         cls,
         api_key: str,

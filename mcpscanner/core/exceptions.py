@@ -22,10 +22,10 @@ All exceptions inherit from MCPScannerError for easy catching.
 Example:
     >>> from mcpscanner import Scanner, Config
     >>> from mcpscanner.core.exceptions import MCPAuthenticationError
-    >>> 
+    >>>
     >>> config = Config()
     >>> scanner = Scanner(config)
-    >>> 
+    >>>
     >>> try:
     ...     results = await scanner.scan_remote_server_tools("https://server.com")
     ... except MCPAuthenticationError as e:
@@ -42,7 +42,7 @@ class MCPScannerError(Exception):
 
 class MCPConnectionError(MCPScannerError):
     """Raised when unable to connect to an MCP server.
-    
+
     This can indicate:
     - DNS resolution failure
     - Network connectivity issues
@@ -54,11 +54,11 @@ class MCPConnectionError(MCPScannerError):
 
 class MCPAuthenticationError(MCPConnectionError):
     """Raised when authentication with an MCP server fails.
-    
+
     This typically indicates:
     - HTTP 401 Unauthorized - Missing or invalid credentials
     - HTTP 403 Forbidden - Insufficient permissions
-    
+
     The server requires authentication via OAuth or Bearer token.
     Use the --bearer-token flag or configure OAuth.
     """
@@ -67,7 +67,7 @@ class MCPAuthenticationError(MCPConnectionError):
 
 class MCPServerNotFoundError(MCPConnectionError):
     """Raised when the MCP server endpoint is not found.
-    
+
     This indicates:
     - HTTP 404 Not Found
     - Invalid URL or endpoint path

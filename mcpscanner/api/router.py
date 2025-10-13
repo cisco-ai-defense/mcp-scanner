@@ -63,14 +63,14 @@ def _group_findings_for_api(
 ) -> Dict[str, Any]:
     """
     Extract and group findings by analyzer for API response.
-    
+
     This helper function processes findings from any scan result type and returns
     a dictionary of grouped findings suitable for API responses.
-    
+
     Args:
         scanner_result: The scan result (tool, prompt, or resource)
         scanner: The scanner instance
-        
+
     Returns:
         Dict with analyzer findings grouped by analyzer name
     """
@@ -145,7 +145,7 @@ def _group_findings_for_api(
             # If the analyzer was run but found nothing, it's SAFE.
             # We check if the internal name is in the list of analyzers that were part of the scan.
             ran_analyzers = [f for f in scanner_result.analyzers]
-            
+
             # Get result identifier based on type for logging
             if isinstance(scanner_result, ToolScanResult):
                 result_id = scanner_result.tool_name
@@ -155,7 +155,7 @@ def _group_findings_for_api(
                 result_id = scanner_result.resource_uri
             else:
                 result_id = "unknown"
-            
+
             logger.debug(
                 f"Scanner Result {result_id} findings: {scanner_result.findings}"
             )
@@ -203,7 +203,7 @@ def _convert_scanner_result_to_api_result(
 ) -> ToolScanResult:
     """Convert a scanner result to an API result with grouped analyzer findings."""
     grouped_findings = _group_findings_for_api(scanner_result, scanner)
-    
+
     return ToolScanResult(
         tool_name=scanner_result.tool_name,
         status=scanner_result.status,
@@ -269,11 +269,11 @@ async def scan_tool_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        
+
         auth = None
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)  
+                auth = Auth.bearer(request.auth.bearer_token)
             if request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
 
@@ -347,7 +347,7 @@ async def scan_all_tools_endpoint(
         auth = None
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)  
+                auth = Auth.bearer(request.auth.bearer_token)
             if request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
 

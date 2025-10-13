@@ -239,10 +239,10 @@ def display_prompt_results_table(results: List[Dict[str, Any]], server_url: str)
         print("Falling back to summary format...\n")
         display_prompt_results(results, server_url, detailed=False)
         return
-    
+
     print("\n=== MCP Prompt Scanner Results (Table) ===\n")
     print(f"Server URL: {server_url}\n")
-    
+
     # Prepare table data
     table_data = []
     for result in results:
@@ -252,7 +252,7 @@ def display_prompt_results_table(results: List[Dict[str, Any]], server_url: str)
         desc_short = desc[:40] + "..." if len(desc) > 40 else desc
         findings_count = len(result.get("findings", []))
         status = result.get("status", "unknown")
-        
+
         table_data.append([
             status_icon,
             prompt_name,
@@ -260,10 +260,10 @@ def display_prompt_results_table(results: List[Dict[str, Any]], server_url: str)
             findings_count,
             status
         ])
-    
+
     headers = ["Status", "Prompt Name", "Description", "Findings", "Scan Status"]
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
-    
+
     # Summary
     safe = sum(1 for r in results if r.get("is_safe", False))
     unsafe = sum(1 for r in results if not r.get("is_safe", False))
@@ -279,28 +279,28 @@ def display_resource_results_table(results: List[Dict[str, Any]], server_url: st
         print("Falling back to summary format...\n")
         display_resource_results(results, server_url, detailed=False)
         return
-    
+
     print("\n=== MCP Resource Scanner Results (Table) ===\n")
     print(f"Server URL: {server_url}\n")
-    
+
     # Prepare table data
     table_data = []
     for result in results:
         status = result.get("status", "unknown")
-        
+
         if status == "completed":
             status_icon = "✅" if result.get("is_safe", False) else "⚠️"
         elif status == "skipped":
             status_icon = "⏭️"
         else:
             status_icon = "❌"
-        
+
         resource_name = result.get("resource_name", "Unknown")
         uri = result.get("resource_uri", "N/A")
         uri_short = uri[:40] + "..." if len(uri) > 40 else uri
         mime_type = result.get("resource_mime_type", "unknown")
         findings_count = len(result.get("findings", [])) if status == "completed" else "-"
-        
+
         table_data.append([
             status_icon,
             resource_name,
@@ -309,17 +309,17 @@ def display_resource_results_table(results: List[Dict[str, Any]], server_url: st
             findings_count,
             status
         ])
-    
+
     headers = ["Status", "Resource Name", "URI", "MIME Type", "Findings", "Scan Status"]
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
-    
+
     # Summary
     completed = [r for r in results if r.get("status") == "completed"]
     skipped = [r for r in results if r.get("status") == "skipped"]
     failed = [r for r in results if r.get("status") == "failed"]
     safe = sum(1 for r in completed if r.get("is_safe", False))
     unsafe = sum(1 for r in completed if not r.get("is_safe", False))
-    
+
     print(f"\n📊 Summary: {len(results)} total | {len(completed)} scanned | {len(skipped)} skipped | {len(failed)} failed")
     if completed:
         print(f"   Security: {safe} safe | {unsafe} unsafe")
@@ -352,7 +352,7 @@ def display_prompt_results(results: List[Dict[str, Any]], server_url: str, detai
             if prompt.get('prompt_description'):
                 desc = prompt['prompt_description']
                 print(f"   Description: {desc[:80]}{'...' if len(desc) > 80 else ''}")
-            
+
             findings = prompt.get("findings", [])
             print(f"   Findings: {len(findings)}")
 
@@ -361,7 +361,7 @@ def display_prompt_results(results: List[Dict[str, Any]], server_url: str, detai
                     print(f"   {j}. {finding.get('summary', 'No summary')}")
                     print(f"      Severity: {finding.get('severity', 'Unknown')}")
                     print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
-                    
+
                     details = finding.get("details", {})
                     if details.get("primary_threats"):
                         threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
@@ -404,7 +404,7 @@ def display_resource_results(results: List[Dict[str, Any]], server_url: str, det
     if completed:
         safe_resources = [r for r in completed if r.get("is_safe", False)]
         unsafe_resources = [r for r in completed if not r.get("is_safe", False)]
-        
+
         print(f"Safe resources: {len(safe_resources)}")
         print(f"Unsafe resources: {len(unsafe_resources)}")
 
@@ -415,7 +415,7 @@ def display_resource_results(results: List[Dict[str, Any]], server_url: str, det
                 print(f"{i}. {resource.get('resource_name', 'Unknown')}")
                 print(f"   URI: {resource.get('resource_uri', 'N/A')}")
                 print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
-                
+
                 findings = resource.get("findings", [])
                 print(f"   Findings: {len(findings)}")
 
@@ -424,7 +424,7 @@ def display_resource_results(results: List[Dict[str, Any]], server_url: str, det
                         print(f"   {j}. {finding.get('summary', 'No summary')}")
                         print(f"      Severity: {finding.get('severity', 'Unknown')}")
                         print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
-                        
+
                         details = finding.get("details", {})
                         if details.get("primary_threats"):
                             threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
@@ -751,7 +751,7 @@ async def main():
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-            
+
             if args.prompt_name:
                 # Scan specific prompt
                 result = await scanner.scan_remote_server_prompt(
@@ -806,10 +806,10 @@ async def main():
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-            
+
             # Parse MIME types
             allowed_mime_types = [m.strip() for m in args.mime_types.split(",")]
-            
+
             if args.resource_uri:
                 # Scan specific resource
                 result = await scanner.scan_remote_server_resource(
@@ -1089,16 +1089,16 @@ def cli_entry_point():
     import sys
     import logging
     import warnings
-    
+
     # Suppress warnings from MCP library cleanup issues
     warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*never awaited.*")
     warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*async.*generator.*")
-    
+
     # Suppress asyncio shutdown errors from MCP library cleanup bugs
     def custom_exception_handler(loop, context):
         exception = context.get("exception")
         message = context.get("message", "")
-        
+
         # Suppress RuntimeError from MCP library task cleanup
         if isinstance(exception, RuntimeError) and "cancel scope" in str(exception):
             return
@@ -1110,11 +1110,11 @@ def cli_entry_point():
             return
         # For other exceptions, use default handling
         loop.default_exception_handler(context)
-    
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.set_exception_handler(custom_exception_handler)
-    
+
     try:
         loop.run_until_complete(main())
     finally:

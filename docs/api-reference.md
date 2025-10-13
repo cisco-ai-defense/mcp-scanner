@@ -13,7 +13,7 @@ MCP_SCANNER_API_KEY=your_api_key_here
 # API Endpoint URL - defaults to US production if not specified
 MCP_SCANNER_ENDPOINT="https://us.api.inspect.aidefense.security.cisco.com/api/v1"
 
-Other Cisco AI Defense endpoints are documented at https://developer.cisco.com/docs/ai-defense/getting-started/#base-url 
+Other Cisco AI Defense endpoints are documented at https://developer.cisco.com/docs/ai-defense/getting-started/#base-url
 
 ```
 
@@ -110,7 +110,7 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
   -H "Content-Type: application/json" \
   -d '{
     "server_url": "https://mcp-server.example.com/mcp",
-    "analyzers": ["api", "llm"], 
+    "analyzers": ["api", "llm"],
     "output_format": "summary",
     "severity_filter": "all",
     "analyzer_filter": null,
@@ -149,7 +149,7 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
   -H "accept: application/json" \
   -H "Content-Type: application/json" \
   -d '{
-    "server_url": "https://mcp-server.example.com/mcp",   
+    "server_url": "https://mcp-server.example.com/mcp",
     "analyzers": ["api", "llm"],
     "output_format": "by_severity",
     "severity_filter": "all",
@@ -220,7 +220,7 @@ Scan a specific tool on an MCP server.
 - `analyzers`: List of analyzers to use
 - `auth`: Authentication configuration (optional)
 
-#### POST /scan-all-tools  
+#### POST /scan-all-tools
 Scan all tools available on an MCP server.
 
 **Parameters:**

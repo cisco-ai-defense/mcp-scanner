@@ -148,7 +148,7 @@ servers = [
         "auth": Auth.oauth(client_id="oauth_client")
     },
     {
-        "url": "http://public-server:8002/mcp", 
+        "url": "http://public-server:8002/mcp",
         "auth": Auth(enabled=False)  # Explicitly no auth
     },
     {

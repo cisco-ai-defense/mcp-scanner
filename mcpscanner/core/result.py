@@ -240,7 +240,7 @@ def process_scan_results(
 
 
 def filter_results_by_severity(
-    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]], 
+    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]],
     severity: str
 ) -> List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]]:
     """Filter scan results by severity level.
@@ -294,7 +294,7 @@ def filter_results_by_severity(
                 )
             else:
                 continue  # Skip unknown types
-            
+
             filtered_results.append(filtered_result)
 
     return filtered_results
@@ -358,7 +358,7 @@ def format_results_as_json(
     for scan_result in scan_results:
         # Initialize result_dict to None
         result_dict = None
-        
+
         # Build result dict based on type
         if isinstance(scan_result, ToolScanResult):
             result_dict = {
@@ -383,7 +383,7 @@ def format_results_as_json(
                 "findings": {},
                 "is_safe": scan_result.is_safe,
             }
-        
+
         # Skip unknown types
         if result_dict is None:
             continue
@@ -488,7 +488,7 @@ def format_results_by_analyzer(
         item_name = f"Resource '{scan_result.resource_uri}'"
     else:
         item_name = "Item"
-    
+
     if scan_result.is_safe:
         return f"✅ {item_name} is safe - no potential threats detected"
 

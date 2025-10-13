@@ -8,7 +8,7 @@ The MCP Scanner SDK raises specific exceptions for different error scenarios:
 from mcpscanner import Scanner, Config
 from mcpscanner import (
     MCPAuthenticationError,  # 401/403 errors
-    MCPServerNotFoundError,  # 404 errors  
+    MCPServerNotFoundError,  # 404 errors
     MCPConnectionError,      # Network/DNS failures
 )
 
@@ -16,13 +16,13 @@ scanner = Scanner(Config())
 
 try:
     results = await scanner.scan_remote_server_tools("https://example.com/mcp")
-    
+
 except MCPAuthenticationError as e:
     print(f"Auth required: {e}")
-    
+
 except MCPServerNotFoundError as e:
     print(f"Not found: {e}")
-    
+
 except MCPConnectionError as e:
     print(f"Connection failed: {e}")
 ```

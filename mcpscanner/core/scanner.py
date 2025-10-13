@@ -300,7 +300,7 @@ class Scanner:
         all_findings = []
         name = prompt.name
         description = prompt.description or ""
-        
+
         # Safely parse prompt data
         try:
             prompt_json = prompt.model_dump_json()
@@ -412,10 +412,10 @@ class Scanner:
 
     def _check_http_error_in_logs(self, msg: str) -> Optional[int]:
         """Check if a log message contains an HTTP error status code.
-        
+
         Args:
             msg: Log message to check
-            
+
         Returns:
             HTTP status code if found (401, 403, 404), None otherwise
         """
@@ -546,31 +546,31 @@ class Scanner:
         httpx_logger = None
         original_httpx_level = None
         original_propagate = None
-        
+
         # Set up httpx logging capture to detect HTTP errors
         httpx_logger = stdlib_logging.getLogger("httpx")
         original_httpx_level = httpx_logger.level
         original_propagate = httpx_logger.propagate
-        
+
         class StatusCodeCapture(stdlib_logging.Handler):
             def __init__(self):
                 super().__init__(level=stdlib_logging.INFO)
-                
+
             def emit(self, record):
                 nonlocal http_status_code
                 # Capture the status code silently (don't propagate to console)
                 http_status_code = self._check_http_error_in_logs(record.getMessage()) or http_status_code
-        
+
         capture_handler = StatusCodeCapture()
         capture_handler._check_http_error_in_logs = self._check_http_error_in_logs
-        
+
         # Temporarily set httpx logger to INFO to ensure it emits logs we can capture
         # Disable propagation only if we're raising the log level to avoid console output
         httpx_logger.addHandler(capture_handler)
         if httpx_logger.level > stdlib_logging.INFO or httpx_logger.level == stdlib_logging.NOTSET:
             httpx_logger.setLevel(stdlib_logging.INFO)
             httpx_logger.propagate = False  # Prevent console output
-        
+
         try:
             logger.debug(f'Attempting to connect to MCP server: server="{server_url}"')
             # Suppress async generator warnings from MCP library cleanup bugs
@@ -588,7 +588,7 @@ class Scanner:
         except (asyncio.CancelledError, GeneratorExit) as e:
             # These exceptions often wrap HTTP errors from the MCP library
             await self._close_mcp_session(client_context, session)
-            
+
             # Check if we captured an HTTP error status code from logs
             if http_status_code == 401:
                 raise MCPAuthenticationError(
@@ -606,7 +606,7 @@ class Scanner:
                     f"MCP server endpoint not found at {server_url}. "
                     f"Please verify the URL is correct."
                 ) from e
-            
+
             # Generic cancellation error
             raise MCPConnectionError(
                 f"Connection to MCP server at {server_url} was cancelled. "
@@ -615,14 +615,14 @@ class Scanner:
         except BaseExceptionGroup as eg:
             # ExceptionGroup from MCP library - check for HTTP errors
             await self._close_mcp_session(client_context, session)
-            
+
             # Get the first error for inspection
             first_error = eg.exceptions[0] if eg.exceptions else eg
             error_str = str(first_error)
-            
+
             # Check if we captured an HTTP error status code from logs, or check error string
             detected_code = http_status_code or self._check_http_error_in_logs(error_str)
-            
+
             if detected_code == 401:
                 raise MCPAuthenticationError(
                     f"Authentication failed for MCP server at {server_url}. "
@@ -642,7 +642,7 @@ class Scanner:
                     f"Please verify the URL is correct. "
                     f"Original error: {first_error}"
                 ) from eg
-            
+
             # Generic ExceptionGroup error
             raise MCPConnectionError(
                 f"Error connecting to MCP server at {server_url}: {first_error}"
@@ -1225,7 +1225,7 @@ class Scanner:
                 "No server URL provided. Please specify a valid server URL."
             )
 
-        # Default to API and LLM analyzers for prompts 
+        # Default to API and LLM analyzers for prompts
         if analyzers is None:
             analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
 
@@ -1256,7 +1256,7 @@ class Scanner:
                         analyzers=[],
                         findings=[],
                     ))
-            
+
             return scan_results
 
         except Exception as e:
@@ -1472,7 +1472,7 @@ class Scanner:
             ResourceScanResult: The result of the analysis.
         """
         all_findings = []
-        
+
         # Extract text from HTML if needed
         analysis_content = resource_content
         if resource_mime_type == "text/html":
@@ -1648,7 +1648,7 @@ class Scanner:
                 # Read resource content
                 try:
                     resource_contents = await session.read_resource(resource.uri)
-                    
+
                     # Extract text content
                     text_content = ""
                     try:
@@ -1791,7 +1791,7 @@ class Scanner:
 
             # List all resources to find the target
             resource_list = await session.list_resources()
-            
+
             target_resource = None
             for resource in resource_list.resources:
                 # Convert AnyUrl to string for comparison
@@ -1799,7 +1799,7 @@ class Scanner:
                 if resource_uri_str == resource_uri:
                     target_resource = resource
                     break
-            
+
             if not target_resource:
                 raise ValueError(f"Resource '{resource_uri}' not found on server {server_url}")
 
@@ -1818,7 +1818,7 @@ class Scanner:
             # Read resource content
             try:
                 resource_contents = await session.read_resource(target_resource.uri)
-                
+
                 # Extract text content
                 text_content = ""
                 try:
