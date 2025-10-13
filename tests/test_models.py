@@ -26,7 +26,7 @@ from mcpscanner.core.models import (
     SpecificToolScanRequest,
     ToolScanResult,
     AllToolsScanResponse,
-    FormattedScanResponse,
+    FormattedToolScanResponse,
 )
 
 
@@ -313,12 +313,12 @@ class TestAllToolsScanResponse:
         assert len(response.scan_results) == 0
 
 
-class TestFormattedScanResponse:
-    """Test cases for FormattedScanResponse model."""
+class TestFormattedToolScanResponse:
+    """Test cases for FormattedToolScanResponse model."""
 
-    def test_formatted_scan_response_valid(self):
-        """Test creating valid FormattedScanResponse."""
-        response = FormattedScanResponse(
+    def test_formatted_tool_scan_response_valid(self):
+        """Test creating valid FormattedToolScanResponse."""
+        response = FormattedToolScanResponse(
             server_url="https://example.com/mcp",
             output_format="summary",
             formatted_output="=== Scan Summary ===\nAll tools are safe.",
@@ -330,13 +330,13 @@ class TestFormattedScanResponse:
         assert "Scan Summary" in response.formatted_output
         assert response.raw_results == []
 
-    def test_formatted_scan_response_with_raw_results(self):
-        """Test FormattedScanResponse with raw results."""
+    def test_formatted_tool_scan_response_with_raw_results(self):
+        """Test FormattedToolScanResponse with raw results."""
         raw_result = ToolScanResult(
             tool_name="test_tool", status="completed", findings={}, is_safe=True
         )
 
-        response = FormattedScanResponse(
+        response = FormattedToolScanResponse(
             server_url="https://example.com/mcp",
             output_format="detailed",
             formatted_output="Detailed scan results...",
@@ -346,9 +346,9 @@ class TestFormattedScanResponse:
         assert len(response.raw_results) == 1
         assert response.raw_results[0].tool_name == "test_tool"
 
-    def test_formatted_scan_response_none_raw_results(self):
-        """Test FormattedScanResponse with None raw_results."""
-        response = FormattedScanResponse(
+    def test_formatted_tool_scan_response_none_raw_results(self):
+        """Test FormattedToolScanResponse with None raw_results."""
+        response = FormattedToolScanResponse(
             server_url="https://example.com/mcp",
             output_format="table",
             formatted_output="Table format output",
@@ -403,9 +403,9 @@ class TestModelsNegativeFlows:
                 server_url="https://example.com/mcp", scan_results=None
             )
 
-    def test_formatted_scan_response_empty_formatted_output(self):
-        """Test FormattedScanResponse with empty formatted_output."""
-        response = FormattedScanResponse(
+    def test_formatted_tool_scan_response_empty_formatted_output(self):
+        """Test FormattedToolScanResponse with empty formatted_output."""
+        response = FormattedToolScanResponse(
             server_url="https://example.com/mcp",
             output_format="summary",
             formatted_output="",

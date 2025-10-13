@@ -19,7 +19,7 @@ from unittest.mock import Mock, patch, mock_open
 from typing import List, Dict, Any
 
 from mcpscanner.core.report_generator import ReportGenerator, results_to_json
-from mcpscanner.core.result import ScanResult
+from mcpscanner.core.result import ToolScanResult
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.models import OutputFormat, SeverityFilter
 from mcpscanner.config.constants import SeverityLevel
@@ -85,7 +85,7 @@ class TestReportGenerator:
             SecurityFinding(SeverityLevel.HIGH, "Test finding", "YARA", "test_category")
         ]
         results = [
-            ScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings)
+            ToolScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings)
         ]
         dict_results = convert_scan_results_to_dict(results)
         scan_data = {
@@ -119,8 +119,8 @@ class TestReportGenerator:
             )
         ]
         results = [
-            ScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings),
-            ScanResult("tool2", "Tool 2 description", "completed", [], []),
+            ToolScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings),
+            ToolScanResult("tool2", "Tool 2 description", "completed", [], []),
         ]
 
         dict_results = convert_scan_results_to_dict(results)
@@ -145,7 +145,7 @@ class TestReportGenerator:
             )
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "test_tool", "Test tool description", "completed", ["YARA"], findings
             )
         ]
@@ -174,7 +174,7 @@ class TestReportGenerator:
             )
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "table_tool", "Table tool description", "completed", ["API"], findings
             )
         ]
@@ -203,8 +203,8 @@ class TestReportGenerator:
             SecurityFinding(SeverityLevel.MEDIUM, "Finding 2", "API", "test_category")
         ]
         results = [
-            ScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings1),
-            ScanResult("tool2", "Tool 2 description", "completed", ["API"], findings2),
+            ToolScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings1),
+            ToolScanResult("tool2", "Tool 2 description", "completed", ["API"], findings2),
         ]
 
         dict_results = convert_scan_results_to_dict(results)
@@ -236,7 +236,7 @@ class TestReportGenerator:
             ),
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "test_tool",
                 "Test tool description",
                 "completed",
@@ -264,7 +264,7 @@ class TestReportGenerator:
             SecurityFinding(SeverityLevel.HIGH, "High finding", "LLM", "test_category")
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "raw_tool", "Raw tool description", "completed", ["LLM"], findings
             )
         ]
@@ -289,7 +289,7 @@ class TestReportGenerator:
             SecurityFinding(SeverityLevel.HIGH, "High finding", "LLM", "test_category"),
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "filtered_tool",
                 "Filtered tool description",
                 "completed",
@@ -323,7 +323,7 @@ class TestReportGenerator:
             SecurityFinding(SeverityLevel.HIGH, "High finding", "LLM", "test_category"),
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "filtered_tool",
                 "Filtered tool description",
                 "completed",
@@ -359,7 +359,7 @@ class TestReportGenerator:
             SecurityFinding(SeverityLevel.LOW, "LLM finding", "LLM", "test_category"),
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "filtered_tool",
                 "Filtered tool description",
                 "completed",
@@ -392,14 +392,14 @@ class TestReportGenerator:
             SecurityFinding(SeverityLevel.MEDIUM, "Finding 2", "API", "test_category")
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "target_tool",
                 "Target tool description",
                 "completed",
                 ["YARA"],
                 findings1,
             ),
-            ScanResult(
+            ToolScanResult(
                 "other_tool", "Other tool description", "completed", ["API"], findings2
             ),
         ]
@@ -427,14 +427,14 @@ class TestReportGenerator:
             )
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "unsafe_tool",
                 "Unsafe tool description",
                 "completed",
                 ["YARA"],
                 findings,
             ),
-            ScanResult("safe_tool", "Safe tool description", "completed", [], []),
+            ToolScanResult("safe_tool", "Safe tool description", "completed", [], []),
         ]
 
         dict_results = convert_scan_results_to_dict(results)
@@ -462,7 +462,7 @@ class TestReportGenerator:
             ),
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "stats_tool",
                 "Stats tool description",
                 "completed",
@@ -499,8 +499,8 @@ class TestResultsToJson:
             )
         ]
         results = [
-            ScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings),
-            ScanResult("tool2", "Tool 2 description", "completed", [], []),
+            ToolScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings),
+            ToolScanResult("tool2", "Tool 2 description", "completed", [], []),
         ]
 
         json_results = await results_to_json(results)
@@ -524,7 +524,7 @@ class TestResultsToJson:
     @pytest.mark.asyncio
     async def test_results_to_json_with_error(self):
         """Test converting results with error to JSON."""
-        result = ScanResult("failed_tool", "Failed tool description", "failed", [], [])
+        result = ToolScanResult("failed_tool", "Failed tool description", "failed", [], [])
         json_results = await results_to_json([result])
 
         assert len(json_results) == 1
@@ -544,7 +544,7 @@ class TestResultsToJson:
                 "threat_type": "test_category",
             },
         )
-        result = ScanResult(
+        result = ToolScanResult(
             "api_tool", "API tool description", "completed", ["API"], [finding]
         )
 
@@ -568,7 +568,7 @@ class TestReportGeneratorNegativeFlows:
 
     def test_report_generator_invalid_output_format(self):
         """Test ReportGenerator with invalid output format."""
-        results = [ScanResult("tool", "Tool description", "completed", [], [])]
+        results = [ToolScanResult("tool", "Tool description", "completed", [], [])]
         dict_results = convert_scan_results_to_dict(results)
         scan_data = {
             "server_url": "http://test-server.com",
@@ -588,7 +588,7 @@ class TestReportGeneratorNegativeFlows:
 
     def test_report_generator_empty_tool_name(self):
         """Test ReportGenerator with empty tool name."""
-        results = [ScanResult("", "Empty tool description", "completed", [], [])]
+        results = [ToolScanResult("", "Empty tool description", "completed", [], [])]
         dict_results = convert_scan_results_to_dict(results)
         scan_data = {
             "server_url": "http://test-server.com",
@@ -604,7 +604,7 @@ class TestReportGeneratorNegativeFlows:
         """Test ReportGenerator with None finding message."""
         finding = SecurityFinding(SeverityLevel.HIGH, None, "YARA", "test_category")
         results = [
-            ScanResult("tool", "Tool description", "completed", ["YARA"], [finding])
+            ToolScanResult("tool", "Tool description", "completed", ["YARA"], [finding])
         ]
         dict_results = convert_scan_results_to_dict(results)
         scan_data = {
@@ -619,7 +619,7 @@ class TestReportGeneratorNegativeFlows:
 
     def test_report_generator_invalid_severity_filter(self):
         """Test ReportGenerator with invalid severity filter."""
-        results = [ScanResult("tool", "Tool description", "completed", [], [])]
+        results = [ToolScanResult("tool", "Tool description", "completed", [], [])]
         dict_results = convert_scan_results_to_dict(results)
         scan_data = {
             "server_url": "http://test-server.com",
@@ -645,7 +645,7 @@ class TestReportGeneratorNegativeFlows:
             SecurityFinding(SeverityLevel.HIGH, "Finding", "YARA", "test_category")
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "nonexistent_tool_filter_tool",
                 "Tool description",
                 "completed",
@@ -675,7 +675,7 @@ class TestReportGeneratorNegativeFlows:
             SecurityFinding(SeverityLevel.HIGH, "Finding", "YARA", "test_category")
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 "existing_tool",
                 "Existing tool description",
                 "completed",
@@ -709,7 +709,7 @@ class TestReportGeneratorNegativeFlows:
             {"nested": {"deeply": {"malformed": None}}},
         )
         results = [
-            ScanResult("tool", "Tool description", "completed", ["YARA"], [finding])
+            ToolScanResult("tool", "Tool description", "completed", ["YARA"], [finding])
         ]
         dict_results = convert_scan_results_to_dict(results)
         scan_data = {
@@ -726,7 +726,7 @@ class TestReportGeneratorNegativeFlows:
     async def test_results_to_json_malformed_result(self):
         """Test results_to_json with malformed result."""
         # Create a result with invalid data
-        result = ScanResult("tool", "Tool description", "completed", [], [])
+        result = ToolScanResult("tool", "Tool description", "completed", [], [])
         result.tool_name = None  # Force invalid state
 
         # Test that malformed result either raises an exception or handles gracefully
@@ -747,7 +747,7 @@ class TestReportGeneratorNegativeFlows:
         finding = SecurityFinding(
             SeverityLevel.HIGH, "Circular ref", "YARA", "test_category", circular_dict
         )
-        result = ScanResult(
+        result = ToolScanResult(
             "tool", "Tool description", "completed", ["YARA"], [finding]
         )
 
@@ -764,7 +764,7 @@ class TestReportGeneratorNegativeFlows:
         """Test ReportGenerator with extremely long tool name."""
         long_name = "a" * 10000
         results = [
-            ScanResult(long_name, "Long name tool description", "completed", [], [])
+            ToolScanResult(long_name, "Long name tool description", "completed", [], [])
         ]
         dict_results = convert_scan_results_to_dict(results)
         scan_data = {
@@ -787,7 +787,7 @@ class TestReportGeneratorNegativeFlows:
             )
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 special_name,
                 "Special name tool description",
                 "completed",
@@ -818,7 +818,7 @@ class TestReportGeneratorNegativeFlows:
             )
         ]
         results = [
-            ScanResult(
+            ToolScanResult(
                 unicode_name,
                 "Unicode name tool description",
                 "completed",

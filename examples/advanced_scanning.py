@@ -83,19 +83,19 @@ def format_text_output(results, severity_filter=None):
             output.append(f"\nTool: {result.tool_name}")
             output.append(f"Description: {result.tool_description}")
             output.append(f"Status: {result.status}")
-            output.append(f"Vulnerabilities: {len(result.vulnerabilities)}")
+            output.append(f"Findings: {len(result.findings)}")
 
-            for i, vuln in enumerate(result.vulnerabilities, 1):
-                output.append(f"  Vulnerability #{i}:")
-                output.append(f"    Severity: {vuln.severity}")
-                output.append(f"    Summary: {vuln.summary}")
-                output.append(f"    Analyzer: {vuln.analyzer}")
+            for i, finding in enumerate(result.findings, 1):
+                output.append(f"  Finding #{i}:")
+                output.append(f"    Severity: {finding.severity}")
+                output.append(f"    Summary: {finding.summary}")
+                output.append(f"    Analyzer: {finding.analyzer}")
                 if (
-                    hasattr(vuln, "details")
-                    and vuln.details
-                    and "threat_type" in vuln.details
+                    hasattr(finding, "details")
+                    and finding.details
+                    and "threat_type" in finding.details
                 ):
-                    output.append(f"    Threat Type: {vuln.details['threat_type']}")
+                    output.append(f"    Threat Type: {finding.details['threat_type']}")
 
     return "\n".join(output)
 
@@ -122,29 +122,29 @@ def format_json_output(results, severity_filter=None):
 
     for result in results:
         if not result.is_safe:
-            vulnerabilities = []
-            for vuln in result.vulnerabilities:
-                vuln_data = {
-                    "severity": vuln.severity,
-                    "summary": vuln.summary,
-                    "analyzer": vuln.analyzer,
+            findings_list = []
+            for finding in result.findings:
+                finding_data = {
+                    "severity": finding.severity,
+                    "summary": finding.summary,
+                    "analyzer": finding.analyzer,
                 }
 
                 # Add details if available
-                if hasattr(vuln, "details") and vuln.details:
-                    vuln_data["details"] = vuln.details
+                if hasattr(finding, "details") and finding.details:
+                    finding_data["details"] = finding.details
                     # Extract threat_type to top level if available
-                    if "threat_type" in vuln.details:
-                        vuln_data["threat_type"] = vuln.details["threat_type"]
+                    if "threat_type" in finding.details:
+                        finding_data["threat_type"] = finding.details["threat_type"]
 
-                vulnerabilities.append(vuln_data)
+                findings_list.append(finding_data)
 
             output["results"].append(
                 {
                     "tool_name": result.tool_name,
                     "tool_description": result.tool_description,
                     "status": result.status,
-                    "vulnerabilities": vulnerabilities,
+                    "findings": findings_list,
                 }
             )
 

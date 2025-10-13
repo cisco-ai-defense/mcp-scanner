@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 
 from mcpscanner import Config, Scanner
-from mcpscanner import ScanResult
+from mcpscanner import ToolScanResult
 from mcpscanner import ApiAnalyzer
 from mcpscanner import YaraAnalyzer
 from mcpscanner.core.models import AnalyzerEnum
@@ -31,6 +31,7 @@ from mcpscanner.core.analyzers.base import BaseAnalyzer
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.auth import Auth, AuthType
 from mcpscanner.core.mcp_models import StdioServer
+from mcpscanner.core.result import PromptScanResult, ResourceScanResult
 from mcpscanner.core.exceptions import (
     MCPConnectionError,
     MCPAuthenticationError,
@@ -147,7 +148,7 @@ async def test_scan_remote_server_tool_method(config):
         ),
     ):
 
-        mock_analyze_tool.return_value = ScanResult(
+        mock_analyze_tool.return_value = ToolScanResult(
             tool_name="safe_tool",
             tool_description="This is a safe tool",
             status="completed",
@@ -246,14 +247,14 @@ async def test_scan_remote_server_tools_method(config):
 
         # Configure mock_analyze_tool to return a different result for each tool
         mock_analyze_tool.side_effect = [
-            ScanResult(
+            ToolScanResult(
                 tool_name="tool1",
                 tool_description="Tool 1",
                 status="completed",
                 analyzers=["API"],
                 findings=[],
             ),
-            ScanResult(
+            ToolScanResult(
                 tool_name="tool2",
                 tool_description="Tool 2",
                 status="completed",
@@ -603,14 +604,14 @@ async def test_scan_stdio_server_tools(config):
 
         mock_get_session.return_value = (AsyncMock(), mock_session)
         mock_analyze_tool.side_effect = [
-            ScanResult(
+            ToolScanResult(
                 tool_name="stdio_tool1",
                 tool_description="Tool 1",
                 status="completed",
                 analyzers=["API"],
                 findings=[],
             ),
-            ScanResult(
+            ToolScanResult(
                 tool_name="stdio_tool2",
                 tool_description="Tool 2",
                 status="completed",
@@ -661,7 +662,7 @@ async def test_scan_stdio_server_tool(config):
     ):
 
         mock_get_session.return_value = (AsyncMock(), mock_session)
-        mock_analyze_tool.return_value = ScanResult(
+        mock_analyze_tool.return_value = ToolScanResult(
             tool_name="target_tool",
             tool_description="Target tool",
             status="completed",
@@ -722,7 +723,7 @@ async def test_scan_remote_server_tool_with_auth(config):
     ):
 
         mock_get_session.return_value = (AsyncMock(), mock_session)
-        mock_analyze_tool.return_value = ScanResult(
+        mock_analyze_tool.return_value = ToolScanResult(
             tool_name="auth_tool",
             tool_description="Authenticated tool",
             status="completed",
@@ -756,7 +757,7 @@ async def test_scan_remote_server_tools_with_http_headers(config):
     ):
 
         mock_get_session.return_value = (AsyncMock(), mock_session)
-        mock_analyze_tool.return_value = ScanResult(
+        mock_analyze_tool.return_value = ToolScanResult(
             tool_name="header_tool",
             tool_description="Tool with headers",
             status="completed",
@@ -781,24 +782,24 @@ async def test_scan_remote_server_tools_with_http_headers(config):
 async def test_get_mcp_session_401_unauthorized_streamable_http(config):
     """Test _get_mcp_session with 401 authentication error for streamable HTTP endpoint."""
     scanner = Scanner(config)
-    
+
     with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
         mock_context = AsyncMock()
-        
+
         # Create a mock HTTPStatusError with 401
         class MockHTTPStatusError(Exception):
             def __init__(self):
                 super().__init__("Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0'")
-        
+
         # BaseExceptionGroup with 401 error (simulates what MCP library does)
         error_group = BaseExceptionGroup(
             "unhandled errors",
             [MockHTTPStatusError()]
         )
-        
+
         mock_context.__aenter__.side_effect = error_group
         mock_client.return_value = mock_context
-        
+
         with pytest.raises(MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0")
 
@@ -807,24 +808,24 @@ async def test_get_mcp_session_401_unauthorized_streamable_http(config):
 async def test_get_mcp_session_401_unauthorized_via_exception_group(config):
     """Test _get_mcp_session with 401 authentication error via BaseExceptionGroup (SSE endpoint)."""
     scanner = Scanner(config)
-    
+
     with patch("mcpscanner.core.scanner.sse_client") as mock_sse_client:
         mock_context = AsyncMock()
-        
+
         # Create a mock HTTPStatusError
         class MockHTTPStatusError(Exception):
             def __init__(self):
                 super().__init__("Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0/sse'")
-        
+
         # BaseExceptionGroup with 401 error
         error_group = BaseExceptionGroup(
             "unhandled errors",
             [MockHTTPStatusError()]
         )
-        
+
         mock_context.__aenter__.side_effect = error_group
         mock_sse_client.return_value = mock_context
-        
+
         with pytest.raises(MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0/sse")
 
@@ -833,22 +834,22 @@ async def test_get_mcp_session_401_unauthorized_via_exception_group(config):
 async def test_get_mcp_session_403_forbidden(config):
     """Test _get_mcp_session with 403 forbidden error."""
     scanner = Scanner(config)
-    
+
     with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
         mock_context = AsyncMock()
-        
+
         class MockHTTPStatusError(Exception):
             def __init__(self):
                 super().__init__("Client error '403 Forbidden' for url 'https://api.mcpanalytics.ai/auth0'")
-        
+
         error_group = BaseExceptionGroup(
             "unhandled errors",
             [MockHTTPStatusError()]
         )
-        
+
         mock_context.__aenter__.side_effect = error_group
         mock_client.return_value = mock_context
-        
+
         with pytest.raises(MCPAuthenticationError, match="Access denied.*authentication credentials"):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0")
 
@@ -857,25 +858,158 @@ async def test_get_mcp_session_403_forbidden(config):
 async def test_get_mcp_session_404_not_found(config):
     """Test _get_mcp_session with 404 not found error."""
     scanner = Scanner(config)
-    
+
     with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
         mock_context = AsyncMock()
-        
+
         class MockHTTPStatusError(Exception):
             def __init__(self):
                 super().__init__("Client error '404 Not Found' for url 'https://api.mcpanalytics.ai/nonexistent'")
-        
+
         error_group = BaseExceptionGroup(
             "unhandled errors",
             [MockHTTPStatusError()]
         )
-        
+
         mock_context.__aenter__.side_effect = error_group
         mock_client.return_value = mock_context
-        
+
         with pytest.raises(MCPServerNotFoundError, match="MCP server endpoint not found.*verify the URL"):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/nonexistent")
 
 
 # Note: DNS resolution failure test is covered by manual testing with https://test.alpic.ai
 # The CancelledError path is difficult to mock reliably due to the async context manager setup
+
+
+# --- Prompt Scanning Tests ---
+
+
+def test_prompt_scan_result_creation():
+    """Test creating a PromptScanResult."""
+    result = PromptScanResult(
+        prompt_name="test_prompt",
+        prompt_description="A test prompt",
+        status="completed",
+        analyzers=[AnalyzerEnum.API],
+        findings=[]
+    )
+
+    assert result.prompt_name == "test_prompt"
+    assert result.prompt_description == "A test prompt"
+    assert result.status == "completed"
+    assert result.is_safe is True
+    assert len(result.findings) == 0
+
+
+def test_prompt_scan_result_with_findings():
+    """Test PromptScanResult with security findings."""
+    finding = SecurityFinding(
+        severity="HIGH",
+        summary="Test finding",
+        analyzer="API",
+        threat_category="MALICIOUS_CODE",
+        details={}
+    )
+
+    result = PromptScanResult(
+        prompt_name="unsafe_prompt",
+        prompt_description="An unsafe prompt",
+        status="completed",
+        analyzers=[AnalyzerEnum.API],
+        findings=[finding]
+    )
+
+    assert result.is_safe is False
+    assert len(result.findings) == 1
+    assert result.findings[0].severity == "HIGH"
+
+
+def test_prompt_scan_result_failed_status():
+    """Test PromptScanResult with failed status."""
+    result = PromptScanResult(
+        prompt_name="failed_prompt",
+        prompt_description="A failed prompt scan",
+        status="failed",
+        analyzers=[],
+        findings=[]
+    )
+
+    assert result.status == "failed"
+    assert result.is_safe is True  # No findings means safe
+
+
+# --- Resource Scanning Tests ---
+
+
+def test_resource_scan_result_creation():
+    """Test creating a ResourceScanResult."""
+    result = ResourceScanResult(
+        resource_uri="file://test/file.txt",
+        resource_name="test_file",
+        resource_mime_type="text/plain",
+        status="completed",
+        analyzers=[AnalyzerEnum.API],
+        findings=[]
+    )
+
+    assert result.resource_uri == "file://test/file.txt"
+    assert result.resource_name == "test_file"
+    assert result.resource_mime_type == "text/plain"
+    assert result.status == "completed"
+    assert result.is_safe is True
+    assert len(result.findings) == 0
+
+
+def test_resource_scan_result_with_findings():
+    """Test ResourceScanResult with security findings."""
+    finding = SecurityFinding(
+        severity="HIGH",
+        summary="Malicious content detected",
+        analyzer="LLM",
+        threat_category="XSS",
+        details={"threat_type": "XSS"}
+    )
+
+    result = ResourceScanResult(
+        resource_uri="file://test/malicious.html",
+        resource_name="malicious_file",
+        resource_mime_type="text/html",
+        status="completed",
+        analyzers=[AnalyzerEnum.LLM],
+        findings=[finding]
+    )
+
+    assert result.is_safe is False
+    assert len(result.findings) == 1
+    assert result.findings[0].severity == "HIGH"
+
+
+def test_resource_scan_result_skipped_status():
+    """Test ResourceScanResult with skipped status."""
+    result = ResourceScanResult(
+        resource_uri="file://test/binary.bin",
+        resource_name="binary_file",
+        resource_mime_type="application/octet-stream",
+        status="skipped",
+        analyzers=[],
+        findings=[]
+    )
+
+    assert result.status == "skipped"
+    assert result.is_safe is True  # No findings means safe, even if skipped
+
+
+def test_resource_scan_result_failed_status():
+    """Test ResourceScanResult with failed status."""
+    result = ResourceScanResult(
+        resource_uri="file://test/error.txt",
+        resource_name="error_file",
+        resource_mime_type="text/plain",
+        status="failed",
+        analyzers=[],
+        findings=[]
+    )
+
+    assert result.status == "failed"
+    assert result.is_safe is True  # No findings means safe, even if failed

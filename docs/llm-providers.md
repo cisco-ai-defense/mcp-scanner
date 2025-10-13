@@ -203,7 +203,7 @@ async def scan_with_openai():
         llm_provider_api_key="sk-your-openai-key",
         llm_model="gpt-4",
     )
-    
+
     scanner = Scanner(config)
     results = await scanner.scan_remote_server_tools(
         "https://your-mcp-server/sse",
@@ -218,7 +218,7 @@ async def scan_with_azure():
         llm_base_url="https://your-resource.openai.azure.com/",
         llm_api_version="2024-02-01",
     )
-    
+
     scanner = Scanner(config)
     results = await scanner.scan_remote_server_tools(
         "https://your-mcp-server/sse",
@@ -231,7 +231,7 @@ async def scan_with_claude():
         llm_provider_api_key="your-anthropic-key",
         llm_model="claude-3-opus-20240229",
     )
-    
+
     scanner = Scanner(config)
     results = await scanner.scan_remote_server_tools(
         "https://your-mcp-server/sse",
@@ -287,10 +287,10 @@ async def test_llm_provider():
         llm_base_url="your-base-url",  # if needed
         llm_api_version="your-api-version",  # if needed
     )
-    
+
     try:
         analyzer = LLMAnalyzer(config)
-        
+
         # Test with a simple malicious pattern
         test_content = '''
         {
@@ -304,17 +304,17 @@ async def test_llm_provider():
             }
         }
         '''
-        
+
         print("Testing LLM provider configuration...")
         findings = await analyzer.analyze(test_content, {"tool_name": "test_tool"})
-        
+
         if findings:
             print(f"✅ LLM provider working! Found {len(findings)} findings:")
             for finding in findings:
                 print(f"   - {finding.severity}: {finding.summary}")
         else:
             print("⚠️  No findings detected - check if this is expected")
-            
+
     except Exception as e:
         print(f"❌ LLM provider test failed: {e}")
 
@@ -418,7 +418,7 @@ critical_config = Config(
 
 # Fast provider for bulk analysis
 bulk_config = Config(
-    llm_provider_api_key="your-gpt35-key", 
+    llm_provider_api_key="your-gpt35-key",
     llm_model="gpt-3.5-turbo",
     llm_temperature=0.1,
     llm_max_tokens=500,  # Faster responses
@@ -431,4 +431,3 @@ bulk_config = Config(
 - **Provider-specific docs**: Check each provider's official documentation
 - **MCP Scanner Issues**: [GitHub Issues](https://github.com/cisco-ai-defense/mcp-scanner/issues)
 - **Community Support**: Join our community discussions
-

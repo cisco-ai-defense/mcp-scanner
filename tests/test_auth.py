@@ -355,7 +355,7 @@ class TestAPIAuthConfig:
     def test_api_auth_config_creation_default(self):
         """Test creating APIAuthConfig with default values."""
         from mcpscanner.core.auth import APIAuthConfig
-        
+
         auth_config = APIAuthConfig()
 
         assert auth_config.auth_type == AuthType.NONE
@@ -366,7 +366,7 @@ class TestAPIAuthConfig:
     def test_api_auth_config_creation_bearer(self):
         """Test creating APIAuthConfig with bearer token."""
         from mcpscanner.core.auth import APIAuthConfig
-        
+
         auth_config = APIAuthConfig(
             auth_type=AuthType.BEARER,
             bearer_token="test_bearer_token"
@@ -380,7 +380,7 @@ class TestAPIAuthConfig:
     def test_api_auth_config_creation_api_key(self):
         """Test creating APIAuthConfig with API key."""
         from mcpscanner.core.auth import APIAuthConfig
-        
+
         auth_config = APIAuthConfig(
             auth_type=AuthType.APIKEY,
             api_key="test_api_key",
@@ -395,7 +395,7 @@ class TestAPIAuthConfig:
     def test_api_auth_config_creation_all_fields(self):
         """Test creating APIAuthConfig with all fields."""
         from mcpscanner.core.auth import APIAuthConfig
-        
+
         auth_config = APIAuthConfig(
             auth_type=AuthType.APIKEY,
             bearer_token="bearer_token",
@@ -485,7 +485,7 @@ class TestAuthTypeEnum:
     def test_auth_type_comparison_api_key(self):
         """Test AuthType comparison with APIKEY."""
         auth_type = AuthType.APIKEY
-        
+
         assert auth_type == AuthType.APIKEY
         assert auth_type != AuthType.BEARER
         assert auth_type != AuthType.OAUTH
@@ -498,7 +498,7 @@ class TestAPIKeyAuthNegativeFlows:
     def test_api_auth_config_none_api_key(self):
         """Test APIAuthConfig with None API key."""
         from mcpscanner.core.auth import APIAuthConfig
-        
+
         auth_config = APIAuthConfig(
             auth_type=AuthType.APIKEY,
             api_key=None,
@@ -512,7 +512,7 @@ class TestAPIKeyAuthNegativeFlows:
     def test_api_auth_config_empty_header_name(self):
         """Test APIAuthConfig with empty header name."""
         from mcpscanner.core.auth import APIAuthConfig
-        
+
         auth_config = APIAuthConfig(
             auth_type=AuthType.APIKEY,
             api_key="test_key",
@@ -526,7 +526,7 @@ class TestAPIKeyAuthNegativeFlows:
     def test_api_auth_config_none_header_name(self):
         """Test APIAuthConfig with None header name."""
         from mcpscanner.core.auth import APIAuthConfig
-        
+
         auth_config = APIAuthConfig(
             auth_type=AuthType.APIKEY,
             api_key="test_key",

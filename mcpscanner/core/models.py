@@ -291,6 +291,19 @@ class SpecificToolScanRequest(APIScanRequest):
     tool_name: str
 
 
+class SpecificPromptScanRequest(APIScanRequest):
+    """Request for scanning a single, specific prompt via API."""
+
+    prompt_name: str
+
+
+class SpecificResourceScanRequest(APIScanRequest):
+    """Request for scanning a single, specific resource via API."""
+
+    resource_uri: str
+    allowed_mime_types: Optional[List[str]] = ["text/plain", "text/html"]
+
+
 class AnalyzerFinding(BaseModel):
     """Analyzer finding with grouped structure."""
 
@@ -315,8 +328,11 @@ class AllToolsScanResponse(BaseModel):
     scan_results: List[ToolScanResult]
 
 
-class FormattedScanResponse(BaseModel):
-    """Formatted scan response with custom output format."""
+class FormattedToolScanResponse(BaseModel):
+    """Formatted tool scan response with custom output format.
+
+    This model is used for formatted responses from tool scans.
+    """
 
     server_url: str
     output_format: str

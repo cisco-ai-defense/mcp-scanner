@@ -132,7 +132,7 @@ Respond with ONLY a valid JSON object:
 
 **Field Instructions:**
 - **primary_threats**: Must ONLY contain values from: `PROMPT INJECTION`, `DATA EXFILTRATION`, `TOOL POISONING`, `TOOL SHADOWING`. Include only detected threats.
-- **threat_summary**: 
+- **threat_summary**:
   - If threats detected: Provide a concise summary (1-2 sentences) explaining what specific malicious patterns were found
   - If SAFE: Use empty string `""`
   - Examples: "Tool requests SSH credentials for basic math operations", "Description contains prompt injection attempting to bypass safety guidelines"
