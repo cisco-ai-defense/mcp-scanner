@@ -198,10 +198,10 @@ def _group_findings_for_api(
     return grouped_findings
 
 
-def _convert_scanner_result_to_api_result(
+def _convert_scanner_result_to_tool_api_result(
     scanner_result: ScanResult, scanner: Scanner
 ) -> ToolScanResult:
-    """Convert a scanner result to an API result with grouped analyzer findings."""
+    """Convert a scanner result to a tool API result with grouped analyzer findings."""
     grouped_findings = _group_findings_for_api(scanner_result, scanner)
 
     return ToolScanResult(
@@ -290,7 +290,7 @@ async def scan_tool_endpoint(
                 f"No analyzers ran for tool '{request.tool_name}' - check analyzer configuration"
             )
 
-        api_result = _convert_scanner_result_to_api_result(result, scanner)
+        api_result = _convert_scanner_result_to_tool_api_result(result, scanner)
 
         if request.output_format == OutputFormat.RAW:
             logger.debug("Returning raw API result")
@@ -360,7 +360,7 @@ async def scan_all_tools_endpoint(
         logger.debug(f"Scanner completed - scanned {len(results)} tools")
 
         api_results = [
-            _convert_scanner_result_to_api_result(res, scanner) for res in results
+            _convert_scanner_result_to_tool_api_result(res, scanner) for res in results
         ]
 
         if request.output_format == OutputFormat.RAW:
