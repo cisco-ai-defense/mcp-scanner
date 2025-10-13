@@ -31,7 +31,7 @@ All analyzers (API, YARA, LLM) will return vulnerabilities with this unified str
 
 ### 2. **confidence** (Required)
 - **HIGH**: Very confident in the finding (>80% certainty)
-- **MEDIUM**: Moderately confident (50-80% certainty)  
+- **MEDIUM**: Moderately confident (50-80% certainty)
 - **LOW**: Low confidence, potential false positive (<50% certainty)
 
 ### 3. **threat_category** (Required)
@@ -78,7 +78,7 @@ Confidence HIGH for exact matches
 ### LLM Analyzer Mapping
 ```
 CRITICAL -> HIGH severity
-HIGH -> HIGH severity  
+HIGH -> HIGH severity
 MEDIUM -> MEDIUM severity
 LOW -> LOW severity
 

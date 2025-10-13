@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -23,15 +23,19 @@ from ..core.models import (
     AllToolsScanResponse,
     AnalyzerEnum,
     APIScanRequest,
-    FormattedScanResponse,
+    FormattedToolScanResponse,
     OutputFormat,
     SeverityFilter,
     SpecificToolScanRequest,
+    SpecificPromptScanRequest,
+    SpecificResourceScanRequest,
     ToolScanResult,
 )
 from ..core.report_generator import ReportGenerator
 from ..core.result import (
     ScanResult,
+    PromptScanResult,
+    ResourceScanResult,
     get_highest_severity,
     group_findings_by_analyzer,
     process_scan_results,
@@ -53,10 +57,23 @@ def get_scanner() -> ScannerFactory:
     )
 
 
-def _convert_scanner_result_to_api_result(
-    scanner_result: ScanResult, scanner: Scanner
-) -> ToolScanResult:
-    """Convert a scanner result to an API result with grouped analyzer findings."""
+def _group_findings_for_api(
+    scanner_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult],
+    scanner: Scanner
+) -> Dict[str, Any]:
+    """
+    Extract and group findings by analyzer for API response.
+
+    This helper function processes findings from any scan result type and returns
+    a dictionary of grouped findings suitable for API responses.
+
+    Args:
+        scanner_result: The scan result (tool, prompt, or resource)
+        scanner: The scanner instance
+
+    Returns:
+        Dict with analyzer findings grouped by analyzer name
+    """
     analyzer_groups = group_findings_by_analyzer(scanner_result.findings)
     grouped_findings = {}
 
@@ -128,8 +145,19 @@ def _convert_scanner_result_to_api_result(
             # If the analyzer was run but found nothing, it's SAFE.
             # We check if the internal name is in the list of analyzers that were part of the scan.
             ran_analyzers = [f for f in scanner_result.analyzers]
+
+            # Get result identifier based on type for logging
+            if isinstance(scanner_result, ToolScanResult):
+                result_id = scanner_result.tool_name
+            elif isinstance(scanner_result, PromptScanResult):
+                result_id = scanner_result.prompt_name
+            elif isinstance(scanner_result, ResourceScanResult):
+                result_id = scanner_result.resource_uri
+            else:
+                result_id = "unknown"
+
             logger.debug(
-                f"Scanner Result {scanner_result.tool_name} findings: {scanner_result.findings}"
+                f"Scanner Result {result_id} findings: {scanner_result.findings}"
             )
             logger.debug(
                 f"Ran Analyzers: {ran_analyzers} Internal Name: {internal_name}"
@@ -167,6 +195,15 @@ def _convert_scanner_result_to_api_result(
             "total_findings": len(vulns),
         }
 
+    return grouped_findings
+
+
+def _convert_scanner_result_to_tool_api_result(
+    scanner_result: ScanResult, scanner: Scanner
+) -> ToolScanResult:
+    """Convert a scanner result to a tool API result with grouped analyzer findings."""
+    grouped_findings = _group_findings_for_api(scanner_result, scanner)
+
     return ToolScanResult(
         tool_name=scanner_result.tool_name,
         status=scanner_result.status,
@@ -175,7 +212,7 @@ def _convert_scanner_result_to_api_result(
     )
 
 
-def _format_scan_results(
+def _format_tool_scan_results(
     results: List[ScanResult],
     output_format: OutputFormat,
     severity_filter: SeverityFilter = SeverityFilter.ALL,
@@ -213,7 +250,7 @@ def _format_scan_results(
 
 @router.post(
     "/scan-tool",
-    response_model=Union[ToolScanResult, FormattedScanResponse],
+    response_model=Union[ToolScanResult, FormattedToolScanResponse],
     tags=["Scanning"],
 )
 async def scan_tool_endpoint(
@@ -232,11 +269,11 @@ async def scan_tool_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        
+
         auth = None
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)  
+                auth = Auth.bearer(request.auth.bearer_token)
             if request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
 
@@ -253,13 +290,13 @@ async def scan_tool_endpoint(
                 f"No analyzers ran for tool '{request.tool_name}' - check analyzer configuration"
             )
 
-        api_result = _convert_scanner_result_to_api_result(result, scanner)
+        api_result = _convert_scanner_result_to_tool_api_result(result, scanner)
 
         if request.output_format == OutputFormat.RAW:
             logger.debug("Returning raw API result")
             return api_result
 
-        formatted_output = _format_scan_results(
+        formatted_output = _format_tool_scan_results(
             results=[result],
             output_format=request.output_format,
             severity_filter=request.severity_filter,
@@ -269,7 +306,7 @@ async def scan_tool_endpoint(
             show_stats=request.show_stats,
         )
 
-        response = FormattedScanResponse(
+        response = FormattedToolScanResponse(
             server_url=request.server_url,
             output_format=request.output_format.value,
             formatted_output=formatted_output,
@@ -290,7 +327,7 @@ async def scan_tool_endpoint(
 
 @router.post(
     "/scan-all-tools",
-    response_model=Union[AllToolsScanResponse, FormattedScanResponse],
+    response_model=Union[AllToolsScanResponse, FormattedToolScanResponse],
     tags=["Scanning"],
 )
 async def scan_all_tools_endpoint(
@@ -310,7 +347,7 @@ async def scan_all_tools_endpoint(
         auth = None
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)  
+                auth = Auth.bearer(request.auth.bearer_token)
             if request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
 
@@ -323,7 +360,7 @@ async def scan_all_tools_endpoint(
         logger.debug(f"Scanner completed - scanned {len(results)} tools")
 
         api_results = [
-            _convert_scanner_result_to_api_result(res, scanner) for res in results
+            _convert_scanner_result_to_tool_api_result(res, scanner) for res in results
         ]
 
         if request.output_format == OutputFormat.RAW:
@@ -332,7 +369,7 @@ async def scan_all_tools_endpoint(
                 server_url=request.server_url, scan_results=api_results
             )
 
-        formatted_output = _format_scan_results(
+        formatted_output = _format_tool_scan_results(
             results=results,
             output_format=request.output_format,
             severity_filter=request.severity_filter,
@@ -342,7 +379,7 @@ async def scan_all_tools_endpoint(
             show_stats=request.show_stats,
         )
 
-        response = FormattedScanResponse(
+        response = FormattedToolScanResponse(
             server_url=request.server_url,
             output_format=request.output_format.value,
             formatted_output=formatted_output,
@@ -363,3 +400,274 @@ async def scan_all_tools_endpoint(
     except Exception as e:
         logger.error(f"Unexpected error in full server scan: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning tools: {str(e)}")
+
+
+@router.post(
+    "/scan-prompt",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_prompt_endpoint(
+    request: SpecificPromptScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan a specific prompt on an MCP server."""
+    logger.debug(f"Starting specific prompt scan - server: {request.server_url}, prompt: {request.prompt_name}")
+
+    try:
+        scanner = scanner_factory(request.analyzers)
+
+        # Extract HTTP headers for analyzers
+        http_headers = dict(http_request.headers)
+
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)
+
+        result = await scanner.scan_remote_server_prompt(
+            server_url=request.server_url,
+            prompt_name=request.prompt_name,
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+        )
+        logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
+
+        # Convert result to API format using helper function
+        grouped_findings = _group_findings_for_api(result, scanner)
+
+        response = {
+            "server_url": request.server_url,
+            "prompt_name": result.prompt_name,
+            "prompt_description": result.prompt_description,
+            "status": result.status,
+            "is_safe": result.is_safe,
+            "findings": grouped_findings,
+        }
+
+        logger.debug(f"Prompt scan completed successfully for {request.prompt_name}")
+        return response
+
+    except ValueError as e:
+        logger.error(f"ValueError in prompt scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in prompt scan: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scanning prompt: {str(e)}")
+
+
+@router.post(
+    "/scan-all-prompts",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_all_prompts_endpoint(
+    request: APIScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan all prompts on an MCP server."""
+    logger.debug(f"Starting all prompts scan - server: {request.server_url}")
+
+    try:
+        scanner = scanner_factory(request.analyzers)
+
+        # Extract HTTP headers for analyzers
+        http_headers = dict(http_request.headers)
+
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)
+
+        results = await scanner.scan_remote_server_prompts(
+            server_url=request.server_url,
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+        )
+        logger.debug(f"Scanner completed - scanned {len(results)} prompts")
+
+        # Convert results to API format
+        prompt_results = []
+        for result in results:
+            # Use helper function to group findings
+            grouped_findings = _group_findings_for_api(result, scanner)
+
+            prompt_results.append({
+                "prompt_name": result.prompt_name,
+                "prompt_description": result.prompt_description,
+                "status": result.status,
+                "is_safe": result.is_safe,
+                "findings": grouped_findings,
+            })
+
+        response = {
+            "server_url": request.server_url,
+            "total_prompts": len(results),
+            "safe_prompts": sum(1 for r in results if r.is_safe),
+            "unsafe_prompts": sum(1 for r in results if not r.is_safe),
+            "prompts": prompt_results,
+        }
+
+        logger.debug(f"Prompt scan completed successfully - {len(results)} prompts processed")
+        return response
+
+    except ValueError as e:
+        logger.error(f"ValueError in prompt scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in prompt scan: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scanning prompts: {str(e)}")
+
+
+@router.post(
+    "/scan-resource",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_resource_endpoint(
+    request: SpecificResourceScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan a specific resource on an MCP server."""
+    logger.debug(f"Starting specific resource scan - server: {request.server_url}, resource: {request.resource_uri}")
+
+    try:
+        scanner = scanner_factory(request.analyzers)
+
+        # Extract HTTP headers for analyzers
+        http_headers = dict(http_request.headers)
+
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)
+
+        # Use allowed MIME types from request or default
+        allowed_mime_types = request.allowed_mime_types or ["text/plain", "text/html"]
+
+        result = await scanner.scan_remote_server_resource(
+            server_url=request.server_url,
+            resource_uri=request.resource_uri,
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+            allowed_mime_types=allowed_mime_types,
+        )
+        logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
+
+        # Convert result to API format using helper function
+        if result.status == "completed":
+            grouped_findings = _group_findings_for_api(result, scanner)
+        else:
+            grouped_findings = {}
+
+        response = {
+            "server_url": request.server_url,
+            "resource_uri": result.resource_uri,
+            "resource_name": result.resource_name,
+            "resource_mime_type": result.resource_mime_type,
+            "status": result.status,
+            "is_safe": result.is_safe if result.status == "completed" else None,
+            "findings": grouped_findings,
+        }
+
+        logger.debug(f"Resource scan completed successfully for {request.resource_uri}")
+        return response
+
+    except ValueError as e:
+        logger.error(f"ValueError in resource scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in resource scan: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scanning resource: {str(e)}")
+
+
+@router.post(
+    "/scan-all-resources",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_all_resources_endpoint(
+    request: APIScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan all resources on an MCP server."""
+    logger.debug(f"Starting all resources scan - server: {request.server_url}")
+
+    try:
+        scanner = scanner_factory(request.analyzers)
+
+        # Extract HTTP headers for analyzers
+        http_headers = dict(http_request.headers)
+
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)
+
+        # Default allowed MIME types
+        allowed_mime_types = ["text/plain", "text/html"]
+
+        results = await scanner.scan_remote_server_resources(
+            server_url=request.server_url,
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+            allowed_mime_types=allowed_mime_types,
+        )
+        logger.debug(f"Scanner completed - scanned {len(results)} resources")
+
+        # Convert results to API format
+        resource_results = []
+        for result in results:
+            if result.status == "completed":
+                # Use helper function to group findings
+                grouped_findings = _group_findings_for_api(result, scanner)
+
+                resource_results.append({
+                    "resource_uri": result.resource_uri,
+                    "resource_name": result.resource_name,
+                    "resource_mime_type": result.resource_mime_type,
+                    "status": result.status,
+                    "is_safe": result.is_safe,
+                    "findings": grouped_findings,
+                })
+            else:
+                # Skipped or failed resources
+                resource_results.append({
+                    "resource_uri": result.resource_uri,
+                    "resource_name": result.resource_name,
+                    "resource_mime_type": result.resource_mime_type,
+                    "status": result.status,
+                    "is_safe": None,
+                    "findings": {},
+                })
+
+        completed = [r for r in results if r.status == "completed"]
+        response = {
+            "server_url": request.server_url,
+            "total_resources": len(results),
+            "scanned_resources": len(completed),
+            "skipped_resources": sum(1 for r in results if r.status == "skipped"),
+            "failed_resources": sum(1 for r in results if r.status == "failed"),
+            "safe_resources": sum(1 for r in completed if r.is_safe),
+            "unsafe_resources": sum(1 for r in completed if not r.is_safe),
+            "allowed_mime_types": allowed_mime_types,
+            "resources": resource_results,
+        }
+
+        logger.debug(f"Resource scan completed successfully - {len(results)} resources processed")
+        return response
+
+    except ValueError as e:
+        logger.error(f"ValueError in resource scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in resource scan: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scanning resources: {str(e)}")

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "1.1.0"
+version = "2.0.0"
 description = "A tool to scan MCP servers and tools for security vulnerabilities"
 authors = [
     {name = "Cisco"},

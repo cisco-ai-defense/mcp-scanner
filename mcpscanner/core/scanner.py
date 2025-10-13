@@ -32,7 +32,7 @@ from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
-from mcp.types import Tool as MCPTool
+from mcp.types import Tool as MCPTool, Prompt as MCPPrompt
 from mcp import StdioServerParameters
 
 from ..config.config import Config
@@ -54,7 +54,7 @@ from .exceptions import (
 from .models import AnalyzerEnum
 from .mcp_models import StdioServer, RemoteServer
 from ..config.config_parser import MCPConfigScanner
-from .result import ScanResult
+from .result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
 
@@ -164,7 +164,7 @@ class Scanner:
         tool: MCPTool,
         analyzers: List[AnalyzerEnum],
         http_headers: Optional[dict] = None,
-    ) -> ScanResult:
+    ) -> ToolScanResult:
         """Analyze a single MCP tool using specified analyzers.
 
         Args:
@@ -273,7 +273,7 @@ class Scanner:
         # Combine enum analyzers and custom analyzer names
         all_analyzers = list(analyzers) + custom_analyzer_names
 
-        return ScanResult(
+        return ToolScanResult(
             tool_name=name,
             tool_description=description,
             status="completed",
@@ -281,12 +281,141 @@ class Scanner:
             findings=all_findings,
         )
 
+    async def _analyze_prompt(
+        self,
+        prompt: MCPPrompt,
+        analyzers: List[AnalyzerEnum],
+        http_headers: Optional[dict] = None,
+    ) -> PromptScanResult:
+        """Analyze a single MCP prompt using specified analyzers.
+
+        Args:
+            prompt (MCPPrompt): The MCP prompt to analyze.
+            analyzers (List[AnalyzerEnum]): List of analyzers to run.
+            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
+
+        Returns:
+            PromptScanResult: The result of the analysis.
+        """
+        all_findings = []
+        name = prompt.name
+        description = prompt.description or ""
+
+        # Safely parse prompt data
+        try:
+            prompt_json = prompt.model_dump_json()
+            prompt_data = json.loads(prompt_json)
+        except (json.JSONDecodeError, AttributeError, TypeError) as e:
+            logger.warning(f"Error parsing prompt '{name}' data: {e}. Using minimal data.")
+            prompt_data = {"name": name, "description": description}
+
+        if AnalyzerEnum.API in analyzers and self._api_analyzer:
+            # Run API analysis on the description
+            try:
+                api_context = {"prompt_name": name, "content_type": "description"}
+                api_findings = await self._api_analyzer.analyze(
+                    description, api_context
+                )
+                for finding in api_findings:
+                    finding.analyzer = "API"
+                all_findings.extend(api_findings)
+            except Exception as e:
+                logger.error(
+                    f'API analysis failed on prompt description: prompt="{name}", error="{e}"'
+                )
+
+        if AnalyzerEnum.YARA in analyzers:
+            # Run YARA analysis on the description
+            try:
+                yara_desc_context = {"prompt_name": name, "content_type": "description"}
+                yara_desc_findings = await self._yara_analyzer.analyze(
+                    description, yara_desc_context
+                )
+                for finding in yara_desc_findings:
+                    finding.analyzer = "YARA"
+                all_findings.extend(yara_desc_findings)
+            except Exception as e:
+                logger.error(
+                    f'YARA analysis failed on prompt description: prompt="{name}", error="{e}"'
+                )
+
+            # Run YARA analysis on the prompt arguments/structure
+            try:
+                # Remove description from the JSON as it is already analyzed
+                if "description" in prompt_data:
+                    del prompt_data["description"]
+                prompt_json_str = json.dumps(prompt_data)
+                yara_params_context = {"prompt_name": name, "content_type": "arguments"}
+                yara_params_findings = await self._yara_analyzer.analyze(
+                    prompt_json_str, yara_params_context
+                )
+                for finding in yara_params_findings:
+                    finding.analyzer = "YARA"
+                all_findings.extend(yara_params_findings)
+            except Exception as e:
+                logger.error(
+                    f'YARA analysis failed on prompt arguments: prompt="{name}", error="{e}"'
+                )
+
+        if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
+            # Run LLM analysis on the complete prompt information
+            try:
+                # Format content for comprehensive analysis
+                analysis_content = f"Prompt Name: {name}\n"
+                analysis_content += f"Description: {description}\n"
+                if "arguments" in prompt_data and prompt_data["arguments"]:
+                    analysis_content += f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
+
+                llm_context = {"prompt_name": name, "content_type": "comprehensive"}
+                llm_findings = await self._llm_analyzer.analyze(
+                    analysis_content, llm_context
+                )
+                for finding in llm_findings:
+                    finding.analyzer = "LLM"
+                all_findings.extend(llm_findings)
+            except Exception as e:
+                logger.error(f'LLM analysis failed: prompt="{name}", error="{e}"')
+        elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
+            logger.warning(
+                f"LLM scan requested for prompt '{name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
+            )
+
+        # Run custom analyzers
+        custom_analyzer_names = []
+        for analyzer in self._custom_analyzers:
+            try:
+                custom_context = {"prompt_name": name, "content_type": "description"}
+                # Add HTTP headers to context for custom analyzers
+                if http_headers:
+                    custom_context["http_headers"] = http_headers
+                findings = await analyzer.analyze(description, custom_context)
+                for finding in findings:
+                    finding.analyzer = analyzer.name
+                all_findings.extend(findings)
+                # Track which custom analyzers were successfully run
+                custom_analyzer_names.append(analyzer.name)
+            except Exception as e:
+                logger.error(
+                    f'Custom analyzer "{analyzer.name}" failed: prompt="{name}", error="{e}"'
+                )
+
+        # Combine enum analyzers and custom analyzer names
+        all_analyzers = list(analyzers) + custom_analyzer_names
+
+        return PromptScanResult(
+            prompt_name=name,
+            prompt_description=description,
+            status="completed",
+            analyzers=all_analyzers,
+            findings=all_findings,
+        )
+
     def _check_http_error_in_logs(self, msg: str) -> Optional[int]:
         """Check if a log message contains an HTTP error status code.
-        
+
         Args:
             msg: Log message to check
-            
+
         Returns:
             HTTP status code if found (401, 403, 404), None otherwise
         """
@@ -417,31 +546,31 @@ class Scanner:
         httpx_logger = None
         original_httpx_level = None
         original_propagate = None
-        
+
         # Set up httpx logging capture to detect HTTP errors
         httpx_logger = stdlib_logging.getLogger("httpx")
         original_httpx_level = httpx_logger.level
         original_propagate = httpx_logger.propagate
-        
+
         class StatusCodeCapture(stdlib_logging.Handler):
             def __init__(self):
                 super().__init__(level=stdlib_logging.INFO)
-                
+
             def emit(self, record):
                 nonlocal http_status_code
                 # Capture the status code silently (don't propagate to console)
                 http_status_code = self._check_http_error_in_logs(record.getMessage()) or http_status_code
-        
+
         capture_handler = StatusCodeCapture()
         capture_handler._check_http_error_in_logs = self._check_http_error_in_logs
-        
+
         # Temporarily set httpx logger to INFO to ensure it emits logs we can capture
         # Disable propagation only if we're raising the log level to avoid console output
         httpx_logger.addHandler(capture_handler)
         if httpx_logger.level > stdlib_logging.INFO or httpx_logger.level == stdlib_logging.NOTSET:
             httpx_logger.setLevel(stdlib_logging.INFO)
             httpx_logger.propagate = False  # Prevent console output
-        
+
         try:
             logger.debug(f'Attempting to connect to MCP server: server="{server_url}"')
             # Suppress async generator warnings from MCP library cleanup bugs
@@ -459,7 +588,7 @@ class Scanner:
         except (asyncio.CancelledError, GeneratorExit) as e:
             # These exceptions often wrap HTTP errors from the MCP library
             await self._close_mcp_session(client_context, session)
-            
+
             # Check if we captured an HTTP error status code from logs
             if http_status_code == 401:
                 raise MCPAuthenticationError(
@@ -477,7 +606,7 @@ class Scanner:
                     f"MCP server endpoint not found at {server_url}. "
                     f"Please verify the URL is correct."
                 ) from e
-            
+
             # Generic cancellation error
             raise MCPConnectionError(
                 f"Connection to MCP server at {server_url} was cancelled. "
@@ -486,14 +615,14 @@ class Scanner:
         except BaseExceptionGroup as eg:
             # ExceptionGroup from MCP library - check for HTTP errors
             await self._close_mcp_session(client_context, session)
-            
+
             # Get the first error for inspection
             first_error = eg.exceptions[0] if eg.exceptions else eg
             error_str = str(first_error)
-            
+
             # Check if we captured an HTTP error status code from logs, or check error string
             detected_code = http_status_code or self._check_http_error_in_logs(error_str)
-            
+
             if detected_code == 401:
                 raise MCPAuthenticationError(
                     f"Authentication failed for MCP server at {server_url}. "
@@ -513,7 +642,7 @@ class Scanner:
                     f"Please verify the URL is correct. "
                     f"Original error: {first_error}"
                 ) from eg
-            
+
             # Generic ExceptionGroup error
             raise MCPConnectionError(
                 f"Error connecting to MCP server at {server_url}: {first_error}"
@@ -545,7 +674,7 @@ class Scanner:
         auth: Optional[Auth] = None,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
-    ) -> ScanResult:
+    ) -> ToolScanResult:
         """Scan a specific tool on an MCP server.
 
         Args:
@@ -555,7 +684,7 @@ class Scanner:
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
 
         Returns:
-            ScanResult: The result of the scan.
+            ToolScanResult: The result of the scan.
 
         Raises:
             ValueError: If the tool is not found on the server.
@@ -606,7 +735,7 @@ class Scanner:
         auth: Optional[Auth] = None,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
-    ) -> List[ScanResult]:
+    ) -> List[ToolScanResult]:
         """Scan all tools on an MCP server.
 
         Args:
@@ -616,7 +745,7 @@ class Scanner:
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
 
         Returns:
-            List[ScanResult]: The results of the scan for each tool.
+            List[ToolScanResult]: The results of the scan for each tool.
 
         Raises:
             MCPAuthenticationError: If authentication fails (HTTP 401/403).
@@ -770,7 +899,7 @@ class Scanner:
         server_config: StdioServer,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
-    ) -> List[ScanResult]:
+    ) -> List[ToolScanResult]:
         """Scan tools from a stdio MCP server.
 
         Args:
@@ -779,7 +908,7 @@ class Scanner:
             timeout: Connection timeout in seconds
 
         Returns:
-            List of scan results
+            List[ToolScanResult]: List of tool scan results
         """
         if timeout is None:
             timeout = 60
@@ -829,7 +958,7 @@ class Scanner:
         tool_name: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
-    ) -> ScanResult:
+    ) -> ToolScanResult:
         """Scan a specific tool on a stdio MCP server.
 
         Args:
@@ -839,7 +968,7 @@ class Scanner:
             timeout (Optional[int]): Timeout for the connection.
 
         Returns:
-            ScanResult: The result of the scan.
+            ToolScanResult: The result of the scan.
 
         Raises:
             ValueError: If the tool is not found on the server.
@@ -888,14 +1017,14 @@ class Scanner:
         self,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
-    ) -> Dict[str, List[ScanResult]]:
+    ) -> Dict[str, List[ToolScanResult]]:
         """Scan all well-known MCP configuration files and their servers.
 
         Args:
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
 
         Returns:
-            Dict[str, List[ScanResult]]: Dictionary mapping config file paths to scan results.
+            Dict[str, List[ToolScanResult]]: Dictionary mapping config file paths to scan results.
         """
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -981,7 +1110,7 @@ class Scanner:
         config_path: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
-    ) -> List[ScanResult]:
+    ) -> List[ToolScanResult]:
         """Scan all servers in a specific MCP configuration file.
 
         Args:
@@ -989,7 +1118,7 @@ class Scanner:
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
 
         Returns:
-            List[ScanResult]: The results of scanning all servers in the config file.
+            List[ToolScanResult]: The results of scanning all servers in the config file.
         """
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -1066,3 +1195,696 @@ class Scanner:
                 continue
 
         return all_results
+
+    async def scan_remote_server_prompts(
+        self,
+        server_url: str,
+        auth: Optional[Auth] = None,
+        analyzers: Optional[List[AnalyzerEnum]] = None,
+        http_headers: Optional[dict] = None,
+    ) -> List[PromptScanResult]:
+        """Scan all prompts on an MCP server.
+
+        Args:
+            server_url (str): The URL of the MCP server to scan.
+            auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
+            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
+            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
+
+        Returns:
+            List[PromptScanResult]: The results of the scan for each prompt.
+
+        Raises:
+            MCPAuthenticationError: If authentication fails (HTTP 401/403).
+            MCPServerNotFoundError: If the server endpoint is not found (HTTP 404).
+            MCPConnectionError: If unable to connect to the server (network issues, DNS failure, etc).
+            ValueError: If the server URL is invalid or empty.
+        """
+        if not server_url:
+            raise ValueError(
+                "No server URL provided. Please specify a valid server URL."
+            )
+
+        # Default to API and LLM analyzers for prompts
+        if analyzers is None:
+            analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
+
+        # Validate that requested analyzers have required configuration
+        self._validate_analyzer_requirements(analyzers)
+
+        client_context = None
+        session = None
+        try:
+            client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # List all prompts
+            prompt_list = await session.list_prompts()
+
+            # Analyze each prompt with individual error handling
+            scan_results = []
+            for prompt in prompt_list.prompts:
+                try:
+                    result = await self._analyze_prompt(prompt, analyzers, http_headers)
+                    scan_results.append(result)
+                except Exception as e:
+                    logger.error(f"Error analyzing prompt '{prompt.name}': {e}")
+                    # Create a failed result for this prompt
+                    scan_results.append(PromptScanResult(
+                        prompt_name=prompt.name,
+                        prompt_description=prompt.description or "",
+                        status="failed",
+                        analyzers=[],
+                        findings=[],
+                    ))
+
+            return scan_results
+
+        except Exception as e:
+            logger.error(f"Error scanning prompts on server {server_url}: {e}")
+            raise
+        finally:
+            await self._close_mcp_session(client_context, session)
+
+    async def scan_remote_server_prompt(
+        self,
+        server_url: str,
+        prompt_name: str,
+        auth: Optional[Auth] = None,
+        analyzers: Optional[List[AnalyzerEnum]] = None,
+        http_headers: Optional[dict] = None,
+    ) -> PromptScanResult:
+        """Scan a specific prompt on an MCP server.
+
+        Args:
+            server_url (str): The URL of the MCP server to scan.
+            prompt_name (str): The name of the prompt to scan.
+            auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
+            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
+            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
+
+        Returns:
+            PromptScanResult: The result of the scan.
+
+        Raises:
+            ValueError: If the prompt is not found on the server.
+        """
+        if not server_url:
+            raise ValueError(
+                "No server URL provided. Please specify a valid server URL."
+            )
+
+        # Default to API and LLM analyzers for prompts
+        if analyzers is None:
+            analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
+
+        # Validate that requested analyzers have required configuration
+        self._validate_analyzer_requirements(analyzers)
+
+        client_context = None
+        session = None
+        try:
+            client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # List all prompts and find the target prompt
+            prompt_list = await session.list_prompts()
+            target_prompt = next(
+                (p for p in prompt_list.prompts if p.name == prompt_name), None
+            )
+
+            if not target_prompt:
+                raise ValueError(
+                    f"Prompt '{prompt_name}' not found on the server at {server_url}"
+                )
+
+            # Analyze the prompt
+            result = await self._analyze_prompt(target_prompt, analyzers, http_headers)
+            return result
+
+        except Exception as e:
+            logger.error(
+                f'Error scanning prompt \'{prompt_name}\' on MCP server: server="{server_url}", error="{e}"'
+            )
+            raise
+        finally:
+            await self._close_mcp_session(client_context, session)
+
+    async def scan_stdio_server_prompts(
+        self,
+        server_config: StdioServer,
+        analyzers: Optional[List[AnalyzerEnum]] = None,
+        timeout: Optional[int] = None,
+    ) -> List[PromptScanResult]:
+        """Scan prompts from a stdio MCP server.
+
+        Args:
+            server_config: The stdio server configuration
+            analyzers: List of analyzers to use (defaults to API and LLM)
+            timeout: Connection timeout in seconds
+
+        Returns:
+            List of prompt scan results
+        """
+        if timeout is None:
+            timeout = 60
+
+        # Default to API and LLM analyzers for prompts
+        if analyzers is None:
+            analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
+
+        # Validate that requested analyzers have required configuration
+        self._validate_analyzer_requirements(analyzers)
+
+        client_context = None
+        session = None
+        try:
+            # Create a new task for the connection to isolate async contexts
+            async def connect_and_scan():
+                nonlocal client_context, session
+                client_context, session = await self._get_stdio_session(
+                    server_config, timeout
+                )
+
+                # List all prompts
+                prompt_list = await session.list_prompts()
+
+                # Create analysis tasks for each prompt
+                scan_tasks = [
+                    self._analyze_prompt(prompt, analyzers) for prompt in prompt_list.prompts
+                ]
+
+                # Run all tasks concurrently
+                scan_results = await asyncio.gather(*scan_tasks)
+                return scan_results
+
+            # Run the connection and scanning in an isolated task
+            return await connect_and_scan()
+
+        except Exception as e:
+            logger.error(f"Error scanning prompts on stdio server {server_config.command}: {e}")
+            raise
+        finally:
+            # Always clean up resources
+            await self._close_mcp_session(client_context, session)
+
+    async def scan_stdio_server_prompt(
+        self,
+        server_config: StdioServer,
+        prompt_name: str,
+        analyzers: Optional[List[AnalyzerEnum]] = None,
+        timeout: Optional[int] = None,
+    ) -> PromptScanResult:
+        """Scan a specific prompt on a stdio MCP server.
+
+        Args:
+            server_config (StdioServer): The stdio server configuration.
+            prompt_name (str): The name of the prompt to scan.
+            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
+            timeout (Optional[int]): Timeout for the connection.
+
+        Returns:
+            PromptScanResult: The result of the scan.
+
+        Raises:
+            ValueError: If the prompt is not found on the server.
+        """
+        if not server_config.command:
+            raise ValueError("No command provided in stdio server configuration.")
+
+        # Default to API and LLM analyzers for prompts
+        if analyzers is None:
+            analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
+
+        # Validate that requested analyzers have required configuration
+        self._validate_analyzer_requirements(analyzers)
+
+        client_context = None
+        session = None
+        try:
+            client_context, session = await self._get_stdio_session(
+                server_config, timeout
+            )
+
+            # List all prompts and find the target prompt
+            prompt_list = await session.list_prompts()
+            target_prompt = next(
+                (p for p in prompt_list.prompts if p.name == prompt_name), None
+            )
+
+            if not target_prompt:
+                raise ValueError(
+                    f"Prompt '{prompt_name}' not found on the stdio server with command {server_config.command}"
+                )
+
+            # Analyze the prompt
+            result = await self._analyze_prompt(target_prompt, analyzers)
+            return result
+
+        except Exception as e:
+            logger.error(
+                f'Error scanning prompt \'{prompt_name}\' on stdio server: command="{server_config.command}", error="{e}"'
+            )
+            raise
+        finally:
+            await self._close_mcp_session(client_context, session)
+
+    async def _analyze_resource(
+        self,
+        resource_content: str,
+        resource_uri: str,
+        resource_name: str,
+        resource_description: str,
+        resource_mime_type: str,
+        analyzers: List[AnalyzerEnum],
+        http_headers: Optional[dict] = None,
+    ) -> ResourceScanResult:
+        """Analyze a single MCP resource using specified analyzers.
+
+        Args:
+            resource_content (str): The content of the resource to analyze.
+            resource_uri (str): The URI of the resource.
+            resource_name (str): The name of the resource.
+            resource_description (str): The description of the resource.
+            resource_mime_type (str): The MIME type of the resource.
+            analyzers (List[AnalyzerEnum]): List of analyzers to run (only API and LLM supported for resources).
+            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
+
+        Returns:
+            ResourceScanResult: The result of the analysis.
+        """
+        all_findings = []
+
+        # Extract text from HTML if needed
+        analysis_content = resource_content
+        if resource_mime_type == "text/html":
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resource_content, 'html.parser')
+                # Extract text content from HTML
+                analysis_content = soup.get_text(separator='\n', strip=True)
+                logger.info(f"Extracted text from HTML resource: {resource_uri}")
+            except ImportError:
+                logger.warning("BeautifulSoup not installed, analyzing raw HTML content")
+                analysis_content = resource_content
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Error parsing HTML for resource '{resource_uri}': {e}. Using raw content.")
+                analysis_content = resource_content
+            except Exception as e:
+                logger.error(f"Unexpected error extracting text from HTML '{resource_uri}': {e}. Using raw content.")
+                analysis_content = resource_content
+
+        # Only API and LLM analyzers are used for resources
+        if AnalyzerEnum.API in analyzers and self._api_analyzer:
+            # Run API analysis on the resource content
+            try:
+                api_context = {
+                    "resource_uri": resource_uri,
+                    "resource_name": resource_name,
+                    "resource_description": resource_description,
+                    "mime_type": resource_mime_type
+                }
+                api_findings = await self._api_analyzer.analyze(
+                    analysis_content, api_context
+                )
+                for finding in api_findings:
+                    finding.analyzer = "API"
+                all_findings.extend(api_findings)
+            except Exception as e:
+                logger.error(
+                    f'API analysis failed on resource: uri="{resource_uri}", error="{e}"'
+                )
+
+        if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
+            # Run LLM analysis on the resource content
+            try:
+                # Format content for comprehensive analysis
+                llm_content = f"Resource URI: {resource_uri}\n"
+                llm_content += f"Resource Name: {resource_name}\n"
+                if resource_description:
+                    llm_content += f"Description: {resource_description}\n"
+                llm_content += f"MIME Type: {resource_mime_type}\n"
+                llm_content += f"Content:\n{analysis_content[:2000]}\n"  # Limit content size
+
+                llm_context = {
+                    "resource_uri": resource_uri,
+                    "resource_name": resource_name,
+                    "resource_description": resource_description,
+                    "mime_type": resource_mime_type
+                }
+                llm_findings = await self._llm_analyzer.analyze(
+                    llm_content, llm_context
+                )
+                for finding in llm_findings:
+                    finding.analyzer = "LLM"
+                all_findings.extend(llm_findings)
+            except Exception as e:
+                logger.error(f'LLM analysis failed: resource="{resource_uri}", error="{e}"')
+        elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
+            logger.warning(
+                f"LLM scan requested for resource '{resource_uri}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
+            )
+
+        # Run custom analyzers
+        custom_analyzer_names = []
+        for analyzer in self._custom_analyzers:
+            try:
+                custom_context = {
+                    "resource_uri": resource_uri,
+                    "resource_name": resource_name,
+                    "resource_description": resource_description,
+                    "mime_type": resource_mime_type
+                }
+                # Add HTTP headers to context for custom analyzers
+                if http_headers:
+                    custom_context["http_headers"] = http_headers
+                findings = await analyzer.analyze(analysis_content, custom_context)
+                for finding in findings:
+                    finding.analyzer = analyzer.name
+                all_findings.extend(findings)
+                # Track which custom analyzers were successfully run
+                custom_analyzer_names.append(analyzer.name)
+            except Exception as e:
+                logger.error(
+                    f'Custom analyzer "{analyzer.name}" failed: resource="{resource_uri}", error="{e}"'
+                )
+
+        # Combine enum analyzers and custom analyzer names (filter out YARA if present)
+        active_analyzers = [a for a in analyzers if a in [AnalyzerEnum.API, AnalyzerEnum.LLM]]
+        all_analyzers = active_analyzers + custom_analyzer_names
+
+        return ResourceScanResult(
+            resource_uri=resource_uri,
+            resource_name=resource_name,
+            resource_mime_type=resource_mime_type,
+            status="completed",
+            analyzers=all_analyzers,
+            findings=all_findings,
+        )
+
+    async def scan_remote_server_resources(
+        self,
+        server_url: str,
+        auth: Optional[Auth] = None,
+        analyzers: Optional[List[AnalyzerEnum]] = None,
+        http_headers: Optional[dict] = None,
+        allowed_mime_types: Optional[List[str]] = None,
+    ) -> List[ResourceScanResult]:
+        """Scan all resources on an MCP server.
+
+        Args:
+            server_url (str): The URL of the MCP server to scan.
+            auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
+            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
+            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
+            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain and text/html.
+
+        Returns:
+            List[ResourceScanResult]: The results of the scan for each resource.
+
+        Raises:
+            MCPAuthenticationError: If authentication fails (HTTP 401/403).
+            MCPServerNotFoundError: If the server endpoint is not found (HTTP 404).
+            MCPConnectionError: If unable to connect to the server (network issues, DNS failure, etc).
+            ValueError: If the server URL is invalid or empty.
+        """
+        if not server_url:
+            raise ValueError(
+                "No server URL provided. Please specify a valid server URL."
+            )
+
+        # Default to API and LLM analyzers for resources
+        if analyzers is None:
+            analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
+
+        # Default allowed MIME types
+        if allowed_mime_types is None:
+            allowed_mime_types = ["text/plain", "text/html"]
+
+        # Validate that requested analyzers have required configuration
+        self._validate_analyzer_requirements(analyzers)
+
+        client_context = None
+        session = None
+        try:
+            client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # List all resources
+            resource_list = await session.list_resources()
+
+            results = []
+            for resource in resource_list.resources:
+                # Check if MIME type is allowed
+                if resource.mimeType and resource.mimeType not in allowed_mime_types:
+                    logger.info(f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'")
+                    results.append(ResourceScanResult(
+                        resource_uri=resource.uri,
+                        resource_name=resource.name or "",
+                        resource_mime_type=resource.mimeType or "unknown",
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                    ))
+                    continue
+
+                # Read resource content
+                try:
+                    resource_contents = await session.read_resource(resource.uri)
+
+                    # Extract text content
+                    text_content = ""
+                    try:
+                        for content in resource_contents.contents:
+                            if hasattr(content, 'text'):
+                                text_content += content.text
+                            elif hasattr(content, 'blob'):
+                                # Skip binary content
+                                logger.info(f"Skipping binary content for resource '{resource.uri}'")
+                                continue
+                    except (AttributeError, TypeError) as e:
+                        logger.warning(f"Error extracting content from resource '{resource.uri}': {e}")
+                        results.append(ResourceScanResult(
+                            resource_uri=resource.uri,
+                            resource_name=resource.name or "",
+                            resource_mime_type=resource.mimeType or "unknown",
+                            status="failed",
+                            analyzers=[],
+                            findings=[],
+                        ))
+                        continue
+
+                    if not text_content:
+                        logger.info(f"No text content found for resource '{resource.uri}'")
+                        results.append(ResourceScanResult(
+                            resource_uri=resource.uri,
+                            resource_name=resource.name or "",
+                            resource_mime_type=resource.mimeType or "unknown",
+                            status="skipped",
+                            analyzers=[],
+                            findings=[],
+                        ))
+                        continue
+
+                    # Analyze the resource
+                    try:
+                        result = await self._analyze_resource(
+                            text_content,
+                            resource.uri,
+                            resource.name or "",
+                            resource.description or "",
+                            resource.mimeType or "unknown",
+                            analyzers,
+                            http_headers
+                        )
+                        results.append(result)
+                    except Exception as e:
+                        logger.error(f"Error analyzing resource '{resource.uri}': {e}")
+                        results.append(ResourceScanResult(
+                            resource_uri=resource.uri,
+                            resource_name=resource.name or "",
+                            resource_mime_type=resource.mimeType or "unknown",
+                            status="failed",
+                            analyzers=[],
+                            findings=[],
+                        ))
+
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout reading resource '{resource.uri}'")
+                    results.append(ResourceScanResult(
+                        resource_uri=resource.uri,
+                        resource_name=resource.name or "",
+                        resource_mime_type=resource.mimeType or "unknown",
+                        status="failed",
+                        analyzers=[],
+                        findings=[],
+                    ))
+                except Exception as e:
+                    logger.error(f"Error reading resource '{resource.uri}': {e}")
+                    results.append(ResourceScanResult(
+                        resource_uri=resource.uri,
+                        resource_name=resource.name or "",
+                        resource_mime_type=resource.mimeType or "unknown",
+                        status="failed",
+                        analyzers=[],
+                        findings=[],
+                    ))
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Error scanning resources on server {server_url}: {e}")
+            raise
+        finally:
+            await self._close_mcp_session(client_context, session)
+
+    async def scan_remote_server_resource(
+        self,
+        server_url: str,
+        resource_uri: str,
+        auth: Optional[Auth] = None,
+        analyzers: Optional[List[AnalyzerEnum]] = None,
+        http_headers: Optional[dict] = None,
+        allowed_mime_types: Optional[List[str]] = None,
+    ) -> ResourceScanResult:
+        """Scan a specific resource on an MCP server.
+
+        Args:
+            server_url (str): The URL of the MCP server to scan.
+            resource_uri (str): The URI of the resource to scan.
+            auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
+            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
+            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
+            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain and text/html.
+
+        Returns:
+            ResourceScanResult: The result of the scan.
+
+        Raises:
+            MCPAuthenticationError: If authentication fails (HTTP 401/403).
+            MCPServerNotFoundError: If the server endpoint is not found (HTTP 404).
+            MCPConnectionError: If unable to connect to the server (network issues, DNS failure, etc).
+            ValueError: If the resource is not found on the server or server URL is invalid.
+        """
+        if not server_url:
+            raise ValueError(
+                "No server URL provided. Please specify a valid server URL."
+            )
+
+        if not resource_uri:
+            raise ValueError(
+                "No resource URI provided. Please specify a valid resource URI."
+            )
+
+        # Default to API and LLM analyzers for resources
+        if analyzers is None:
+            analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
+
+        # Default allowed MIME types
+        if allowed_mime_types is None:
+            allowed_mime_types = ["text/plain", "text/html"]
+
+        # Validate that requested analyzers have required configuration
+        self._validate_analyzer_requirements(analyzers)
+
+        client_context = None
+        session = None
+        try:
+            client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # List all resources to find the target
+            resource_list = await session.list_resources()
+
+            target_resource = None
+            for resource in resource_list.resources:
+                # Convert AnyUrl to string for comparison
+                resource_uri_str = str(resource.uri) if hasattr(resource.uri, '__str__') else resource.uri
+                if resource_uri_str == resource_uri:
+                    target_resource = resource
+                    break
+
+            if not target_resource:
+                raise ValueError(f"Resource '{resource_uri}' not found on server {server_url}")
+
+            # Check if MIME type is allowed
+            if target_resource.mimeType and target_resource.mimeType not in allowed_mime_types:
+                logger.info(f"Resource '{resource_uri}' has unsupported MIME type '{target_resource.mimeType}'")
+                return ResourceScanResult(
+                    resource_uri=target_resource.uri,
+                    resource_name=target_resource.name or "",
+                    resource_mime_type=target_resource.mimeType or "unknown",
+                    status="skipped",
+                    analyzers=[],
+                    findings=[],
+                )
+
+            # Read resource content
+            try:
+                resource_contents = await session.read_resource(target_resource.uri)
+
+                # Extract text content
+                text_content = ""
+                try:
+                    for content in resource_contents.contents:
+                        if hasattr(content, 'text'):
+                            text_content += content.text
+                        elif hasattr(content, 'blob'):
+                            logger.info(f"Skipping binary content for resource '{resource_uri}'")
+                            continue
+                except (AttributeError, TypeError) as e:
+                    logger.warning(f"Error extracting content from resource '{resource_uri}': {e}")
+                    return ResourceScanResult(
+                        resource_uri=target_resource.uri,
+                        resource_name=target_resource.name or "",
+                        resource_mime_type=target_resource.mimeType or "unknown",
+                        status="failed",
+                        analyzers=[],
+                        findings=[],
+                    )
+
+                if not text_content:
+                    logger.info(f"No text content found for resource '{resource_uri}'")
+                    return ResourceScanResult(
+                        resource_uri=target_resource.uri,
+                        resource_name=target_resource.name or "",
+                        resource_mime_type=target_resource.mimeType or "unknown",
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                    )
+
+                # Analyze the resource
+                result = await self._analyze_resource(
+                    text_content,
+                    target_resource.uri,
+                    target_resource.name or "",
+                    target_resource.description or "",
+                    target_resource.mimeType or "unknown",
+                    analyzers,
+                    http_headers
+                )
+                return result
+
+            except asyncio.TimeoutError:
+                logger.error(f"Timeout reading resource '{resource_uri}'")
+                return ResourceScanResult(
+                    resource_uri=target_resource.uri,
+                    resource_name=target_resource.name or "",
+                    resource_mime_type=target_resource.mimeType or "unknown",
+                    status="failed",
+                    analyzers=[],
+                    findings=[],
+                )
+            except Exception as e:
+                logger.error(f"Error reading resource '{resource_uri}': {e}")
+                return ResourceScanResult(
+                    resource_uri=target_resource.uri,
+                    resource_name=target_resource.name or "",
+                    resource_mime_type=target_resource.mimeType or "unknown",
+                    status="failed",
+                    analyzers=[],
+                    findings=[],
+                )
+
+        except Exception as e:
+            logger.error(f"Error scanning resource '{resource_uri}' on server {server_url}: {e}")
+            raise
+        finally:
+            await self._close_mcp_session(client_context, session)

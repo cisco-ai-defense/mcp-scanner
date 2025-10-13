@@ -20,19 +20,65 @@ This module provides classes and utilities for handling scan results.
 """
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 from .analyzers.base import SecurityFinding
 
 
 class ScanResult:
-    """Aggregates all findings from a scan.
+    """Base class for all scan results.
 
     Attributes:
+        status (str): The status of the scan (e.g., "completed", "failed", "skipped").
+        analyzers (List[str]): List of analyzers used.
+        findings (List[SecurityFinding]): The security findings found during the scan.
+        server_source (str): The source server/config for this result.
+        server_name (str): The name of the server from config.
+    """
+
+    def __init__(
+        self,
+        status: str,
+        analyzers: List[str],
+        findings: List[SecurityFinding],
+        server_source: str = None,
+        server_name: str = None,
+    ):
+        """Initialize a new ScanResult instance.
+
+        Args:
+            status (str): The status of the scan.
+            analyzers (List[str]): List of analyzers used.
+            findings (List[SecurityFinding]): The security findings found during the scan.
+            server_source (str): The source server/config for this result.
+            server_name (str): The name of the server from config.
+        """
+        self.status = status
+        self.analyzers = analyzers
+        self.findings = findings
+        self.server_source = server_source
+        self.server_name = server_name
+
+    @property
+    def is_safe(self) -> bool:
+        """Check if the scan result indicates the item is safe.
+
+        Returns:
+            bool: True if no security findings were found, False otherwise.
+        """
+        return len(self.findings) == 0
+
+    def __str__(self) -> str:
+        """Return a string representation of the scan result."""
+        return f"ScanResult(status={self.status}, findings={len(self.findings)})"
+
+
+class ToolScanResult(ScanResult):
+    """Aggregates all findings from a tool scan.
+
+    Inherits all attributes from ScanResult and adds:
         tool_name (str): The name of the scanned tool.
         tool_description (str): The description of the scanned tool.
-        status (str): The status of the scan (e.g., "completed", "failed").
-        findings (List[SecurityFinding]): The security findings found during the scan.
     """
 
     def __init__(
@@ -45,42 +91,113 @@ class ScanResult:
         server_source: str = None,
         server_name: str = None,
     ):
-        """Initialize a new ScanResult instance.
+        """Initialize a new ToolScanResult instance.
 
         Args:
             tool_name (str): The name of the scanned tool.
-            status (str): The status of the scan.
-            findings (List[SecurityFinding]): The security findings found during the scan.
-            server_source (str): The source server/config for this result.
-            server_name (str): The name of the server from config.
+            tool_description (str): The description of the scanned tool.
+            status (str): Inherited - The status of the scan.
+            analyzers (List[str]): Inherited - List of analyzers used.
+            findings (List[SecurityFinding]): Inherited - The security findings.
+            server_source (str): Inherited - The source server/config.
+            server_name (str): Inherited - The name of the server from config.
         """
         self.tool_name = tool_name
         self.tool_description = tool_description
-        self.status = status
-        self.analyzers = analyzers
-        self.findings = findings
-        self.server_source = server_source
-        self.server_name = server_name
-
-    @property
-    def is_safe(self) -> bool:
-        """Check if the scan result indicates the tool is safe.
-
-        Returns:
-            bool: True if no security findings were found, False otherwise.
-        """
-        return len(self.findings) == 0
+        super().__init__(status, analyzers, findings, server_source, server_name)
 
     def __str__(self) -> str:
-        """Return a string representation of the scan result."""
-        return f"ScanResult(tool_name={self.tool_name}, status={self.status}, findings={self.findings})"
+        """Return a string representation of the tool scan result."""
+        return f"ToolScanResult(tool_name={self.tool_name}, status={self.status}, findings={len(self.findings)})"
 
 
-def process_scan_results(results: List[ScanResult]) -> Dict[str, Any]:
+class PromptScanResult(ScanResult):
+    """Aggregates all findings from a prompt scan.
+
+    Inherits all attributes from ScanResult and adds:
+        prompt_name (str): The name of the scanned prompt.
+        prompt_description (str): The description of the scanned prompt.
+    """
+
+    def __init__(
+        self,
+        prompt_name: str,
+        prompt_description: str,
+        status: str,
+        analyzers: List[str],
+        findings: List[SecurityFinding],
+        server_source: str = None,
+        server_name: str = None,
+    ):
+        """Initialize a new PromptScanResult instance.
+
+        Args:
+            prompt_name (str): The name of the scanned prompt.
+            prompt_description (str): The description of the scanned prompt.
+            status (str): Inherited - The status of the scan.
+            analyzers (List[str]): Inherited - List of analyzers used.
+            findings (List[SecurityFinding]): Inherited - The security findings.
+            server_source (str): Inherited - The source server/config.
+            server_name (str): Inherited - The name of the server from config.
+        """
+        self.prompt_name = prompt_name
+        self.prompt_description = prompt_description
+        super().__init__(status, analyzers, findings, server_source, server_name)
+
+    def __str__(self) -> str:
+        """Return a string representation of the prompt scan result."""
+        return f"PromptScanResult(prompt_name={self.prompt_name}, status={self.status}, findings={len(self.findings)})"
+
+
+class ResourceScanResult(ScanResult):
+    """Aggregates all findings from a resource scan.
+
+    Inherits all attributes from ScanResult and adds:
+        resource_uri (str): The URI of the scanned resource.
+        resource_name (str): The name of the scanned resource.
+        resource_mime_type (str): The MIME type of the resource.
+    """
+
+    def __init__(
+        self,
+        resource_uri: str,
+        resource_name: str,
+        resource_mime_type: str,
+        status: str,
+        analyzers: List[str],
+        findings: List[SecurityFinding],
+        server_source: str = None,
+        server_name: str = None,
+    ):
+        """Initialize a new ResourceScanResult instance.
+
+        Args:
+            resource_uri (str): The URI of the scanned resource.
+            resource_name (str): The name of the scanned resource.
+            resource_mime_type (str): The MIME type of the resource.
+            status (str): Inherited - The status of the scan.
+            analyzers (List[str]): Inherited - List of analyzers used.
+            findings (List[SecurityFinding]): Inherited - The security findings.
+            server_source (str): Inherited - The source server/config.
+            server_name (str): Inherited - The name of the server from config.
+        """
+        self.resource_uri = resource_uri
+        self.resource_name = resource_name
+        self.resource_mime_type = resource_mime_type
+        super().__init__(status, analyzers, findings, server_source, server_name)
+
+    def __str__(self) -> str:
+        """Return a string representation of the resource scan result."""
+        return f"ResourceScanResult(resource_uri={self.resource_uri}, mime_type={self.resource_mime_type}, status={self.status}, findings={len(self.findings)})"
+
+
+def process_scan_results(
+    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]]
+) -> Dict[str, Any]:
     """Process a list of scan results and return summary statistics.
 
     Args:
-        results (List[ScanResult]): A list of scan results to process.
+        results: A list of scan results (tools, prompts, or resources) to process.
 
     Returns:
         Dict[str, Any]: A dictionary containing summary statistics about the scan results.
@@ -123,16 +240,17 @@ def process_scan_results(results: List[ScanResult]) -> Dict[str, Any]:
 
 
 def filter_results_by_severity(
-    results: List[ScanResult], severity: str
-) -> List[ScanResult]:
+    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]],
+    severity: str
+) -> List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]]:
     """Filter scan results by severity level.
 
     Args:
-        results (List[ScanResult]): A list of scan results to filter.
+        results: A list of scan results (tools, prompts, or resources) to filter.
         severity (str): The severity level to filter by (high, medium, low).
 
     Returns:
-        List[ScanResult]: A filtered list of scan results.
+        A filtered list of scan results of the same type as input.
     """
     filtered_results = []
 
@@ -148,14 +266,35 @@ def filter_results_by_severity(
 
         # If there are findings matching the severity, include this result
         if filtered_findings:
-            # Create a new ScanResult with only the filtered findings
-            filtered_result = ScanResult(
-                tool_name=result.tool_name,
-                tool_description=result.tool_description,
-                status=result.status,
-                analyzers=result.analyzers,
-                findings=filtered_findings,
-            )
+            # Create a new result with only the filtered findings (preserve type)
+            if isinstance(result, ToolScanResult):
+                filtered_result = ToolScanResult(
+                    tool_name=result.tool_name,
+                    tool_description=result.tool_description,
+                    status=result.status,
+                    analyzers=result.analyzers,
+                    findings=filtered_findings,
+                )
+            elif isinstance(result, PromptScanResult):
+                filtered_result = PromptScanResult(
+                    prompt_name=result.prompt_name,
+                    prompt_description=result.prompt_description,
+                    status=result.status,
+                    analyzers=result.analyzers,
+                    findings=filtered_findings,
+                )
+            elif isinstance(result, ResourceScanResult):
+                filtered_result = ResourceScanResult(
+                    resource_uri=result.resource_uri,
+                    resource_name=result.resource_name,
+                    resource_mime_type=result.resource_mime_type,
+                    status=result.status,
+                    analyzers=result.analyzers,
+                    findings=filtered_findings,
+                )
+            else:
+                continue  # Skip unknown types
+
             filtered_results.append(filtered_result)
 
     return filtered_results
@@ -203,11 +342,13 @@ def get_highest_severity(severities: List[str]) -> str:
     return highest
 
 
-def format_results_as_json(scan_results: List[ScanResult]) -> str:
+def format_results_as_json(
+    scan_results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]]
+) -> str:
     """Format scan results as structured JSON grouped by analyzer.
 
     Args:
-        scan_results (List[ScanResult]): List of scan results to format.
+        scan_results: List of scan results (tools, prompts, or resources) to format.
 
     Returns:
         str: JSON formatted string with analyzer-grouped results.
@@ -215,12 +356,37 @@ def format_results_as_json(scan_results: List[ScanResult]) -> str:
     results = []
 
     for scan_result in scan_results:
-        tool_result = {
-            "tool_name": scan_result.tool_name,
-            "status": scan_result.status,
-            "findings": {},
-            "is_safe": scan_result.is_safe,
-        }
+        # Initialize result_dict to None
+        result_dict = None
+
+        # Build result dict based on type
+        if isinstance(scan_result, ToolScanResult):
+            result_dict = {
+                "tool_name": scan_result.tool_name,
+                "status": scan_result.status,
+                "findings": {},
+                "is_safe": scan_result.is_safe,
+            }
+        elif isinstance(scan_result, PromptScanResult):
+            result_dict = {
+                "prompt_name": scan_result.prompt_name,
+                "status": scan_result.status,
+                "findings": {},
+                "is_safe": scan_result.is_safe,
+            }
+        elif isinstance(scan_result, ResourceScanResult):
+            result_dict = {
+                "resource_uri": scan_result.resource_uri,
+                "resource_name": scan_result.resource_name,
+                "resource_mime_type": scan_result.resource_mime_type,
+                "status": scan_result.status,
+                "findings": {},
+                "is_safe": scan_result.is_safe,
+            }
+
+        # Skip unknown types
+        if result_dict is None:
+            continue
 
         # Group findings by analyzer
         analyzer_groups = group_findings_by_analyzer(scan_result.findings)
@@ -282,7 +448,7 @@ def format_results_as_json(scan_results: List[ScanResult]) -> str:
                     # Use first summary as threat_summary (analyzers should provide consistent summaries)
                     threat_summary = summaries[0] if summaries else "Threats detected"
 
-                tool_result["findings"][analyzer_display_name] = {
+                result_dict["findings"][analyzer_display_name] = {
                     "severity": analyzer_severity,
                     "threat_names": threat_names,
                     "threat_summary": threat_summary,
@@ -290,34 +456,44 @@ def format_results_as_json(scan_results: List[ScanResult]) -> str:
                 }
             else:
                 # Analyzer has no findings - set default values
-                tool_result["findings"][analyzer_display_name] = {
+                result_dict["findings"][analyzer_display_name] = {
                     "severity": "SAFE",
                     "threat_names": [],
                     "threat_summary": "N/A",
                     "total_findings": 0,
                 }
 
-        results.append(tool_result)
+        results.append(result_dict)
 
     return json.dumps({"scan_results": results}, indent=2)
 
 
-def format_results_by_analyzer(scan_result: ScanResult) -> str:
+def format_results_by_analyzer(
+    scan_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult]
+) -> str:
     """Format scan results grouped by analyzer for display.
 
     Args:
-        scan_result (ScanResult): The scan result to format.
+        scan_result: The scan result (tool, prompt, or resource) to format.
 
     Returns:
         str: Formatted string showing results grouped by analyzer.
     """
+    # Get the item name based on type
+    if isinstance(scan_result, ToolScanResult):
+        item_name = f"Tool '{scan_result.tool_name}'"
+    elif isinstance(scan_result, PromptScanResult):
+        item_name = f"Prompt '{scan_result.prompt_name}'"
+    elif isinstance(scan_result, ResourceScanResult):
+        item_name = f"Resource '{scan_result.resource_uri}'"
+    else:
+        item_name = "Item"
+
     if scan_result.is_safe:
-        return (
-            f"✅ Tool '{scan_result.tool_name}' is safe - no potential threats detected"
-        )
+        return f"✅ {item_name} is safe - no potential threats detected"
 
     output = [
-        f"🚨 Tool '{scan_result.tool_name}' - Found {len(scan_result.findings)} potential threats\n"
+        f"🚨 {item_name} - Found {len(scan_result.findings)} potential threats\n"
     ]
 
     # Group findings by analyzer
