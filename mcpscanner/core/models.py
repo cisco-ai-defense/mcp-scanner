@@ -340,14 +340,18 @@ class FormattedToolScanResponse(BaseModel):
     raw_results: Optional[List[ToolScanResult]] = None
 
 
-class GitHubScanRequest(BaseModel):
-    """Request model for GitHub repository scanning."""
+class CodeRepoScanRequest(BaseModel):
+    """Base request model for code repository scanning."""
 
-    repo_url: str = Field(..., description="GitHub repository URL to scan")
+    repo_url: str = Field(..., description="Repository URL to scan")
     analyzers: Optional[List[AnalyzerEnum]] = Field(
         default=[AnalyzerEnum.CODE_LLM],
         description="List of analyzers to run (default: Code LLM only)"
     )
+
+
+class GitHubScanRequest(CodeRepoScanRequest):
+    """Request model for GitHub repository scanning."""
 
     @field_validator("repo_url")
     @classmethod
@@ -358,8 +362,8 @@ class GitHubScanRequest(BaseModel):
         return v
 
 
-class GitHubScanResult(BaseModel):
-    """Result of scanning a GitHub repository."""
+class CodeRepoScanResult(BaseModel):
+    """Base result model for code repository scanning."""
 
     repo_url: str
     status: str  # "completed", "failed", "partial"
@@ -370,3 +374,8 @@ class GitHubScanResult(BaseModel):
     findings: dict  # Dictionary with analyzer names as keys
     is_safe: bool
     analyzers: List[str]
+
+
+class GitHubScanResult(CodeRepoScanResult):
+    """Result of scanning a GitHub repository."""
+    pass
