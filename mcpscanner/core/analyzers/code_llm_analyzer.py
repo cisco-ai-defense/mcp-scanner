@@ -65,12 +65,16 @@ class SupportedLanguage(str, Enum):
 class VulnerabilityType(str, Enum):
     """Types of vulnerabilities detected in MCP server functions."""
 
-    DATA_EXFILTRATION = "data_exfiltration"
+    REMOTE_CODE_EXECUTION = "remote_code_execution"
     COMMAND_INJECTION = "command_injection"
-    FILE_SYSTEM_ACCESS = "file_system_access"
-    NETWORK_REQUEST = "network_request"
-    EMAIL_SENDING = "email_sending"
-    CREDENTIAL_EXPOSURE = "credential_exposure"
+    SQL_INJECTION = "sql_injection"
+    NOSQL_INJECTION = "nosql_injection"
+    DATA_EXFILTRATION = "data_exfiltration"
+    SSRF = "server_side_request_forgery"
+    SSTI = "server_side_template_injection"
+    ARBITRARY_FILE_READ = "arbitrary_file_read"
+    ARBITRARY_FILE_WRITE = "arbitrary_file_write"
+    PATH_TRAVERSAL = "path_traversal"
 
 
 @dataclass
