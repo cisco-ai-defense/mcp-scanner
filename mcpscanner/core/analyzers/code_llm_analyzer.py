@@ -395,6 +395,20 @@ class CodeLLMAnalyzer(BaseAnalyzer):
 
         return functions
 
+    def _load_vulnerability_analysis_prompt(self) -> str:
+        """Load the code vulnerability analysis prompt from file.
+        
+        Returns:
+            The prompt template content
+            
+        Raises:
+            FileNotFoundError: If the prompt file cannot be found
+            IOError: If the prompt file cannot be read
+        """
+        prompt_file = Path(__file__).parent.parent.parent / "data" / "prompts" / "code_vulnerability_analysis_prompt.md"
+        with open(prompt_file, 'r', encoding='utf-8') as f:
+            return f.read()
+
     async def _analyze_function_with_llm(
         self, mcp_function: MCPFunction
     ) -> List[SecurityFinding]:
@@ -412,13 +426,15 @@ class CodeLLMAnalyzer(BaseAnalyzer):
         findings = []
         
         try:
-            # Create analysis prompt
+            # Load the vulnerability analysis prompt template
+            prompt_template = self._load_vulnerability_analysis_prompt()
+            
+            # Create analysis prompt with function details
             random_id = secrets.token_hex(16)
             start_tag = f"<!---UNTRUSTED_CODE_START_{random_id}--->"
             end_tag = f"<!---UNTRUSTED_CODE_END_{random_id}--->"
 
-            analysis_prompt = f"""Analyze the following MCP server function for security vulnerabilities:
-
+            function_details = f"""
 **Function Type**: {mcp_function.function_type}
 **Function Name**: {mcp_function.function_name}
 **Programming Language**: {mcp_function.language.value}
@@ -430,28 +446,9 @@ class CodeLLMAnalyzer(BaseAnalyzer):
 {mcp_function.code_snippet}
 ```
 {end_tag}
+"""
 
-Focus on detecting:
-1. Data exfiltration (sending data to external services, email, network requests)
-2. Command injection vulnerabilities (os.system, subprocess, exec, eval)
-3. File system manipulation (writing, deleting files)
-4. Credential exposure (hardcoded passwords, API keys, tokens)
-5. Unsafe deserialization
-6. SQL injection risks
-
-Provide your analysis in JSON format with the following structure:
-{{
-    "is_safe": true/false,
-    "severity": "critical"/"high"/"medium"/"low"/"info",
-    "vulnerabilities": [
-        {{
-            "type": "vulnerability type",
-            "description": "detailed description",
-            "line_references": "specific code lines",
-            "recommendation": "how to fix"
-        }}
-    ]
-}}"""
+            analysis_prompt = prompt_template + "\n\n" + function_details
 
             # Call LLM
             response = await acompletion(
@@ -467,30 +464,31 @@ Provide your analysis in JSON format with the following structure:
             # Parse response
             response_text = response.choices[0].message.content
             
-            # Extract JSON from response
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                analysis_result = json.loads(json_match.group())
+            # Extract JSON array from response
+            # Try to find JSON array first
+            json_array_match = re.search(r'\[.*\]', response_text, re.DOTALL)
+            if json_array_match:
+                vulnerabilities = json.loads(json_array_match.group())
                 
-                if not analysis_result.get("is_safe", True):
-                    for vuln in analysis_result.get("vulnerabilities", []):
-                        finding = SecurityFinding(
-                            severity=analysis_result.get("severity", "medium"),
-                            summary=f"{vuln.get('type', 'Security Issue')} in {mcp_function.function_type} '{mcp_function.function_name}'",
-                            threat_category=vuln.get("type", "Security Issue"),
-                            details=f"File: {mcp_function.file_path}:{mcp_function.line_number}\n"
-                                   f"Function: {mcp_function.function_name} ({mcp_function.function_type})\n"
-                                   f"Language: {mcp_function.language.value}\n"
-                                   f"Description: {vuln.get('description', 'N/A')}\n"
-                                   f"Recommendation: {vuln.get('recommendation', 'N/A')}",
-                            analyzer="CodeLLMAnalyzer",
-                        )
-                        findings.append(finding)
+                # Process each vulnerability finding
+                for vuln in vulnerabilities:
+                    finding = SecurityFinding(
+                        severity=vuln.get("severity", "medium").lower(),
+                        summary=vuln.get("summary", f"Security issue in {mcp_function.function_type} '{mcp_function.function_name}'"),
+                        threat_category=vuln.get("threat_category", "Code Vulnerability"),
+                        details=vuln.get("details", "No details provided"),
+                        analyzer="CodeLLMAnalyzer",
+                    )
+                    findings.append(finding)
+            else:
+                logger.warning(f"No JSON array found in LLM response for {mcp_function.function_name}")
 
             # Rate limiting
             if self._rate_limit_delay > 0:
                 await asyncio.sleep(self._rate_limit_delay)
 
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing JSON response for {mcp_function.function_name}: {e}")
         except Exception as e:
             logger.error(f"Error analyzing function {mcp_function.function_name} with LLM: {e}")
 
