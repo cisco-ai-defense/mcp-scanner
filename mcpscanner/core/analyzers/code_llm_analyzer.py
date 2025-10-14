@@ -47,6 +47,7 @@ except ImportError:
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
+from ...utils.code_flow_tracker import track_code_flow, get_flow_summary, MultiFileCodeFlowTracker
 from .base import BaseAnalyzer, SecurityFinding
 
 logger = logging.getLogger(__name__)
@@ -410,12 +411,13 @@ class CodeLLMAnalyzer(BaseAnalyzer):
             return f.read()
 
     async def _analyze_function_with_llm(
-        self, mcp_function: MCPFunction
+        self, mcp_function: MCPFunction, flow_tracker: Optional[MultiFileCodeFlowTracker] = None
     ) -> List[SecurityFinding]:
         """Analyze an MCP function for security vulnerabilities using LLM.
 
         Args:
             mcp_function: MCP function to analyze
+            flow_tracker: Optional multi-file flow tracker with pre-computed flows
 
         Returns:
             List of security findings
@@ -429,6 +431,28 @@ class CodeLLMAnalyzer(BaseAnalyzer):
             # Load the vulnerability analysis prompt template
             prompt_template = self._load_vulnerability_analysis_prompt()
             
+            # Perform data flow analysis for Python code
+            flow_analysis = ""
+            if mcp_function.language == SupportedLanguage.PYTHON:
+                try:
+                    # Use multi-file flow tracker if available, otherwise single-file
+                    if flow_tracker:
+                        # Get flow report for this specific file
+                        file_flow_report = flow_tracker.get_file_report(mcp_function.file_path)
+                        if file_flow_report and file_flow_report.get('total_parameters', 0) > 0:
+                            flow_summary = get_flow_summary(file_flow_report)
+                            flow_analysis = f"\n\n**Data Flow Analysis (Multi-File Context)**:\n{flow_summary}\n"
+                            logger.info(f"Using multi-file flow analysis for {mcp_function.function_name}: {file_flow_report.get('total_parameters', 0)} parameters tracked")
+                    else:
+                        # Fallback to single-file analysis
+                        flow_report = track_code_flow(mcp_function.code_snippet, mcp_function.file_path)
+                        if flow_report and flow_report.get('total_parameters', 0) > 0:
+                            flow_summary = get_flow_summary(flow_report)
+                            flow_analysis = f"\n\n**Data Flow Analysis**:\n{flow_summary}\n"
+                            logger.info(f"Generated flow analysis for {mcp_function.function_name}: {flow_report.get('total_parameters', 0)} parameters tracked")
+                except Exception as e:
+                    logger.warning(f"Could not perform flow analysis for {mcp_function.function_name}: {e}")
+            
             # Create analysis prompt with function details
             random_id = secrets.token_hex(16)
             start_tag = f"<!---UNTRUSTED_CODE_START_{random_id}--->"
@@ -440,7 +464,7 @@ class CodeLLMAnalyzer(BaseAnalyzer):
 **Programming Language**: {mcp_function.language.value}
 **File Path**: {mcp_function.file_path}
 **Line Number**: {mcp_function.line_number}
-
+{flow_analysis}
 {start_tag}
 ```{mcp_function.language.value}
 {mcp_function.code_snippet}
@@ -552,6 +576,10 @@ class CodeLLMAnalyzer(BaseAnalyzer):
             logger.info("Starting to scan repository contents...")
             repo_path = Path(temp_dir)
             
+            # Initialize multi-file flow tracker for Python files
+            flow_tracker = MultiFileCodeFlowTracker()
+            python_files = []
+            
             # Recursively scan Python files only
             language = SupportedLanguage.PYTHON
             extensions = self.language_extensions[language]
@@ -570,6 +598,10 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                             file_data = f.read()
                         
                         files_scanned += 1
+                        python_files.append(str(file_path))
+                        
+                        # Add to flow tracker
+                        flow_tracker.add_file(str(file_path), source_code=file_data)
                         
                         # Extract MCP functions
                         functions = self._extract_mcp_functions(
@@ -584,6 +616,19 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                         continue
 
             logger.info(f"Scan complete: Scanned {files_scanned} files, found {len(all_functions)} MCP functions")
+            
+            # Perform multi-file flow analysis
+            flow_report = None
+            if python_files:
+                try:
+                    logger.info(f"Performing multi-file flow analysis on {len(python_files)} Python files...")
+                    flow_report = flow_tracker.analyze()
+                    logger.info(
+                        f"Flow analysis complete: {flow_report['total_parameters']} parameters, "
+                        f"{flow_report['total_flow_events']} flow events across {flow_report['files_with_flows']} files"
+                    )
+                except Exception as e:
+                    logger.warning(f"Multi-file flow analysis failed: {e}")
 
             # Check if any Python files were found
             if files_scanned == 0:
@@ -610,9 +655,9 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                     )
                 ]
 
-            # Analyze each function with LLM for vulnerabilities
+            # Analyze each function with LLM for vulnerabilities (with multi-file flow context)
             for mcp_func in all_functions:
-                func_findings = await self._analyze_function_with_llm(mcp_func)
+                func_findings = await self._analyze_function_with_llm(mcp_func, flow_tracker=flow_tracker)
                 findings.extend(func_findings)
 
             # Add summary finding
