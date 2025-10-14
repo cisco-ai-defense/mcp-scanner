@@ -28,6 +28,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "litellm<1.77.0",
     "GitPython>=3.1.0",
+    "requests>=2.31.0",
+    "tarsafe>=0.0.5",
 ]
 
 [dependency-groups]

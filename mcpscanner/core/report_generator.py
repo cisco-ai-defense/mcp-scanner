@@ -152,11 +152,14 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                 if finding.summary not in summaries_by_analyzer[analyzer]:
                     summaries_by_analyzer[analyzer].append(finding.summary)
 
-            threat_type = (
-                finding.details.get("threat_type", "unknown")
-                if getattr(finding, "details", None)
-                else "unknown"
-            )
+            # Extract threat_type from details (handle both dict and string)
+            threat_type = "unknown"
+            if hasattr(finding, "details") and finding.details:
+                if isinstance(finding.details, dict):
+                    threat_type = finding.details.get("threat_type", "unknown")
+                elif isinstance(finding.details, str):
+                    # For string details, use threat_category if available
+                    threat_type = getattr(finding, "threat_category", "unknown")
             if threat_type not in findings_by_analyzer[analyzer]["threat_names"]:
                 findings_by_analyzer[analyzer]["threat_names"].append(threat_type)
             if finding.severity == "HIGH":
@@ -807,6 +810,33 @@ class ReportGenerator:
                         f"    - Threat Names: {', '.join(threat_names) if threat_names else 'None'}"
                     )
                     output.append(f"    - Total Findings: {total_findings}")
+                
+                # Show individual findings if available
+                raw_findings = result.get("raw_findings", [])
+                if raw_findings:
+                    # Filter out summary findings
+                    vuln_findings = [f for f in raw_findings if f.get("threat_category") != "Summary"]
+                    if vuln_findings:
+                        output.append("\n  Individual Findings:")
+                        for idx, finding in enumerate(vuln_findings, 1):
+                            severity_emoji = {
+                                "HIGH": "🔴",
+                                "MEDIUM": "🟠",
+                                "LOW": "🟡",
+                                "INFO": "ℹ️"
+                            }.get(finding.get("severity", "INFO").upper(), "ℹ️")
+                            
+                            output.append(f"\n  {severity_emoji} Finding #{idx} [{finding.get('severity', 'INFO').upper()}]")
+                            output.append(f"     Category: {finding.get('threat_category', 'Unknown')}")
+                            output.append(f"     Summary: {finding.get('summary', 'No summary')}")
+                            
+                            # Show details if it's a string
+                            details = finding.get('details', '')
+                            if details and isinstance(details, str):
+                                # Indent each line of details
+                                for line in details.split('\n'):
+                                    if line.strip():
+                                        output.append(f"     {line}")
             else:
                 output.append("No findings.")
 
@@ -1005,11 +1035,13 @@ class ReportGenerator:
             output.append("No results match the specified filters.\n")
             return "\n".join(output)
         
-        # Check if this is a repository scan
+        # Check if this is a repository scan or PyPI scan
         is_repo_scan = (results and 
                        results[0].get("tool_description", "").startswith("Repository scan:"))
+        is_pypi_scan = (results and 
+                       results[0].get("tool_description", "").startswith("PyPI package scan:"))
         
-        if is_repo_scan:
+        if is_repo_scan or is_pypi_scan:
             return self._format_repo_table(results)
 
         # Check if this is a config-based scan (has server_source)
@@ -1017,12 +1049,25 @@ class ReportGenerator:
             "server_source" in result and result["server_source"] for result in results
         )
 
+        # Determine which analyzers are present in the results
+        has_code_llm = any("code_llm_analyzer" in result.get("findings", {}) for result in results)
+        has_standard_analyzers = any(
+            any(k in result.get("findings", {}) for k in ["api_analyzer", "yara_analyzer", "llm_analyzer"])
+            for result in results
+        )
+        
         if has_config_results:
             # Table header with Target Server column for config-based scans
-            header = f"{'Scan Target':<20} {'Target Server':<20} {'Tool Name':<18} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
+            if has_code_llm:
+                header = f"{'Scan Target':<20} {'Target Server':<20} {'Tool Name':<18} {'Status':<10} {'CODE_LLM':<12} {'Severity':<10}"
+            else:
+                header = f"{'Scan Target':<20} {'Target Server':<20} {'Tool Name':<18} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
         else:
             # Table header without Target Server column for direct server scans
-            header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
+            if has_code_llm:
+                header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'CODE_LLM':<12} {'Severity':<10}"
+            else:
+                header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
 
         output.append(header)
         output.append("—" * (len(header) + 10))
@@ -1048,8 +1093,6 @@ class ReportGenerator:
             findings = result.get("findings", {})
 
             # Get severity for each analyzer
-            # Show SAFE only if analyzer was requested AND we have scan results (meaning it ran successfully)
-            # Show N/A if analyzer wasn't requested OR if it was requested but failed to run
             def get_analyzer_status(analyzer_key):
                 if analyzer_key in findings:
                     return findings[analyzer_key].get("severity", "SAFE")
@@ -1058,14 +1101,16 @@ class ReportGenerator:
                     and self.scan_results
                     and result.get("is_safe", True)
                 ):
-                    # Analyzer was requested and we have results, so it ran successfully and found tools safe
                     return "SAFE"
                 else:
                     return "N/A"
 
-            api_severity = get_analyzer_status("api_analyzer")[:6]
-            yara_severity = get_analyzer_status("yara_analyzer")[:6]
-            llm_severity = get_analyzer_status("llm_analyzer")[:6]
+            if has_code_llm:
+                code_llm_severity = get_analyzer_status("code_llm_analyzer")[:10]
+            else:
+                api_severity = get_analyzer_status("api_analyzer")[:6]
+                yara_severity = get_analyzer_status("yara_analyzer")[:6]
+                llm_severity = get_analyzer_status("llm_analyzer")[:6]
 
             # Get overall severity with colored emoji
             severity_emojis = {
@@ -1086,9 +1131,15 @@ class ReportGenerator:
                 overall_severity = f"{severity_emoji} {status}"[:8]
 
             if has_config_results:
-                row = f"{scan_target_source:<20} {target_server:<20} {tool_name:<18} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
+                if has_code_llm:
+                    row = f"{scan_target_source:<20} {target_server:<20} {tool_name:<18} {status:<10} {code_llm_severity:<12} {overall_severity:<10}"
+                else:
+                    row = f"{scan_target_source:<20} {target_server:<20} {tool_name:<18} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
             else:
-                row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
+                if has_code_llm:
+                    row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {code_llm_severity:<12} {overall_severity:<10}"
+                else:
+                    row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
             output.append(row)
 
         return "\n".join(output)
