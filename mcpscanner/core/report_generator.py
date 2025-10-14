@@ -26,10 +26,74 @@ from typing import Any, Dict, List, Optional, Union
 from .models import OutputFormat, SeverityFilter
 
 
+def _convert_github_scan_result_to_scan_result(github_result):
+    """Convert GitHubScanResult to a format compatible with results_to_json.
+    
+    Args:
+        github_result: GitHubScanResult object with structure:
+            - findings: dict[analyzer_name, list[dict]] where each dict has:
+                - severity: str
+                - summary: str
+                - details: str (may contain threat_category info)
+        
+    Returns:
+        Mock scan result object with expected attributes
+    """
+    from .analyzers.base import SecurityFinding
+    
+    class RepoScanResult:
+        def __init__(self, repo_url, status, is_safe, findings_dict, analyzers):
+            self.tool_name = repo_url
+            self.tool_description = f"Repository scan: {repo_url}"
+            self.status = status
+            self.is_safe = is_safe
+            self.analyzers = [a if isinstance(a, str) else a.value for a in analyzers]
+            # Convert findings dict to list of SecurityFinding objects
+            self.findings = []
+            for analyzer_name, finding_list in findings_dict.items():
+                for finding_dict in finding_list:
+                    # Get details - could be dict, string, or None
+                    details = finding_dict.get("details", {})
+                    
+                    # Extract threat_category from details
+                    threat_category = ""
+                    if isinstance(details, dict):
+                        # If details is a dict, look for threat_category key
+                        threat_category = details.get("threat_category", "")
+                    elif isinstance(details, str) and "Category:" in details:
+                        # If details is a string, try to extract category
+                        for line in details.split('\n'):
+                            if line.strip().startswith("Category:"):
+                                threat_category = line.split(":", 1)[1].strip()
+                                break
+                    
+                    # Ensure details is a dict for SecurityFinding
+                    if not isinstance(details, dict):
+                        details = {"raw": str(details)} if details else {}
+                    
+                    # Create SecurityFinding object from dict
+                    self.findings.append(SecurityFinding(
+                        severity=finding_dict.get("severity", "unknown"),
+                        summary=finding_dict.get("summary", ""),
+                        threat_category=threat_category or "Code Vulnerability",
+                        details=details,
+                        analyzer=analyzer_name,
+                    ))
+    
+    return RepoScanResult(
+        repo_url=github_result.repo_url,
+        status=github_result.status,
+        is_safe=github_result.is_safe,
+        findings_dict=github_result.findings,
+        analyzers=github_result.analyzers
+    )
+
+
 async def results_to_json(scan_results) -> List[Dict[str, Any]]:
     """Convert scan results to JSON format.
 
     Note: expects ScanResult-like objects with .findings, .tool_name, .tool_description, .status, .is_safe
+    Also handles GitHubScanResult objects by converting them first.
 
     Args:
         scan_results: List of scan result objects
@@ -39,6 +103,9 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
     """
     json_results = []
     for result in scan_results:
+        # Check if this is a GitHubScanResult and convert it
+        if hasattr(result, 'repo_url') and hasattr(result, 'functions_by_type'):
+            result = _convert_github_scan_result_to_scan_result(result)
         findings_by_analyzer: Dict[str, Dict[str, Any]] = {}
         summaries_by_analyzer: Dict[str, List[str]] = {}
 
@@ -59,7 +126,16 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
 
         # Process actual findings and update analyzer data
         for finding in result.findings:
-            analyzer = finding.analyzer.lower() + "_analyzer"
+            # Normalize analyzer name to match expected format
+            # Convert "CodeLLMAnalyzer" -> "code_llm_analyzer"
+            analyzer_name = finding.analyzer
+            if analyzer_name == "CodeLLMAnalyzer":
+                analyzer = "code_llm_analyzer"
+            elif not analyzer_name.lower().endswith("_analyzer"):
+                analyzer = analyzer_name.lower() + "_analyzer"
+            else:
+                analyzer = analyzer_name.lower()
+            
             if analyzer not in findings_by_analyzer:
                 findings_by_analyzer[analyzer] = {
                     "severity": "SAFE",
@@ -130,6 +206,19 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
         # Include server_name if available
         if hasattr(result, "server_name") and result.server_name:
             result_dict["server_name"] = result.server_name
+        
+        # Store raw findings for detailed views (preserve individual finding details)
+        if hasattr(result, "findings") and result.findings:
+            result_dict["raw_findings"] = [
+                {
+                    "severity": f.severity,
+                    "summary": f.summary,
+                    "threat_category": f.threat_category,
+                    "details": f.details if isinstance(f.details, str) else f.details,
+                    "analyzer": f.analyzer,
+                }
+                for f in result.findings
+            ]
 
         json_results.append(result_dict)
     return json_results
@@ -281,9 +370,336 @@ class ReportGenerator:
         """Format as raw JSON."""
         return json.dumps(self.data, indent=2)
 
+    def _format_repo_by_analyzer(
+        self, results: List[Dict[str, Any]], analyzer_filter: Optional[str] = None
+    ) -> str:
+        """Format repository scan results grouped by analyzer."""
+        output = ["=== Repository Scan - Results by Analyzer ===\n"]
+        
+        if not results:
+            output.append("No results found.\n")
+            return "\n".join(output)
+        
+        result = results[0]
+        repo_url = result.get("tool_name", "Unknown")
+        raw_findings = result.get("raw_findings", [])
+        findings = result.get("findings", {})
+        
+        output.append(f"Repository: {repo_url}\n")
+        
+        # Group findings by analyzer
+        for analyzer_name, analyzer_data in findings.items():
+            if analyzer_filter and analyzer_filter != analyzer_name:
+                continue
+            
+            severity = analyzer_data.get("severity", "SAFE")
+            count = analyzer_data.get("total_findings", 0)
+            summary = analyzer_data.get("threat_summary", "No details")
+            
+            output.append(f"🔍 {analyzer_name.upper().replace('_', ' ')}")
+            output.append(f"Severity: {severity}")
+            output.append(f"Total Findings: {count}")
+            output.append(f"Summary: {summary}")
+            
+            # Show individual findings for this analyzer
+            analyzer_findings = [f for f in raw_findings if f.get("analyzer", "").lower() == analyzer_name.replace("_analyzer", "").lower() or f.get("analyzer") == "CodeLLMAnalyzer"]
+            if analyzer_findings and count > 1:  # More than just summary
+                output.append("\nKey Findings:")
+                vuln_findings = [f for f in analyzer_findings if f.get("threat_category") != "Summary"][:5]
+                for i, finding in enumerate(vuln_findings, 1):
+                    output.append(f"  {i}. {finding.get('summary', 'No summary')}")
+                if len(vuln_findings) < count - 1:
+                    output.append(f"  ... and {count - len(vuln_findings) - 1} more")
+            
+            output.append("")
+        
+        return "\n".join(output)
+
+    def _format_repo_by_severity(
+        self, results: List[Dict[str, Any]], severity_filter: SeverityFilter
+    ) -> str:
+        """Format repository scan results grouped by severity."""
+        output = ["=== Repository Scan - Results by Severity ===\n"]
+        
+        if not results:
+            output.append("No results found.\n")
+            return "\n".join(output)
+        
+        result = results[0]
+        repo_url = result.get("tool_name", "Unknown")
+        raw_findings = result.get("raw_findings", [])
+        
+        output.append(f"Repository: {repo_url}\n")
+        
+        # Group findings by severity (excluding summary findings)
+        severity_groups = {
+            "HIGH": [],
+            "MEDIUM": [],
+            "LOW": [],
+            "INFO": []
+        }
+        
+        for finding in raw_findings:
+            severity = finding.get("severity", "INFO").upper()
+            # Skip summary findings
+            if finding.get("threat_category") == "Summary":
+                continue
+            if severity in severity_groups:
+                severity_groups[severity].append(finding)
+        
+        # Display findings by severity
+        severity_emojis = {
+            "HIGH": "🔴",
+            "MEDIUM": "🟡",
+            "LOW": "🟢",
+            "INFO": "ℹ️"
+        }
+        
+        severity_order = ["HIGH", "MEDIUM", "LOW", "INFO"]
+        for severity in severity_order:
+            findings_list = severity_groups[severity]
+            
+            # Apply severity filter
+            if severity_filter != SeverityFilter.ALL and severity_filter.value.upper() != severity:
+                continue
+            
+            if not findings_list:
+                continue
+            
+            emoji = severity_emojis.get(severity, "ℹ️")
+            output.append(f"{emoji} {severity} SEVERITY ({len(findings_list)} findings)")
+            
+            # Show first 10 findings
+            for i, finding in enumerate(findings_list[:10], 1):
+                category = finding.get('threat_category', 'Unknown')
+                summary = finding.get('summary', 'No summary')
+                output.append(f"  {i}. [{category}] {summary}")
+            
+            if len(findings_list) > 10:
+                output.append(f"  ... and {len(findings_list) - 10} more")
+            
+            output.append("")
+        
+        return "\n".join(output)
+
+    def _format_repo_table(self, results: List[Dict[str, Any]]) -> str:
+        """Format repository scan results as a table."""
+        output = ["=== MCP Scanner Results Table ===\n"]
+        
+        if not results:
+            output.append("No results found.\n")
+            return "\n".join(output)
+        
+        result = results[0]
+        repo_url = result.get("tool_name", "Unknown")
+        is_safe = result.get("is_safe", True)
+        raw_findings = result.get("raw_findings", [])
+        findings = result.get("findings", {})
+        
+        # Group findings by function/vulnerability
+        vulnerability_findings = [f for f in raw_findings if f.get("threat_category") != "Summary"]
+        
+        # Create table header matching the standard format
+        header = f"{'Repository':<30} {'Vulnerability':<35} {'Status':<10} {'CODE_LLM':<10} {'Severity':<10}"
+        output.append(header)
+        output.append("—" * (len(header) + 10))
+        
+        # Get analyzer severity
+        code_llm_severity = findings.get("code_llm_analyzer", {}).get("severity", "N/A")
+        
+        severity_emojis = {
+            "HIGH": "🔴",
+            "MEDIUM": "🟠",
+            "LOW": "🟡",
+            "SAFE": "🟢",
+        }
+        
+        if not vulnerability_findings:
+            # No vulnerabilities found
+            repo_short = repo_url[:28]
+            status = "SAFE"
+            severity_emoji = severity_emojis.get("SAFE", "🟢")
+            overall_severity = f"{severity_emoji} SAFE"
+            row = f"{repo_short:<30} {'No vulnerabilities':<35} {status:<10} {code_llm_severity:<10} {overall_severity:<10}"
+            output.append(row)
+        else:
+            # Show all vulnerabilities
+            for i, finding in enumerate(vulnerability_findings, 1):
+                if i == 1:
+                    repo_display = repo_url[:28]
+                else:
+                    repo_display = ""  # Empty for subsequent rows
+                
+                # Extract function name from summary
+                summary = finding.get("summary", "Unknown")
+                # Try to extract function name from patterns like "X in tool 'function_name'"
+                if " in tool '" in summary:
+                    vuln_type = summary.split(" in tool '")[0]
+                    func_name = summary.split(" in tool '")[1].rstrip("'")
+                    vuln_display = f"{func_name}: {vuln_type}"[:33]
+                elif " in resource '" in summary:
+                    vuln_type = summary.split(" in resource '")[0]
+                    func_name = summary.split(" in resource '")[1].rstrip("'")
+                    vuln_display = f"{func_name}: {vuln_type}"[:33]
+                else:
+                    vuln_display = summary[:33]
+                
+                status = "UNSAFE"
+                severity = finding.get("severity", "MEDIUM").upper()
+                severity_emoji = severity_emojis.get(severity, "🟠")
+                overall_severity = f"{severity_emoji} {severity}"
+                
+                row = f"{repo_display:<30} {vuln_display:<35} {status:<10} {code_llm_severity:<10} {overall_severity:<10}"
+                output.append(row)
+        
+        return "\n".join(output)
+
+    def _format_repo_detailed(self, results: List[Dict[str, Any]]) -> str:
+        """Format repository scan results with detailed vulnerability information."""
+        output = ["=== Repository Security Scan - Detailed Results ===\n"]
+        
+        if not results:
+            output.append("No results found.\n")
+            return "\n".join(output)
+        
+        result = results[0]
+        repo_url = result.get("tool_name", "Unknown")
+        is_safe = result.get("is_safe", True)
+        raw_findings = result.get("raw_findings", [])
+        
+        output.append(f"Repository: {repo_url}")
+        output.append(f"Status: {'✅ SAFE' if is_safe else '⚠️  UNSAFE'}")
+        output.append(f"Total Vulnerabilities: {len([f for f in raw_findings if f['severity'].upper() in ['HIGH', 'MEDIUM', 'LOW'] and f['threat_category'] != 'Summary'])}\n")
+        
+        # Group findings by severity (excluding summary findings)
+        severity_groups = {
+            "HIGH": [],
+            "MEDIUM": [],
+            "LOW": [],
+            "INFO": []
+        }
+        
+        for finding in raw_findings:
+            severity = finding.get("severity", "INFO").upper()
+            # Skip summary findings
+            if finding.get("threat_category") == "Summary":
+                continue
+            if severity in severity_groups:
+                severity_groups[severity].append(finding)
+        
+        # Display findings by severity
+        severity_emojis = {
+            "HIGH": "🔴",
+            "MEDIUM": "🟡",
+            "LOW": "🟢",
+            "INFO": "ℹ️"
+        }
+        
+        for severity in ["HIGH", "MEDIUM", "LOW", "INFO"]:
+            findings_list = severity_groups[severity]
+            if not findings_list:
+                continue
+            
+            emoji = severity_emojis.get(severity, "ℹ️")
+            output.append(f"\n{emoji} {severity} SEVERITY ({len(findings_list)} findings)")
+            output.append("=" * 60)
+            
+            for i, finding in enumerate(findings_list, 1):
+                output.append(f"\n{i}. {finding.get('summary', 'No summary')}")
+                output.append(f"   Category: {finding.get('threat_category', 'Unknown')}")
+                
+                # Display details
+                details = finding.get('details', '')
+                if details:
+                    if isinstance(details, str):
+                        # Format multi-line details
+                        for line in details.split('\n'):
+                            if line.strip():
+                                output.append(f"   {line}")
+                    elif isinstance(details, dict):
+                        # Format dict details
+                        for key, value in details.items():
+                            if key != 'raw':
+                                output.append(f"   {key}: {value}")
+        
+        # Show summary at the end
+        summary_findings = [f for f in raw_findings if f.get('threat_category') == 'Summary']
+        if summary_findings:
+            output.append("\n" + "=" * 60)
+            output.append(f"\n📊 {summary_findings[0].get('summary', 'Scan complete')}")
+        
+        return "\n".join(output)
+
+    def _format_repo_summary(self, results: List[Dict[str, Any]]) -> str:
+        """Format repository scan results as summary."""
+        output = ["=== Repository Security Scan Results ===\n"]
+        
+        if not results:
+            output.append("No results found.\n")
+            return "\n".join(output)
+        
+        result = results[0]
+        repo_url = result.get("tool_name", "Unknown")
+        is_safe = result.get("is_safe", True)
+        findings = result.get("findings", {})
+        
+        output.append(f"Repository: {repo_url}")
+        output.append(f"Status: {'✅ SAFE' if is_safe else '⚠️  UNSAFE'}")
+        
+        # Count findings by severity
+        total_findings = 0
+        high_findings = 0
+        medium_findings = 0
+        low_findings = 0
+        
+        for analyzer_name, analyzer_data in findings.items():
+            severity = analyzer_data.get("severity", "SAFE")
+            count = analyzer_data.get("total_findings", 0)
+            total_findings += count
+            
+            if severity == "HIGH":
+                high_findings += count
+            elif severity == "MEDIUM":
+                medium_findings += count
+            elif severity == "LOW":
+                low_findings += count
+        
+        output.append(f"\nTotal Findings: {total_findings}")
+        if high_findings > 0:
+            output.append(f"  🔴 High Severity: {high_findings}")
+        if medium_findings > 0:
+            output.append(f"  🟡 Medium Severity: {medium_findings}")
+        if low_findings > 0:
+            output.append(f"  🟢 Low Severity: {low_findings}")
+        
+        # Show findings by analyzer
+        if findings:
+            output.append("\n=== Findings by Analyzer ===")
+            for analyzer_name, analyzer_data in findings.items():
+                severity = analyzer_data.get("severity", "SAFE")
+                count = analyzer_data.get("total_findings", 0)
+                summary = analyzer_data.get("threat_summary", "No details")
+                
+                output.append(f"\n{analyzer_name}:")
+                output.append(f"  Severity: {severity}")
+                output.append(f"  Findings: {count}")
+                output.append(f"  Summary: {summary}")
+        
+        output.append("\n💡 Tip: Use --format detailed to see full vulnerability details")
+        
+        return "\n".join(output)
+
     def _format_summary(self, results: List[Dict[str, Any]]) -> str:
         """Format as summary view."""
         output = ["=== MCP Scanner Results Summary ===\n"]
+
+        # Check if this is a repository scan (has repo-specific metadata)
+        is_repo_scan = (results and 
+                       results[0].get("tool_description", "").startswith("Repository scan:"))
+        
+        if is_repo_scan:
+            # Special formatting for repository scans
+            return self._format_repo_summary(results)
 
         # Use server_source if available for config-based scans
         if results and "server_source" in results[0] and results[0]["server_source"]:
@@ -341,6 +757,13 @@ class ReportGenerator:
         """Format as detailed view."""
         output = ["=== MCP Scanner Detailed Results ===\n"]
 
+        # Check if this is a repository scan
+        is_repo_scan = (results and 
+                       results[0].get("tool_description", "").startswith("Repository scan:"))
+        
+        if is_repo_scan:
+            return self._format_repo_detailed(results)
+
         # Use server_source if available for config-based scans
         if results and "server_source" in results[0] and results[0]["server_source"]:
             scan_target = results[0]["server_source"]
@@ -393,6 +816,14 @@ class ReportGenerator:
 
     def _format_by_tool(self, results: List[Dict[str, Any]]) -> str:
         """Format grouped by tool."""
+        # Check if this is a repository scan
+        is_repo_scan = (results and 
+                       results[0].get("tool_description", "").startswith("Repository scan:"))
+        
+        if is_repo_scan:
+            # For repository scans, by_tool format is the same as summary
+            return self._format_repo_summary(results)
+        
         output = ["=== Results by Tool ===\n"]
         output.append(f"Scan Target: {self.server_url}\n")
 
@@ -438,6 +869,13 @@ class ReportGenerator:
         self, results: List[Dict[str, Any]], analyzer_filter: Optional[str] = None
     ) -> str:
         """Format grouped by analyzer."""
+        # Check if this is a repository scan
+        is_repo_scan = (results and 
+                       results[0].get("tool_description", "").startswith("Repository scan:"))
+        
+        if is_repo_scan:
+            return self._format_repo_by_analyzer(results, analyzer_filter)
+        
         output = ["=== Results by Analyzer ===\n"]
         output.append(f"Scan Target: {self.server_url}\n")
 
@@ -493,6 +931,13 @@ class ReportGenerator:
         self, results: List[Dict[str, Any]], severity_filter: SeverityFilter
     ) -> str:
         """Format grouped by severity."""
+        # Check if this is a repository scan
+        is_repo_scan = (results and 
+                       results[0].get("tool_description", "").startswith("Repository scan:"))
+        
+        if is_repo_scan:
+            return self._format_repo_by_severity(results, severity_filter)
+        
         output = ["=== Results by Severity ===\n"]
         output.append(f"Scan Target: {self.server_url}\n")
 
@@ -559,6 +1004,13 @@ class ReportGenerator:
         if not results:
             output.append("No results match the specified filters.\n")
             return "\n".join(output)
+        
+        # Check if this is a repository scan
+        is_repo_scan = (results and 
+                       results[0].get("tool_description", "").startswith("Repository scan:"))
+        
+        if is_repo_scan:
+            return self._format_repo_table(results)
 
         # Check if this is a config-based scan (has server_source)
         has_config_results = any(

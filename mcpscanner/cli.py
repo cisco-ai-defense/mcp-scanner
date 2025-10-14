@@ -69,13 +69,14 @@ def _build_config(
     llm_model = os.environ.get("MCP_SCANNER_LLM_MODEL")
     endpoint_url = endpoint_url or _get_endpoint_from_env()
 
+    # Check if any LLM-based analyzer is requested
+    needs_llm = AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.CODE_LLM in selected_analyzers
+    
     config_params = {
         "api_key": api_key if AnalyzerEnum.API in selected_analyzers else "",
         "endpoint_url": endpoint_url,
-        "llm_provider_api_key": (
-            llm_api_key if AnalyzerEnum.LLM in selected_analyzers else ""
-        ),
-        "llm_model": llm_model if AnalyzerEnum.LLM in selected_analyzers else "",
+        "llm_provider_api_key": llm_api_key if needs_llm else "",
+        "llm_model": llm_model if needs_llm else "",
     }
 
     if llm_base_url:
@@ -527,6 +528,16 @@ async def main():
         help="Comma-separated list of allowed MIME types (default: %(default)s)",
     )
 
+    # Repository code scanning subcommand
+    p_repo = subparsers.add_parser(
+        "repo", help="Scan a Git repository for MCP server vulnerabilities"
+    )
+    p_repo.add_argument(
+        "--repo-url",
+        required=True,
+        help="Git repository URL to scan (e.g., https://github.com/user/repo)",
+    )
+
     # API key and endpoint configuration
     parser.add_argument(
         "--api-key",
@@ -863,6 +874,21 @@ async def main():
                     }
                     for r in resource_results
                 ]
+
+        elif args.cmd == "repo":
+            # Repository code scanning
+            cfg = _build_config([AnalyzerEnum.CODE_LLM])
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            
+            print(f"\n🔍 Scanning repository: {args.repo_url}\n")
+            
+            result = await scanner.scan_github_repository(
+                repo_url=args.repo_url,
+                analyzers=[AnalyzerEnum.CODE_LLM]
+            )
+            
+            # Convert to JSON format - results_to_json handles GitHubScanResult conversion
+            results = await results_to_json([result])
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:

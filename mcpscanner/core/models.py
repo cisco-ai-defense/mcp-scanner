@@ -51,11 +51,11 @@ class SeverityFilter(str, Enum):
 
 
 class AnalyzerEnum(str, Enum):
-    """Available analyzers."""
-
+    """Enum for available analyzers."""
     API = "api"
     YARA = "yara"
     LLM = "llm"
+    CODE_LLM = "code_llm"
 
 
 class AnalysisContext(BaseModel):
@@ -338,3 +338,35 @@ class FormattedToolScanResponse(BaseModel):
     output_format: str
     formatted_output: Union[str, dict, List[dict]]
     raw_results: Optional[List[ToolScanResult]] = None
+
+
+class GitHubScanRequest(BaseModel):
+    """Request model for GitHub repository scanning."""
+
+    repo_url: str = Field(..., description="GitHub repository URL to scan")
+    analyzers: Optional[List[AnalyzerEnum]] = Field(
+        default=[AnalyzerEnum.CODE_LLM],
+        description="List of analyzers to run (default: Code LLM only)"
+    )
+
+    @field_validator("repo_url")
+    @classmethod
+    def validate_repo_url(cls, v):
+        """Validate GitHub repository URL."""
+        if not v.startswith("https://github.com/") and not v.startswith("http://github.com/"):
+            raise ValueError("Repository URL must be a valid GitHub URL")
+        return v
+
+
+class GitHubScanResult(BaseModel):
+    """Result of scanning a GitHub repository."""
+
+    repo_url: str
+    status: str  # "completed", "failed", "partial"
+    total_functions_found: int
+    functions_by_type: Dict[str, int]
+    functions_by_language: Dict[str, int]
+    vulnerabilities_found: int
+    findings: dict  # Dictionary with analyzer names as keys
+    is_safe: bool
+    analyzers: List[str]

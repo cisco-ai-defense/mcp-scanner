@@ -41,6 +41,7 @@ from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
+from .analyzers.code_llm_analyzer import CodeLLMAnalyzer
 from .auth import (
     Auth,
     AuthType,
@@ -102,6 +103,7 @@ class Scanner:
         self._llm_analyzer = (
             LLMAnalyzer(config) if config.llm_provider_api_key else None
         )
+        self._code_llm_analyzer = CodeLLMAnalyzer(config)
         self._custom_analyzers = custom_analyzers or []
 
         # Debug logging for analyzer initialization
@@ -112,6 +114,8 @@ class Scanner:
             active_analyzers.append("YARA")
         if self._llm_analyzer:
             active_analyzers.append("LLM")
+        if self._code_llm_analyzer:
+            active_analyzers.append("CODE_LLM")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -1888,3 +1892,145 @@ class Scanner:
             raise
         finally:
             await self._close_mcp_session(client_context, session)
+
+    async def scan_github_repository(
+        self,
+        repo_url: str,
+        analyzers: Optional[List[AnalyzerEnum]] = None,
+    ) -> "GitHubScanResult":
+        """Scan a GitHub repository for MCP server vulnerabilities.
+
+        This method clones a public GitHub repository, extracts MCP server functions
+        (tools, resources, prompts) from supported languages (Python, TypeScript, Kotlin, Swift),
+        and scans them for security vulnerabilities including data exfiltration and command injection.
+
+        Args:
+            repo_url (str): The GitHub repository URL to scan (must be public).
+            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to GITHUB only.
+
+        Returns:
+            GitHubScanResult: The result of the repository scan.
+
+        Raises:
+            ValueError: If the repository URL is invalid.
+
+        Example:
+            >>> scanner = Scanner(config)
+            >>> result = await scanner.scan_github_repository("https://github.com/user/mcp-server")
+            >>> print(f"Found {result.total_functions_found} MCP functions")
+            >>> print(f"Vulnerabilities: {result.vulnerabilities_found}")
+        """
+        from .models import GitHubScanResult
+
+        if not repo_url:
+            raise ValueError("No repository URL provided. Please specify a valid GitHub repository URL.")
+
+        # Default to Code LLM analyzer only
+        if analyzers is None:
+            analyzers = [AnalyzerEnum.CODE_LLM]
+
+        # Validate that Code LLM analyzer is requested
+        if AnalyzerEnum.CODE_LLM not in analyzers:
+            logger.warning("Code LLM analyzer not in requested analyzers, adding it")
+            analyzers.append(AnalyzerEnum.CODE_LLM)
+
+        logger.info(f"Starting GitHub repository scan: {repo_url}")
+
+        try:
+            import re
+            
+            # Run Code LLM analyzer (async)
+            all_findings = []
+            if self._code_llm_analyzer:
+                findings = await self._code_llm_analyzer.analyze(repo_url)
+                all_findings.extend(findings)
+
+            # Extract summary information from findings
+            total_functions = 0
+            functions_by_type = {}
+            functions_by_language = {}
+            vulnerabilities_found = 0
+
+            # Look for the summary finding
+            for finding in all_findings:
+                if finding.severity == "info" and "Repository scan complete" in finding.summary:
+                    # Parse details string to extract information
+                    details_str = finding.details if isinstance(finding.details, str) else str(finding.details)
+                    func_match = re.search(r'(\d+) MCP functions analyzed', details_str)
+                    if func_match:
+                        total_functions = int(func_match.group(1))
+                    
+                    # Extract functions by type
+                    type_match = re.search(r'Functions by type: ({[^}]+})', details_str)
+                    if type_match:
+                        try:
+                            functions_by_type = eval(type_match.group(1))
+                        except:
+                            pass
+                    
+                    # Extract functions by language
+                    lang_match = re.search(r'Functions by language: ({[^}]+})', details_str)
+                    if lang_match:
+                        try:
+                            functions_by_language = eval(lang_match.group(1))
+                        except:
+                            pass
+                    
+                    # Extract vulnerabilities count
+                    vuln_match = re.search(r'Vulnerabilities found: (\d+)', details_str)
+                    if vuln_match:
+                        vulnerabilities_found = int(vuln_match.group(1))
+                    break
+            
+            # If no summary found or counts are 0, calculate from findings
+            if vulnerabilities_found == 0:
+                vulnerabilities_found = sum(1 for f in all_findings if f.severity not in ["info", "low"])
+            
+            # If total_functions is still 0, try to extract from any finding
+            if total_functions == 0:
+                for finding in all_findings:
+                    if "MCP functions analyzed" in str(finding.summary):
+                        match = re.search(r'(\d+) MCP functions', finding.summary)
+                        if match:
+                            total_functions = int(match.group(1))
+                            break
+
+            # Group findings by analyzer
+            grouped_findings = {}
+            for finding in all_findings:
+                analyzer_name = finding.analyzer
+                if analyzer_name not in grouped_findings:
+                    grouped_findings[analyzer_name] = []
+                grouped_findings[analyzer_name].append({
+                    "severity": finding.severity,
+                    "summary": finding.summary,
+                    "details": finding.details,
+                })
+
+            # Determine if repository is safe
+            is_safe = all(
+                f.severity in ["info", "low"]
+                for f in all_findings
+            )
+
+            status = "completed"
+            if not all_findings:
+                status = "failed"
+            elif vulnerabilities_found > 0:
+                status = "completed"
+
+            return GitHubScanResult(
+                repo_url=repo_url,
+                status=status,
+                total_functions_found=total_functions,
+                functions_by_type=functions_by_type,
+                functions_by_language=functions_by_language,
+                vulnerabilities_found=vulnerabilities_found,
+                findings=grouped_findings,
+                is_safe=is_safe,
+                analyzers=[a.value for a in analyzers],
+            )
+
+        except Exception as e:
+            logger.error(f"Error scanning GitHub repository {repo_url}: {e}", exc_info=True)
+            raise
