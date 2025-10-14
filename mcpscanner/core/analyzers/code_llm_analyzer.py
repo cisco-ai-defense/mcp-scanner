@@ -135,9 +135,12 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                 "prompt": r"@[\w_]+\.(prompt|list_prompts|get_prompt)\(",
             },
             SupportedLanguage.TYPESCRIPT: {
-                "tool": r"server\.registerTool\(",
-                "resource": r"server\.registerResource\(",
-                "prompt": r"server\.registerPrompt\(",
+                # Matches: server.tool(, server.registerTool(, server.setRequestHandler(CallToolRequest
+                "tool": r"(server\.(tool|registerTool)\(|server\.setRequestHandler\(CallToolRequest|server\.setRequestHandler\(ListToolsRequest)",
+                # Matches: server.resource(, server.registerResource(, server.setRequestHandler(ReadResourceRequest
+                "resource": r"(server\.(resource|registerResource)\(|server\.setRequestHandler\(ReadResourceRequest|server\.setRequestHandler\(ListResourcesRequest)",
+                # Matches: server.prompt(, server.registerPrompt(, server.setRequestHandler(GetPromptRequest
+                "prompt": r"(server\.(prompt|registerPrompt)\(|server\.setRequestHandler\(GetPromptRequest|server\.setRequestHandler\(ListPromptsRequest)",
             },
             SupportedLanguage.KOTLIN: {
                 "tool": r"server\.addTool",
@@ -274,8 +277,24 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                 if match:
                     return match.group(1)
             elif language == SupportedLanguage.TYPESCRIPT:
-                # Look for function name in registration
-                match = re.search(r'["\'](\w+)["\']', code)
+                # Look for function name in server.tool("name", ...) or server.registerTool({ name: "..." })
+                # Pattern 1: server.tool("name", ...) - allow any characters in quotes (not just \w)
+                match = re.search(r'server\.(tool|registerTool|prompt|registerPrompt|resource|registerResource)\s*\(\s*["\']([^"\']+)["\']', code)
+                if match:
+                    return match.group(2)
+                # Pattern 2: server.setRequestHandler - extract from request type
+                match = re.search(r'server\.setRequestHandler\((CallToolRequest|ListToolsRequest|ReadResourceRequest|ListResourcesRequest|GetPromptRequest|ListPromptsRequest)', code)
+                if match:
+                    request_type = match.group(1)
+                    # Return a descriptive name based on request type
+                    return f"handler_{request_type.replace('Request', '').lower()}"
+                # Pattern 3: server.tool({ name: "..." })
+                match = re.search(r'name\s*:\s*["\']([^"\']+)["\']', code)
+                if match:
+                    return match.group(1)
+                # Pattern 4: Look for any quoted string in first line
+                first_line = code.split('\n')[0]
+                match = re.search(r'["\']([^"\']+)["\']', first_line)
                 if match:
                     return match.group(1)
             elif language == SupportedLanguage.KOTLIN:
@@ -350,6 +369,55 @@ class CodeLLMAnalyzer(BaseAnalyzer):
         
         return "\n".join(func_lines), start_line + len(func_lines)
 
+    def _extract_typescript_function_code(self, lines: List[str], match_line: int) -> tuple:
+        """Extract TypeScript/JavaScript function code from server.tool/registerTool pattern.
+        
+        Extracts the complete server.tool() or server.registerTool() call including
+        the callback function and all its contents.
+        
+        Args:
+            lines: All lines of the file
+            match_line: Line number where server.tool/registerTool appears (0-indexed)
+            
+        Returns:
+            Tuple of (function_code, end_line_number)
+        """
+        start_line = match_line
+        func_lines = []
+        
+        # Track brace/parenthesis depth to find the complete function
+        brace_count = 0
+        paren_count = 0
+        in_function = False
+        
+        for i in range(match_line, len(lines)):
+            line = lines[i]
+            func_lines.append(line)
+            
+            # Count braces and parentheses
+            for char in line:
+                if char == '(':
+                    paren_count += 1
+                    in_function = True
+                elif char == ')':
+                    paren_count -= 1
+                elif char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+            
+            # If we've closed all braces and parentheses, we're done
+            if in_function and brace_count == 0 and paren_count == 0:
+                # Check if line ends with semicolon or closing
+                if ';' in line or ')' in line:
+                    break
+            
+            # Safety limit: don't extract more than 200 lines
+            if len(func_lines) > 200:
+                break
+        
+        return "\n".join(func_lines), start_line + len(func_lines)
+
     def _extract_mcp_functions(
         self, file_content: str, file_path: str, language: SupportedLanguage
     ) -> List[MCPFunction]:
@@ -373,8 +441,13 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                     # Find line number
                     line_num = file_content[: match.start()].count("\n") + 1
 
-                    # Extract FULL function code (not just snippet)
-                    full_code, end_line = self._extract_full_function_code(lines, line_num - 1)
+                    # Extract FULL function code based on language
+                    if language == SupportedLanguage.TYPESCRIPT:
+                        # Use TypeScript-specific extraction
+                        full_code, end_line = self._extract_typescript_function_code(lines, line_num - 1)
+                    else:
+                        # Use Python/decorator-based extraction
+                        full_code, end_line = self._extract_full_function_code(lines, line_num - 1)
 
                     # Extract function name
                     func_name = self._extract_function_name(
@@ -584,40 +657,41 @@ class CodeLLMAnalyzer(BaseAnalyzer):
             flow_tracker = MultiFileCodeFlowTracker()
             python_files = []
             
-            # Recursively scan Python files only
-            language = SupportedLanguage.PYTHON
-            extensions = self.language_extensions[language]
-            
-            for ext in extensions:
-                for file_path in repo_path.rglob(f"*{ext}"):
-                    # Skip common non-source directories
-                    if any(skip in file_path.parts for skip in [
-                        "node_modules", ".git", "venv", ".venv", "build", "dist", "__pycache__", ".next", "site-packages"
-                    ]):
-                        continue
-                    
-                    try:
-                        logger.debug(f"Scanning file: {file_path.relative_to(repo_path)} (language: {language.value})")
-                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                            file_data = f.read()
+            # Scan both Python and TypeScript/JavaScript files
+            for language in [SupportedLanguage.PYTHON, SupportedLanguage.TYPESCRIPT]:
+                extensions = self.language_extensions[language]
+                
+                for ext in extensions:
+                    for file_path in repo_path.rglob(f"*{ext}"):
+                        # Skip common non-source directories
+                        if any(skip in file_path.parts for skip in [
+                            "node_modules", ".git", "venv", ".venv", "build", "dist", "__pycache__", ".next", "site-packages"
+                        ]):
+                            continue
                         
-                        files_scanned += 1
-                        python_files.append(str(file_path))
-                        
-                        # Add to flow tracker
-                        flow_tracker.add_file(str(file_path), source_code=file_data)
-                        
-                        # Extract MCP functions
-                        functions = self._extract_mcp_functions(
-                            file_data, str(file_path.relative_to(repo_path)), language
-                        )
-                        if functions:
-                            logger.info(f"Found {len(functions)} MCP functions in {file_path.relative_to(repo_path)}")
-                        all_functions.extend(functions)
-                        
-                    except Exception as e:
-                        logger.warning(f"Error processing file {file_path}: {e}")
-                        continue
+                        try:
+                            logger.debug(f"Scanning file: {file_path.relative_to(repo_path)} (language: {language.value})")
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                file_data = f.read()
+                            
+                            files_scanned += 1
+                            
+                            # Add Python files to flow tracker
+                            if language == SupportedLanguage.PYTHON:
+                                python_files.append(str(file_path))
+                                flow_tracker.add_file(str(file_path), source_code=file_data)
+                            
+                            # Extract MCP functions
+                            functions = self._extract_mcp_functions(
+                                file_data, str(file_path.relative_to(repo_path)), language
+                            )
+                            if functions:
+                                logger.info(f"Found {len(functions)} MCP functions in {file_path.relative_to(repo_path)}")
+                            all_functions.extend(functions)
+                            
+                        except Exception as e:
+                            logger.warning(f"Error processing file {file_path}: {e}")
+                            continue
 
             logger.info(f"Scan complete: Scanned {files_scanned} files, found {len(all_functions)} MCP functions")
             
@@ -634,14 +708,14 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                 except Exception as e:
                     logger.warning(f"Multi-file flow analysis failed: {e}")
 
-            # Check if any Python files were found
+            # Check if any files were found
             if files_scanned == 0:
                 return [
                     SecurityFinding(
                         severity="info",
-                        summary="No Python files found in repository",
+                        summary="No supported files found in repository",
                         threat_category="Configuration",
-                        details="This analyzer only supports Python code. No .py files were found in the repository.",
+                        details="This analyzer supports Python (.py) and TypeScript/JavaScript (.ts, .js) files. No supported files were found in the repository.",
                         analyzer="CodeLLMAnalyzer",
                     )
                 ]
@@ -653,8 +727,9 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                         severity="info",
                         summary="No MCP functions found",
                         threat_category="Configuration",
-                        details=f"Scanned {files_scanned} Python files but found no MCP server functions. "
-                               f"This analyzer looks for @mcp.tool(), @mcp.prompt(), @mcp.resource() decorators.",
+                        details=f"Scanned {files_scanned} files but found no MCP server functions. "
+                               f"This analyzer looks for Python decorators (@mcp.tool, @mcp.prompt, @mcp.resource) "
+                               f"and TypeScript/JavaScript patterns (server.tool, server.registerTool, etc.).",
                         analyzer="CodeLLMAnalyzer",
                     )
                 ]

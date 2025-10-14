@@ -552,6 +552,20 @@ async def main():
         help="Specific version to scan (if not provided, scans latest version)",
     )
 
+    # NPM package scanning subcommand
+    p_npm = subparsers.add_parser(
+        "npm", help="Scan an NPM package for security vulnerabilities"
+    )
+    p_npm.add_argument(
+        "--package-name",
+        required=True,
+        help="Name of the NPM package to scan (e.g., @modelcontextprotocol/server-everything)",
+    )
+    p_npm.add_argument(
+        "--version",
+        help="Specific version to scan (if not provided, scans latest version)",
+    )
+
     # API key and endpoint configuration
     parser.add_argument(
         "--api-key",
@@ -913,12 +927,24 @@ async def main():
             pypi_analyzer = PyPIPackageAnalyzer(cfg)
             context = {"version": args.version} if args.version else None
             findings = await pypi_analyzer.analyze(args.package_name, context=context)
+
+        # NPM package scanning
+        elif hasattr(args, "cmd") and args.cmd == "npm":
+            print(f"\n📦 Scanning NPM package: {args.package_name}" + (f" version {args.version}" if args.version else "") + "\n")
+            cfg = _build_config([AnalyzerEnum.CODE_LLM])
+            
+            # Import and use NPM analyzer
+            from mcpscanner.core.analyzers.npm_package_analyzer import NPMPackageAnalyzer
+            
+            npm_analyzer = NPMPackageAnalyzer(cfg)
+            context = {"version": args.version} if args.version else None
+            findings = await npm_analyzer.analyze(args.package_name, context=context)
             
             # Create a scan result object
             from mcpscanner.core.result import ToolScanResult
             scan_result = ToolScanResult(
                 tool_name=args.package_name,
-                tool_description=f"PyPI package scan: {args.package_name}" + (f" v{args.version}" if args.version else ""),
+                tool_description=f"NPM package scan: {args.package_name}" + (f" v{args.version}" if args.version else ""),
                 status="completed",
                 analyzers=[AnalyzerEnum.CODE_LLM],
                 findings=findings,
