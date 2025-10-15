@@ -48,6 +48,9 @@ except ImportError:
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
 from ...utils.code_flow_tracker import track_code_flow, get_flow_summary, MultiFileCodeFlowTracker
+from ...utils.js_flow_tracker import track_js_code_flow, get_js_flow_summary
+from ...utils.js_call_chain_tracker import JSCallChainTracker
+from ...utils.python_call_chain_tracker import PythonCallChainTracker, get_python_call_chain_summary
 from .base import BaseAnalyzer, SecurityFinding
 
 logger = logging.getLogger(__name__)
@@ -488,13 +491,19 @@ class CodeLLMAnalyzer(BaseAnalyzer):
             return f.read()
 
     async def _analyze_function_with_llm(
-        self, mcp_function: MCPFunction, flow_tracker: Optional[MultiFileCodeFlowTracker] = None
+        self, 
+        mcp_function: MCPFunction, 
+        flow_tracker: Optional[MultiFileCodeFlowTracker] = None,
+        python_call_chain_report: Optional[Dict] = None,
+        js_call_chain_report: Optional[Dict] = None
     ) -> List[SecurityFinding]:
         """Analyze an MCP function for security vulnerabilities using LLM.
 
         Args:
             mcp_function: MCP function to analyze
-            flow_tracker: Optional multi-file flow tracker with pre-computed flows
+            flow_tracker: Optional multi-file flow tracker with pre-computed flows (Python)
+            python_call_chain_report: Optional call chain analysis report (Python)
+            js_call_chain_report: Optional call chain analysis report (JavaScript/TypeScript)
 
         Returns:
             List of security findings
@@ -508,8 +517,9 @@ class CodeLLMAnalyzer(BaseAnalyzer):
             # Load the vulnerability analysis prompt template
             prompt_template = self._load_vulnerability_analysis_prompt()
             
-            # Perform data flow analysis for Python code
+            # Perform data flow analysis
             flow_analysis = ""
+            
             if mcp_function.language == SupportedLanguage.PYTHON:
                 try:
                     # Use multi-file flow tracker if available, otherwise single-file
@@ -527,8 +537,61 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                             flow_summary = get_flow_summary(flow_report)
                             flow_analysis = f"\n\n**Data Flow Analysis**:\n{flow_summary}\n"
                             logger.info(f"Generated flow analysis for {mcp_function.function_name}: {flow_report.get('total_parameters', 0)} parameters tracked")
+                    
+                    # Add call chain analysis if available
+                    if python_call_chain_report and python_call_chain_report.get('total_call_chains', 0) > 0:
+                        # Find relevant call chains for this file
+                        relevant_chains = [
+                            chain for chain in python_call_chain_report.get('call_chains', [])
+                            if mcp_function.file_path in chain.entry_file or 
+                               any(call.caller_file == mcp_function.file_path for call in chain.chain)
+                        ]
+                        
+                        if relevant_chains:
+                            chain_summary = get_python_call_chain_summary({
+                                'total_functions': python_call_chain_report['total_functions'],
+                                'total_call_chains': len(relevant_chains),
+                                'call_chains': relevant_chains
+                            })
+                            flow_analysis += f"\n**Call Chain Analysis (Multi-File Context)**:\n{chain_summary}\n"
+                            logger.info(f"Added call chain analysis for {mcp_function.function_name}: {len(relevant_chains)} relevant chains")
                 except Exception as e:
                     logger.warning(f"Could not perform flow analysis for {mcp_function.function_name}: {e}")
+            
+            elif mcp_function.language == SupportedLanguage.TYPESCRIPT:
+                try:
+                    # Use call chain analysis if available, otherwise single-file flow
+                    if js_call_chain_report and js_call_chain_report.get('dangerous_chains', 0) > 0:
+                        # Format call chain information for this function
+                        relevant_chains = []
+                        for chain in js_call_chain_report.get('call_chains', []):
+                            if chain.reaches_sink and chain.chain:
+                                # Check if this function is involved in the chain
+                                for call in chain.chain:
+                                    if mcp_function.file_path in call.caller_file or mcp_function.file_path in (call.resolved_file or ''):
+                                        relevant_chains.append(chain)
+                                        break
+                        
+                        if relevant_chains:
+                            chain_summary = f"Found {len(relevant_chains)} dangerous call chain(s) involving this file:\n"
+                            for i, chain in enumerate(relevant_chains[:3], 1):
+                                chain_summary += f"\n  Chain {i}: {len(chain.chain)} calls → {chain.sink_type} sink (Severity: {chain.severity.upper()})\n"
+                                chain_summary += f"  Source Parameters: {', '.join(chain.source_params)}\n"
+                                for call in chain.chain[:3]:
+                                    chain_summary += f"    → {call.caller_function}() calls {call.called_function}()\n"
+                            
+                            flow_analysis = f"\n\n**Call Chain Analysis (Multi-File Context)**:\n{chain_summary}\n"
+                            logger.info(f"Using call chain analysis for {mcp_function.function_name}: {len(relevant_chains)} relevant chains")
+                    
+                    # Fallback to single-file flow analysis
+                    if not flow_analysis:
+                        flow_report = track_js_code_flow(mcp_function.code_snippet, mcp_function.file_path)
+                        if flow_report and flow_report.get('total_parameters', 0) > 0:
+                            flow_summary = get_js_flow_summary(flow_report)
+                            flow_analysis = f"\n\n**Data Flow Analysis (JavaScript/TypeScript)**:\n{flow_summary}\n"
+                            logger.info(f"Generated JS flow analysis for {mcp_function.function_name}: {flow_report.get('total_parameters', 0)} parameters tracked")
+                except Exception as e:
+                    logger.warning(f"Could not perform JS flow analysis for {mcp_function.function_name}: {e}")
             
             # Create analysis prompt with function details
             random_id = secrets.token_hex(16)
@@ -653,9 +716,12 @@ class CodeLLMAnalyzer(BaseAnalyzer):
             logger.info("Starting to scan repository contents...")
             repo_path = Path(temp_dir)
             
-            # Initialize multi-file flow tracker for Python files
-            flow_tracker = MultiFileCodeFlowTracker()
+            # Initialize multi-file flow trackers and call chain trackers
+            flow_tracker = MultiFileCodeFlowTracker()  # For Python flow
+            python_call_chain_tracker = PythonCallChainTracker()  # For Python call chains
+            js_call_chain_tracker = JSCallChainTracker()  # For JavaScript/TypeScript
             python_files = []
+            js_files = []
             
             # Scan both Python and TypeScript/JavaScript files
             for language in [SupportedLanguage.PYTHON, SupportedLanguage.TYPESCRIPT]:
@@ -676,10 +742,16 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                             
                             files_scanned += 1
                             
-                            # Add Python files to flow tracker
+                            # Add Python files to flow tracker and call chain tracker
                             if language == SupportedLanguage.PYTHON:
                                 python_files.append(str(file_path))
                                 flow_tracker.add_file(str(file_path), source_code=file_data)
+                                python_call_chain_tracker.add_file(str(file_path), file_data)
+                            
+                            # Add JavaScript/TypeScript files to call chain tracker
+                            elif language == SupportedLanguage.TYPESCRIPT:
+                                js_files.append(str(file_path))
+                                js_call_chain_tracker.add_file(str(file_path), file_data)
                             
                             # Extract MCP functions
                             functions = self._extract_mcp_functions(
@@ -695,8 +767,9 @@ class CodeLLMAnalyzer(BaseAnalyzer):
 
             logger.info(f"Scan complete: Scanned {files_scanned} files, found {len(all_functions)} MCP functions")
             
-            # Perform multi-file flow analysis
+            # Perform multi-file flow analysis for Python
             flow_report = None
+            python_call_chain_report = None
             if python_files:
                 try:
                     logger.info(f"Performing multi-file flow analysis on {len(python_files)} Python files...")
@@ -707,6 +780,30 @@ class CodeLLMAnalyzer(BaseAnalyzer):
                     )
                 except Exception as e:
                     logger.warning(f"Multi-file flow analysis failed: {e}")
+                
+                try:
+                    logger.info(f"Performing call chain analysis on {len(python_files)} Python files...")
+                    python_call_chain_report = python_call_chain_tracker.analyze()
+                    logger.info(
+                        f"Call chain analysis complete: {python_call_chain_report['total_functions']} functions, "
+                        f"{python_call_chain_report['total_call_chains']} call chains detected"
+                    )
+                except Exception as e:
+                    logger.warning(f"Python call chain analysis failed: {e}")
+            
+            # Perform call chain analysis for JavaScript/TypeScript
+            js_call_chain_report = None
+            if js_files:
+                try:
+                    logger.info(f"Performing call chain analysis on {len(js_files)} JavaScript/TypeScript files...")
+                    js_call_chain_report = js_call_chain_tracker.analyze()
+                    logger.info(
+                        f"Call chain analysis complete: {js_call_chain_report['total_functions']} functions, "
+                        f"{js_call_chain_report['total_call_chains']} call chains, "
+                        f"{js_call_chain_report['dangerous_chains']} dangerous chains detected"
+                    )
+                except Exception as e:
+                    logger.warning(f"Call chain analysis failed: {e}")
 
             # Check if any files were found
             if files_scanned == 0:
@@ -736,7 +833,12 @@ class CodeLLMAnalyzer(BaseAnalyzer):
 
             # Analyze each function with LLM for vulnerabilities (with multi-file flow context)
             for mcp_func in all_functions:
-                func_findings = await self._analyze_function_with_llm(mcp_func, flow_tracker=flow_tracker)
+                func_findings = await self._analyze_function_with_llm(
+                    mcp_func, 
+                    flow_tracker=flow_tracker,
+                    python_call_chain_report=python_call_chain_report,
+                    js_call_chain_report=js_call_chain_report
+                )
                 findings.extend(func_findings)
 
             # Add summary finding
