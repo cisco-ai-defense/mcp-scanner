@@ -129,16 +129,9 @@ class PyPIPackageAnalyzer(BaseAnalyzer):
             code_findings = await self._scan_package_code(extract_path, package_name, version)
             findings.extend(code_findings)
             
-            # Add summary finding
-            if findings:
-                summary_finding = SecurityFinding(
-                    severity="info",
-                    summary=f"PyPI package scan complete: {package_name} v{version} - {len(findings)} findings",
-                    threat_category="Summary",
-                    details=f"Package: {package_name}\nVersion: {version}\nTotal Findings: {len(findings)}",
-                    analyzer="PyPIPackageAnalyzer",
-                )
-                findings.append(summary_finding)
+            # Log summary (don't add as finding - it's redundant)
+            vuln_count = len([f for f in findings if f.severity in ['high', 'medium', 'low']])
+            logger.info(f"PyPI package scan complete: {package_name} v{version} - {len(findings)} total findings, {vuln_count} vulnerabilities")
             
         except Exception as e:
             logger.error(f"Error scanning PyPI package {package_name}: {e}")
