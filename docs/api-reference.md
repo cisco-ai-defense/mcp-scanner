@@ -275,18 +275,34 @@ curl -X POST "http://localhost:8001/scan-all-prompts" \
   "total_prompts": 5,
   "safe_prompts": 3,
   "unsafe_prompts": 2,
-  "prompts": [
+  "results": [
     {
-      "prompt_name": "greet_user",
-      "prompt_description": "Generate a greeting prompt",
+      "prompt_name": "malicious_injection",
+      "prompt_description": "Inject malicious code",
       "status": "completed",
-      "is_safe": true,
+      "is_safe": false,
       "findings": {
         "llm_analyzer": {
-          "severity": "SAFE",
-          "threat_names": [],
-          "threat_summary": "No threats detected",
-          "total_findings": 0
+          "severity": "HIGH",
+          "threat_names": ["PROMPT INJECTION"],
+          "threat_summary": "Detected 1 threat: prompt injection",
+          "total_findings": 1,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-1.1",
+                "technique_name": "Direct Prompt Injection",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubtech-1.1.1",
+                    "sub_technique_name": "Instruction Manipulation (Direct Prompt Injection)",
+                    "max_severity": "HIGH",
+                    "description": "Adversarial attack that attempts to alter or control the output of a LLM or other related systems by providing instructions (via prompt) that override existing instructions and/or bypass model alignment or guardrails."
+                  }
+                ]
+              }
+            ]
+          }
         }
       }
     }

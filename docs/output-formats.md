@@ -83,9 +83,25 @@ mcp-scanner --server-url http://127.0.0.1:8001/sse --format by_severity --severi
       "findings": {
         "yara_analyzer": {
           "severity": "HIGH",
-          "threat_names": ["command_injection"],
-          "threat_summary": "Detected command injection patterns",
-          "total_findings": 1
+          "threat_names": ["SUSPICIOUS CODE EXECUTION"],
+          "threat_summary": "Detected 1 threat: command injection",
+          "total_findings": 1,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-1.4",
+                "technique_name": "Injection Attacks (SQL, Command Execution, XSS)",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubTech-1.4.1",
+                    "sub_technique_name": "Injection Attacks (SQL, Command Execution, XSS)",
+                    "max_severity": "HIGH",
+                    "description": "Injecting malicious payloads such as SQL queries, command sequences, or scripts into MCP servers or tools that process model or user input, leading to data exposure, remote code execution, or compromise of the underlying system environment."
+                  }
+                ]
+              }
+            ]
+          }
         }
       }
     }

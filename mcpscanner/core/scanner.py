@@ -24,7 +24,6 @@ import json
 import logging as stdlib_logging
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Callable
-
 import httpx
 
 # MCP client imports
@@ -34,6 +33,13 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import Tool as MCPTool, Prompt as MCPPrompt
 from mcp import StdioServerParameters
+
+try:
+    from mcp.shared.exceptions import McpError
+except ImportError:  # pragma: no cover - fallback for environments without mcp installed
+    class McpError(Exception):
+        """Fallback error class when MCP dependency is unavailable."""
+        pass
 
 from ..config.config import Config
 from ..utils.logging_config import get_logger
@@ -158,6 +164,39 @@ class Scanner:
                 + "\n".join(f"  • {req}" for req in missing_requirements)
             )
             raise ValueError(error_msg)
+
+    @staticmethod
+    def _is_missing_capability_error(error: Exception) -> bool:
+        """Return True when the server reports a capability is unavailable."""
+        messages = [str(error)]
+        code = getattr(error, "code", None)
+
+        rpc_error = getattr(error, "error", None)
+        if hasattr(rpc_error, "code") and getattr(rpc_error, "code") is not None:
+            code = code or rpc_error.code
+            rpc_message = getattr(rpc_error, "message", None)
+            if rpc_message:
+                messages.append(str(rpc_message))
+        elif isinstance(rpc_error, dict):
+            code = code or rpc_error.get("code")
+            rpc_message = rpc_error.get("message")
+            if rpc_message:
+                messages.append(str(rpc_message))
+
+        combined_message = " ".join(m for m in messages if m).lower()
+
+        if code == -32601:
+            return True
+
+        tokens = (
+            "method not found",
+            "methodnotfound",
+            "not implemented",
+            "unsupported",
+            "does not have",
+            "doesn't have",
+        )
+        return any(token in combined_message for token in tokens)
 
     async def _analyze_tool(
         self,
@@ -707,7 +746,16 @@ class Scanner:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
             # List all tools and find the target tool
-            tool_list = await session.list_tools()
+            try:
+                tool_list = await session.list_tools()
+            except McpError as e:
+                if self._is_missing_capability_error(e):
+                    message = (
+                        f"Server '{server_url}' does not expose tools; cannot scan '{tool_name}'."
+                    )
+                    logger.warning(message)
+                    raise ValueError(message) from e
+                raise
             target_tool = next(
                 (t for t in tool_list.tools if t.name == tool_name), None
             )
@@ -721,6 +769,8 @@ class Scanner:
             result = await self._analyze_tool(target_tool, analyzers, http_headers)
             return result
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(
                 f'Error scanning tool \'{tool_name}\' on MCP server: server="{server_url}", error="{e}"'
@@ -771,7 +821,15 @@ class Scanner:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
             # List all tools
-            tool_list = await session.list_tools()
+            try:
+                tool_list = await session.list_tools()
+            except McpError as e:
+                if self._is_missing_capability_error(e):
+                    logger.warning(
+                        f"Server '{server_url}' does not expose tools: {e}"
+                    )
+                    return []
+                raise
 
             # Create analysis tasks for each tool
             scan_tasks = [
@@ -931,7 +989,15 @@ class Scanner:
                 )
 
                 # List all tools
-                tool_list = await session.list_tools()
+                try:
+                    tool_list = await session.list_tools()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        logger.warning(
+                            f"Stdio server '{server_config.command}' does not expose tools: {e}"
+                        )
+                        return []
+                    raise
 
                 # Create analysis tasks for each tool
                 scan_tasks = [
@@ -991,7 +1057,16 @@ class Scanner:
             )
 
             # List all tools and find the target tool
-            tool_list = await session.list_tools()
+            try:
+                tool_list = await session.list_tools()
+            except McpError as e:
+                if self._is_missing_capability_error(e):
+                    message = (
+                        f"Stdio server '{server_config.command}' does not expose tools; cannot scan '{tool_name}'."
+                    )
+                    logger.warning(message)
+                    raise ValueError(message) from e
+                raise
             target_tool = next(
                 (t for t in tool_list.tools if t.name == tool_name), None
             )
@@ -1005,6 +1080,8 @@ class Scanner:
             result = await self._analyze_tool(target_tool, analyzers)
             return result
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(
                 f'Error scanning tool \'{tool_name}\' on stdio server: command="{server_config.command}", error="{e}"'
@@ -1238,7 +1315,15 @@ class Scanner:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
             # List all prompts
-            prompt_list = await session.list_prompts()
+            try:
+                prompt_list = await session.list_prompts()
+            except McpError as e:
+                if self._is_missing_capability_error(e):
+                    logger.warning(
+                        f"Server '{server_url}' does not expose prompts: {e}"
+                    )
+                    return []
+                raise
 
             # Analyze each prompt with individual error handling
             scan_results = []
@@ -1306,7 +1391,16 @@ class Scanner:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
             # List all prompts and find the target prompt
-            prompt_list = await session.list_prompts()
+            try:
+                prompt_list = await session.list_prompts()
+            except McpError as e:
+                if self._is_missing_capability_error(e):
+                    message = (
+                        f"Server '{server_url}' does not expose prompts; cannot scan '{prompt_name}'."
+                    )
+                    logger.warning(message)
+                    raise ValueError(message) from e
+                raise
             target_prompt = next(
                 (p for p in prompt_list.prompts if p.name == prompt_name), None
             )
@@ -1320,6 +1414,8 @@ class Scanner:
             result = await self._analyze_prompt(target_prompt, analyzers, http_headers)
             return result
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(
                 f'Error scanning prompt \'{prompt_name}\' on MCP server: server="{server_url}", error="{e}"'
@@ -1365,7 +1461,15 @@ class Scanner:
                 )
 
                 # List all prompts
-                prompt_list = await session.list_prompts()
+                try:
+                    prompt_list = await session.list_prompts()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        logger.warning(
+                            f"Stdio server '{server_config.command}' does not expose prompts: {e}"
+                        )
+                        return []
+                    raise
 
                 # Create analysis tasks for each prompt
                 scan_tasks = [
@@ -1425,7 +1529,16 @@ class Scanner:
             )
 
             # List all prompts and find the target prompt
-            prompt_list = await session.list_prompts()
+            try:
+                prompt_list = await session.list_prompts()
+            except McpError as e:
+                if self._is_missing_capability_error(e):
+                    message = (
+                        f"Stdio server '{server_config.command}' does not expose prompts; cannot scan '{prompt_name}'."
+                    )
+                    logger.warning(message)
+                    raise ValueError(message) from e
+                raise
             target_prompt = next(
                 (p for p in prompt_list.prompts if p.name == prompt_name), None
             )
@@ -1439,6 +1552,8 @@ class Scanner:
             result = await self._analyze_prompt(target_prompt, analyzers)
             return result
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(
                 f'Error scanning prompt \'{prompt_name}\' on stdio server: command="{server_config.command}", error="{e}"'
@@ -1628,7 +1743,15 @@ class Scanner:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
             # List all resources
-            resource_list = await session.list_resources()
+            try:
+                resource_list = await session.list_resources()
+            except McpError as e:
+                if self._is_missing_capability_error(e):
+                    logger.warning(
+                        f"Server '{server_url}' does not expose resources: {e}"
+                    )
+                    return []
+                raise
 
             results = []
             for resource in resource_list.resources:
@@ -1790,7 +1913,16 @@ class Scanner:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
             # List all resources to find the target
-            resource_list = await session.list_resources()
+            try:
+                resource_list = await session.list_resources()
+            except McpError as e:
+                if self._is_missing_capability_error(e):
+                    message = (
+                        f"Server '{server_url}' does not expose resources; cannot scan '{resource_uri}'."
+                    )
+                    logger.warning(message)
+                    raise ValueError(message) from e
+                raise
 
             target_resource = None
             for resource in resource_list.resources:
@@ -1883,6 +2015,8 @@ class Scanner:
                     findings=[],
                 )
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"Error scanning resource '{resource_uri}' on server {server_url}: {e}")
             raise

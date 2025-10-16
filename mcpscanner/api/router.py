@@ -57,6 +57,79 @@ def get_scanner() -> ScannerFactory:
     )
 
 
+def _build_taxonomy_hierarchy(findings: List[Any]) -> List[Dict[str, Any]]:
+    """
+    Build hierarchical MCP Taxonomy structure from findings.
+    
+    Groups findings by technique -> sub-technique and returns a nested structure.
+    
+    Args:
+        findings: List of SecurityFinding objects
+        
+    Returns:
+        List of technique dictionaries with nested sub-techniques and findings
+    """
+    from collections import defaultdict
+    
+    # Group findings by technique and sub-technique
+    technique_map = defaultdict(lambda: defaultdict(list))
+    
+    for finding in findings:
+        if not hasattr(finding, 'mcp_taxonomy') or not finding.mcp_taxonomy:
+            continue
+            
+        taxonomy = finding.mcp_taxonomy
+        aitech = taxonomy.get('aitech')
+        aitech_name = taxonomy.get('aitech_name')
+        aisubtech = taxonomy.get('aisubtech')
+        aisubtech_name = taxonomy.get('aisubtech_name')
+        
+        if not aitech:
+            continue
+            
+        # Create technique key
+        tech_key = (aitech, aitech_name)
+        
+        # Create sub-technique key (use "N/A" if no sub-technique)
+        subtech_key = (aisubtech or "N/A", aisubtech_name or "N/A")
+        
+        # Add finding to the appropriate group
+        technique_map[tech_key][subtech_key].append(finding)
+    
+    # Build the hierarchical structure
+    result = []
+    
+    for (tech_id, tech_name), subtechs in technique_map.items():
+        technique_dict = {
+            "technique_id": tech_id,
+            "technique_name": tech_name,
+            "items": []
+        }
+        
+        for (subtech_id, subtech_name), subtech_findings in subtechs.items():
+            # Determine max severity for this sub-technique
+            severities = [f.severity for f in subtech_findings]
+            max_severity = get_highest_severity(severities)
+            
+            # Get description from the first finding (all findings in same sub-technique have same description)
+            description = None
+            if subtech_findings and hasattr(subtech_findings[0], 'mcp_taxonomy') and subtech_findings[0].mcp_taxonomy:
+                description = subtech_findings[0].mcp_taxonomy.get('description')
+            
+            subtech_dict = {
+                "sub_technique_id": subtech_id if subtech_id != "N/A" else None,
+                "sub_technique_name": subtech_name if subtech_name != "N/A" else None,
+                "max_severity": max_severity,
+                "description": description,
+            }
+            
+            technique_dict["items"].append(subtech_dict)
+        
+        result.append(technique_dict)
+    
+    return result
+
+
 def _group_findings_for_api(
     scanner_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult],
     scanner: Scanner
@@ -188,12 +261,23 @@ def _group_findings_for_api(
                 threat_summary = "Analyzer not run"
             threat_names = []
 
-        grouped_findings[display_name] = {
+        # Build the base structure (keep existing format)
+        analyzer_result = {
             "severity": highest_severity,
             "threat_names": threat_names,
             "threat_summary": threat_summary,
             "total_findings": len(vulns),
         }
+        
+        # Add MCP Taxonomy hierarchy if there are findings
+        if vulns:
+            threats_hierarchy = _build_taxonomy_hierarchy(vulns)
+            if threats_hierarchy:
+                analyzer_result["threats"] = {
+                    "items": threats_hierarchy
+                }
+        
+        grouped_findings[display_name] = analyzer_result
 
     return grouped_findings
 

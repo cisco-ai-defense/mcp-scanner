@@ -414,6 +414,9 @@ def format_results_as_json(
                 summaries = []
                 severities = []
 
+                # Collect MCP Taxonomy info (use first finding's taxonomy)
+                mcp_taxonomy = None
+                
                 for vuln in vulns:
                     severities.append(vuln.severity)
 
@@ -431,6 +434,10 @@ def format_results_as_json(
                         threat_type = vuln.details["threat_type"]
                         if threat_type not in threat_names:
                             threat_names.append(threat_type)
+                    
+                    # Collect MCP Taxonomy from first finding
+                    if mcp_taxonomy is None and hasattr(vuln, "mcp_taxonomy") and vuln.mcp_taxonomy:
+                        mcp_taxonomy = vuln.mcp_taxonomy
 
                 # Get the highest severity for this analyzer
                 analyzer_severity = get_highest_severity(severities)
@@ -448,12 +455,18 @@ def format_results_as_json(
                     # Use first summary as threat_summary (analyzers should provide consistent summaries)
                     threat_summary = summaries[0] if summaries else "Threats detected"
 
-                result_dict["findings"][analyzer_display_name] = {
+                analyzer_finding = {
                     "severity": analyzer_severity,
                     "threat_names": threat_names,
                     "threat_summary": threat_summary,
                     "total_findings": len(vulns),
                 }
+                
+                # Add MCP Taxonomy if available
+                if mcp_taxonomy:
+                    analyzer_finding["mcp_taxonomy"] = mcp_taxonomy
+                
+                result_dict["findings"][analyzer_display_name] = analyzer_finding
             else:
                 # Analyzer has no findings - set default values
                 result_dict["findings"][analyzer_display_name] = {

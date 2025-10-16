@@ -23,6 +23,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 from ...utils.logging_config import get_logger
+from ...threats.threats import ThreatMapping
 
 
 class SecurityFinding:
@@ -34,6 +35,7 @@ class SecurityFinding:
         threat_category (str): Standardized threat category.
         analyzer (str): The name of the analyzer that found the security finding.
         details (Optional[Dict[str, Any]]): Additional details about the security finding.
+        mcp_taxonomy (Optional[Dict[str, Any]]): MCP Taxonomy classification information.
     """
 
     def __init__(
@@ -61,6 +63,9 @@ class SecurityFinding:
         self.threat_category = threat_category
         self.analyzer = analyzer
         self.details = details or {}
+        
+        # Enrich with MCP Taxonomy information
+        self.mcp_taxonomy = self._get_mcp_taxonomy()
 
     def _normalize_level(
         self, level: str, valid_levels: List[str], default: str
@@ -80,6 +85,51 @@ class SecurityFinding:
 
         normalized = level.upper()
         return normalized if normalized in valid_levels else default
+    
+    def _get_mcp_taxonomy(self) -> Optional[Dict[str, Any]]:
+        """Get MCP Taxonomy classification for this finding.
+        
+        Returns:
+            Dictionary with MCP Taxonomy information or None if not found.
+        """
+        try:
+            # Map analyzer names to threat mapping keys
+            analyzer_map = {
+                "LLM": "llm",
+                "YARA": "yara",
+                "API": "ai_defense",
+            }
+            
+            analyzer_key = analyzer_map.get(self.analyzer.upper())
+            if not analyzer_key:
+                return None
+            
+            # For YARA, try to use the specific rule name from details first
+            threat_name = self.threat_category
+            if analyzer_key == "yara" and self.details:
+                # Try to get the YARA rule name from raw_response
+                raw_response = self.details.get("raw_response", {})
+                rule_name = raw_response.get("rule", "")
+                if rule_name:
+                    # Convert rule name to uppercase for lookup (e.g., "code_execution" -> "CODE_EXECUTION")
+                    threat_name = rule_name.upper()
+            
+            if not threat_name:
+                return None
+            
+            # Look up in threat mapping
+            mapping = ThreatMapping.get_threat_mapping(analyzer_key, threat_name)
+            return {
+                "scanner_category": mapping.get("scanner_category"),
+                "aitech": mapping.get("aitech"),
+                "aitech_name": mapping.get("aitech_name"),
+                "aisubtech": mapping.get("aisubtech"),
+                "aisubtech_name": mapping.get("aisubtech_name"),
+                "description": mapping.get("description"),
+            }
+        except (ValueError, KeyError, AttributeError):
+            # If threat not found in mapping, return None
+            return None
 
     def __str__(self) -> str:
         return f"{self.severity}: {self.threat_category} - {self.summary} (analyzer: {self.analyzer})"

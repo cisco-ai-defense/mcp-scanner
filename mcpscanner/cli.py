@@ -224,6 +224,22 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                                 [t.replace("_", " ").title() for t in threat_names]
                             )
                             print(f"      Threats: {threat_display}")
+                        
+                        # Display MCP Taxonomy if available
+                        mcp_taxonomy = analyzer_data.get("mcp_taxonomy")
+                        if mcp_taxonomy:
+                            aitech = mcp_taxonomy.get("aitech")
+                            aitech_name = mcp_taxonomy.get("aitech_name")
+                            aisubtech = mcp_taxonomy.get("aisubtech")
+                            aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                            description = mcp_taxonomy.get("description")
+                            
+                            if aitech:
+                                print(f"      Technique: {aitech} - {aitech_name}")
+                            if aisubtech:
+                                print(f"      Sub-Technique: {aisubtech} - {aisubtech_name}")
+                            if description:
+                                print(f"      Description: {description}")
 
                         print()
                         finding_num += 1
@@ -366,6 +382,21 @@ def display_prompt_results(results: List[Dict[str, Any]], server_url: str, detai
                     if details.get("primary_threats"):
                         threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
                         print(f"      Threats: {threats}")
+                    
+                    mcp_taxonomy = finding.get("mcp_taxonomy")
+                    if mcp_taxonomy:
+                        aitech = mcp_taxonomy.get("aitech")
+                        aitech_name = mcp_taxonomy.get("aitech_name")
+                        aisubtech = mcp_taxonomy.get("aisubtech")
+                        aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                        description = mcp_taxonomy.get("description")
+                        
+                        if aitech:
+                            print(f"      Technique: {aitech} - {aitech_name}")
+                        if aisubtech:
+                            print(f"      Sub-Technique: {aisubtech} - {aisubtech_name}")
+                        if description:
+                            print(f"      Description: {description}")
                     print()
             print()
 
@@ -429,6 +460,22 @@ def display_resource_results(results: List[Dict[str, Any]], server_url: str, det
                         if details.get("primary_threats"):
                             threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
                             print(f"      Threats: {threats}")
+                        
+                        # Display MCP Taxonomy if available
+                        mcp_taxonomy = finding.get("mcp_taxonomy")
+                        if mcp_taxonomy:
+                            aitech = mcp_taxonomy.get("aitech")
+                            aitech_name = mcp_taxonomy.get("aitech_name")
+                            aisubtech = mcp_taxonomy.get("aisubtech")
+                            aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                            description = mcp_taxonomy.get("description")
+                            
+                            if aitech:
+                                print(f"      Technique: {aitech} - {aitech_name}")
+                            if aisubtech:
+                                print(f"      Sub-Technique: {aisubtech} - {aisubtech_name}")
+                            if description:
+                                print(f"      Description: {description}")
                         print()
                 print()
 
@@ -772,6 +819,7 @@ async def main():
                             "summary": f.summary,
                             "analyzer": f.analyzer,
                             "details": f.details,
+                            "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
                         }
                         for f in result.findings
                     ],
@@ -795,6 +843,7 @@ async def main():
                                 "summary": f.summary,
                                 "analyzer": f.analyzer,
                                 "details": f.details,
+                                "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
                             }
                             for f in r.findings
                         ],
@@ -832,6 +881,7 @@ async def main():
                             "summary": f.summary,
                             "analyzer": f.analyzer,
                             "details": f.details,
+                            "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
                         }
                         for f in result.findings
                     ],
@@ -857,6 +907,7 @@ async def main():
                                 "summary": f.summary,
                                 "analyzer": f.analyzer,
                                 "details": f.details,
+                                "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
                             }
                             for f in r.findings
                         ],

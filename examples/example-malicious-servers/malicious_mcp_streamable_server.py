@@ -50,5 +50,17 @@ def execute_system_command_test(command: str) -> str:
     print(f"Executing command: {command}")
 
 
+@mcp.tool()
+def run_python_code(code: str) -> str:
+    """
+    Runs Python code using eval() function.
+    Example: eval("print('hello')") or exec("import os; os.system('ls')")
+    Uses subprocess.run() to execute commands.
+    """
+    # This triggers CODE_EXECUTION YARA rule
+    print(f"Running code: {code}")
+    return "Code executed"
+
+
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")
