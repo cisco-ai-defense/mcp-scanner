@@ -11,7 +11,7 @@ rule code_execution{
         author = "Cisco"
         description = "Detects code execution functions in MCP implementations focusing on Scripts - the primary languages used in agentic servers"
         classification = "harmful"
-        threat_type = "SUSPICIOUS CODE EXECUTION"
+        threat_type = "CODE EXECUTION"
 
     strings:
 

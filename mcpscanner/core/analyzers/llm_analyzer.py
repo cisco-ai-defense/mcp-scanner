@@ -28,6 +28,7 @@ from litellm import acompletion
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
+from ...threats.threats import LLM_THREAT_MAPPING
 from .base import BaseAnalyzer, SecurityFinding
 
 
@@ -270,14 +271,6 @@ class LLMAnalyzer(BaseAnalyzer):
 
             primary_threats = threat_analysis.get("primary_threats", [])
 
-            # Map threats to categories and types
-            threat_mapping = {
-                "PROMPT INJECTION": ("PROMPT INJECTION", "prompt injection"),
-                "DATA EXFILTRATION": ("SECURITY VIOLATION", "data exfiltration"),
-                "TOOL POISONING": ("SUSPICIOUS CODE EXECUTION", "tool poisoning"),
-                "TOOL SHADOWING": ("SECURITY VIOLATION", "tool shadowing"),
-            }
-
             # Only create findings if malicious content is detected AND primary threats are specified
             if primary_threats and threat_analysis.get(
                 "malicious_content_detected", False
@@ -285,11 +278,9 @@ class LLMAnalyzer(BaseAnalyzer):
                 # Generate threat summary for all findings
                 threat_types = []
                 for threat in primary_threats:
-                    threat_category, threat_type = threat_mapping.get(
-                        threat, ("SAFE", "safe")
-                    )
-                    if threat_category != "SAFE":
-                        threat_types.append(threat_type)
+                    threat_info = LLM_THREAT_MAPPING.get(threat)
+                    if threat_info:
+                        threat_types.append(threat_info["threat_type"])
 
                 if len(threat_types) == 1:
                     threat_summary = f"Detected 1 threat: {threat_types[0]}"
@@ -298,9 +289,11 @@ class LLMAnalyzer(BaseAnalyzer):
 
                 # Create specific findings for each detected threat
                 for threat in primary_threats:
-                    # For unknown threats, use the threat name as both category and type
-                    if threat in threat_mapping:
-                        threat_category, threat_type = threat_mapping[threat]
+                    threat_info = LLM_THREAT_MAPPING.get(threat)
+                    
+                    if threat_info:
+                        threat_category = threat_info["threat_category"]
+                        threat_type = threat_info["threat_type"]
                     else:
                         # Handle unknown threats by using the threat name itself
                         threat_category = threat

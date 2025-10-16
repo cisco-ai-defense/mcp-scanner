@@ -9,7 +9,7 @@ rule credential_harvesting{
         author = "Cisco"
         description = "Detects potential exposure of sensitive information like API keys, passwords, tokens, and certificates"
         classification = "harmful"
-        threat_type = "SECURITY VIOLATION"
+        threat_type = "CREDENTIAL HARVESTING"
 
     strings:
         // API credentials and authentication tokens

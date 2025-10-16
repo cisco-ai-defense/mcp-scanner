@@ -10,7 +10,7 @@ rule script_injection{
         author = "Cisco"
         description = "Detects embedded scripting payloads (JS, VBScript, etc.) in MCP tool descriptions"
         classification = "harmful"
-        threat_type = "SUSPICIOUS CODE EXECUTION"
+        threat_type = "INJECTION ATTACK"
 
     strings:
 

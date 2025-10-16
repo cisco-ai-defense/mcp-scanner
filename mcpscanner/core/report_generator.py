@@ -95,6 +95,10 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                 and finding.severity == "LOW"
             ):
                 findings_by_analyzer[analyzer]["severity"] = "LOW"
+            
+            # Collect MCP Taxonomy from first finding with taxonomy
+            if "mcp_taxonomy" not in findings_by_analyzer[analyzer] and hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+                findings_by_analyzer[analyzer]["mcp_taxonomy"] = finding.mcp_taxonomy
 
         # Use analyzer-provided summaries for analyzers with findings
         for analyzer, data in findings_by_analyzer.items():

@@ -10,7 +10,7 @@ rule system_manipulation{
         author = "Cisco"
         description = "Detects system manipulation, privilege escalation, and destructive file operations"
         classification = "harmful"
-        threat_type = "SECURITY VIOLATION"
+        threat_type = "SYSTEM MANIPULATION"
 
     strings:
         // System environment and path access patterns

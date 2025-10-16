@@ -174,21 +174,63 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
       "findings": {
         "api_analyzer": {
           "severity": "HIGH",
-          "threat_names": ["SECURITY VIOLATION"],
-          "threat_summary": "Detected 1 threat: security violation",
-          "total_findings": 1
+          "total_findings": 1,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-8.2",
+                "technique_name": "Data Exfiltration / Exposure",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubtech-8.2.3",
+                    "sub_technique_name": "Data Exfiltration via Agent Tooling",
+                    "max_severity": "HIGH",
+                    "description": "Unintentional and/or unauthorized exposure or exfiltration of sensitive information..."
+                  }
+                ]
+              }
+            ]
+          }
         },
         "yara_analyzer": {
           "severity": "HIGH",
-          "threat_names": ["SECURITY VIOLATION", "SUSPICIOUS CODE EXECUTION"],
-          "threat_summary": "Detected 2 threat: system access, script injection",
-          "total_findings": 2
+          "total_findings": 2,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-9.1",
+                "technique_name": "Model or Agentic System Manipulation",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubtech-9.1.1",
+                    "sub_technique_name": "Code Execution",
+                    "max_severity": "HIGH",
+                    "description": "Autonomously generating, interpreting, or executing code..."
+                  }
+                ]
+              }
+            ]
+          }
         },
         "llm_analyzer": {
           "severity": "HIGH",
-          "threat_names": ["SUSPICIOUS CODE EXECUTION"],
-          "threat_summary": "Detected 1 threat: tool poisoning",
-          "total_findings": 1
+          "total_findings": 1,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-9.1",
+                "technique_name": "Model or Agentic System Manipulation",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubtech-9.1.1",
+                    "sub_technique_name": "Code Execution",
+                    "max_severity": "HIGH",
+                    "description": "Autonomously generating, interpreting, or executing code..."
+                  }
+                ]
+              }
+            ]
+          }
         }
       },
       "is_safe": false
@@ -275,18 +317,32 @@ curl -X POST "http://localhost:8001/scan-all-prompts" \
   "total_prompts": 5,
   "safe_prompts": 3,
   "unsafe_prompts": 2,
-  "prompts": [
+  "results": [
     {
-      "prompt_name": "greet_user",
-      "prompt_description": "Generate a greeting prompt",
+      "prompt_name": "malicious_injection",
+      "prompt_description": "Inject malicious code",
       "status": "completed",
-      "is_safe": true,
+      "is_safe": false,
       "findings": {
         "llm_analyzer": {
-          "severity": "SAFE",
-          "threat_names": [],
-          "threat_summary": "No threats detected",
-          "total_findings": 0
+          "severity": "HIGH",
+          "total_findings": 1,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-1.1",
+                "technique_name": "Direct Prompt Injection",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubtech-1.1.1",
+                    "sub_technique_name": "Instruction Manipulation (Direct Prompt Injection)",
+                    "max_severity": "HIGH",
+                    "description": "Adversarial attack that attempts to alter or control the output of a LLM or other related systems by providing instructions (via prompt) that override existing instructions and/or bypass model alignment or guardrails."
+                  }
+                ]
+              }
+            ]
+          }
         }
       }
     }
@@ -357,8 +413,6 @@ curl -X POST "http://localhost:8001/scan-all-resources" \
       "findings": {
         "llm_analyzer": {
           "severity": "SAFE",
-          "threat_names": [],
-          "threat_summary": "No threats detected",
           "total_findings": 0
         }
       }

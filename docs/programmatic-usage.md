@@ -107,6 +107,13 @@ async def main():
     if not result.is_safe:
         for finding in result.findings:
             print(f"  - {finding.severity}: {finding.summary}")
+            
+            # Access MCP Taxonomy information
+            if hasattr(finding, 'mcp_taxonomy') and finding.mcp_taxonomy:
+                taxonomy = finding.mcp_taxonomy
+                print(f"    Technique: {taxonomy.get('aitech')} - {taxonomy.get('aitech_name')}")
+                print(f"    Sub-Technique: {taxonomy.get('aisubtech')} - {taxonomy.get('aisubtech_name')}")
+                print(f"    Description: {taxonomy.get('description')}")
 
 asyncio.run(main())
 ```
