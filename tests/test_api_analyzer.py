@@ -198,8 +198,10 @@ class TestApiAnalyzer:
             "PROMPT_INJECTION",
             "HARASSMENT",
             "HATE_SPEECH",
-            "TOXIC_CONTENT",
-            "VIOLENCE",
+            "PROFANITY",
+            "SEXUAL_CONTENT_AND_EXPLOITATION",
+            "SOCIAL_DIVISION_AND_POLARIZATION",
+            "VIOLENCE_AND_PUBLIC_SAFETY_THREATS",
             "CODE_DETECTION",
         ]
 
@@ -213,32 +215,28 @@ class TestApiAnalyzer:
 
         assert len(findings) == len(classifications)
 
-        # Verify specific mappings
+        # Verify specific mappings based on actual API classifications
         finding_by_type = {f.details["threat_type"]: f for f in findings}
 
+        # SECURITY_VIOLATION -> SECURITY VIOLATION (HIGH)
         assert finding_by_type["SECURITY VIOLATION"].severity == "HIGH"
-        assert (
-            finding_by_type["SECURITY VIOLATION"].threat_category
-            == "SECURITY VIOLATION"
-        )
+        assert finding_by_type["SECURITY VIOLATION"].threat_category == "SECURITY VIOLATION"
+        
+        # PROMPT_INJECTION -> PROMPT INJECTION (HIGH)
         assert finding_by_type["PROMPT INJECTION"].severity == "HIGH"
         assert finding_by_type["PROMPT INJECTION"].threat_category == "PROMPT INJECTION"
+        
+        # HARASSMENT, HATE_SPEECH, PROFANITY, SOCIAL_DIVISION_AND_POLARIZATION -> SOCIAL ENGINEERING (MEDIUM)
         assert finding_by_type["SOCIAL ENGINEERING"].severity == "MEDIUM"
-        assert (
-            finding_by_type["SOCIAL ENGINEERING"].threat_category
-            == "SOCIAL ENGINEERING"
-        )
-        # Note: HARASSMENT, HATE_SPEECH, and TOXIC_CONTENT all map to SOCIAL ENGINEERING
+        assert finding_by_type["SOCIAL ENGINEERING"].threat_category == "SOCIAL ENGINEERING"
+        
+        # SEXUAL_CONTENT_AND_EXPLOITATION, VIOLENCE_AND_PUBLIC_SAFETY_THREATS -> MALICIOUS BEHAVIOR (MEDIUM)
         assert finding_by_type["MALICIOUS BEHAVIOR"].severity == "MEDIUM"
-        assert (
-            finding_by_type["MALICIOUS BEHAVIOR"].threat_category
-            == "MALICIOUS BEHAVIOR"
-        )
+        assert finding_by_type["MALICIOUS BEHAVIOR"].threat_category == "MALICIOUS BEHAVIOR"
+        
+        # CODE_DETECTION -> SUSPICIOUS CODE EXECUTION (LOW)
         assert finding_by_type["SUSPICIOUS CODE EXECUTION"].severity == "LOW"
-        assert (
-            finding_by_type["SUSPICIOUS CODE EXECUTION"].threat_category
-            == "SUSPICIOUS CODE EXECUTION"
-        )
+        assert finding_by_type["SUSPICIOUS CODE EXECUTION"].threat_category == "SUSPICIOUS CODE EXECUTION"
 
     @respx.mock
     @pytest.mark.asyncio
