@@ -174,21 +174,63 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
       "findings": {
         "api_analyzer": {
           "severity": "HIGH",
-          "threat_names": ["SECURITY VIOLATION"],
-          "threat_summary": "Detected 1 threat: security violation",
-          "total_findings": 1
+          "total_findings": 1,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-8.2",
+                "technique_name": "Data Exfiltration / Exposure",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubtech-8.2.3",
+                    "sub_technique_name": "Data Exfiltration via Agent Tooling",
+                    "max_severity": "HIGH",
+                    "description": "Unintentional and/or unauthorized exposure or exfiltration of sensitive information..."
+                  }
+                ]
+              }
+            ]
+          }
         },
         "yara_analyzer": {
           "severity": "HIGH",
-          "threat_names": ["SECURITY VIOLATION", "SUSPICIOUS CODE EXECUTION"],
-          "threat_summary": "Detected 2 threat: system access, script injection",
-          "total_findings": 2
+          "total_findings": 2,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-9.1",
+                "technique_name": "Model or Agentic System Manipulation",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubtech-9.1.1",
+                    "sub_technique_name": "Code Execution",
+                    "max_severity": "HIGH",
+                    "description": "Autonomously generating, interpreting, or executing code..."
+                  }
+                ]
+              }
+            ]
+          }
         },
         "llm_analyzer": {
           "severity": "HIGH",
-          "threat_names": ["SUSPICIOUS CODE EXECUTION"],
-          "threat_summary": "Detected 1 threat: tool poisoning",
-          "total_findings": 1
+          "total_findings": 1,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-9.1",
+                "technique_name": "Model or Agentic System Manipulation",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubtech-9.1.1",
+                    "sub_technique_name": "Code Execution",
+                    "max_severity": "HIGH",
+                    "description": "Autonomously generating, interpreting, or executing code..."
+                  }
+                ]
+              }
+            ]
+          }
         }
       },
       "is_safe": false
@@ -284,8 +326,6 @@ curl -X POST "http://localhost:8001/scan-all-prompts" \
       "findings": {
         "llm_analyzer": {
           "severity": "HIGH",
-          "threat_names": ["PROMPT INJECTION"],
-          "threat_summary": "Detected 1 threat: prompt injection",
           "total_findings": 1,
           "threats": {
             "items": [
@@ -373,8 +413,6 @@ curl -X POST "http://localhost:8001/scan-all-resources" \
       "findings": {
         "llm_analyzer": {
           "severity": "SAFE",
-          "threat_names": [],
-          "threat_summary": "No threats detected",
           "total_findings": 0
         }
       }
