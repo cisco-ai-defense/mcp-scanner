@@ -66,7 +66,7 @@ class ThreatMapping:
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
             "description": "Adversarial attack that attempts to alter or control the output of a LLM or other related systems by providing instructions (via prompt) that override existing instructions and/or bypass model alignment or guardrails. A prompt injection technique is any transformation that preserves the intent of the input.",
         },
-        "SUSPICIOUS CODE EXECUTION": {
+        "CODE EXECUTION": {
             "scanner_category": "SUSPICIOUS CODE EXECUTION",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
@@ -74,13 +74,29 @@ class ThreatMapping:
             "aisubtech_name": "Code Execution",
             "description": "Autonomously generating, interpreting, or executing code, leading to unsolicited or unauthorized code execution targeted to large language models (LLMs), or agentic frameworks, systems (including MCP, A2A) often include integrated code interpreter or tool execution components.",
         },
-        "SECURITY VIOLATION": {
+        "INJECTION ATTACK": {
+            "scanner_category": "INJECTION ATTACK",
+            "aitech": "AITech-1.4",
+            "aitech_name": "Injection Attacks (SQL, Command Execution, XSS)",
+            "aisubtech": "AISubTech-1.4.1",
+            "aisubtech_name": "Injection Attacks (SQL, Command Execution, XSS)",
+            "description": "Injecting malicious payloads such as SQL queries, command sequences, or scripts into MCP servers or tools that process model or user input, leading to data exposure, remote code execution, or compromise of the underlying system environment.",
+        },
+        "CREDENTIAL HARVESTING": {
             "scanner_category": "SECURITY VIOLATION",
             "aitech": "AITech-8.2",
             "aitech_name": "Data Exfiltration / Exposure",
             "aisubtech": "AISubtech-8.2.3",
             "aisubtech_name": "Data Exfiltration via Agent Tooling",
             "description": "Unintentional and/or unauthorized exposure or exfiltration of sensitive information, such as private data, intellectual property, and proprietary algorithms.",
+        },
+        "SYSTEM MANIPULATION": {
+            "scanner_category": "SYSTEM MANIPULATION",
+            "aitech": "AITech-9.1",
+            "aitech_name": "Model or Agentic System Manipulation",
+            "aisubtech": "AISubtech-9.1.2",
+            "aisubtech_name": "System Access",
+            "description": "Manipulating or accessing underlying system resources without authorization, leading to unsolicited modification or deletion of files, registries, or permissions through model-driven or agent-executed commands system.",
         },
     }
     

@@ -9,7 +9,7 @@ rule sql_injection{
         author = "Cisco"
         description = "Detects SQL injection attack patterns including keywords, tautologies, and database functions"
         classification = "harmful"
-        threat_type = "SUSPICIOUS CODE EXECUTION"
+        threat_type = "INJECTION ATTACK"
 
     strings:
 
