@@ -26,6 +26,7 @@ from pathlib import Path
 import yara
 
 from ...config.constants import MCPScannerConstants
+from ...threats.threats import YARA_THREAT_MAPPING
 from .base import BaseAnalyzer, SecurityFinding
 
 
@@ -157,27 +158,16 @@ class YaraAnalyzer(BaseAnalyzer):
                 classification = match.meta.get("classification", "unknown")
                 threat_type = match.meta.get("threat_type", "unknown")
 
-                # Map YARA threat_types to standardized threat categories and severity
-                threat_mapping = {
-                    "PROMPT INJECTION": {
-                        "category": "PROMPT INJECTION",
-                        "severity": "HIGH",
-                    },
-                    "SUSPICIOUS CODE EXECUTION": {
-                        "category": "SUSPICIOUS CODE EXECUTION",
-                        "severity": "HIGH",
-                    },
-                    "SECURITY VIOLATION": {
-                        "category": "SECURITY VIOLATION",
-                        "severity": "HIGH",
-                    },
-                }
-
-                # Use threat_type for mapping lookup
-                mapping = threat_mapping.get(
-                    threat_type,
-                    {"severity": "UNKNOWN", "category": "N/A"},
-                )
+                # Use centralized threat mapping
+                threat_info = YARA_THREAT_MAPPING.get(threat_type)
+                
+                if threat_info:
+                    mapping = {
+                        "category": threat_info["threat_category"],
+                        "severity": "HIGH",  # YARA threats are typically HIGH severity
+                    }
+                else:
+                    mapping = {"severity": "UNKNOWN", "category": "N/A"}
 
                 findings.append(
                     SecurityFinding(

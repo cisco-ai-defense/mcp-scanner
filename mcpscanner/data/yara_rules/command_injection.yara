@@ -10,7 +10,7 @@ rule command_injection{
         author = "Cisco"
         description = "Detects command injection patterns related to shell operators, system commands, and network tools"
         classification = "harmful"
-        threat_type = "SUSPICIOUS CODE EXECUTION"
+        threat_type = "INJECTION ATTACK"
 
     strings:
 

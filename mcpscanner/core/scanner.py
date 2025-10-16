@@ -24,7 +24,6 @@ import json
 import logging as stdlib_logging
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Callable
-
 import httpx
 
 # MCP client imports

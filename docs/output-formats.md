@@ -83,9 +83,23 @@ mcp-scanner --server-url http://127.0.0.1:8001/sse --format by_severity --severi
       "findings": {
         "yara_analyzer": {
           "severity": "HIGH",
-          "threat_names": ["command_injection"],
-          "threat_summary": "Detected command injection patterns",
-          "total_findings": 1
+          "total_findings": 1,
+          "threats": {
+            "items": [
+              {
+                "technique_id": "AITech-9.1",
+                "technique_name": "Model or Agentic System Manipulation",
+                "items": [
+                  {
+                    "sub_technique_id": "AISubtech-9.1.1",
+                    "sub_technique_name": "Code Execution",
+                    "max_severity": "HIGH",
+                    "description": "Autonomously generating, interpreting, or executing code, leading to unsolicited or unauthorized code execution targeted to large language models (LLMs), or agentic frameworks, systems (including MCP, A2A) often include integrated code interpreter or tool execution components."
+                  }
+                ]
+              }
+            ]
+          }
         }
       }
     }
