@@ -179,9 +179,7 @@ class ApiAnalyzer(BaseAnalyzer):
                             threat_category=mapping["category"],
                             details={
                                 "tool_name": tool_name,
-                                "threat_type": mapping[
-                                    "category"
-                                ],  # Use standardized threat category
+                                "threat_type": classification,  # Store original classification for taxonomy lookup
                                 "evidence": f"{classification} detected in tool content",
                                 "raw_response": response_json,
                                 "content_type": "text",

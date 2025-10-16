@@ -104,15 +104,19 @@ class SecurityFinding:
             if not analyzer_key:
                 return None
             
-            # For YARA, try to use the specific rule name from details first
+            # For YARA and API, use the threat_type from details for taxonomy lookup
             threat_name = self.threat_category
-            if analyzer_key == "yara" and self.details:
-                # Try to get the YARA rule name from raw_response
-                raw_response = self.details.get("raw_response", {})
-                rule_name = raw_response.get("rule", "")
-                if rule_name:
-                    # Convert rule name to uppercase for lookup (e.g., "code_execution" -> "CODE_EXECUTION")
-                    threat_name = rule_name.upper()
+            if analyzer_key in ["yara", "ai_defense"] and self.details:
+                # Try to get the threat_type from details (original classification name)
+                threat_type = self.details.get("threat_type")
+                if threat_type:
+                    threat_name = threat_type
+                elif analyzer_key == "yara":
+                    # Fallback for YARA: try to get from raw_response
+                    raw_response = self.details.get("raw_response", {})
+                    rule_threat_type = raw_response.get("threat_type", "")
+                    if rule_threat_type:
+                        threat_name = rule_threat_type
             
             if not threat_name:
                 return None
@@ -127,8 +131,9 @@ class SecurityFinding:
                 "aisubtech_name": mapping.get("aisubtech_name"),
                 "description": mapping.get("description"),
             }
-        except (ValueError, KeyError, AttributeError):
+        except (ValueError, KeyError, AttributeError) as e:
             # If threat not found in mapping, return None
+            # Silently fail to avoid breaking the scan
             return None
 
     def __str__(self) -> str:

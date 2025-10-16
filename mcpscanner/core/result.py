@@ -463,6 +463,8 @@ def format_results_as_json(
                 # Add MCP Taxonomy if available (this replaces threat_names and threat_summary)
                 if mcp_taxonomy:
                     analyzer_finding["threats"] = mcp_taxonomy
+                    # Also add as mcp_taxonomy for CLI display compatibility
+                    analyzer_finding["mcp_taxonomy"] = mcp_taxonomy
                 
                 result_dict["findings"][analyzer_display_name] = analyzer_finding
             else:
