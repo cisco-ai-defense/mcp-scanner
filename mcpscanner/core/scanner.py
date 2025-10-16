@@ -40,13 +40,6 @@ except ImportError:  # pragma: no cover - fallback for environments without mcp 
         """Fallback error class when MCP dependency is unavailable."""
         pass
 
-try:
-    from mcp.shared.exceptions import McpError
-except ImportError:  # pragma: no cover - fallback for environments without mcp installed
-    class McpError(Exception):
-        """Fallback error class when MCP dependency is unavailable."""
-        pass
-
 from ..config.config import Config
 from ..utils.logging_config import get_logger
 from .analyzers.api_analyzer import ApiAnalyzer
