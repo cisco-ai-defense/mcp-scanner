@@ -33,6 +33,12 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import Tool as MCPTool, Prompt as MCPPrompt
 from mcp import StdioServerParameters
+try:
+    from mcp.shared.exceptions import McpError
+except ImportError:  # pragma: no cover - fallback for environments without mcp installed
+    class McpError(Exception):
+        """Fallback error class when MCP dependency is unavailable."""
+        pass
 
 try:
     from mcp.shared.exceptions import McpError
