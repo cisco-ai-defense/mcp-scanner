@@ -261,11 +261,9 @@ def _group_findings_for_api(
                 threat_summary = "Analyzer not run"
             threat_names = []
 
-        # Build the base structure (keep existing format)
+        # Build the base structure (simplified - removed threat_names and threat_summary)
         analyzer_result = {
             "severity": highest_severity,
-            "threat_names": threat_names,
-            "threat_summary": threat_summary,
             "total_findings": len(vulns),
         }
         

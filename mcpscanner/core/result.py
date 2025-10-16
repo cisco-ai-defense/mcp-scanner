@@ -457,22 +457,18 @@ def format_results_as_json(
 
                 analyzer_finding = {
                     "severity": analyzer_severity,
-                    "threat_names": threat_names,
-                    "threat_summary": threat_summary,
                     "total_findings": len(vulns),
                 }
                 
-                # Add MCP Taxonomy if available
+                # Add MCP Taxonomy if available (this replaces threat_names and threat_summary)
                 if mcp_taxonomy:
-                    analyzer_finding["mcp_taxonomy"] = mcp_taxonomy
+                    analyzer_finding["threats"] = mcp_taxonomy
                 
                 result_dict["findings"][analyzer_display_name] = analyzer_finding
             else:
                 # Analyzer has no findings - set default values
                 result_dict["findings"][analyzer_display_name] = {
                     "severity": "SAFE",
-                    "threat_names": [],
-                    "threat_summary": "N/A",
                     "total_findings": 0,
                 }
 

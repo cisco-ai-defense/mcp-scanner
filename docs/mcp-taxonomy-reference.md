@@ -132,6 +132,5 @@ The REST API returns taxonomy in a hierarchical structure:
 
 ## References
 
-- [MCP Taxonomy Framework](https://github.com/cisco-ai-defense/mcp-taxonomy)
 - [MCP Scanner Documentation](https://github.com/cisco-ai-defense/mcp-scanner)
 - [Cisco AI Defense](https://www.cisco.com/site/us/en/products/security/ai-defense/index.html)

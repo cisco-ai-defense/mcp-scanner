@@ -26,6 +26,7 @@ import httpx
 from ...config.config import Config
 from .base import BaseAnalyzer, SecurityFinding
 from ...config.constants import CONSTANTS
+from ...threats.threats import API_THREAT_MAPPING
 
 
 enabled_rules = [
@@ -151,42 +152,24 @@ class ApiAnalyzer(BaseAnalyzer):
                     threat_summary = f"Detected {len(classifications)} threats: {', '.join([c.lower().replace('_', ' ') for c in classifications])}"
 
                 for classification in classifications:
-                    # Map classifications to standardized severity levels and threat categories
-                    classification_mapping = {
-                        "SECURITY_VIOLATION": {
-                            "severity": "HIGH",
-                            "category": "SECURITY VIOLATION",
-                        },
-                        "PROMPT_INJECTION": {
-                            "severity": "HIGH",
-                            "category": "PROMPT INJECTION",
-                        },
-                        "HARASSMENT": {
-                            "severity": "MEDIUM",
-                            "category": "SOCIAL ENGINEERING",
-                        },
-                        "HATE_SPEECH": {
-                            "severity": "MEDIUM",
-                            "category": "SOCIAL ENGINEERING",
-                        },
-                        "TOXIC_CONTENT": {
-                            "severity": "MEDIUM",
-                            "category": "SOCIAL ENGINEERING",
-                        },
-                        "VIOLENCE": {
-                            "severity": "MEDIUM",
-                            "category": "MALICIOUS BEHAVIOR",
-                        },
-                        "CODE_DETECTION": {
-                            "severity": "LOW",
-                            "category": "SUSPICIOUS CODE EXECUTION",
-                        },
-                    }
-
-                    mapping = classification_mapping.get(
-                        classification,
-                        {"severity": "UNKNOWN", "category": "N/A"},
-                    )
+                    # Use centralized threat mapping
+                    threat_info = API_THREAT_MAPPING.get(classification)
+                    
+                    if threat_info:
+                        # Determine severity based on threat category
+                        severity_map = {
+                            "PROMPT INJECTION": "HIGH",
+                            "SECURITY VIOLATION": "HIGH",
+                            "SUSPICIOUS CODE EXECUTION": "LOW",
+                            "SOCIAL ENGINEERING": "MEDIUM",
+                            "MALICIOUS BEHAVIOR": "MEDIUM",
+                        }
+                        mapping = {
+                            "severity": severity_map.get(threat_info["threat_category"], "UNKNOWN"),
+                            "category": threat_info["threat_category"],
+                        }
+                    else:
+                        mapping = {"severity": "UNKNOWN", "category": "N/A"}
 
                     findings.append(
                         SecurityFinding(
