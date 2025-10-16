@@ -48,20 +48,6 @@ The MCP Scanner maps all detected threats to the MCP Taxonomy, which provides a 
 | CODE_DETECTION | SUSPICIOUS CODE EXECUTION | AITech-9.1 | Model or Agentic System Manipulation | AISubtech-9.1.1 | Code Execution | Autonomously generating, interpreting, or executing code, leading to unsolicited or unauthorized code execution targeted to large language models (LLMs), or agentic frameworks, systems (including MCP, A2A) often include integrated code interpreter or tool execution components. |
 | SECURITY_VIOLATION | SECURITY VIOLATION | AITech-8.2 | Data Exfiltration / Exposure | AISubtech-8.2.3 | Data Exfiltration via Agent Tooling | Unintentional and/or unauthorized exposure or exfiltration of sensitive information, such as private data, intellectual property, and proprietary algorithms. |
 
-## Scanner Categories
-
-The scanner uses the following high-level categories to group threats:
-
-| Category | Description |
-|----------|-------------|
-| PROMPT INJECTION | Attacks that manipulate prompts to alter LLM behavior |
-| SUSPICIOUS CODE EXECUTION | Threats involving unauthorized code execution |
-| SECURITY VIOLATION | General security violations including data exfiltration and unauthorized access |
-| INJECTION ATTACK | SQL, command, and script injection attacks |
-| SYSTEM MANIPULATION | Unauthorized system access and manipulation |
-| SOCIAL ENGINEERING | Threats involving manipulation or toxic content generation |
-| MALICIOUS BEHAVIOR | Harmful or malicious activities |
-
 ## MCP Taxonomy Techniques
 
 ### Core Techniques Referenced
