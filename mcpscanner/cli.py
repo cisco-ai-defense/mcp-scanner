@@ -69,13 +69,14 @@ def _build_config(
     llm_model = os.environ.get("MCP_SCANNER_LLM_MODEL")
     endpoint_url = endpoint_url or _get_endpoint_from_env()
 
+    # Check if any LLM-based analyzer is requested
+    needs_llm = AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.CODE_LLM in selected_analyzers
+    
     config_params = {
         "api_key": api_key if AnalyzerEnum.API in selected_analyzers else "",
         "endpoint_url": endpoint_url,
-        "llm_provider_api_key": (
-            llm_api_key if AnalyzerEnum.LLM in selected_analyzers else ""
-        ),
-        "llm_model": llm_model if AnalyzerEnum.LLM in selected_analyzers else "",
+        "llm_provider_api_key": llm_api_key if needs_llm else "",
+        "llm_model": llm_model if needs_llm else "",
     }
 
     if llm_base_url:
@@ -574,6 +575,44 @@ async def main():
         help="Comma-separated list of allowed MIME types (default: %(default)s)",
     )
 
+    # Repository code scanning subcommand
+    p_repo = subparsers.add_parser(
+        "repo", help="Scan a Git repository for MCP server vulnerabilities"
+    )
+    p_repo.add_argument(
+        "--repo-url",
+        required=True,
+        help="Git repository URL to scan (e.g., https://github.com/user/repo)",
+    )
+
+    # PyPI package scanning subcommand
+    p_pypi = subparsers.add_parser(
+        "pypi", help="Scan a PyPI package for security vulnerabilities"
+    )
+    p_pypi.add_argument(
+        "--package-name",
+        required=True,
+        help="Name of the PyPI package to scan (e.g., requests)",
+    )
+    p_pypi.add_argument(
+        "--version",
+        help="Specific version to scan (if not provided, scans latest version)",
+    )
+
+    # NPM package scanning subcommand
+    p_npm = subparsers.add_parser(
+        "npm", help="Scan an NPM package for security vulnerabilities"
+    )
+    p_npm.add_argument(
+        "--package-name",
+        required=True,
+        help="Name of the NPM package to scan (e.g., @modelcontextprotocol/server-everything)",
+    )
+    p_npm.add_argument(
+        "--version",
+        help="Specific version to scan (if not provided, scans latest version)",
+    )
+
     # API key and endpoint configuration
     parser.add_argument(
         "--api-key",
@@ -914,6 +953,56 @@ async def main():
                     }
                     for r in resource_results
                 ]
+
+        # Repository scanning
+        elif hasattr(args, "cmd") and args.cmd == "repo":
+            print(f"\n🔍 Scanning repository: {args.repo_url}\n")
+            cfg = _build_config([AnalyzerEnum.CODE_LLM])
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            result = await scanner.scan_github_repository(
+                repo_url=args.repo_url,
+                analyzers=[AnalyzerEnum.CODE_LLM]
+            )
+            
+            # Convert to JSON format - results_to_json handles GitHubScanResult conversion
+            results = await results_to_json([result])
+
+        # PyPI package scanning
+        elif hasattr(args, "cmd") and args.cmd == "pypi":
+            print(f"\n📦 Scanning PyPI package: {args.package_name}" + (f" version {args.version}" if args.version else "") + "\n")
+            cfg = _build_config([AnalyzerEnum.CODE_LLM])
+            
+            # Import and use PyPI analyzer
+            from mcpscanner.core.analyzers.pypi_package_analyzer import PyPIPackageAnalyzer
+            
+            pypi_analyzer = PyPIPackageAnalyzer(cfg)
+            context = {"version": args.version} if args.version else None
+            findings = await pypi_analyzer.analyze(args.package_name, context=context)
+
+        # NPM package scanning
+        elif hasattr(args, "cmd") and args.cmd == "npm":
+            print(f"\n📦 Scanning NPM package: {args.package_name}" + (f" version {args.version}" if args.version else "") + "\n")
+            cfg = _build_config([AnalyzerEnum.CODE_LLM])
+            
+            # Import and use NPM analyzer
+            from mcpscanner.core.analyzers.npm_package_analyzer import NPMPackageAnalyzer
+            
+            npm_analyzer = NPMPackageAnalyzer(cfg)
+            context = {"version": args.version} if args.version else None
+            findings = await npm_analyzer.analyze(args.package_name, context=context)
+            
+            # Create a scan result object
+            from mcpscanner.core.result import ToolScanResult
+            scan_result = ToolScanResult(
+                tool_name=args.package_name,
+                tool_description=f"NPM package scan: {args.package_name}" + (f" v{args.version}" if args.version else ""),
+                status="completed",
+                analyzers=[AnalyzerEnum.CODE_LLM],
+                findings=findings,
+            )
+            
+            # Convert to JSON format
+            results = await results_to_json([scan_result])
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
