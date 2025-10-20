@@ -568,10 +568,18 @@ class ReportGenerator:
         has_config_results = any(
             "server_source" in result and result["server_source"] for result in results
         )
+        
+        # Check if this is a supplychain scan
+        is_supplychain = any(
+            "supplychain_analyzer" in result.get("findings", {}) for result in results
+        )
 
         if has_config_results:
             # Table header with Target Server column for config-based scans
             header = f"{'Scan Target':<20} {'Target Server':<20} {'Tool Name':<18} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
+        elif is_supplychain:
+            # Supplychain scan: show only SUPPLYCHAIN column
+            header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'SUPPLYCHAIN':<15} {'Severity':<10}"
         else:
             # Table header without Target Server column for direct server scans
             header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
@@ -582,9 +590,19 @@ class ReportGenerator:
         for result in results:
             # Use server_source if available, otherwise fall back to server_url
             if "server_source" in result and result["server_source"]:
-                scan_target_source = result["server_source"][:18]
+                scan_target_source = result["server_source"]
             else:
-                scan_target_source = self.server_url[:28]
+                scan_target_source = self.server_url
+            
+            # For supplychain scans, extract just the filename
+            if is_supplychain and "supplychain:" in scan_target_source:
+                # Extract filename from "supplychain:/path/to/file.py"
+                import os
+                full_path = scan_target_source.replace("supplychain:", "")
+                scan_target_source = os.path.basename(full_path)
+            else:
+                # Truncate for non-supplychain scans
+                scan_target_source = scan_target_source[:28] if not has_config_results else scan_target_source[:18]
 
             if has_config_results:
                 # Config-based scan: show target server
@@ -615,10 +633,6 @@ class ReportGenerator:
                 else:
                     return "N/A"
 
-            api_severity = get_analyzer_status("api_analyzer")[:6]
-            yara_severity = get_analyzer_status("yara_analyzer")[:6]
-            llm_severity = get_analyzer_status("llm_analyzer")[:6]
-
             # Get overall severity with colored emoji
             severity_emojis = {
                 "HIGH": "🔴",
@@ -637,9 +651,19 @@ class ReportGenerator:
                 severity_emoji = severity_emojis.get(status, "🟢")
                 overall_severity = f"{severity_emoji} {status}"[:8]
 
-            if has_config_results:
+            if is_supplychain:
+                # Supplychain scan: show only supplychain analyzer status
+                supplychain_severity = get_analyzer_status("supplychain_analyzer")[:13]
+                row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {supplychain_severity:<15} {overall_severity:<10}"
+            elif has_config_results:
+                api_severity = get_analyzer_status("api_analyzer")[:6]
+                yara_severity = get_analyzer_status("yara_analyzer")[:6]
+                llm_severity = get_analyzer_status("llm_analyzer")[:6]
                 row = f"{scan_target_source:<20} {target_server:<20} {tool_name:<18} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
             else:
+                api_severity = get_analyzer_status("api_analyzer")[:6]
+                yara_severity = get_analyzer_status("yara_analyzer")[:6]
+                llm_severity = get_analyzer_status("llm_analyzer")[:6]
                 row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
             output.append(row)
 

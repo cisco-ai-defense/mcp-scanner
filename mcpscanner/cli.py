@@ -73,9 +73,9 @@ def _build_config(
         "api_key": api_key if AnalyzerEnum.API in selected_analyzers else "",
         "endpoint_url": endpoint_url,
         "llm_provider_api_key": (
-            llm_api_key if AnalyzerEnum.LLM in selected_analyzers else ""
+            llm_api_key if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.SUPPLYCHAIN in selected_analyzers) else ""
         ),
-        "llm_model": llm_model if AnalyzerEnum.LLM in selected_analyzers else "",
+        "llm_model": llm_model if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.SUPPLYCHAIN in selected_analyzers) else "",
     }
 
     if llm_base_url:
@@ -574,6 +574,35 @@ async def main():
         help="Comma-separated list of allowed MIME types (default: %(default)s)",
     )
 
+    # SupplyChain subcommand - scan local source code
+    p_supplychain = subparsers.add_parser(
+        "supplychain", help="Scan MCP server source code for docstring/behavior mismatches"
+    )
+    p_supplychain.add_argument(
+        "--source-path",
+        required=True,
+        help="Path to MCP server source code file or directory",
+    )
+    p_supplychain.add_argument(
+        "--output", "-o",
+        help="Save scan results to a file",
+    )
+    p_supplychain.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_supplychain.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_supplychain.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_supplychain.add_argument(
+        "--format",
+        choices=["raw", "summary", "detailed", "by_tool", "by_analyzer", "by_severity", "table"],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+
     # API key and endpoint configuration
     parser.add_argument(
         "--api-key",
@@ -591,7 +620,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, supplychain (default: %(default)s)",
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
@@ -670,7 +699,7 @@ async def main():
     )
     parser.add_argument(
         "--analyzer-filter",
-        choices=["api_analyzer", "yara_analyzer", "llm_analyzer"],
+        choices=["api_analyzer", "yara_analyzer", "llm_analyzer", "supplychain_analyzer"],
         help="Filter results by specific analyzer",
     )
     parser.add_argument(
@@ -688,6 +717,10 @@ async def main():
     parser.add_argument(
         "--rules-path",
         help="Path to directory containing custom YARA rules",
+    )
+    parser.add_argument(
+        "--source-path",
+        help="Path to MCP server source code file or directory (required for supplychain analyzer)",
     )
 
     args = parser.parse_args()
@@ -915,6 +948,67 @@ async def main():
                     for r in resource_results
                 ]
 
+        elif args.cmd == "supplychain":
+            # SupplyChain analyzer - scan local source code  
+            # This follows the same pattern as other analyzers but operates on source files
+            cfg = _build_config([AnalyzerEnum.SUPPLYCHAIN])
+            
+            from mcpscanner.core.analyzers.supplychain_analyzer import SupplyChainAnalyzer
+            analyzer = SupplyChainAnalyzer(cfg)
+            
+            source_path = args.source_path
+            
+            # Analyze the source file
+            findings = await analyzer.analyze(
+                source_path,
+                context={"file_path": source_path}
+            )
+            
+            # Format results to match Scanner output structure
+            # Group findings by function to create tool-like results
+            findings_by_function = {}
+            for finding in findings:
+                # Extract function name from details (not summary!)
+                func_name = finding.details.get("function_name", "unknown") if finding.details else "unknown"
+                
+                if func_name not in findings_by_function:
+                    findings_by_function[func_name] = []
+                findings_by_function[func_name].append(finding)
+            
+            # Create ToolScanResult-like structure for each function
+            results = []
+            for func_name, func_findings in findings_by_function.items():
+                # Get highest severity
+                severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+                max_severity = max((f.severity for f in func_findings), 
+                                 key=lambda s: severity_order.get(s, 0))
+                
+                results.append({
+                    "tool_name": func_name,
+                    "tool_description": f"MCP function from {source_path}",
+                    "status": "completed",
+                    "is_safe": False,
+                    "findings": {
+                        "supplychain_analyzer": {
+                            "severity": max_severity,
+                            "threat_summary": func_findings[0].summary,
+                            "threat_names": [f.threat_category for f in func_findings],
+                            "total_findings": len(func_findings),
+                            "mcp_taxonomy": func_findings[0].mcp_taxonomy if hasattr(func_findings[0], "mcp_taxonomy") else None,
+                        }
+                    }
+                })
+            
+            # If no findings, all functions are safe
+            if not results:
+                results.append({
+                    "tool_name": source_path,
+                    "tool_description": "MCP server source code",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {}
+                })
+
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
             cfg = _build_config(selected_analyzers)
@@ -1021,6 +1115,8 @@ async def main():
             server_label = args.server_url
         elif hasattr(args, "cmd") and args.cmd == "resources":
             server_label = args.server_url
+        elif hasattr(args, "cmd") and args.cmd == "supplychain":
+            server_label = f"supplychain:{args.source_path}"
         elif args.stdio_command:
             label_args = []
             if getattr(args, "stdio_arg", None):
