@@ -22,6 +22,8 @@ and constant propagation analysis from the supplychain engine.
 """
 
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from litellm import acompletion
@@ -43,30 +45,30 @@ class MCPDocstringAnalyzer(BaseAnalyzer):
     Example:
         >>> from mcpscanner import Config
         >>> from mcpscanner.analyzers import MCPDocstringAnalyzer
-        >>> config = Config(llm_provider_api_key="your_key")
         >>> analyzer = MCPDocstringAnalyzer(config)
         >>> findings = await analyzer.analyze_file("/path/to/mcp_server.py")
     """
 
     def __init__(self, config: Config):
-        """Initialize the MCP Docstring Analyzer.
+        """Initialize the analyzer with LLM configuration.
         
         Args:
-            config: Configuration object with LLM settings
+            config: Configuration containing LLM credentials
         """
-        super().__init__("MCPDocstringAnalyzer")
+        super().__init__(name="MCPDocstring")
         self._config = config
         
-        if not hasattr(config, "llm_provider_api_key") or not config.llm_provider_api_key:
-            raise ValueError("LLM provider API key is required for MCP Docstring analyzer")
-        
+        # LLM configuration
+        self._model = config.llm_model
         self._api_key = config.llm_provider_api_key
         self._base_url = config.llm_base_url
         self._api_version = config.llm_api_version
-        self._model = config.llm_model
         self._max_tokens = config.llm_max_tokens
         self._temperature = config.llm_temperature
-
+        
+        # Load prompt template
+        self._prompt_template = self._load_prompt_template()
+        
     async def analyze_file(self, file_path: str) -> List[SecurityFinding]:
         """Analyze a Python file for MCP docstring mismatches.
         
@@ -196,6 +198,46 @@ class MCPDocstringAnalyzer(BaseAnalyzer):
             self.logger.error(f"LLM analysis failed for {func_context.name}: {e}")
             return None
 
+    def _load_prompt_template(self) -> str:
+        """Load the description mismatch prompt template.
+        
+        Returns:
+            Prompt template string
+        """
+        try:
+            # Get the path to the prompts directory
+            current_dir = Path(__file__).parent.parent.parent
+            prompt_path = current_dir / "data" / "prompts" / "description_mismatch_prompt.md"
+            
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            self.logger.warning(f"Failed to load prompt template: {e}, using fallback")
+            return self._get_fallback_prompt()
+    
+    def _get_fallback_prompt(self) -> str:
+        """Get fallback prompt if template file cannot be loaded.
+        
+        Returns:
+            Fallback prompt string
+        """
+        return """Analyze this MCP entry point for mismatches between description and actual behavior.
+
+Compare the docstring claims against the actual dataflow behavior. Only report clear mismatches with security implications.
+
+Respond with JSON:
+{
+    "mismatch_detected": true/false,
+    "severity": "HIGH/MEDIUM/LOW",
+    "mismatch_type": "description_vs_behavior",
+    "description_claims": "what the docstring says",
+    "actual_behavior": "what the code does",
+    "security_implications": "why this matters",
+    "confidence": "HIGH/MEDIUM/LOW",
+    "dataflow_evidence": "specific evidence"
+}
+"""
+    
     def _create_comprehensive_analysis_prompt(self, ctx: FunctionContext) -> str:
         """Create comprehensive analysis prompt with full dataflow context.
         
@@ -208,13 +250,14 @@ class MCPDocstringAnalyzer(BaseAnalyzer):
         docstring = ctx.docstring or "No docstring provided"
         
         # Build comprehensive context
-        prompt = f"""Analyze this MCP entry point for mismatches between description and actual behavior.
-
-**ENTRY POINT INFORMATION:**
+        prompt = self._prompt_template + "\n\n"
+        prompt += f"""**ENTRY POINT INFORMATION:**
 - Function Name: {ctx.name}
 - Decorator: {ctx.decorator_types[0] if ctx.decorator_types else 'unknown'}
 - Line: {ctx.line_number}
 - Docstring/Description: {docstring}
+
+
 
 **FUNCTION SIGNATURE:**
 - Parameters: {json.dumps(ctx.parameters, indent=2)}
@@ -284,39 +327,6 @@ Parameter Flow Tracking:
             for var, val in list(ctx.constants.items())[:10]:
                 prompt += f"  {var} = {val}\n"
         
-        prompt += """\n**ANALYSIS TASK:**
-Compare the docstring/description with the actual code behavior revealed by the analysis above.
-
-**YOUR JOB:**
-1. Read what the docstring CLAIMS the tool does
-2. Read what the code ACTUALLY does (from parameter flows, function calls, operations)
-3. Determine if they match or if there's a mismatch
-
-**KEY PRINCIPLE:**
-- Parameters are untrusted input from external users
-- Does the actual behavior match what the description promises?
-- Is the description misleading, incomplete, or hiding behavior?
-
-**Response Format (JSON only):**
-{
-    "mismatch_detected": true/false,
-    "severity": "HIGH/MEDIUM/LOW",
-    "mismatch_type": "description_vs_behavior",
-    "description_claims": "what the docstring says the tool does",
-    "actual_behavior": "what the code actually does (from analysis)",
-    "security_implications": "why this mismatch matters (data exfiltration, unexpected behavior, etc)",
-    "confidence": "HIGH/MEDIUM/LOW",
-    "dataflow_evidence": "specific evidence from the analysis that shows the mismatch"
-}
-
-**Examples:**
-- Docstring: "Calculate sum" → Code: Sends data to external API → MISMATCH (data exfiltration)
-- Docstring: "Read local file" → Code: Also uploads to server → MISMATCH (hidden behavior)
-- Docstring: "Safe text processing" → Code: Executes shell commands → MISMATCH (dangerous operation)
-- Docstring: "Validate input" → Code: Passes input directly to subprocess → MISMATCH (no validation)
-
-Only report HIGH confidence mismatches where the description clearly doesn't match the implementation.
-"""
         
         return prompt
 

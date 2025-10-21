@@ -983,9 +983,14 @@ async def main():
                 max_severity = max((f.severity for f in func_findings), 
                                  key=lambda s: severity_order.get(s, 0))
                 
+                # Get source file from findings (for directory scans)
+                source_file = func_findings[0].details.get("source_file", source_path) if func_findings[0].details else source_path
+                import os
+                display_name = os.path.basename(source_file) if source_file != source_path else source_path
+                
                 results.append({
                     "tool_name": func_name,
-                    "tool_description": f"MCP function from {source_path}",
+                    "tool_description": f"MCP function from {display_name}",
                     "status": "completed",
                     "is_safe": False,
                     "findings": {
@@ -994,6 +999,7 @@ async def main():
                             "threat_summary": func_findings[0].summary,
                             "threat_names": [f.threat_category for f in func_findings],
                             "total_findings": len(func_findings),
+                            "source_file": source_file,  # Include source file in output
                             "mcp_taxonomy": func_findings[0].mcp_taxonomy if hasattr(func_findings[0], "mcp_taxonomy") else None,
                         }
                     }

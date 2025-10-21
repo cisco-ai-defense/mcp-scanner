@@ -227,16 +227,25 @@ Task: Does the docstring match the actual behavior?
 The SupplyChain analyzer integrates seamlessly:
 
 ```bash
-# CLI Usage
+# CLI Usage - Single File
 python -m mcpscanner.cli supplychain --source-path server.py
 
-# SDK Usage
+# CLI Usage - Directory (scans all .py files recursively)
+python -m mcpscanner.cli supplychain --source-path ./mcp-servers/
+
+# CLI Usage - With output format
+python -m mcpscanner.cli supplychain --source-path ./servers/ --format table
+
+# SDK Usage - Single File
 from mcpscanner import Config
 from mcpscanner.core.analyzers.supplychain_analyzer import SupplyChainAnalyzer
 
 config = Config(llm_provider_api_key="your-key")
 analyzer = SupplyChainAnalyzer(config)
 findings = await analyzer.analyze("server.py", context={})
+
+# SDK Usage - Directory
+findings = await analyzer.analyze("./mcp-servers/", context={})
 ```
 
 ### Output Format
