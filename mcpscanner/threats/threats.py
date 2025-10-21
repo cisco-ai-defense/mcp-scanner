@@ -109,7 +109,7 @@ class ThreatMapping:
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Adversarial attack that attempts to alter or control the output of a LLM or other related systems by providing instructions (via prompt) that override existing instructions and/or bypass model alignment or guardrails. A prompt injection technique is any transformation that preserves the intent of the input.",
+            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., “Ignore previous instructions”).",
         },
         "HARASSMENT": {
             "scanner_category": "SOCIAL ENGINEERING",
