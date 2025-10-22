@@ -57,15 +57,6 @@ class ThreatMapping:
             "aisubtech_name": "Tool Shadowing",
             "description": "Disguising, substituting or duplicating legitimate tools within an agent or MCP server or tool registry, enabling malicious tools with identical or similar identifiers to intercept or replace trusted tool calls, leading to unauthorized actions, data exfiltration, or redirection of legitimate operations.",
         },
-        "SUSPICIOUS CODE EXECUTION": {
-            "scanner_category": "SUSPICIOUS CODE EXECUTION",
-            "severity": "LOW",
-            "aitech": "AITech-9.1",
-            "aitech_name": "Model or Agentic System Manipulation",
-            "aisubtech": "AISubtech-9.1.1",
-            "aisubtech_name": "Code Execution",
-            "description": "Autonomously generating, interpreting, or executing code, leading to unsolicited or unauthorized code execution targeted to large language models (LLMs), or agentic frameworks, systems (including MCP, A2A) often include integrated code interpreter or tool execution components.",
-        },
     }
     
     # YARA Analyzer Threats
