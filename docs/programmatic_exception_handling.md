@@ -1,8 +1,8 @@
-# MCP Scanner CLI (Direct) - Exception Handling
+# MCP Scanner Programmatic Usage - Exception Handling
 
 ## Quick Start
 
-The MCP Scanner CLI (Direct) raises specific exceptions for different error scenarios when used programmatically:
+The MCP Scanner Programmatic Usage raises specific exceptions for different error scenarios when used programmatically:
 
 ```python
 from mcpscanner import Scanner, Config
