@@ -19,6 +19,7 @@
 This module contains the configuration classes for the MCP Scanner SDK.
 """
 
+import os
 from typing import List, Optional
 
 from .constants import CONSTANTS
@@ -51,6 +52,9 @@ class Config:
         llm_api_version: str = None,
         llm_rate_limit_delay: float = None,
         llm_max_retries: int = None,
+        aws_region_name: str = None,
+        aws_session_token: str = None,
+        aws_profile_name: str = None,
         oauth_client_id: str = None,
         oauth_client_secret: str = None,
         oauth_token_url: str = None,
@@ -70,6 +74,9 @@ class Config:
             llm_api_version (str, optional): API version for LLM provider (if required).
             llm_rate_limit_delay (float, optional): Delay in seconds between LLM API calls. Defaults to 1.0.
             llm_max_retries (int, optional): Maximum number of retries for failed LLM API calls. Defaults to 3.
+            aws_region_name (str, optional): AWS region name for Bedrock (e.g., 'us-east-1'). Falls back to AWS_REGION or AWS_DEFAULT_REGION env vars.
+            aws_session_token (str, optional): AWS session token for temporary credentials. Falls back to AWS_SESSION_TOKEN env var.
+            aws_profile_name (str, optional): AWS profile name from ~/.aws/credentials. Falls back to AWS_PROFILE env var.
             oauth_client_id (str, optional): OAuth client ID for authentication.
             oauth_client_secret (str, optional): OAuth client secret for authentication.
             oauth_token_url (str, optional): OAuth token URL for authentication.
@@ -91,6 +98,17 @@ class Config:
             llm_rate_limit_delay if llm_rate_limit_delay is not None else 1.0
         )
         self._llm_max_retries = llm_max_retries if llm_max_retries is not None else 3
+
+        # AWS Bedrock configuration with environment variable fallbacks
+        self._aws_region_name = (
+            aws_region_name
+            or os.getenv("AWS_REGION")
+            or os.getenv("AWS_DEFAULT_REGION")
+            or CONSTANTS.DEFAULT_AWS_REGION
+        )
+        self._aws_session_token = aws_session_token or os.getenv("AWS_SESSION_TOKEN")
+        self._aws_profile_name = aws_profile_name or os.getenv("AWS_PROFILE")
+
         self._oauth_client_id = oauth_client_id
         self._oauth_client_secret = oauth_client_secret
         self._oauth_token_url = oauth_token_url
@@ -176,6 +194,33 @@ class Config:
             int: The maximum number of retries.
         """
         return self._llm_max_retries
+
+    @property
+    def aws_region_name(self) -> Optional[str]:
+        """Get the AWS region name for Bedrock.
+
+        Returns:
+            Optional[str]: The AWS region name (e.g., 'us-east-1').
+        """
+        return self._aws_region_name
+
+    @property
+    def aws_session_token(self) -> Optional[str]:
+        """Get the AWS session token for temporary credentials.
+
+        Returns:
+            Optional[str]: The AWS session token.
+        """
+        return self._aws_session_token
+
+    @property
+    def aws_profile_name(self) -> Optional[str]:
+        """Get the AWS profile name for credentials.
+
+        Returns:
+            Optional[str]: The AWS profile name from ~/.aws/credentials.
+        """
+        return self._aws_profile_name
 
     @property
     def oauth_client_id(self) -> Optional[str]:
