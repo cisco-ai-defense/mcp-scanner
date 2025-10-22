@@ -158,13 +158,14 @@ class YaraAnalyzer(BaseAnalyzer):
                 classification = match.meta.get("classification", "unknown")
                 threat_type = match.meta.get("threat_type", "unknown")
 
-                # Use centralized threat mapping
+                # Use centralized threat mapping (includes severity)
                 threat_info = YARA_THREAT_MAPPING.get(threat_type)
                 
                 if threat_info:
+                    # Severity already included in threat_info mapping
                     mapping = {
                         "category": threat_info["threat_category"],
-                        "severity": "HIGH",  # YARA threats are typically HIGH severity
+                        "severity": threat_info["severity"],
                     }
                 else:
                     mapping = {"severity": "UNKNOWN", "category": "N/A"}

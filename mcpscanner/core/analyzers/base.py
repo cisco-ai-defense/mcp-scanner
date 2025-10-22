@@ -104,9 +104,9 @@ class SecurityFinding:
             if not analyzer_key:
                 return None
             
-            # For YARA and API, use the threat_type from details for taxonomy lookup
+            # For all analyzers, try to use threat_type from details for accurate taxonomy lookup
             threat_name = self.threat_category
-            if analyzer_key in ["yara", "ai_defense"] and self.details:
+            if self.details:
                 # Try to get the threat_type from details (original classification name)
                 threat_type = self.details.get("threat_type")
                 if threat_type:

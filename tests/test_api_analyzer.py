@@ -230,10 +230,18 @@ class TestApiAnalyzer:
         # HARASSMENT, HATE_SPEECH, PROFANITY, SOCIAL_DIVISION_AND_POLARIZATION -> SOCIAL ENGINEERING (MEDIUM)
         assert finding_by_type["HARASSMENT"].severity == "MEDIUM"
         assert finding_by_type["HARASSMENT"].threat_category == "SOCIAL ENGINEERING"
+        assert finding_by_type["HATE_SPEECH"].severity == "MEDIUM"
+        assert finding_by_type["HATE_SPEECH"].threat_category == "SOCIAL ENGINEERING"
+        assert finding_by_type["PROFANITY"].severity == "MEDIUM"
+        assert finding_by_type["PROFANITY"].threat_category == "SOCIAL ENGINEERING"
+        assert finding_by_type["SOCIAL_DIVISION_AND_POLARIZATION"].severity == "MEDIUM"
+        assert finding_by_type["SOCIAL_DIVISION_AND_POLARIZATION"].threat_category == "SOCIAL ENGINEERING"
         
         # SEXUAL_CONTENT_AND_EXPLOITATION, VIOLENCE_AND_PUBLIC_SAFETY_THREATS -> MALICIOUS BEHAVIOR (MEDIUM)
         assert finding_by_type["SEXUAL_CONTENT_AND_EXPLOITATION"].severity == "MEDIUM"
         assert finding_by_type["SEXUAL_CONTENT_AND_EXPLOITATION"].threat_category == "MALICIOUS BEHAVIOR"
+        assert finding_by_type["VIOLENCE_AND_PUBLIC_SAFETY_THREATS"].severity == "MEDIUM"
+        assert finding_by_type["VIOLENCE_AND_PUBLIC_SAFETY_THREATS"].threat_category == "MALICIOUS BEHAVIOR"
         
         # CODE_DETECTION -> SUSPICIOUS CODE EXECUTION (LOW)
         assert finding_by_type["CODE_DETECTION"].severity == "LOW"

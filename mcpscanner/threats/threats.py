@@ -3,26 +3,36 @@ Threat mapping from scanner threat names to MCP Taxonomy.
 
 This module provides mappings between different analyzers' threat names
 and the standardized MCP Taxonomy threat classifications.
+
+The module is organized into two main sections:
+1. THREAT DEFINITIONS: Complete threat definitions with taxonomy mappings and severity
+2. SIMPLIFIED MAPPINGS & FUNCTIONS: Helper functions and lightweight mappings
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
+
+# =============================================================================
+# SECTION 1: THREAT DEFINITIONS
+# =============================================================================
 
 class ThreatMapping:
-    """Mapping of threat names to MCP Taxonomy classifications."""
+    """Mapping of threat names to MCP Taxonomy classifications with severity."""
     
     # LLM Analyzer Threats
     LLM_THREATS = {
         "PROMPT INJECTION": {
             "scanner_category": "PROMPT INJECTION",
+            "severity": "HIGH",
             "aitech": "AITech-1.1",
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., “Ignore previous instructions”).",
+            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., \"Ignore previous instructions\").",
         },
         "DATA EXFILTRATION": {
             "scanner_category": "SECURITY VIOLATION",
+            "severity": "HIGH",
             "aitech": "AITech-8.2",
             "aitech_name": "Data Exfiltration / Exposure",
             "aisubtech": "AISubtech-8.2.3",
@@ -31,6 +41,7 @@ class ThreatMapping:
         },
         "TOOL POISONING": {
             "scanner_category": "SUSPICIOUS CODE EXECUTION",
+            "severity": "HIGH",
             "aitech": "AITech-12.1",
             "aitech_name": "Tool Exploitation",
             "aisubtech": "AISubtech-12.1.2",
@@ -39,6 +50,7 @@ class ThreatMapping:
         },
         "TOOL SHADOWING": {
             "scanner_category": "SECURITY VIOLATION",
+            "severity": "HIGH",
             "aitech": "AITech-12.1",
             "aitech_name": "Tool Exploitation",
             "aisubtech": "AISubtech-12.1.5",
@@ -47,6 +59,7 @@ class ThreatMapping:
         },
         "SUSPICIOUS CODE EXECUTION": {
             "scanner_category": "SUSPICIOUS CODE EXECUTION",
+            "severity": "LOW",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.1",
@@ -60,14 +73,16 @@ class ThreatMapping:
     YARA_THREATS = {
         "PROMPT INJECTION": {
             "scanner_category": "PROMPT INJECTION",
+            "severity": "HIGH",
             "aitech": "AITech-1.1",
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., “Ignore previous instructions”).",
+            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., \"Ignore previous instructions\").",
         },
         "CODE EXECUTION": {
             "scanner_category": "SUSPICIOUS CODE EXECUTION",
+            "severity": "LOW",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.1",
@@ -76,6 +91,7 @@ class ThreatMapping:
         },
         "INJECTION ATTACK": {
             "scanner_category": "INJECTION ATTACK",
+            "severity": "HIGH",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.4",
@@ -84,6 +100,7 @@ class ThreatMapping:
         },
         "CREDENTIAL HARVESTING": {
             "scanner_category": "SECURITY VIOLATION",
+            "severity": "HIGH",
             "aitech": "AITech-8.2",
             "aitech_name": "Data Exfiltration / Exposure",
             "aisubtech": "AISubtech-8.2.3",
@@ -92,6 +109,7 @@ class ThreatMapping:
         },
         "SYSTEM MANIPULATION": {
             "scanner_category": "SYSTEM MANIPULATION",
+            "severity": "MEDIUM",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.2",
@@ -105,14 +123,16 @@ class ThreatMapping:
     AI_DEFENSE_THREATS = {
         "PROMPT_INJECTION": {
             "scanner_category": "PROMPT INJECTION",
+            "severity": "HIGH",
             "aitech": "AITech-1.1",
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., “Ignore previous instructions”).",
+            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., \"Ignore previous instructions\").",
         },
         "HARASSMENT": {
             "scanner_category": "SOCIAL ENGINEERING",
+            "severity": "MEDIUM",
             "aitech": "AITech-15.1",
             "aitech_name": "Harmful / Misleading / Inaccurate Content",
             "aisubtech": "AISubtech-15.1.8",
@@ -121,6 +141,7 @@ class ThreatMapping:
         },
         "HATE_SPEECH": {
             "scanner_category": "SOCIAL ENGINEERING",
+            "severity": "MEDIUM",
             "aitech": "AITech-15.1",
             "aitech_name": "Harmful / Misleading / Inaccurate Content",
             "aisubtech": "AISubtech-15.1.9",
@@ -129,6 +150,7 @@ class ThreatMapping:
         },
         "PROFANITY": {
             "scanner_category": "SOCIAL ENGINEERING",
+            "severity": "MEDIUM",
             "aitech": "AITech-15.1",
             "aitech_name": "Harmful / Misleading / Inaccurate Content",
             "aisubtech": "AISubtech-15.1.11",
@@ -137,6 +159,7 @@ class ThreatMapping:
         },
         "SEXUAL_CONTENT_AND_EXPLOITATION": {
             "scanner_category": "MALICIOUS BEHAVIOR",
+            "severity": "MEDIUM",
             "aitech": "AITech-15.1",
             "aitech_name": "Harmful / Misleading / Inaccurate Content",
             "aisubtech": "AISubtech-15.1.14",
@@ -145,6 +168,7 @@ class ThreatMapping:
         },
         "SOCIAL_DIVISION_AND_POLARIZATION": {
             "scanner_category": "SOCIAL ENGINEERING",
+            "severity": "MEDIUM",
             "aitech": "AITech-15.1",
             "aitech_name": "Harmful / Misleading / Inaccurate Content",
             "aisubtech": "AISubtech-15.1.15",
@@ -153,6 +177,7 @@ class ThreatMapping:
         },
         "VIOLENCE_AND_PUBLIC_SAFETY_THREATS": {
             "scanner_category": "MALICIOUS BEHAVIOR",
+            "severity": "MEDIUM",
             "aitech": "AITech-15.1",
             "aitech_name": "Harmful / Misleading / Inaccurate Content",
             "aisubtech": "AISubtech-15.1.17",
@@ -161,6 +186,7 @@ class ThreatMapping:
         },
         "CODE_DETECTION": {
             "scanner_category": "SUSPICIOUS CODE EXECUTION",
+            "severity": "LOW",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.1",
@@ -169,6 +195,7 @@ class ThreatMapping:
         },
         "SECURITY_VIOLATION": {
             "scanner_category": "SECURITY VIOLATION",
+            "severity": "HIGH",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.2",
@@ -187,7 +214,7 @@ class ThreatMapping:
             threat_name: The threat name from the analyzer
             
         Returns:
-            Dictionary containing the threat mapping information
+            Dictionary containing the threat mapping information including severity
             
         Raises:
             ValueError: If analyzer or threat_name is not found
@@ -209,36 +236,25 @@ class ThreatMapping:
             raise ValueError(f"Unknown threat '{threat_name}' for analyzer '{analyzer}'")
         
         return threats[threat_upper]
-    
-    @classmethod
-    def get_all_threats(cls) -> Dict[str, Dict[str, Dict[str, Any]]]:
-        """
-        Get all threat mappings organized by analyzer.
-        
-        Returns:
-            Dictionary with analyzer names as keys and their threat mappings as values
-        """
-        return {
-            'llm': cls.LLM_THREATS,
-            'yara': cls.YARA_THREATS,
-            'ai_defense': cls.AI_DEFENSE_THREATS,
-        }
 
 
-# Export simplified mappings for analyzer use
-# These map threat names to their category and type for easy lookup
+# =============================================================================
+# SECTION 2: SIMPLIFIED MAPPINGS & HELPER FUNCTIONS
+# =============================================================================
 
 def _create_simple_mapping(threats_dict):
-    """Create simplified mapping with threat_category and threat_type."""
+    """Create simplified mapping with threat_category, threat_type, and severity."""
     return {
         name: {
             "threat_category": info["scanner_category"],
             "threat_type": name.lower().replace("_", " "),
+            "severity": info.get("severity", "UNKNOWN"),
         }
         for name, info in threats_dict.items()
     }
 
 
+# Simplified mappings for analyzers (includes severity, category, and type)
 LLM_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.LLM_THREATS)
 YARA_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.YARA_THREATS)
 API_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.AI_DEFENSE_THREATS)

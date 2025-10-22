@@ -96,9 +96,17 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
             ):
                 findings_by_analyzer[analyzer]["severity"] = "LOW"
             
-            # Collect MCP Taxonomy from first finding with taxonomy
-            if "mcp_taxonomy" not in findings_by_analyzer[analyzer] and hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
-                findings_by_analyzer[analyzer]["mcp_taxonomy"] = finding.mcp_taxonomy
+            # Collect MCP Taxonomy from all findings
+            if "mcp_taxonomies" not in findings_by_analyzer[analyzer]:
+                findings_by_analyzer[analyzer]["mcp_taxonomies"] = []
+            
+            if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+                # Check if this taxonomy is unique (based on aitech + aisubtech)
+                taxonomy_key = (finding.mcp_taxonomy.get("aitech"), finding.mcp_taxonomy.get("aisubtech"))
+                existing_keys = [(t.get("aitech"), t.get("aisubtech")) for t in findings_by_analyzer[analyzer]["mcp_taxonomies"]]
+                
+                if taxonomy_key not in existing_keys:
+                    findings_by_analyzer[analyzer]["mcp_taxonomies"].append(finding.mcp_taxonomy)
 
         # Use analyzer-provided summaries for analyzers with findings
         for analyzer, data in findings_by_analyzer.items():
@@ -380,6 +388,7 @@ class ReportGenerator:
                     threat_names = data.get("threat_names", [])
                     threat_summary = data.get("threat_summary", "N/A")
                     total_findings = data.get("total_findings", 0)
+                    mcp_taxonomy = data.get("mcp_taxonomy")
 
                     output.append(f"  • {analyzer}:")
                     output.append(f"    - Severity: {severity}")
@@ -388,6 +397,45 @@ class ReportGenerator:
                         f"    - Threat Names: {', '.join(threat_names) if threat_names else 'None'}"
                     )
                     output.append(f"    - Total Findings: {total_findings}")
+                    
+                    # Add MCP Taxonomy details if available
+                    mcp_taxonomies = data.get("mcp_taxonomies", [])
+                    if mcp_taxonomies and total_findings > 0:
+                        if len(mcp_taxonomies) == 1:
+                            output.append(f"    - MCP Taxonomy:")
+                            taxonomy = mcp_taxonomies[0]
+                            if taxonomy.get("aitech"):
+                                output.append(f"      • AITech: {taxonomy['aitech']}")
+                            if taxonomy.get("aitech_name"):
+                                output.append(f"      • AITech Name: {taxonomy['aitech_name']}")
+                            if taxonomy.get("aisubtech"):
+                                output.append(f"      • AISubtech: {taxonomy['aisubtech']}")
+                            if taxonomy.get("aisubtech_name"):
+                                output.append(f"      • AISubtech Name: {taxonomy['aisubtech_name']}")
+                            if taxonomy.get("description"):
+                                # Wrap long descriptions
+                                desc = taxonomy['description']
+                                if len(desc) > 80:
+                                    output.append(f"      • Description: {desc[:80]}...")
+                                else:
+                                    output.append(f"      • Description: {desc}")
+                        else:
+                            # Multiple taxonomies - show them numbered
+                            output.append(f"    - MCP Taxonomies ({len(mcp_taxonomies)} unique threats):")
+                            for idx, taxonomy in enumerate(mcp_taxonomies, 1):
+                                output.append(f"      [{idx}] {taxonomy.get('aitech_name', 'Unknown')}")
+                                if taxonomy.get("aitech"):
+                                    output.append(f"          • AITech: {taxonomy['aitech']}")
+                                if taxonomy.get("aisubtech"):
+                                    output.append(f"          • AISubtech: {taxonomy['aisubtech']}")
+                                if taxonomy.get("aisubtech_name"):
+                                    output.append(f"          • AISubtech Name: {taxonomy['aisubtech_name']}")
+                                if taxonomy.get("description"):
+                                    desc = taxonomy['description']
+                                    if len(desc) > 80:
+                                        output.append(f"          • Description: {desc[:80]}...")
+                                    else:
+                                        output.append(f"          • Description: {desc}")
             else:
                 output.append("No findings.")
 
