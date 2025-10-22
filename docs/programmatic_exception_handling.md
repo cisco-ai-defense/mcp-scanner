@@ -1,8 +1,8 @@
-# MCP Scanner SDK - Exception Handling
+# MCP Scanner Programmatic Usage - Exception Handling
 
 ## Quick Start
 
-The MCP Scanner SDK raises specific exceptions for different error scenarios:
+The MCP Scanner Programmatic Usage raises specific exceptions for different error scenarios when used programmatically:
 
 ```python
 from mcpscanner import Scanner, Config
@@ -100,4 +100,4 @@ except MCPConnectionError:
     pass
 ```
 
-See `examples/sdk_exception_handling.py` for a complete working example.
+See `examples/programmatic_exception_handling.py` for a complete working example.

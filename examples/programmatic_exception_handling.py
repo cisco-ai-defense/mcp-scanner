@@ -15,9 +15,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Example: MCP Scanner SDK with proper exception handling.
+"""Example: MCP Scanner Programmatic Usage with proper exception handling.
 
-This example demonstrates how to use the MCP Scanner SDK as a library
+This example demonstrates how to use the MCP Scanner programmatically
 with proper exception handling for different error scenarios.
 """
 
@@ -89,7 +89,7 @@ async def main():
     """Run example scans with different scenarios."""
 
     print("=" * 60)
-    print("MCP Scanner SDK - Exception Handling Examples")
+    print("MCP Scanner Programmatic Usage - Exception Handling Examples")
     print("=" * 60)
 
     # Example 1: Server requiring authentication (401)
