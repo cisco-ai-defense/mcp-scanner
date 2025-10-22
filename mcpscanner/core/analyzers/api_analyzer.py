@@ -141,7 +141,7 @@ class ApiAnalyzer(BaseAnalyzer):
             classifications = response_json.get("classifications", [])
 
             if not is_safe:
-                self.logger.warning(
+                self.logger.debug(
                     f'Cisco AI Defense API detected malicious content: tool="{tool_name}" classifications="{classifications}"'
                 )
 
@@ -152,20 +152,13 @@ class ApiAnalyzer(BaseAnalyzer):
                     threat_summary = f"Detected {len(classifications)} threats: {', '.join([c.lower().replace('_', ' ') for c in classifications])}"
 
                 for classification in classifications:
-                    # Use centralized threat mapping
+                    # Use centralized threat mapping (includes severity)
                     threat_info = API_THREAT_MAPPING.get(classification)
                     
                     if threat_info:
-                        # Determine severity based on threat category
-                        severity_map = {
-                            "PROMPT INJECTION": "HIGH",
-                            "SECURITY VIOLATION": "HIGH",
-                            "SUSPICIOUS CODE EXECUTION": "LOW",
-                            "SOCIAL ENGINEERING": "MEDIUM",
-                            "MALICIOUS BEHAVIOR": "MEDIUM",
-                        }
+                        # Severity already included in threat_info mapping
                         mapping = {
-                            "severity": severity_map.get(threat_info["threat_category"], "UNKNOWN"),
+                            "severity": threat_info["severity"],
                             "category": threat_info["threat_category"],
                         }
                     else:
