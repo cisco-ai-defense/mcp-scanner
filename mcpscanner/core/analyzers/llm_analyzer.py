@@ -297,42 +297,42 @@ class LLMAnalyzer(BaseAnalyzer):
                 "malicious_content_detected", False
             ):
                 # Generate threat summary for all findings
-                threat_types = []
-                for threat in primary_threats:
-                    threat_info = LLM_THREAT_MAPPING.get(threat)
+                display_names = []
+                for threat_name in primary_threats:
+                    threat_info = LLM_THREAT_MAPPING.get(threat_name)
                     if threat_info:
-                        threat_types.append(threat_info["threat_type"])
+                        display_names.append(threat_info["threat_type"])
 
-                if len(threat_types) == 1:
-                    threat_summary = f"Detected 1 threat: {threat_types[0]}"
+                if len(display_names) == 1:
+                    threat_summary = f"Detected 1 threat: {display_names[0]}"
                 else:
-                    threat_summary = f"Detected {len(threat_types)} threats: {', '.join(threat_types)}"
+                    threat_summary = f"Detected {len(display_names)} threats: {', '.join(display_names)}"
 
                 # Create specific findings for each detected threat
-                for threat in primary_threats:
-                    threat_info = LLM_THREAT_MAPPING.get(threat)
+                for threat_name in primary_threats:
+                    threat_info = LLM_THREAT_MAPPING.get(threat_name)
                     
                     if threat_info:
-                        threat_category = threat_info["threat_category"]
-                        threat_type = threat_info["threat_type"]
+                        category = threat_info["threat_category"]
+                        display_name = threat_info["threat_type"]
                     else:
                         # Handle unknown threats by using the threat name itself
-                        threat_category = threat
-                        threat_type = threat.lower().replace("_", " ")
+                        category = threat_name
+                        display_name = threat_name.lower().replace("_", " ")
 
                     # Skip creating findings only for explicitly SAFE classifications
-                    if threat_category == "SAFE":
+                    if category == "SAFE":
                         continue
 
                     finding = SecurityFinding(
                         severity=normalized_severity,
                         summary=threat_summary,
                         analyzer="LLM",
-                        threat_category=threat_category,
+                        threat_category=category,
                         details={
                             "tool_name": tool_name,
-                            "threat_type": threat_category,
-                            "evidence": f"{threat_type} detected in tool content",
+                            "threat_type": threat_name,  # Original name for taxonomy lookup
+                            "evidence": f"{display_name} detected in tool content",
                             "raw_response": analysis_result,
                             "primary_threats": primary_threats,
                         },
