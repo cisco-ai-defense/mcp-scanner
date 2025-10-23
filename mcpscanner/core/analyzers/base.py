@@ -100,7 +100,22 @@ class SecurityFinding:
                 "API": "ai_defense",
             }
             
+            # Check if this is a built-in analyzer
             analyzer_key = analyzer_map.get(self.analyzer.upper())
+            
+            # If not a built-in analyzer, check if it's a custom analyzer using AI Defense classifications
+            # Custom analyzers that use AI Defense threat types should have threat_type in details
+            if not analyzer_key and self.details and "threat_type" in self.details:
+                # Try to map to ai_defense if the threat_type matches AI Defense threat names
+                threat_type = self.details.get("threat_type", "").upper()
+                # Check if this threat exists in AI Defense threats
+                try:
+                    ThreatMapping.get_threat_mapping("ai_defense", threat_type)
+                    analyzer_key = "ai_defense"
+                except ValueError:
+                    # Not an AI Defense threat, return None
+                    return None
+            
             if not analyzer_key:
                 return None
             
