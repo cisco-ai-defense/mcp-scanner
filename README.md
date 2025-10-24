@@ -16,6 +16,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
 - **Comprehensive Scanning**: Scan MCP tools, prompts, and resources for security vulnerabilities
+- **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
 - **Custom Endpoints**: Configure the API endpoint to support any Cisco AI Defense environments.
@@ -169,6 +170,7 @@ asyncio.run(main())
 - **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`.
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`.
+- **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
 
@@ -265,6 +267,51 @@ mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
   --mime-types "text/plain,text/html,application/json"
 ```
 
+#### Scan Static/Offline Files (CI/CD Mode)
+
+The `static` subcommand allows you to scan pre-generated JSON files without connecting to a live MCP server. This is ideal for CI/CD pipelines, air-gapped environments, or reproducible security checks.
+
+```bash
+# Scan tools from a static JSON file
+mcp-scanner --analyzers yara static --tools /path/to/tools-list.json
+
+# Scan with multiple analyzers
+mcp-scanner --analyzers yara,llm static --tools /path/to/tools-list.json
+
+# Scan prompts from a static JSON file
+mcp-scanner --analyzers llm static --prompts /path/to/prompts-list.json
+
+# Scan resources from a static JSON file
+mcp-scanner --analyzers llm static --resources /path/to/resources-list.json
+
+# Scan all three types at once with detailed output
+mcp-scanner \
+  --analyzers yara,llm,api \
+  --format detailed \
+  static \
+  --tools /path/to/tools-list.json \
+  --prompts /path/to/prompts-list.json \
+  --resources /path/to/resources-list.json
+
+# CI/CD example: YARA-only scan (no API keys needed)
+mcp-scanner --analyzers yara --format summary static --tools output/tools.json
+```
+
+**Expected JSON Format:**
+```json
+{
+  "tools": [
+    {
+      "name": "tool_name",
+      "description": "Tool description",
+      "inputSchema": { "type": "object", "properties": {} }
+    }
+  ]
+}
+```
+
+For more details, see [Static Scanning Documentation](docs/static-scanning.md) and [examples/static_scanning_example.py](examples/static_scanning_example.py).
+
 ### API Server Usage
 
 The API server provides a REST interface to the MCP scanner functionality, allowing you to integrate security scanning into web applications, CI/CD pipelines, or other services. It exposes the same scanning capabilities as the CLI tool but through HTTP endpoints.
@@ -359,6 +406,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration
 - **[Programmatic Usage](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/programmatic-usage.md)** - Programmatic usage examples and advanced usage
+- **[Static Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/static-scanning.md)** - Offline/CI-CD scanning mode
 - **[API Reference](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md)** - Complete REST API documentation
 - **[Output Formats](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/output-formats.md)** - Detailed output format options
 
