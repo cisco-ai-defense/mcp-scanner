@@ -46,7 +46,7 @@ from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
-from .analyzers.supplychain_analyzer import SupplyChainAnalyzer
+from .analyzers.behavioural_analyzer import BehaviouralAnalyzer
 from .auth import (
     Auth,
     AuthType,
@@ -108,8 +108,8 @@ class Scanner:
         self._llm_analyzer = (
             LLMAnalyzer(config) if config.llm_provider_api_key else None
         )
-        self._supplychain_analyzer = (
-            SupplyChainAnalyzer(config) if config.llm_provider_api_key else None
+        self._behavioural_analyzer = (
+            BehaviouralAnalyzer(config) if config.llm_provider_api_key else None
         )
         self._custom_analyzers = custom_analyzers or []
 
@@ -121,8 +121,8 @@ class Scanner:
             active_analyzers.append("YARA")
         if self._llm_analyzer:
             active_analyzers.append("LLM")
-        if self._supplychain_analyzer:
-            active_analyzers.append("SupplyChain")
+        if self._behavioural_analyzer:
+            active_analyzers.append("Behavioural")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -157,9 +157,9 @@ class Scanner:
                 "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
             )
 
-        if AnalyzerEnum.SUPPLYCHAIN in requested_analyzers and not self._supplychain_analyzer:
+        if AnalyzerEnum.BEHAVIOURAL in requested_analyzers and not self._behavioural_analyzer:
             missing_requirements.append(
-                "SupplyChain analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
+                "Behavioural analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
             )
 
         # YARA analyzer should always be available since it doesn't require API keys

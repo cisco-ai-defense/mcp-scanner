@@ -73,9 +73,9 @@ def _build_config(
         "api_key": api_key if AnalyzerEnum.API in selected_analyzers else "",
         "endpoint_url": endpoint_url,
         "llm_provider_api_key": (
-            llm_api_key if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.SUPPLYCHAIN in selected_analyzers) else ""
+            llm_api_key if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIOURAL in selected_analyzers) else ""
         ),
-        "llm_model": llm_model if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.SUPPLYCHAIN in selected_analyzers) else "",
+        "llm_model": llm_model if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIOURAL in selected_analyzers) else "",
     }
 
     if llm_base_url:
@@ -574,29 +574,29 @@ async def main():
         help="Comma-separated list of allowed MIME types (default: %(default)s)",
     )
 
-    # SupplyChain subcommand - scan local source code
-    p_supplychain = subparsers.add_parser(
-        "supplychain", help="Scan MCP server source code for docstring/behavior mismatches"
+    # Behavioural subcommand - scan local source code
+    p_behavioural = subparsers.add_parser(
+        "behavioural", help="Scan MCP server source code for docstring/behavior mismatches"
     )
-    p_supplychain.add_argument(
+    p_behavioural.add_argument(
         "--source-path",
         required=True,
         help="Path to MCP server source code file or directory",
     )
-    p_supplychain.add_argument(
+    p_behavioural.add_argument(
         "--output", "-o",
         help="Save scan results to a file",
     )
-    p_supplychain.add_argument(
+    p_behavioural.add_argument(
         "--verbose", "-v", action="store_true", help="Print verbose output"
     )
-    p_supplychain.add_argument(
+    p_behavioural.add_argument(
         "--raw", "-r", action="store_true", help="Print raw JSON output"
     )
-    p_supplychain.add_argument(
+    p_behavioural.add_argument(
         "--detailed", "-d", action="store_true", help="Show detailed results"
     )
-    p_supplychain.add_argument(
+    p_behavioural.add_argument(
         "--format",
         choices=["raw", "summary", "detailed", "by_tool", "by_analyzer", "by_severity", "table"],
         default="summary",
@@ -620,7 +620,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, supplychain (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioural (default: %(default)s)",
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
@@ -699,7 +699,7 @@ async def main():
     )
     parser.add_argument(
         "--analyzer-filter",
-        choices=["api_analyzer", "yara_analyzer", "llm_analyzer", "supplychain_analyzer"],
+        choices=["api_analyzer", "yara_analyzer", "llm_analyzer", "behavioural_analyzer"],
         help="Filter results by specific analyzer",
     )
     parser.add_argument(
@@ -720,7 +720,7 @@ async def main():
     )
     parser.add_argument(
         "--source-path",
-        help="Path to MCP server source code file or directory (required for supplychain analyzer)",
+        help="Path to MCP server source code file or directory (required for behavioural analyzer)",
     )
 
     args = parser.parse_args()
@@ -948,13 +948,13 @@ async def main():
                     for r in resource_results
                 ]
 
-        elif args.cmd == "supplychain":
-            # SupplyChain analyzer - scan local source code  
+        elif args.cmd == "behavioural":
+            # Behavioural analyzer - scan local source code  
             # This follows the same pattern as other analyzers but operates on source files
-            cfg = _build_config([AnalyzerEnum.SUPPLYCHAIN])
+            cfg = _build_config([AnalyzerEnum.BEHAVIOURAL])
             
-            from mcpscanner.core.analyzers.supplychain_analyzer import SupplyChainAnalyzer
-            analyzer = SupplyChainAnalyzer(cfg)
+            from mcpscanner.core.analyzers.behavioural_analyzer import BehaviouralAnalyzer
+            analyzer = BehaviouralAnalyzer(cfg)
             
             source_path = args.source_path
             
@@ -994,7 +994,7 @@ async def main():
                     "status": "completed",
                     "is_safe": False,
                     "findings": {
-                        "supplychain_analyzer": {
+                        "behavioural_analyzer": {
                             "severity": max_severity,
                             "threat_summary": func_findings[0].summary,
                             "threat_names": [f.threat_category for f in func_findings],
@@ -1121,8 +1121,8 @@ async def main():
             server_label = args.server_url
         elif hasattr(args, "cmd") and args.cmd == "resources":
             server_label = args.server_url
-        elif hasattr(args, "cmd") and args.cmd == "supplychain":
-            server_label = f"supplychain:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "behavioural":
+            server_label = f"behavioural:{args.source_path}"
         elif args.stdio_command:
             label_args = []
             if getattr(args, "stdio_arg", None):
