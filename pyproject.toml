@@ -50,6 +50,19 @@ mcp-scanner-api = "mcpscanner.server:main"
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "--maxfail=1"
+filterwarnings = [
+    # Silence Pydantic deprecation/future warnings across all tests
+    #"ignore::DeprecationWarning:pydantic.*",
+    #"ignore::FutureWarning:pydantic.*",
+    # Silence noisy Pydantic serializer warnings emitted by OpenAI/LiteLLM models
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.*",
+    # Fallback by message for environments where the category path differs
+    #"ignore:Pydantic V1 style.*:DeprecationWarning",
+    #"ignore:.*Pydantic.*deprecated.*:DeprecationWarning",
+]
+markers = [
+    "integration: mark for tests that hit external services (run with -m integration)",
+]
 
 [tool.setuptools.packages.find]
 include = ["mcpscanner*", "examples*", "data*"]
