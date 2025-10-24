@@ -74,6 +74,16 @@ export MCP_SCANNER_ENDPOINT="https://us.api.inspect.aidefense.security.cisco.com
 **Tested LLMs:** OpenAI GPT-4o and GPT-4.1
 
 ```bash
+# AWS Bedrock Claude with AWS credentials (profile)
+export AWS_PROFILE="your-profile"
+export AWS_REGION="us-east-1"
+export MCP_SCANNER_LLM_MODEL="bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0" # Any AWS Bedrock supported model
+
+# AWS Bedrock Claude with API key (Bearer token)
+export MCP_SCANNER_LLM_API_KEY="bedrock-api-key-..." # Generated via Amazon Bedrock -> API Keys
+export AWS_REGION="us-east-1"
+export MCP_SCANNER_LLM_MODEL="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v2:0" # Any AWS Bedrock supported model
+
 # LLM Provider API Key (required for LLM analyzer)
 export MCP_SCANNER_LLM_API_KEY="your_llm_api_key"  # OpenAI
 
