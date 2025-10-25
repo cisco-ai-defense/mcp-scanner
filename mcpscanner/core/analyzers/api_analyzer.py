@@ -27,6 +27,7 @@ from ...config.config import Config
 from .base import BaseAnalyzer, SecurityFinding
 from ...config.constants import CONSTANTS
 from ...threats.threats import API_THREAT_MAPPING
+from ...utils.tracing import get_tracer
 
 
 enabled_rules = [
@@ -73,6 +74,12 @@ class ApiAnalyzer(BaseAnalyzer):
         """
         super().__init__("ApiAnalyzer")
         self._config = config
+        # Persistent HTTP client for connection reuse
+        self._client = httpx.AsyncClient(
+            http2=True,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            timeout=self._DEFAULT_TIMEOUT,
+        )
 
     def _get_headers(self) -> Dict[str, str]:
         """Get the headers for the API request.
@@ -127,12 +134,12 @@ class ApiAnalyzer(BaseAnalyzer):
         payload = self._get_payload(content)
         headers = self._get_headers()
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
+            tracer = get_tracer()
+            async with tracer.span("analyzer.api.request", {"endpoint": api_url, "content_len": len(content or "")}):
+                response = await self._client.post(
                     api_url,
                     headers=headers,
                     json=payload,
-                    timeout=self._DEFAULT_TIMEOUT,
                 )
 
             response.raise_for_status()

@@ -60,6 +60,7 @@ from .models import AnalyzerEnum
 from .mcp_models import StdioServer, RemoteServer
 from ..config.config_parser import MCPConfigScanner
 from .result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult
+from ..utils.tracing import get_tracer
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
 
@@ -215,16 +216,20 @@ class Scanner:
         all_findings = []
         name = tool.name
         description = tool.description
-        tool_json = tool.model_dump_json()
-        tool_data = json.loads(tool_json)
+        try:
+            tool_data = tool.model_dump()
+        except Exception:
+            tool_json = tool.model_dump_json()
+            tool_data = json.loads(tool_json)
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the description
             try:
                 api_context = {"tool_name": name, "content_type": "description"}
-                api_findings = await self._api_analyzer.analyze(
-                    description, api_context
-                )
+                async with get_tracer().span("analyzer.api.analyze", {"tool": name, "content": "description"}):
+                    api_findings = await self._api_analyzer.analyze(
+                        description, api_context
+                    )
                 for finding in api_findings:
                     finding.analyzer = "API"
                 all_findings.extend(api_findings)
@@ -237,9 +242,10 @@ class Scanner:
             # Run YARA analysis on the description
             try:
                 yara_desc_context = {"tool_name": name, "content_type": "description"}
-                yara_desc_findings = await self._yara_analyzer.analyze(
-                    description, yara_desc_context
-                )
+                async with get_tracer().span("analyzer.yara.analyze", {"tool": name, "content": "description"}):
+                    yara_desc_findings = await self._yara_analyzer.analyze(
+                        description, yara_desc_context
+                    )
                 for finding in yara_desc_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_desc_findings)
@@ -255,9 +261,10 @@ class Scanner:
                     del tool_data["description"]
                 tool_json_str = json.dumps(tool_data)
                 yara_params_context = {"tool_name": name, "content_type": "parameters"}
-                yara_params_findings = await self._yara_analyzer.analyze(
-                    tool_json_str, yara_params_context
-                )
+                async with get_tracer().span("analyzer.yara.analyze", {"tool": name, "content": "parameters"}):
+                    yara_params_findings = await self._yara_analyzer.analyze(
+                        tool_json_str, yara_params_context
+                    )
                 for finding in yara_params_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_params_findings)
@@ -276,9 +283,10 @@ class Scanner:
                     analysis_content += f"Parameters Schema: {json.dumps(tool_data['inputSchema'], indent=2)}\n"
 
                 llm_context = {"tool_name": name, "content_type": "comprehensive"}
-                llm_findings = await self._llm_analyzer.analyze(
-                    analysis_content, llm_context
-                )
+                async with get_tracer().span("analyzer.llm.analyze_tool", {"tool": name}):
+                    llm_findings = await self._llm_analyzer.analyze(
+                        analysis_content, llm_context
+                    )
                 for finding in llm_findings:
                     finding.analyzer = "LLM"
                 all_findings.extend(llm_findings)
@@ -341,11 +349,14 @@ class Scanner:
 
         # Safely parse prompt data
         try:
-            prompt_json = prompt.model_dump_json()
-            prompt_data = json.loads(prompt_json)
-        except (json.JSONDecodeError, AttributeError, TypeError) as e:
-            logger.warning(f"Error parsing prompt '{name}' data: {e}. Using minimal data.")
-            prompt_data = {"name": name, "description": description}
+            prompt_data = prompt.model_dump()
+        except Exception:
+            try:
+                prompt_json = prompt.model_dump_json()
+                prompt_data = json.loads(prompt_json)
+            except (json.JSONDecodeError, AttributeError, TypeError) as e:
+                logger.warning(f"Error parsing prompt '{name}' data: {e}. Using minimal data.")
+                prompt_data = {"name": name, "description": description}
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the description
@@ -821,7 +832,9 @@ class Scanner:
 
             # List all tools
             try:
-                tool_list = await session.list_tools()
+                tracer = get_tracer()
+                async with tracer.span("scanner.list_tools", {"server_url": server_url}):
+                    tool_list = await session.list_tools()
             except McpError as e:
                 if self._is_missing_capability_error(e):
                     logger.warning(
@@ -830,14 +843,22 @@ class Scanner:
                     return []
                 raise
 
-            # Create analysis tasks for each tool
+            # Create analysis tasks for each tool with bounded concurrency
+            max_concurrency = getattr(self._config, "max_concurrency_tools", 8)
+            sem = asyncio.Semaphore(max_concurrency)
+
+            async def _bounded_tool_analyze(t):
+                async with sem:
+                    return await self._analyze_tool(t, analyzers, http_headers)
+
             scan_tasks = [
-                self._analyze_tool(tool, analyzers, http_headers)
+                _bounded_tool_analyze(tool)
                 for tool in tool_list.tools
             ]
 
             # Run all tasks concurrently
-            scan_results = await asyncio.gather(*scan_tasks)
+            async with get_tracer().span("scanner.analyze.tools", {"count": len(tool_list.tools)}):
+                scan_results = await asyncio.gather(*scan_tasks)
             return scan_results
 
         except Exception as e:
@@ -1315,7 +1336,8 @@ class Scanner:
 
             # List all prompts
             try:
-                prompt_list = await session.list_prompts()
+                async with get_tracer().span("scanner.list_prompts", {"server_url": server_url}):
+                    prompt_list = await session.list_prompts()
             except McpError as e:
                 if self._is_missing_capability_error(e):
                     logger.warning(
@@ -1324,22 +1346,26 @@ class Scanner:
                     return []
                 raise
 
-            # Analyze each prompt with individual error handling
-            scan_results = []
-            for prompt in prompt_list.prompts:
+            # Analyze prompts with bounded concurrency
+            max_concurrency = getattr(self._config, "max_concurrency_prompts", 8)
+            sem = asyncio.Semaphore(max_concurrency)
+
+            async def _bounded_prompt_analyze(p):
                 try:
-                    result = await self._analyze_prompt(prompt, analyzers, http_headers)
-                    scan_results.append(result)
+                    async with sem:
+                        async with get_tracer().span("scanner.analyze.prompt", {"prompt": p.name}):
+                            return await self._analyze_prompt(p, analyzers, http_headers)
                 except Exception as e:
-                    logger.error(f"Error analyzing prompt '{prompt.name}': {e}")
-                    # Create a failed result for this prompt
-                    scan_results.append(PromptScanResult(
-                        prompt_name=prompt.name,
-                        prompt_description=prompt.description or "",
+                    logger.error(f"Error analyzing prompt '{p.name}': {e}")
+                    return PromptScanResult(
+                        prompt_name=p.name,
+                        prompt_description=p.description or "",
                         status="failed",
                         analyzers=[],
                         findings=[],
-                    ))
+                    )
+
+            scan_results = await asyncio.gather(*[_bounded_prompt_analyze(p) for p in prompt_list.prompts])
 
             return scan_results
 
@@ -1743,7 +1769,8 @@ class Scanner:
 
             # List all resources
             try:
-                resource_list = await session.list_resources()
+                async with get_tracer().span("scanner.list_resources", {"server_url": server_url}):
+                    resource_list = await session.list_resources()
             except McpError as e:
                 if self._is_missing_capability_error(e):
                     logger.warning(
@@ -1753,61 +1780,65 @@ class Scanner:
                 raise
 
             results = []
-            for resource in resource_list.resources:
+            max_concurrency = getattr(self._config, "max_concurrency_resources", 8)
+            sem = asyncio.Semaphore(max_concurrency)
+
+            async def _process_resource(resource):
                 # Check if MIME type is allowed
                 if resource.mimeType and resource.mimeType not in allowed_mime_types:
                     logger.info(f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'")
-                    results.append(ResourceScanResult(
+                    return ResourceScanResult(
                         resource_uri=resource.uri,
                         resource_name=resource.name or "",
                         resource_mime_type=resource.mimeType or "unknown",
                         status="skipped",
                         analyzers=[],
                         findings=[],
-                    ))
-                    continue
+                    )
 
                 # Read resource content
                 try:
-                    resource_contents = await session.read_resource(resource.uri)
+                    async with sem:
+                        async with get_tracer().span("scanner.read_resource", {"uri": str(resource.uri)}):
+                            resource_contents = await session.read_resource(resource.uri)
 
                     # Extract text content
-                    text_content = ""
+                    parts = []
                     try:
                         for content in resource_contents.contents:
                             if hasattr(content, 'text'):
-                                text_content += content.text
+                                parts.append(content.text)
                             elif hasattr(content, 'blob'):
                                 # Skip binary content
                                 logger.info(f"Skipping binary content for resource '{resource.uri}'")
                                 continue
+                        text_content = "".join(parts)
                     except (AttributeError, TypeError) as e:
                         logger.warning(f"Error extracting content from resource '{resource.uri}': {e}")
-                        results.append(ResourceScanResult(
+                        return ResourceScanResult(
                             resource_uri=resource.uri,
                             resource_name=resource.name or "",
                             resource_mime_type=resource.mimeType or "unknown",
                             status="failed",
                             analyzers=[],
                             findings=[],
-                        ))
-                        continue
+                        )
 
                     if not text_content:
                         logger.info(f"No text content found for resource '{resource.uri}'")
-                        results.append(ResourceScanResult(
+                        return ResourceScanResult(
                             resource_uri=resource.uri,
                             resource_name=resource.name or "",
                             resource_mime_type=resource.mimeType or "unknown",
                             status="skipped",
                             analyzers=[],
                             findings=[],
-                        ))
-                        continue
+                        )
 
                     # Analyze the resource
                     try:
-                        result = await self._analyze_resource(
+                        async with get_tracer().span("scanner.analyze.resource", {"uri": str(resource.uri)}):
+                            result = await self._analyze_resource(
                             text_content,
                             resource.uri,
                             resource.name or "",
@@ -1815,40 +1846,42 @@ class Scanner:
                             resource.mimeType or "unknown",
                             analyzers,
                             http_headers
-                        )
-                        results.append(result)
+                            )
+                        return result
                     except Exception as e:
                         logger.error(f"Error analyzing resource '{resource.uri}': {e}")
-                        results.append(ResourceScanResult(
+                        return ResourceScanResult(
                             resource_uri=resource.uri,
                             resource_name=resource.name or "",
                             resource_mime_type=resource.mimeType or "unknown",
                             status="failed",
                             analyzers=[],
                             findings=[],
-                        ))
+                        )
 
                 except asyncio.TimeoutError:
                     logger.error(f"Timeout reading resource '{resource.uri}'")
-                    results.append(ResourceScanResult(
+                    return ResourceScanResult(
                         resource_uri=resource.uri,
                         resource_name=resource.name or "",
                         resource_mime_type=resource.mimeType or "unknown",
                         status="failed",
                         analyzers=[],
                         findings=[],
-                    ))
+                    )
                 except Exception as e:
                     logger.error(f"Error reading resource '{resource.uri}': {e}")
-                    results.append(ResourceScanResult(
+                    return ResourceScanResult(
                         resource_uri=resource.uri,
                         resource_name=resource.name or "",
                         resource_mime_type=resource.mimeType or "unknown",
                         status="failed",
                         analyzers=[],
                         findings=[],
-                    ))
+                    )
 
+            tasks = [_process_resource(r) for r in resource_list.resources]
+            results = await asyncio.gather(*tasks)
             return results
 
         except Exception as e:
