@@ -20,6 +20,7 @@ This module contains the configuration classes for the MCP Scanner SDK.
 """
 
 from typing import List, Optional
+import os
 
 from .constants import CONSTANTS
 
@@ -55,6 +56,10 @@ class Config:
         oauth_client_secret: str = None,
         oauth_token_url: str = None,
         oauth_scopes: List[str] = None,
+        tracing_enabled: Optional[bool] = None,
+        max_concurrency_tools: Optional[int] = None,
+        max_concurrency_prompts: Optional[int] = None,
+        max_concurrency_resources: Optional[int] = None,
     ):
         """Initialize a new Config instance.
 
@@ -95,6 +100,23 @@ class Config:
         self._oauth_client_secret = oauth_client_secret
         self._oauth_token_url = oauth_token_url
         self._oauth_scopes = oauth_scopes
+        self._tracing_enabled = tracing_enabled
+        # Concurrency (allow env overrides if not explicitly provided)
+        self._max_concurrency_tools = (
+            max_concurrency_tools
+            if max_concurrency_tools is not None
+            else int(os.getenv("MCP_SCANNER_MAX_CONCURRENCY_TOOLS", "8"))
+        )
+        self._max_concurrency_prompts = (
+            max_concurrency_prompts
+            if max_concurrency_prompts is not None
+            else int(os.getenv("MCP_SCANNER_MAX_CONCURRENCY_PROMPTS", "8"))
+        )
+        self._max_concurrency_resources = (
+            max_concurrency_resources
+            if max_concurrency_resources is not None
+            else int(os.getenv("MCP_SCANNER_MAX_CONCURRENCY_RESOURCES", "8"))
+        )
 
     @property
     def api_key(self) -> str:
@@ -212,6 +234,27 @@ class Config:
             Optional[List[str]]: The OAuth scopes.
         """
         return self._oauth_scopes
+
+    @property
+    def tracing_enabled(self) -> Optional[bool]:
+        """Get whether tracing is enabled (optional override).
+
+        Returns:
+            Optional[bool]: True to force tracing on, False to force off, None to use env default.
+        """
+        return self._tracing_enabled
+
+    @property
+    def max_concurrency_tools(self) -> int:
+        return self._max_concurrency_tools
+
+    @property
+    def max_concurrency_prompts(self) -> int:
+        return self._max_concurrency_prompts
+
+    @property
+    def max_concurrency_resources(self) -> int:
+        return self._max_concurrency_resources
 
     @property
     def base_url(self) -> str:

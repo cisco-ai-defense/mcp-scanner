@@ -30,6 +30,7 @@ from ...config.config import Config
 from ...config.constants import MCPScannerConstants
 from ...threats.threats import LLM_THREAT_MAPPING
 from .base import BaseAnalyzer, SecurityFinding
+from ...utils.tracing import get_tracer
 
 
 class SecurityError(Exception):
@@ -459,6 +460,7 @@ class LLMAnalyzer(BaseAnalyzer):
             Exception: If all retries are exhausted
         """
         last_exception = None
+        tracer = get_tracer()
 
         for attempt in range(self._max_retries + 1):
             try:
@@ -484,7 +486,12 @@ class LLMAnalyzer(BaseAnalyzer):
                 if self._api_version:
                     request_params["api_version"] = self._api_version
 
-                response = await acompletion(**request_params)
+                async with tracer.span("analyzer.llm.request", {
+                    "model": self._model,
+                    "attempt": attempt + 1,
+                    "max_tokens": self._max_tokens,
+                }):
+                    response = await acompletion(**request_params)
                 return response
 
             except Exception as e:

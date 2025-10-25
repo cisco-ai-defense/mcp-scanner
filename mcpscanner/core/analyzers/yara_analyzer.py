@@ -24,10 +24,13 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 
 import yara
+import os
+from typing import Tuple
 
 from ...config.constants import MCPScannerConstants
 from ...threats.threats import YARA_THREAT_MAPPING
 from .base import BaseAnalyzer, SecurityFinding
+from ...utils.tracing import get_tracer
 
 
 class YaraAnalyzer(BaseAnalyzer):
@@ -77,6 +80,20 @@ class YaraAnalyzer(BaseAnalyzer):
 
         self._rules = self._load_rules()
 
+    _YARA_CACHE: dict = {}
+
+    def _rules_cache_key(self) -> Tuple[str, Tuple[Tuple[str, float], ...]]:
+        # Build a cache key based on directory and mtimes of rule files
+        file_entries = []
+        for item in self._rules_dir.iterdir():
+            if item.name.endswith((".yara", ".yar")):
+                try:
+                    file_entries.append((item.name, item.stat().st_mtime))
+                except OSError:
+                    continue
+        file_entries.sort()
+        return (str(self._rules_dir), tuple(file_entries))
+
     def _load_rules(self) -> yara.Rules:
         """Load and compile all YARA rules from the rules directory.
 
@@ -104,12 +121,19 @@ class YaraAnalyzer(BaseAnalyzer):
             self.logger.error(f"No YARA rule files found in '{self._rules_dir}'")
             raise FileNotFoundError(f"No YARA rule files found in '{self._rules_dir}'")
 
+        # Try cache first
+        cache_key = self._rules_cache_key()
+        cached = self._YARA_CACHE.get(cache_key)
+        if cached:
+            return cached
+
         self.logger.debug(
             f"Compiling {len(rule_sources)} rule file(s): {list(rule_sources.keys())}"
         )
         try:
             rules = yara.compile(sources=rule_sources)
             self.logger.info("YARA rules compiled successfully")
+            self._YARA_CACHE[cache_key] = rules
             return rules
         except yara.Error as e:
             self.logger.error(f"Error compiling YARA rules: {e}")
@@ -136,7 +160,9 @@ class YaraAnalyzer(BaseAnalyzer):
             return findings
 
         try:
-            matches = self._rules.match(data=content)
+            tracer = get_tracer()
+            async with tracer.span("analyzer.yara.match", {"tool": tool_name, "content": content_type, "content_len": len(content or "")}):
+                matches = self._rules.match(data=content)
             rule_names = []  # Collect rule names for summary
 
             # First pass: collect all rule names

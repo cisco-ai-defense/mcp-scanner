@@ -22,6 +22,8 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **MCP Server Integration**: Connect directly to MCP servers to scan tools, prompts, and resources with flexible authentication.
 - **Customizable YARA Rules**: Add your own YARA rules to detect specific patterns.
 - **Comprehensive Vulnerability Reporting**: Detailed reports on detected vulnerabilities.
+ - **Lightweight JSON Tracing**: Optional span-level profiling to stdout for performance analysis
+ - **Configurable Concurrency**: Tune parallelism for tools, prompts, and resources
 
 ## Installation
 
@@ -88,6 +90,18 @@ export MCP_SCANNER_LLM_API_VERSION="2024-02-01"
 export MCP_SCANNER_LLM_MODEL="azure/gpt-4"
 ```
 
+#### Tracing & Performance Tuning
+
+```bash
+# Enable lightweight JSON tracing (one JSON line per span)
+export MCP_SCANNER_TRACING=1
+
+# Concurrency tuning (defaults: 8)
+export MCP_SCANNER_MAX_CONCURRENCY_TOOLS=8
+export MCP_SCANNER_MAX_CONCURRENCY_PROMPTS=8
+export MCP_SCANNER_MAX_CONCURRENCY_RESOURCES=8
+```
+
 ### Quick Start Examples
 
 The fastest way to get started is using the `mcp-scanner` CLI command. Global flags (like `--analyzers`, `--format`, etc.) must be placed before a subcommand.
@@ -102,7 +116,7 @@ mcp-scanner --scan-known-configs --analyzers yara --format summary
 mcp-scanner --stdio-command uvx --stdio-arg=--from --stdio-arg=mcp-server-fetch --stdio-arg=mcp-server-fetch --analyzers yara --format summary
 
 # Remote server (deepwiki example)
-mcp-scanner --server-url https://mcp.deepwki.com/mcp --analyzers yara --format summary
+mcp-scanner --server-url https://mcp.deepwki.com/mcp --analyzers yara --format summary --trace
 
 # MCP Scanner as REST API
 mcp-scanner-api --host 0.0.0.0 --port 8080
@@ -171,6 +185,13 @@ asyncio.run(main())
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
+
+Additional global flags:
+
+- `--trace` — enable JSON tracing to stdout (or set `MCP_SCANNER_TRACING=1`)
+- `--max-concurrency-tools N` — bound parallel tool analyses (env: `MCP_SCANNER_MAX_CONCURRENCY_TOOLS`)
+- `--max-concurrency-prompts N` — bound parallel prompt analyses (env: `MCP_SCANNER_MAX_CONCURRENCY_PROMPTS`)
+- `--max-concurrency-resources N` — bound parallel resource analyses (env: `MCP_SCANNER_MAX_CONCURRENCY_RESOURCES`)
 
 #### Additional Examples
 

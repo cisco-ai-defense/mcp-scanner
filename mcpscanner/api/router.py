@@ -43,6 +43,7 @@ from ..core.result import (
 from ..core.scanner import Scanner, ScannerFactory
 from ..utils.logging_config import get_logger
 from ..core.auth import AuthType
+from ..utils.tracing import get_tracer
 router = APIRouter()
 logger = get_logger(__name__)
 
@@ -346,6 +347,7 @@ async def scan_tool_endpoint(
     )
 
     try:
+        tracer = get_tracer()
         scanner = scanner_factory(request.analyzers)
 
         # Extract HTTP headers for analyzers
@@ -359,13 +361,14 @@ async def scan_tool_endpoint(
             if request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
 
-        result = await scanner.scan_remote_server_tool(
-            server_url=request.server_url,
-            tool_name=request.tool_name,
-            auth=auth,
-            analyzers=request.analyzers,
-            http_headers=http_headers,
-        )
+        async with tracer.span("api.scan_tool", {"server_url": request.server_url, "tool": request.tool_name}):
+            result = await scanner.scan_remote_server_tool(
+                server_url=request.server_url,
+                tool_name=request.tool_name,
+                auth=auth,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+            )
         # Only warn if analyzers actually failed to run
         if len(result.findings) == 0 and len(result.analyzers) == 0:
             logger.warning(
@@ -433,12 +436,13 @@ async def scan_all_tools_endpoint(
             if request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
 
-        results = await scanner.scan_remote_server_tools(
-            server_url=request.server_url,
-            auth=auth,
-            analyzers=request.analyzers,
-            http_headers=http_headers,
-        )
+        async with get_tracer().span("api.scan_all_tools", {"server_url": request.server_url}):
+            results = await scanner.scan_remote_server_tools(
+                server_url=request.server_url,
+                auth=auth,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+            )
         logger.debug(f"Scanner completed - scanned {len(results)} tools")
 
         api_results = [
@@ -508,13 +512,14 @@ async def scan_prompt_endpoint(
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)
 
-        result = await scanner.scan_remote_server_prompt(
-            server_url=request.server_url,
-            prompt_name=request.prompt_name,
-            auth=auth,
-            analyzers=request.analyzers,
-            http_headers=http_headers,
-        )
+        async with get_tracer().span("api.scan_prompt", {"server_url": request.server_url, "prompt": request.prompt_name}):
+            result = await scanner.scan_remote_server_prompt(
+                server_url=request.server_url,
+                prompt_name=request.prompt_name,
+                auth=auth,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+            )
         logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
 
         # Convert result to API format using helper function
@@ -564,12 +569,13 @@ async def scan_all_prompts_endpoint(
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)
 
-        results = await scanner.scan_remote_server_prompts(
-            server_url=request.server_url,
-            auth=auth,
-            analyzers=request.analyzers,
-            http_headers=http_headers,
-        )
+        async with get_tracer().span("api.scan_all_prompts", {"server_url": request.server_url}):
+            results = await scanner.scan_remote_server_prompts(
+                server_url=request.server_url,
+                auth=auth,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+            )
         logger.debug(f"Scanner completed - scanned {len(results)} prompts")
 
         # Convert results to API format
@@ -632,14 +638,15 @@ async def scan_resource_endpoint(
         # Use allowed MIME types from request or default
         allowed_mime_types = request.allowed_mime_types or ["text/plain", "text/html"]
 
-        result = await scanner.scan_remote_server_resource(
-            server_url=request.server_url,
-            resource_uri=request.resource_uri,
-            auth=auth,
-            analyzers=request.analyzers,
-            http_headers=http_headers,
-            allowed_mime_types=allowed_mime_types,
-        )
+        async with get_tracer().span("api.scan_resource", {"server_url": request.server_url, "resource_uri": request.resource_uri}):
+            result = await scanner.scan_remote_server_resource(
+                server_url=request.server_url,
+                resource_uri=request.resource_uri,
+                auth=auth,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+                allowed_mime_types=allowed_mime_types,
+            )
         logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
 
         # Convert result to API format using helper function
@@ -696,13 +703,14 @@ async def scan_all_resources_endpoint(
         # Default allowed MIME types
         allowed_mime_types = ["text/plain", "text/html"]
 
-        results = await scanner.scan_remote_server_resources(
-            server_url=request.server_url,
-            auth=auth,
-            analyzers=request.analyzers,
-            http_headers=http_headers,
-            allowed_mime_types=allowed_mime_types,
-        )
+        async with get_tracer().span("api.scan_all_resources", {"server_url": request.server_url}):
+            results = await scanner.scan_remote_server_resources(
+                server_url=request.server_url,
+                auth=auth,
+                analyzers=request.analyzers,
+                http_headers=http_headers,
+                allowed_mime_types=allowed_mime_types,
+            )
         logger.debug(f"Scanner completed - scanned {len(results)} resources")
 
         # Convert results to API format
