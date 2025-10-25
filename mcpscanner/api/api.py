@@ -23,7 +23,7 @@ import os
 from typing import List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from ..config.config import Config
 from ..config.constants import CONSTANTS
@@ -37,6 +37,11 @@ ENDPOINT_URL = os.environ.get(CONSTANTS.ENV_ENDPOINT, CONSTANTS.API_BASE_URL)
 LLM_API_KEY = os.environ.get(CONSTANTS.ENV_LLM_API_KEY, "")
 LLM_MODEL = os.environ.get(CONSTANTS.ENV_LLM_MODEL, CONSTANTS.DEFAULT_LLM_MODEL)
 
+# AWS Bedrock configuration
+AWS_REGION = os.environ.get(CONSTANTS.ENV_AWS_REGION, CONSTANTS.DEFAULT_AWS_REGION)
+AWS_SESSION_TOKEN = os.environ.get(CONSTANTS.ENV_AWS_SESSION_TOKEN, "")
+AWS_PROFILE = os.environ.get(CONSTANTS.ENV_AWS_PROFILE, "")
+
 app = FastAPI(
     title="MCP Scanner SDK API",
     description="An API to scan MCP server tools for vulnerabilities using both Cisco AI Defense and custom YARA rules.",
@@ -49,6 +54,9 @@ def _validate_api_config(
     api_key: str,
     llm_scan: bool,
     llm_api_key: str,
+    llm_model: str,
+    aws_region: str,
+    aws_profile: str,
 ) -> None:
     """Validate API configuration when API scan is requested.
 
@@ -57,6 +65,9 @@ def _validate_api_config(
         api_key (str): The API key to validate.
         llm_scan (bool): Whether LLM scan is requested.
         llm_api_key (str): The LLM API key to validate.
+        llm_model (str): The LLM model to use.
+        aws_region (str): AWS region for Bedrock.
+        aws_profile (str): AWS profile for Bedrock.
 
     Raises:
         HTTPException: If API scan is requested but config is invalid.
@@ -67,21 +78,39 @@ def _validate_api_config(
             detail=f"API analyzer requested but configuration is missing. Please set {CONSTANTS.ENV_API_KEY} environment variable.",
         )
 
-    if llm_scan and not llm_api_key:
-        raise HTTPException(
-            status_code=400,
-            detail=f"LLM analyzer requested but configuration is missing. Please set {CONSTANTS.ENV_LLM_API_KEY} environment variable.",
-        )
+    if llm_scan:
+        # Check if it's a Bedrock model
+        is_bedrock = llm_model and "bedrock/" in llm_model
+
+        if is_bedrock:
+            # For Bedrock: Either API key OR AWS credentials (region/profile) must be configured
+            has_api_key = bool(llm_api_key)
+            has_aws_credentials = bool(aws_region) or bool(aws_profile)
+
+            if not has_api_key and not has_aws_credentials:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"LLM analyzer with Bedrock model requested but configuration is missing. "
+                           f"Please set either {CONSTANTS.ENV_LLM_API_KEY} (for Bedrock API key) "
+                           f"or AWS credentials ({CONSTANTS.ENV_AWS_REGION}, {CONSTANTS.ENV_AWS_PROFILE}) environment variables.",
+                )
+        else:
+            # For non-Bedrock models: API key is required
+            if not llm_api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"LLM analyzer requested but configuration is missing. Please set {CONSTANTS.ENV_LLM_API_KEY} environment variable.",
+                )
 
 
-def _prepare_scanner_config(analyzers: List[AnalyzerEnum]) -> tuple[str, str, str]:
+def _prepare_scanner_config(analyzers: List[AnalyzerEnum]) -> tuple[str, str, str, str, str, str]:
     """Prepare scanner configuration based on scan requirements.
 
     Args:
         analyzers (List[AnalyzerEnum]): List of analyzers to run.
 
     Returns:
-        tuple[str, str, str]: The API key, endpoint URL, and LLM API key to use.
+        tuple[str, str, str, str, str, str]: The API key, endpoint URL, LLM API key, AWS region, AWS session token, and AWS profile to use.
 
     Raises:
         HTTPException: If API scan is requested but config is invalid.
@@ -92,19 +121,25 @@ def _prepare_scanner_config(analyzers: List[AnalyzerEnum]) -> tuple[str, str, st
     api_key_to_use = API_KEY
     llm_api_key_to_use = LLM_API_KEY
     endpoint_url = ENDPOINT_URL
+    aws_region_to_use = AWS_REGION
+    aws_session_token_to_use = AWS_SESSION_TOKEN
+    aws_profile_to_use = AWS_PROFILE
 
     # Validate configuration if API scan or LLM scan is requested
-    _validate_api_config(api_scan, api_key_to_use, llm_scan, llm_api_key_to_use)
+    _validate_api_config(api_scan, api_key_to_use, llm_scan, llm_api_key_to_use, LLM_MODEL, aws_region_to_use, aws_profile_to_use)
 
     # If not doing API scan, we don't need an API key
     if not api_scan:
         api_key_to_use = ""
 
-    # If not doing LLM scan, we don't need an LLM API key
+    # If not doing LLM scan, we don't need LLM-related configuration
     if not llm_scan:
         llm_api_key_to_use = ""
+        aws_region_to_use = ""
+        aws_session_token_to_use = ""
+        aws_profile_to_use = ""
 
-    return api_key_to_use, endpoint_url, llm_api_key_to_use
+    return api_key_to_use, endpoint_url, llm_api_key_to_use, aws_region_to_use, aws_session_token_to_use, aws_profile_to_use
 
 
 def create_default_scanner_factory() -> ScannerFactory:
@@ -128,12 +163,15 @@ def create_default_scanner_factory() -> ScannerFactory:
         Raises:
             HTTPException: If API scan is requested but config is invalid.
         """
-        api_key, endpoint_url, llm_api_key = _prepare_scanner_config(analyzers)
+        api_key, endpoint_url, llm_api_key, aws_region, aws_session_token, aws_profile = _prepare_scanner_config(analyzers)
         config = Config(
             api_key=api_key,
             endpoint_url=endpoint_url,
             llm_provider_api_key=llm_api_key,
             llm_model=LLM_MODEL,
+            aws_region_name=aws_region,
+            aws_session_token=aws_session_token,
+            aws_profile_name=aws_profile,
         )
         return Scanner(config, rules_dir=rules_path)
 
