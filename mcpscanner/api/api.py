@@ -85,7 +85,7 @@ def _validate_api_config(
         if is_bedrock:
             # For Bedrock: Either API key OR AWS credentials (region/profile) must be configured
             has_api_key = bool(llm_api_key)
-            has_aws_credentials = bool(aws_region) or bool(aws_profile)
+            has_aws_credentials = bool(aws_profile)
 
             if not has_api_key and not has_aws_credentials:
                 raise HTTPException(
