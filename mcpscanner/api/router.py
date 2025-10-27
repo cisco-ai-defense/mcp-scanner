@@ -21,7 +21,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from ..core.auth import Auth
 from ..core.models import (
     AllToolsScanResponse,
-    AnalyzerEnum,
     APIScanRequest,
     FormattedToolScanResponse,
     OutputFormat,
@@ -38,7 +37,6 @@ from ..core.result import (
     ResourceScanResult,
     get_highest_severity,
     group_findings_by_analyzer,
-    process_scan_results,
 )
 from ..core.scanner import Scanner, ScannerFactory
 from ..utils.logging_config import get_logger
