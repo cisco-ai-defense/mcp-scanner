@@ -119,6 +119,7 @@ class MCPScannerConstants:
     )
     DEFAULT_LLM_BASE_URL: str = os.getenv("MCP_SCANNER_LLM_BASE_URL", None)
     DEFAULT_LLM_API_VERSION: str = os.getenv("MCP_SCANNER_LLM_API_VERSION", None)
+    DEFAULT_LLM_TIMEOUT: int = int(os.getenv("MCP_SCANNER_LLM_TIMEOUT", "30"))
 
     # AWS Configuration Defaults
     DEFAULT_AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")

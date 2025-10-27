@@ -105,6 +105,7 @@ class LLMAnalyzer(BaseAnalyzer):
         self._aws_region = config.aws_region_name if is_bedrock else None
         self._aws_session_token = config.aws_session_token if is_bedrock else None
         self._aws_profile_name = config.aws_profile_name if is_bedrock else None
+        self._llm_timeout = config.llm_timeout
 
         # Load shared protection rules and analysis prompts
         self._protection_rules = self._load_prompt(
@@ -493,7 +494,7 @@ class LLMAnalyzer(BaseAnalyzer):
                     "messages": messages,
                     "max_tokens": self._max_tokens,
                     "temperature": self._temperature,
-                    "timeout": 30.0,
+                    "timeout": self._llm_timeout,
                 }
 
                 # Add API key if set (works for OpenAI, Anthropic, and Bedrock API keys)

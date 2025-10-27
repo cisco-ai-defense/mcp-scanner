@@ -55,6 +55,7 @@ class Config:
         aws_region_name: str = None,
         aws_session_token: str = None,
         aws_profile_name: str = None,
+        llm_timeout: float = None,
         oauth_client_id: str = None,
         oauth_client_secret: str = None,
         oauth_token_url: str = None,
@@ -109,6 +110,7 @@ class Config:
         self._aws_session_token = aws_session_token or os.getenv("AWS_SESSION_TOKEN")
         self._aws_profile_name = aws_profile_name or os.getenv("AWS_PROFILE")
 
+        self._llm_timeout = llm_timeout or CONSTANTS.DEFAULT_LLM_TIMEOUT
         self._oauth_client_id = oauth_client_id
         self._oauth_client_secret = oauth_client_secret
         self._oauth_token_url = oauth_token_url
@@ -221,6 +223,15 @@ class Config:
             Optional[str]: The AWS profile name from ~/.aws/credentials.
         """
         return self._aws_profile_name
+
+    @property
+    def llm_timeout(self) -> float:
+        """Get the timeout for LLM API calls.
+
+        Returns:
+            float: The timeout in seconds.
+        """
+        return self._llm_timeout
 
     @property
     def oauth_client_id(self) -> Optional[str]:
