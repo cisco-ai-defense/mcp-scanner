@@ -67,6 +67,7 @@ def _build_config(
     llm_base_url = os.environ.get("MCP_SCANNER_LLM_BASE_URL")
     llm_api_version = os.environ.get("MCP_SCANNER_LLM_API_VERSION")
     llm_model = os.environ.get("MCP_SCANNER_LLM_MODEL")
+    llm_timeout = os.environ.get("MCP_SCANNER_LLM_TIMEOUT")
     endpoint_url = endpoint_url or _get_endpoint_from_env()
 
     config_params = {
@@ -82,6 +83,8 @@ def _build_config(
         config_params["llm_base_url"] = llm_base_url
     if llm_api_version:
         config_params["llm_api_version"] = llm_api_version
+    if llm_timeout:
+        config_params["llm_timeout"] = float(llm_timeout)
 
     return Config(**config_params)
 
