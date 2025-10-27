@@ -30,12 +30,17 @@ from ..config.constants import CONSTANTS
 from ..core.models import AnalyzerEnum
 from ..core.scanner import Scanner, ScannerFactory
 from .router import get_scanner, router as api_router
+from ..utils.tracing import set_tracing_enabled
 
 load_dotenv()
 API_KEY = os.environ.get(CONSTANTS.ENV_API_KEY, "")
 ENDPOINT_URL = os.environ.get(CONSTANTS.ENV_ENDPOINT, CONSTANTS.API_BASE_URL)
 LLM_API_KEY = os.environ.get(CONSTANTS.ENV_LLM_API_KEY, "")
 LLM_MODEL = os.environ.get(CONSTANTS.ENV_LLM_MODEL, CONSTANTS.DEFAULT_LLM_MODEL)
+
+# Tracing toggle from env at API startup
+if str(os.environ.get("MCP_SCANNER_TRACING", "")).lower() in ("1", "true", "yes"):
+    set_tracing_enabled(True)
 
 app = FastAPI(
     title="MCP Scanner SDK API",
@@ -114,6 +119,8 @@ def create_default_scanner_factory() -> ScannerFactory:
         ScannerFactory: A function that takes analyzers and returns a Scanner instance.
     """
 
+    _SCANNER_CACHE: dict = {}
+
     def scanner_factory(
         analyzers: List[AnalyzerEnum], rules_path: Optional[str] = None
     ) -> Scanner:
@@ -129,13 +136,21 @@ def create_default_scanner_factory() -> ScannerFactory:
             HTTPException: If API scan is requested but config is invalid.
         """
         api_key, endpoint_url, llm_api_key = _prepare_scanner_config(analyzers)
+        # Cache key based on rules path and which analyzers require keys
+        key = (rules_path or "", bool(api_key), bool(llm_api_key))
+        cached = _SCANNER_CACHE.get(key)
+        if cached:
+            return cached
+
         config = Config(
             api_key=api_key,
             endpoint_url=endpoint_url,
             llm_provider_api_key=llm_api_key,
             llm_model=LLM_MODEL,
         )
-        return Scanner(config, rules_dir=rules_path)
+        scanner = Scanner(config, rules_dir=rules_path)
+        _SCANNER_CACHE[key] = scanner
+        return scanner
 
     return scanner_factory
 
