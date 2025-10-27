@@ -104,8 +104,11 @@ class Scanner:
         self._config = config
         self._api_analyzer = ApiAnalyzer(config) if config.api_key else None
         self._yara_analyzer = YaraAnalyzer(rules_dir=rules_dir)
+
+        # LLM analyzer can be used with either API key or Bedrock (AWS credentials)
+        is_bedrock = config.llm_model and "bedrock/" in config.llm_model
         self._llm_analyzer = (
-            LLMAnalyzer(config) if config.llm_provider_api_key else None
+            LLMAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
         )
         self._custom_analyzers = custom_analyzers or []
 
@@ -148,7 +151,7 @@ class Scanner:
 
         if AnalyzerEnum.LLM in requested_analyzers and not self._llm_analyzer:
             missing_requirements.append(
-                "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
+                "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured (or AWS credentials for Bedrock models)"
             )
 
         # YARA analyzer should always be available since it doesn't require API keys

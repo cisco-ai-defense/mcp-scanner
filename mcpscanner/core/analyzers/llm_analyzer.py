@@ -65,25 +65,46 @@ class LLMAnalyzer(BaseAnalyzer):
         """
         super().__init__("LLMAnalyzer")
         self._config = config
-        if (
-            not hasattr(config, "llm_provider_api_key")
-            or not config.llm_provider_api_key
-        ):
-            raise ValueError("LLM provider API key is required for LLM analyzer")
-
-        # Store configuration for per-request usage instead of global settings
-        # This avoids conflicts when multiple analyzers are used
-        self._api_key = config.llm_provider_api_key
-        self._base_url = config.llm_base_url
-        self._api_version = config.llm_api_version
 
         # Get model configuration from config
         self._model = config.llm_model
+
+        # Detect Bedrock model
+        is_bedrock = self._model and "bedrock/" in self._model
+
+        # Authentication strategy based on provider:
+        # 1. Non-Bedrock providers (OpenAI, Anthropic, etc.): API key required
+        # 2. Bedrock with API key: Use Bedrock API key (MCP_SCANNER_LLM_API_KEY or AWS_BEARER_TOKEN_BEDROCK)
+        # 3. Bedrock without API key: Use AWS credentials (profile/IAM/session token)
+
+        if not is_bedrock:
+            # Non-Bedrock providers always require API key
+            if not hasattr(config, "llm_provider_api_key") or not config.llm_provider_api_key:
+                raise ValueError("LLM provider API key is required for LLM analyzer")
+            self._api_key = config.llm_provider_api_key
+        else:
+            # Bedrock: API key is optional (can use AWS credentials instead)
+            if hasattr(config, "llm_provider_api_key") and config.llm_provider_api_key:
+                # Use Bedrock API key authentication
+                self._api_key = config.llm_provider_api_key
+                self.logger.debug("Bedrock: Using API key authentication")
+            else:
+                # Use AWS credentials (profile/IAM/session token)
+                self._api_key = None
+                self.logger.debug("Bedrock: Using AWS credentials (profile/IAM/session)")
+
+        # Store configuration for per-request usage
+        self._base_url = config.llm_base_url
+        self._api_version = config.llm_api_version
         self._max_tokens = config.llm_max_tokens
         self._temperature = config.llm_temperature
-        self._base_url = config.llm_base_url
         self._rate_limit_delay = config.llm_rate_limit_delay
         self._max_retries = config.llm_max_retries
+
+        # AWS Bedrock configuration (only used for Bedrock models)
+        self._aws_region = config.aws_region_name if is_bedrock else None
+        self._aws_session_token = config.aws_session_token if is_bedrock else None
+        self._aws_profile_name = config.aws_profile_name if is_bedrock else None
         self._llm_timeout = config.llm_timeout
 
         # Load shared protection rules and analysis prompts
@@ -474,8 +495,13 @@ class LLMAnalyzer(BaseAnalyzer):
                     "max_tokens": self._max_tokens,
                     "temperature": self._temperature,
                     "timeout": self._llm_timeout,
-                    "api_key": self._api_key,  # Pass API key per request
                 }
+
+                # Add API key if set (works for OpenAI, Anthropic, and Bedrock API keys)
+                # For Bedrock: api_key can be a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK)
+                # If not set, Bedrock will use AWS credentials (profile/IAM role)
+                if self._api_key:
+                    request_params["api_key"] = self._api_key
 
                 # Add base URL if configured (for Azure OpenAI or custom endpoints)
                 if self._base_url:
@@ -485,12 +511,50 @@ class LLMAnalyzer(BaseAnalyzer):
                 if self._api_version:
                     request_params["api_version"] = self._api_version
 
+                # Add AWS region for Bedrock
+                if self._aws_region:
+                    request_params["aws_region_name"] = self._aws_region
+
+                # Add AWS session token for temporary credentials
+                if self._aws_session_token:
+                    request_params["aws_session_token"] = self._aws_session_token
+
+                # Add AWS profile for credential resolution
+                if self._aws_profile_name:
+                    request_params["aws_profile_name"] = self._aws_profile_name
+
                 response = await acompletion(**request_params)
                 return response
 
             except Exception as e:
                 last_exception = e
                 error_msg = str(e).lower()
+
+                # Check for AWS/Bedrock specific errors (only for Bedrock models)
+                is_bedrock_model = self._model and "bedrock/" in self._model
+                if is_bedrock_model and any(
+                    keyword in error_msg
+                    for keyword in [
+                        "bedrockexception",
+                        "accessdenied",
+                        "unauthorizedoperation",
+                        "throttlingexception",
+                    ]
+                ):
+                    self.logger.error(
+                        f"AWS Bedrock error for {context}: {e}. "
+                        "Check AWS credentials, region, and Bedrock model access."
+                    )
+                    if attempt < self._max_retries:
+                        delay = (2**attempt) * self._rate_limit_delay
+                        self.logger.warning(
+                            f"Retrying AWS Bedrock request in {delay}s "
+                            f"(attempt {attempt + 1}/{self._max_retries + 1})"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        break
 
                 # Check if it's a rate limiting error
                 if any(
