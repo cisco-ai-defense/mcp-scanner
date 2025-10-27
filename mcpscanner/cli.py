@@ -590,6 +590,11 @@ async def main():
         "--llm-api-key",
         help="LLM provider API key for LLM analysis (overrides environment variable)",
     )
+    parser.add_argument(
+        "--llm-timeout",
+        type=int,
+        help="Timeout in seconds for LLM API calls (overrides MCP_SCANNER_LLM_TIMEOUT environment variable)",
+    )
 
     parser.add_argument(
         "--analyzers",
@@ -733,6 +738,8 @@ async def main():
         os.environ["MCP_SCANNER_ENDPOINT"] = args.endpoint_url
     if args.llm_api_key:
         os.environ["MCP_SCANNER_LLM_API_KEY"] = args.llm_api_key
+    if args.llm_timeout:
+        os.environ["MCP_SCANNER_LLM_TIMEOUT"] = str(args.llm_timeout)
 
     try:
         if args.cmd == "remote":
