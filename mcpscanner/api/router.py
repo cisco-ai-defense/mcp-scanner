@@ -21,7 +21,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from ..core.auth import Auth
 from ..core.models import (
     AllToolsScanResponse,
-    AnalyzerEnum,
     APIScanRequest,
     FormattedToolScanResponse,
     OutputFormat,
@@ -31,14 +30,13 @@ from ..core.models import (
     SpecificResourceScanRequest,
     ToolScanResult,
 )
-from ..core.report_generator import ReportGenerator
+from ..core.report_generator import ReportGenerator, results_to_json
 from ..core.result import (
     ScanResult,
     PromptScanResult,
     ResourceScanResult,
     get_highest_severity,
     group_findings_by_analyzer,
-    process_scan_results,
 )
 from ..core.scanner import Scanner, ScannerFactory
 from ..utils.logging_config import get_logger
@@ -294,9 +292,10 @@ def _convert_scanner_result_to_tool_api_result(
     )
 
 
-def _format_tool_scan_results(
+async def _format_tool_scan_results(
     results: List[ScanResult],
     output_format: OutputFormat,
+    server_url: str = "Unknown",
     severity_filter: SeverityFilter = SeverityFilter.ALL,
     analyzer_filter: Optional[str] = None,
     tool_filter: Optional[str] = None,
@@ -304,8 +303,15 @@ def _format_tool_scan_results(
     show_stats: bool = False,
 ) -> Union[str, dict, List[dict]]:
     """Format scan results using ReportGenerator."""
-    # Create ReportGenerator instance - convert scan results to expected format
-    scan_data = process_scan_results(results)
+    # Convert ScanResult objects to JSON format
+    json_results = await results_to_json(results)
+    
+    # Create ReportGenerator instance with proper structure
+    scan_data = {
+        "server_url": server_url,
+        "scan_results": json_results,
+    }
+    
     generator = ReportGenerator(scan_data)
 
     # Generate formatted output (no mapping needed - using unified enums)
@@ -378,9 +384,10 @@ async def scan_tool_endpoint(
             logger.debug("Returning raw API result")
             return api_result
 
-        formatted_output = _format_tool_scan_results(
+        formatted_output = await _format_tool_scan_results(
             results=[result],
             output_format=request.output_format,
+            server_url=request.server_url,
             severity_filter=request.severity_filter,
             analyzer_filter=request.analyzer_filter,
             tool_filter=request.tool_filter,
@@ -451,9 +458,10 @@ async def scan_all_tools_endpoint(
                 server_url=request.server_url, scan_results=api_results
             )
 
-        formatted_output = _format_tool_scan_results(
+        formatted_output = await _format_tool_scan_results(
             results=results,
             output_format=request.output_format,
+            server_url=request.server_url,
             severity_filter=request.severity_filter,
             analyzer_filter=request.analyzer_filter,
             tool_filter=request.tool_filter,
