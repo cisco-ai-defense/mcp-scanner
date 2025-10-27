@@ -127,8 +127,24 @@ class CodeContextExtractor:
         """
         for decorator in node.decorator_list:
             decorator_name = self._get_decorator_name(decorator)
-            if decorator_name in ["mcp.tool", "mcp.prompt", "mcp.resource"]:
+            
+            # Check if decorator matches pattern: <any_variable>.tool/prompt/resource
+            # Examples: mcp.tool, hello_mcp.tool, my_server.prompt, etc.
+            if '.' in decorator_name:
+                # Split on the last dot to get the method name
+                parts = decorator_name.rsplit('.', 1)
+                if len(parts) == 2:
+                    method_name = parts[1].lower()
+                    # Check if it's one of the MCP decorator methods
+                    if method_name in ['tool', 'prompt', 'resource']:
+                        return decorator_name
+            
+            # Fallback: check if decorator name contains tool, prompt, or resource
+            # This handles edge cases like direct function decorators
+            decorator_lower = decorator_name.lower()
+            if decorator_lower in ['tool', 'prompt', 'resource']:
                 return decorator_name
+        
         return None
 
     def _get_decorator_name(self, decorator: ast.expr) -> str:
