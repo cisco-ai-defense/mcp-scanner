@@ -465,7 +465,7 @@ Once the server is running, you can access the interactive API documentation at:
 4. **Try different formats:**
    - Change `"output_format"` to `"table"`, `"by_severity"`, `"detailed"`, etc.
    - Add `"severity_filter": "high"` to see only critical findings
-   - Set `"hide_safe": true` to focus on vulnerable tools only
+   - Set `"hide_safe": true` to focus on unsafe tools only
    - Use `"analyzers": ["api", "yara", "llm"]` to enable multiple analyzers
 
    ```bash

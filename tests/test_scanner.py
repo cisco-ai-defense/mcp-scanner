@@ -390,7 +390,7 @@ async def test_analyze_tool_with_api_analyzer(config):
                 severity="medium",
                 summary="API finding",
                 analyzer="api",
-                threat_category="API_VULNERABILITY",
+                threat_category="API_FINDING",
                 details={},
             )
         ]

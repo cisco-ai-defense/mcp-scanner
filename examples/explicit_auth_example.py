@@ -71,8 +71,8 @@ async def explicit_oauth_example():
             print(f"\nTool: {result.tool_name}")
             print(f"Safe: {result.is_safe}")
             if not result.is_safe:
-                for vuln in result.vulnerabilities:
-                    print(f"  - {vuln.severity}: {vuln.summary}")
+                for finding in result.findings:
+                    print(f"  - {finding.severity}: {finding.summary}")
 
     except Exception as e:
         print(f"Error: {e}")

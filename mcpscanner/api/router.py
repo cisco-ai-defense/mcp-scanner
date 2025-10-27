@@ -165,7 +165,7 @@ def _group_findings_for_api(
     for display_name, internal_name in all_analyzers_map.items():
         vulns = analyzer_groups.get(internal_name, [])
         logger.debug(
-            f"Processing analyzer {display_name} ({internal_name}): {len(vulns)} vulnerabilities"
+            f"Processing analyzer {display_name} ({internal_name}): {len(vulns)} security findings"
         )
 
         if vulns:
@@ -176,7 +176,7 @@ def _group_findings_for_api(
             for vuln in vulns:
                 severities.append(vuln.severity)
                 logger.debug(
-                    f"Processing vulnerability: {vuln.summary}, severity: {vuln.severity}"
+                    f"Processing security finding: {vuln.summary}, severity: {vuln.severity}"
                 )
 
                 # Extract threat name from details
