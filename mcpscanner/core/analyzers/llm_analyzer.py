@@ -84,6 +84,7 @@ class LLMAnalyzer(BaseAnalyzer):
         self._base_url = config.llm_base_url
         self._rate_limit_delay = config.llm_rate_limit_delay
         self._max_retries = config.llm_max_retries
+        self._llm_timeout = config.llm_timeout
 
         # Load shared protection rules and analysis prompts
         self._protection_rules = self._load_prompt(
@@ -472,7 +473,7 @@ class LLMAnalyzer(BaseAnalyzer):
                     "messages": messages,
                     "max_tokens": self._max_tokens,
                     "temperature": self._temperature,
-                    "timeout": 30.0,
+                    "timeout": self._llm_timeout,
                     "api_key": self._api_key,  # Pass API key per request
                 }
 

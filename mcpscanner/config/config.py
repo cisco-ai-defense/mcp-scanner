@@ -51,6 +51,7 @@ class Config:
         llm_api_version: str = None,
         llm_rate_limit_delay: float = None,
         llm_max_retries: int = None,
+        llm_timeout: float = None,
         oauth_client_id: str = None,
         oauth_client_secret: str = None,
         oauth_token_url: str = None,
@@ -91,6 +92,7 @@ class Config:
             llm_rate_limit_delay if llm_rate_limit_delay is not None else 1.0
         )
         self._llm_max_retries = llm_max_retries if llm_max_retries is not None else 3
+        self._llm_timeout = llm_timeout or CONSTANTS.DEFAULT_LLM_TIMEOUT
         self._oauth_client_id = oauth_client_id
         self._oauth_client_secret = oauth_client_secret
         self._oauth_token_url = oauth_token_url
@@ -176,6 +178,15 @@ class Config:
             int: The maximum number of retries.
         """
         return self._llm_max_retries
+
+    @property
+    def llm_timeout(self) -> float:
+        """Get the timeout for LLM API calls.
+
+        Returns:
+            float: The timeout in seconds.
+        """
+        return self._llm_timeout
 
     @property
     def oauth_client_id(self) -> Optional[str]:

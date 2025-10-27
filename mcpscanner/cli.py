@@ -71,6 +71,7 @@ def _build_config(
     llm_base_url = os.environ.get("MCP_SCANNER_LLM_BASE_URL")
     llm_api_version = os.environ.get("MCP_SCANNER_LLM_API_VERSION")
     llm_model = os.environ.get("MCP_SCANNER_LLM_MODEL")
+    llm_timeout = os.environ.get("MCP_SCANNER_LLM_TIMEOUT")
     endpoint_url = endpoint_url or _get_endpoint_from_env()
 
     config_params = {
@@ -86,6 +87,8 @@ def _build_config(
         config_params["llm_base_url"] = llm_base_url
     if llm_api_version:
         config_params["llm_api_version"] = llm_api_version
+    if llm_timeout:
+        config_params["llm_timeout"] = float(llm_timeout)
 
     return Config(**config_params)
 
@@ -616,6 +619,11 @@ async def main():
         "--llm-api-key",
         help="LLM provider API key for LLM analysis (overrides environment variable)",
     )
+    parser.add_argument(
+        "--llm-timeout",
+        type=int,
+        help="Timeout in seconds for LLM API calls (overrides MCP_SCANNER_LLM_TIMEOUT environment variable)",
+    )
 
     parser.add_argument(
         "--analyzers",
@@ -760,6 +768,8 @@ async def main():
         os.environ["MCP_SCANNER_ENDPOINT"] = args.endpoint_url
     if args.llm_api_key:
         os.environ["MCP_SCANNER_LLM_API_KEY"] = args.llm_api_key
+    if args.llm_timeout:
+        os.environ["MCP_SCANNER_LLM_TIMEOUT"] = str(args.llm_timeout)
 
     try:
         # Handle static file scanning subcommand (matches 'prompts' and 'resources' pattern)
