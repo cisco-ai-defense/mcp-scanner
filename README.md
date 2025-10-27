@@ -88,6 +88,9 @@ export MCP_SCANNER_LLM_API_VERSION="2024-02-01"  # API version (if required)
 export MCP_SCANNER_LLM_BASE_URL="https://your-resource.openai.azure.com/"
 export MCP_SCANNER_LLM_API_VERSION="2024-02-01"
 export MCP_SCANNER_LLM_MODEL="azure/gpt-4"
+
+# For Extended Thinking Models (longer timeout)
+export MCP_SCANNER_LLM_TIMEOUT=300
 ```
 
 #### Tracing & Performance Tuning
