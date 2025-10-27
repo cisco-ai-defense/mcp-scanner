@@ -113,6 +113,30 @@ mcp-scanner --server-url http://127.0.0.1:8001/sse --format by_severity --severi
 }
 ```
 
+### Detailed Format Example
+```
+Tool 1: malicious_tool
+Status: completed
+Safe: No
+Analyzer Results:
+  • llm_analyzer:
+    - Severity: HIGH
+    - Threat Summary: Detected 2 threats: data exfiltration, prompt injection
+    - Threat Names: DATA EXFILTRATION, PROMPT INJECTION
+    - Total Findings: 2
+    - MCP Taxonomies (2 unique threats):
+      [1] Data Exfiltration / Exposure
+          • AITech: AITech-8.2
+          • AISubtech: AISubtech-8.2.3
+          • AISubtech Name: Data Exfiltration via Agent Tooling
+          • Description: Unintentional and/or unauthorized exposure or exfiltration...
+      [2] Direct Prompt Injection
+          • AITech: AITech-1.1
+          • AISubtech: AISubtech-1.1.1
+          • AISubtech Name: Instruction Manipulation (Direct Prompt Injection)
+          • Description: Explicit attempts to override, replace, or modify...
+```
+
 ### Summary Format
 ```
 === MCP Scanner Results ===
