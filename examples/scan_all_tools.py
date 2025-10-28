@@ -53,23 +53,23 @@ async def main():
         # Print scan summary
         print(f"\nScan completed. Found {len(results)} tools.")
 
-        # Count safe and vulnerable tools
+        # Count safe and unsafe tools
         safe_tools = [r for r in results if r.is_safe]
-        vulnerable_tools = [r for r in results if not r.is_safe]
+        unsafe_tools = [r for r in results if not r.is_safe]
 
         print(f"Safe tools: {len(safe_tools)}")
-        print(f"Vulnerable tools: {len(vulnerable_tools)}")
+        print(f"Unsafe tools: {len(unsafe_tools)}")
 
-        # Print details for vulnerable tools
-        if vulnerable_tools:
-            print("\nDetails for vulnerable tools:")
-            for result in vulnerable_tools:
+        # Print details for unsafe tools
+        if unsafe_tools:
+            print("\nDetails for unsafe tools:")
+            for result in unsafe_tools:
                 print(f"\nTool: {result.tool_name}")
                 print(f"Status: {result.status}")
-                print(f"Vulnerabilities: {len(result.vulnerabilities)}")
+                print(f"Security Findings: {len(result.findings)}")
 
-                for i, vuln in enumerate(result.vulnerabilities, 1):
-                    print(f"  Vulnerability #{i}:{vuln}")
+                for i, finding in enumerate(result.findings, 1):
+                    print(f"  Security Finding #{i}:{finding}")
 
     except ValueError as e:
         print(f"Error: {e}")

@@ -20,7 +20,7 @@
 MCP Security Scanner
 
 A comprehensive security scanning tool for Model Context Protocol (MCP) servers.
-This tool analyzes MCP tools for potential security vulnerabilities using multiple
+This tool analyzes MCP tools for potential security findings using multiple
 analysis engines including API-based classification, YARA pattern matching,
 and LLM-powered threat detection.
 """
@@ -67,6 +67,7 @@ def _build_config(
     llm_base_url = os.environ.get("MCP_SCANNER_LLM_BASE_URL")
     llm_api_version = os.environ.get("MCP_SCANNER_LLM_API_VERSION")
     llm_model = os.environ.get("MCP_SCANNER_LLM_MODEL")
+    llm_timeout = os.environ.get("MCP_SCANNER_LLM_TIMEOUT")
     endpoint_url = endpoint_url or _get_endpoint_from_env()
 
     config_params = {
@@ -82,6 +83,8 @@ def _build_config(
         config_params["llm_base_url"] = llm_base_url
     if llm_api_version:
         config_params["llm_api_version"] = llm_api_version
+    if llm_timeout:
+        config_params["llm_timeout"] = float(llm_timeout)
 
     return Config(**config_params)
 
@@ -505,7 +508,7 @@ async def main():
         epilog="""Examples:
   %(prog)s                                                    # Basic security scan with summary (all analyzers)
   %(prog)s --api-key YOUR_API_KEY --endpoint-url <your-endpoint> # Scan with an endpoint
-  %(prog)s --format detailed --api-key YOUR_API_KEY         # Detailed vulnerability report with API
+  %(prog)s --format detailed --api-key YOUR_API_KEY         # Detailed security findings report with API
   %(prog)s --format by_analyzer --llm-api-key YOUR_LLM_KEY  # Group findings by analysis engine with LLM
   %(prog)s --format table --analyzers yara                  # YARA-only scanning with table format
   %(prog)s --analyzers api,yara --severity-filter high      # API and YARA analysis, high severity only
@@ -615,6 +618,11 @@ async def main():
     parser.add_argument(
         "--llm-api-key",
         help="LLM provider API key for LLM analysis (overrides environment variable)",
+    )
+    parser.add_argument(
+        "--llm-timeout",
+        type=int,
+        help="Timeout in seconds for LLM API calls (overrides MCP_SCANNER_LLM_TIMEOUT environment variable)",
     )
 
     parser.add_argument(
@@ -763,6 +771,8 @@ async def main():
         os.environ["MCP_SCANNER_ENDPOINT"] = args.endpoint_url
     if args.llm_api_key:
         os.environ["MCP_SCANNER_LLM_API_KEY"] = args.llm_api_key
+    if args.llm_timeout:
+        os.environ["MCP_SCANNER_LLM_TIMEOUT"] = str(args.llm_timeout)
 
     try:
         if args.cmd == "remote":

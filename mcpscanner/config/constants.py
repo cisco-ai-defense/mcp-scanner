@@ -76,6 +76,23 @@ class MCPScannerConstants:
         "MCP_SCANNER_ENV_LLM_API_VERSION_NAME", "MCP_SCANNER_LLM_API_VERSION"
     )
 
+    # AWS Environment Variables
+    ENV_AWS_REGION: str = os.getenv(
+        "MCP_SCANNER_ENV_AWS_REGION_NAME", "AWS_REGION"
+    )
+    ENV_AWS_ACCESS_KEY_ID: str = os.getenv(
+        "MCP_SCANNER_ENV_AWS_ACCESS_KEY_ID_NAME", "AWS_ACCESS_KEY_ID"
+    )
+    ENV_AWS_SECRET_ACCESS_KEY: str = os.getenv(
+        "MCP_SCANNER_ENV_AWS_SECRET_ACCESS_KEY_NAME", "AWS_SECRET_ACCESS_KEY"
+    )
+    ENV_AWS_SESSION_TOKEN: str = os.getenv(
+        "MCP_SCANNER_ENV_AWS_SESSION_TOKEN_NAME", "AWS_SESSION_TOKEN"
+    )
+    ENV_AWS_PROFILE: str = os.getenv(
+        "MCP_SCANNER_ENV_AWS_PROFILE_NAME", "AWS_PROFILE"
+    )
+
     # Default Configuration File Paths
     DEFAULT_ENV_FILE: str = os.getenv("MCP_SCANNER_DEFAULT_ENV_FILE", ".env")
 
@@ -102,6 +119,10 @@ class MCPScannerConstants:
     )
     DEFAULT_LLM_BASE_URL: str = os.getenv("MCP_SCANNER_LLM_BASE_URL", None)
     DEFAULT_LLM_API_VERSION: str = os.getenv("MCP_SCANNER_LLM_API_VERSION", None)
+    DEFAULT_LLM_TIMEOUT: int = int(os.getenv("MCP_SCANNER_LLM_TIMEOUT", "30"))
+
+    # AWS Configuration Defaults
+    DEFAULT_AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
 
     # Logging Configuration
     LOG_FORMAT: str = os.getenv(
