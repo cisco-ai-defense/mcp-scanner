@@ -4,9 +4,9 @@ The MCP Scanner supports multiple output formats to suit different use cases and
 
 ## Available Formats
 
-- **`raw`**: Raw JSON output with complete scan results including hierarchical MCP taxonomy
+- **`raw`**: Raw JSON output with complete scan results including hierarchical threat taxonomy
 - **`summary`**: Concise summary showing only key findings
-- **`detailed`**: Comprehensive output with full finding details and MCP taxonomy information
+- **`detailed`**: Comprehensive output with full finding details and threat taxonomy information
 - **`by_tool`**: Results grouped by scanned tool
 - **`by_analyzer`**: Results grouped by analyzer type (API, YARA, LLM)
 - **`by_severity`**: Results grouped by severity level (HIGH, MEDIUM, LOW, UNKNOWN)
@@ -67,7 +67,7 @@ mcp-scanner --server-url http://127.0.0.1:8001/sse --analyzer-filter api_analyze
 # Hide tools with no security findings
 mcp-scanner --server-url http://127.0.0.1:8001/sse --hide-safe
 
-# Show scan statistics (total tools, vulnerable tools, etc.)
+# Show scan statistics (total tools, unsafe tools, etc.)
 mcp-scanner --server-url http://127.0.0.1:8001/sse --stats
 
 # Combine multiple options
