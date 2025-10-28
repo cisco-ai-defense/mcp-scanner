@@ -37,6 +37,7 @@ from litellm import acompletion
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
 from ...behavioural.context_extractor import CodeContextExtractor, FunctionContext
+from ...behavioural.analysis.cross_file import CrossFileAnalyzer
 from .base import BaseAnalyzer, SecurityFinding
 
 
@@ -108,14 +109,29 @@ class BehaviouralAnalyzer(BaseAnalyzer):
                 python_files = self._find_python_files(content)
                 self.logger.info(f"Found {len(python_files)} Python file(s) to analyze")
                 
+                # Build cross-file analyzer for the entire directory
+                cross_file_analyzer = CrossFileAnalyzer()
+                for py_file in python_files:
+                    try:
+                        with open(py_file, 'r') as f:
+                            source_code = f.read()
+                        cross_file_analyzer.add_file(Path(py_file), source_code)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to add file {py_file} to cross-file analyzer: {e}")
+                
+                # Build the call graph
+                call_graph = cross_file_analyzer.build_call_graph()
+                self.logger.info(f"Built call graph with {len(call_graph.functions)} functions")
+                
+                # Analyze each file with cross-file context
                 for py_file in python_files:
                     self.logger.info(f"Analyzing file: {py_file}")
-                    file_findings = await self._analyze_file(py_file, context)
+                    file_findings = await self._analyze_file(py_file, context, cross_file_analyzer)
                     all_findings.extend(file_findings)
                     
             # Check if content is a single file
             elif os.path.isfile(content):
-                all_findings = await self._analyze_file(content, context)
+                all_findings = await self._analyze_file(content, context, None)
                 
             else:
                 # Content is source code string
@@ -152,12 +168,18 @@ class BehaviouralAnalyzer(BaseAnalyzer):
         
         return sorted(python_files)
     
-    async def _analyze_file(self, file_path: str, context: Dict[str, Any]) -> List[SecurityFinding]:
+    async def _analyze_file(
+        self, 
+        file_path: str, 
+        context: Dict[str, Any],
+        cross_file_analyzer: Optional[CrossFileAnalyzer] = None
+    ) -> List[SecurityFinding]:
         """Analyze a single Python file.
         
         Args:
             file_path: Path to Python file
             context: Analysis context
+            cross_file_analyzer: Optional cross-file analyzer for tracking imports
             
         Returns:
             List of SecurityFinding objects
@@ -168,6 +190,7 @@ class BehaviouralAnalyzer(BaseAnalyzer):
             
             file_context = context.copy()
             file_context['file_path'] = file_path
+            file_context['cross_file_analyzer'] = cross_file_analyzer
             
             findings = await self._analyze_source_code(source_code, file_context)
             
@@ -205,6 +228,12 @@ class BehaviouralAnalyzer(BaseAnalyzer):
                 return findings
             
             self.logger.info(f"Found {len(mcp_contexts)} MCP functions in {file_path}")
+            
+            # Enrich with cross-file context if available
+            cross_file_analyzer = context.get('cross_file_analyzer')
+            if cross_file_analyzer:
+                for func_context in mcp_contexts:
+                    self._enrich_with_cross_file_context(func_context, file_path, cross_file_analyzer)
             
             # Analyze each MCP entry point
             for func_context in mcp_contexts:
@@ -300,6 +329,51 @@ class BehaviouralAnalyzer(BaseAnalyzer):
         except Exception as e:
             self.logger.error(f"LLM analysis failed for {func_context.name}: {e}")
             return None
+    
+    def _enrich_with_cross_file_context(
+        self, 
+        func_context: FunctionContext, 
+        file_path: str,
+        cross_file_analyzer: CrossFileAnalyzer
+    ) -> None:
+        """Enrich function context with cross-file analysis data.
+        
+        Args:
+            func_context: Function context to enrich
+            file_path: Path to the file containing the function
+            cross_file_analyzer: Cross-file analyzer instance
+        """
+        try:
+            # Build full function name
+            full_func_name = f"{file_path}::{func_context.name}"
+            
+            # Get reachable functions from this entry point
+            reachable = cross_file_analyzer.get_reachable_functions(full_func_name)
+            func_context.reachable_functions = reachable
+            
+            # Get cross-file calls (calls to functions in other files)
+            cross_file_calls = []
+            for caller, callee in cross_file_analyzer.call_graph.calls:
+                if caller == full_func_name:
+                    caller_file = caller.split("::")[0] if "::" in caller else ""
+                    callee_file = callee.split("::")[0] if "::" in callee else ""
+                    
+                    # Check if it's a cross-file call
+                    if caller_file and callee_file and caller_file != callee_file:
+                        callee_func_name = callee.split("::")[-1] if "::" in callee else callee
+                        cross_file_calls.append({
+                            "function": callee_func_name,
+                            "file": callee_file,
+                            "full_name": callee
+                        })
+            
+            func_context.cross_file_calls = cross_file_calls
+            
+            if cross_file_calls:
+                self.logger.info(f"Function '{func_context.name}' calls {len(cross_file_calls)} function(s) from other files")
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to enrich cross-file context for {func_context.name}: {e}")
     
     def _load_prompt(self) -> str:
         """Load the description mismatch prompt template.
@@ -408,12 +482,26 @@ Parameter Flow Tracking:
             for assign in ctx.assignments[:15]:  # Limit to first 15
                 analysis_content += f"  Line {assign['line']}: {assign['variable']} = {assign['value']}\n"
         
-        # Add control flow
-        analysis_content += f"\n**CONTROL FLOW:**\n"
-        analysis_content += f"- Has Conditionals: {ctx.control_flow.get('has_conditionals')}\n"
-        analysis_content += f"- Has Loops: {ctx.control_flow.get('has_loops')}\n"
-        analysis_content += f"- Has Exception Handling: {ctx.control_flow.get('has_exception_handling')}\n"
-        analysis_content += f"- Cyclomatic Complexity: {ctx.dataflow_summary.get('complexity')}\n"
+        # Add control flow information
+        if ctx.control_flow:
+            analysis_content += f"\n**CONTROL FLOW:**\n"
+            analysis_content += f"{json.dumps(ctx.control_flow, indent=2)}\n"
+        
+        # Add cross-file analysis if available
+        if ctx.cross_file_calls:
+            analysis_content += f"\n**CROSS-FILE CALLS ({len(ctx.cross_file_calls)} calls to other files):**\n"
+            analysis_content += "⚠️  This function calls functions from other files:\n"
+            for call in ctx.cross_file_calls[:10]:
+                analysis_content += f"  - {call['function']}() in {call['file']}\n"
+            analysis_content += "\nNote: These external functions may perform operations not visible in this file.\n"
+        
+        if ctx.reachable_functions:
+            total_reachable = len(ctx.reachable_functions)
+            cross_file_reachable = sum(1 for f in ctx.reachable_functions if "::" in f and f.split("::")[0] != str(ctx.line_number))
+            if cross_file_reachable > 0:
+                analysis_content += f"\n**REACHABILITY ANALYSIS:**\n"
+                analysis_content += f"- Total reachable functions: {total_reachable}\n"
+                analysis_content += f"- Functions in other files: {cross_file_reachable}\n"
         
         # Add constants
         if ctx.constants:

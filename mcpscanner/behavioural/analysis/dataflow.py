@@ -271,8 +271,19 @@ class DataFlowAnalyzer(Generic[T]):
 
         worklist = list(self.cfg.nodes)
         in_worklist = {node.id for node in worklist}
+        
+        iteration_count = 0
+        max_iterations = len(self.cfg.nodes) * 100  # Safety limit
 
         while worklist:
+            iteration_count += 1
+            
+            # Safety check to prevent infinite loops
+            if iteration_count > max_iterations:
+                import logging
+                logging.getLogger(__name__).warning(f"Dataflow analysis exceeded max iterations ({max_iterations}), stopping early")
+                break
+            
             node = worklist.pop(0)
             in_worklist.discard(node.id)
 

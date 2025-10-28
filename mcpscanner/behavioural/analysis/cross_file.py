@@ -138,8 +138,11 @@ class CrossFileAnalyzer:
         """
         for decorator in func_def.decorator_list:
             decorator_name = self._get_decorator_name(decorator)
-            if decorator_name in ["mcp.tool", "mcp.prompt", "mcp.resource"]:
-                return True
+            # Support custom variable names: @hello_mcp.tool(), @jira_mcp.tool(), etc.
+            if '.' in decorator_name:
+                parts = decorator_name.rsplit('.', 1)
+                if len(parts) == 2 and parts[1] in ['tool', 'prompt', 'resource']:
+                    return True
         return False
 
     def _get_decorator_name(self, decorator: ast.expr) -> str:

@@ -38,6 +38,7 @@ from .analysis.dataflow import ControlFlowGraph
 from .analysis.forward_tracker import ForwardFlowTracker, FlowPath
 from .analysis.naming import NameResolver
 from .analysis.reaching_defs import ReachingDefinitionsAnalyzer
+from .analysis.cross_file import CrossFileAnalyzer
 
 
 @dataclass
@@ -68,8 +69,12 @@ class FunctionContext:
     has_eval_exec: bool
     has_dangerous_imports: bool
     
+    # Cross-file analysis
+    cross_file_calls: List[Dict[str, Any]] = field(default_factory=list)  # Calls to functions in other files
+    reachable_functions: List[str] = field(default_factory=list)  # All functions reachable from this entry point
+    
     # Dataflow facts
-    dataflow_summary: Dict[str, Any]
+    dataflow_summary: Dict[str, Any] = field(default_factory=dict)
 
 
 class CodeContextExtractor:
@@ -389,8 +394,14 @@ class CodeContextExtractor:
             if not param_names:
                 return []
             
-            # Create forward flow tracker
-            tracker = ForwardFlowTracker(self.analyzer, param_names)
+            # PERFORMANCE FIX: Create a new analyzer with ONLY this function's AST
+            # instead of the entire file. This makes the CFG much smaller and faster.
+            func_source = ast.unparse(node)
+            func_analyzer = PythonAnalyzer(self.file_path, func_source)
+            func_analyzer.parse()
+            
+            # Create forward flow tracker with the function-specific analyzer
+            tracker = ForwardFlowTracker(func_analyzer, param_names)
             
             # Analyze flows from parameters
             flows = tracker.analyze_forward_flows()
