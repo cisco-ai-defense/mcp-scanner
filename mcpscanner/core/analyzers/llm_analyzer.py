@@ -536,8 +536,6 @@ class LLMAnalyzer(BaseAnalyzer):
                     keyword in error_msg
                     for keyword in [
                         "bedrockexception",
-                        "accessdenied",
-                        "unauthorizedoperation",
                         "throttlingexception",
                     ]
                 ):
