@@ -101,6 +101,17 @@ export MCP_SCANNER_LLM_MODEL="azure/gpt-4"
 export MCP_SCANNER_LLM_TIMEOUT=300
 ```
 
+#### Using a Local LLM (No API Key Required)
+
+If you are using a local LLM endpoint such as Ollama, vLLM, or LocalAI,
+the `MCP_SCANNER_LLM_API_KEY` variable is still required but can be set to any value.
+
+Example:
+```bash
+export MCP_SCANNER_LLM_API_KEY=test
+export MCP_SCANNER_LLM_ENDPOINT=http://localhost:11434
+```
+
 ### Quick Start Examples
 
 The fastest way to get started is using the `mcp-scanner` CLI command. Global flags (like `--analyzers`, `--format`, etc.) must be placed before a subcommand.
