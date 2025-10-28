@@ -45,18 +45,18 @@ class ApiAnalyzer(BaseAnalyzer):
     """Analyzer class for analyzing MCP tools using Cisco AI Defense API.
 
     This class provides functionality to analyze MCP tool descriptions for malicious content
-    using the Cisco AI Defense API and returns vulnerabilities directly.
+    using the Cisco AI Defense API and returns security findings directly.
 
     Example:
         >>> from mcpscanner import Config
         >>> from mcpscanner.analyzers import ApiAnalyzer
         >>> config = Config(api_key="your_api_key", endpoint_url="https://eu.api.inspect.aidefense.security.cisco.com/api/v1")
         >>> analyzer = ApiAnalyzer(config)
-        >>> vulnerabilities = await analyzer.analyze("Tool description to analyze")
-        >>> if not vulnerabilities:
+        >>> findings = await analyzer.analyze("Tool description to analyze")
+        >>> if not findings:
         ...     pass  # Tool is safe
         ... else:
-        ...     pass  # Found vulnerabilities
+        ...     pass  # Found security findings
     """
 
     # API endpoint for the chat inspection API
