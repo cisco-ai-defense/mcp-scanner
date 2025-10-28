@@ -44,7 +44,7 @@ AWS_PROFILE = os.environ.get(CONSTANTS.ENV_AWS_PROFILE, "")
 
 app = FastAPI(
     title="MCP Scanner SDK API",
-    description="An API to scan MCP server tools for vulnerabilities using both Cisco AI Defense and custom YARA rules.",
+    description="An API to scan MCP server tools for security findings using both Cisco AI Defense and custom YARA rules.",
     version="1.0.0",
 )
 

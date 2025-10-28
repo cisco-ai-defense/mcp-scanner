@@ -1,10 +1,10 @@
 # MCP Scanner
 
-A Python tool for scanning MCP (Model Context Protocol) servers and tools for potential security vulnerabilities. The MCP Scanner combines Cisco AI Defense inspect API, YARA rules and LLM-as-a-judge to detect malicious MCP tools.
+A Python tool for scanning MCP (Model Context Protocol) servers and tools for potential security findings. The MCP Scanner combines Cisco AI Defense inspect API, YARA rules and LLM-as-a-judge to detect malicious MCP tools.
 
 ## Overview
 
-The MCP Scanner provides a comprehensive solution for scanning MCP servers and tools for security vulnerabilities. It leverages three powerful scanning engines (Yara, LLM-as-judge, Cisco AI Defense) that can be used together or independently.
+The MCP Scanner provides a comprehensive solution for scanning MCP servers and tools for security findings. It leverages three powerful scanning engines (Yara, LLM-as-judge, Cisco AI Defense) that can be used together or independently.
 
 The SDK is designed to be easy to use while providing powerful scanning capabilities, flexible authentication options, and customization.
 
@@ -15,13 +15,13 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
-- **Comprehensive Scanning**: Scan MCP tools, prompts, and resources for security vulnerabilities
+- **Comprehensive Scanning**: Scan MCP tools, prompts, and resources for security findings
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
 - **Custom Endpoints**: Configure the API endpoint to support any Cisco AI Defense environments.
 - **MCP Server Integration**: Connect directly to MCP servers to scan tools, prompts, and resources with flexible authentication.
 - **Customizable YARA Rules**: Add your own YARA rules to detect specific patterns.
-- **Comprehensive Vulnerability Reporting**: Detailed reports on detected vulnerabilities.
+- **Comprehensive Reporting**: Detailed reports on detected security findings.
 
 ## Installation
 

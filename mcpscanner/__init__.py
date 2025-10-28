@@ -16,7 +16,7 @@
 
 """MCP Scanner SDK.
 
-A Python SDK for scanning MCP servers and tools for security vulnerabilities.
+A Python SDK for scanning MCP servers and tools for security findings.
 Provides both a programmatic API and a REST API server.
 """
 

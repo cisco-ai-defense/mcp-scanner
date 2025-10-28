@@ -109,16 +109,16 @@ async def demo_different_models():
             print("   🔍 Analyzing malicious tool...")
 
             # Analyze the malicious tool description
-            vulnerabilities = await analyzer.analyze(
+            findings = await analyzer.analyze(
                 content=malicious_tool_desc, context={"tool_name": "file_processor"}
             )
 
             # Display results
-            if vulnerabilities:
-                print(f"   🚨 Found {len(vulnerabilities)} vulnerabilities:")
-                for j, vuln in enumerate(vulnerabilities, 1):
-                    risk_score = vuln.details.get("risk_score", "N/A")
-                    risk_type = vuln.details.get("risk_type", "Unknown")
+            if findings:
+                print(f"   🚨 Found {len(findings)} security findings:")
+                for j, finding in enumerate(findings, 1):
+                    risk_score = finding.details.get("risk_score", "N/A")
+                    risk_type = finding.details.get("risk_type", "Unknown")
 
                     # Color coding
                     if isinstance(risk_score, (int, float)):
@@ -133,11 +133,11 @@ async def demo_different_models():
                     else:
                         emoji = "⚪"
 
-                    print(f"     {j}. {emoji} [{vuln.severity}] Risk: {risk_score}/100")
+                    print(f"     {j}. {emoji} [{finding.severity}] Risk: {risk_score}/100")
                     print(f"        Type: {risk_type}")
-                    print(f"        Summary: {vuln.summary[:80]}...")
+                    print(f"        Summary: {finding.summary[:80]}...")
             else:
-                print("   ✅ No vulnerabilities detected")
+                print("   ✅ No security findings")
 
         except Exception as e:
             print(f"   ❌ Error with {model_config['name']}: {e}")

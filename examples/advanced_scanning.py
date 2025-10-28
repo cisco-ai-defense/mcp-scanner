@@ -60,11 +60,11 @@ def format_text_output(results, severity_filter=None):
 
     output.append(f"Scan completed. Found {stats['total_tools']} tools.")
     output.append(f"Safe tools: {stats['safe_tools']}")
-    output.append(f"Vulnerable tools: {stats['vulnerable_tools']}")
+    output.append(f"Unsafe tools: {stats['unsafe_tools']}")
 
     # Add severity counts
-    if stats["vulnerable_tools"] > 0:
-        output.append("\nVulnerability severity breakdown:")
+    if stats["unsafe_tools"] > 0:
+        output.append("\nSecurity finding severity breakdown:")
         for severity, count in stats["severity_counts"].items():
             if count > 0:
                 output.append(f"  {severity.upper()}: {count}")
@@ -75,11 +75,11 @@ def format_text_output(results, severity_filter=None):
         for threat_type, count in stats["threat_types"].items():
             output.append(f"  {threat_type}: {count}")
 
-    # Print details for vulnerable tools
-    vulnerable_tools = [r for r in results if not r.is_safe]
-    if vulnerable_tools:
-        output.append("\nDetails for vulnerable tools:")
-        for result in vulnerable_tools:
+    # Print details for unsafe tools
+    unsafe_tools = [r for r in results if not r.is_safe]
+    if unsafe_tools:
+        output.append("\nDetails for unsafe tools:")
+        for result in unsafe_tools:
             output.append(f"\nTool: {result.tool_name}")
             output.append(f"Description: {result.tool_description}")
             output.append(f"Status: {result.status}")
@@ -113,7 +113,7 @@ def format_json_output(results, severity_filter=None):
         "scan_summary": {
             "total_tools": stats["total_tools"],
             "safe_tools": stats["safe_tools"],
-            "vulnerable_tools": stats["vulnerable_tools"],
+            "unsafe_tools": stats["unsafe_tools"],
             "severity_counts": stats["severity_counts"],
             "threat_types": stats["threat_types"],
         },

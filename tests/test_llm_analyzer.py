@@ -152,11 +152,11 @@ class TestLLMAnalyzer:
 
         analysis = {"is_malicious": False, "risk_score": 10, "severity": "Low"}
 
-        vulnerabilities = analyzer._create_findings_from_threat_analysis(
+        findings = analyzer._create_findings_from_threat_analysis(
             analysis, "safe_tool"
         )
 
-        assert len(vulnerabilities) == 0
+        assert len(findings) == 0
 
     def test_create_findings_from_threat_analysis_malicious_tool(self):
         """Test that findings are created for a malicious tool."""
@@ -171,21 +171,21 @@ class TestLLMAnalyzer:
             }
         }
 
-        vulnerabilities = analyzer._create_findings_from_threat_analysis(
+        findings = analyzer._create_findings_from_threat_analysis(
             analysis, "malicious_tool"
         )
 
-        assert len(vulnerabilities) == 2
+        assert len(findings) == 2
 
         # Check data exfiltration finding
-        exfil_finding = vulnerabilities[0]
+        exfil_finding = findings[0]
         assert exfil_finding.severity == "HIGH"
         assert exfil_finding.analyzer == "LLM"
         assert exfil_finding.threat_category == "DATA_EXFILTRATION"
         assert "malicious_tool" in exfil_finding.details["tool_name"]
 
         # Check tool poisoning finding
-        poison_finding = vulnerabilities[1]
+        poison_finding = findings[1]
         assert poison_finding.severity == "HIGH"
         assert poison_finding.threat_category == "TOOL_POISONING"
 
@@ -213,12 +213,12 @@ class TestLLMAnalyzer:
         content = "This tool executes system commands"
         context = {"tool_name": "command_executor"}
 
-        vulnerabilities = await analyzer.analyze(content, context)
+        findings = await analyzer.analyze(content, context)
 
-        assert len(vulnerabilities) == 1
-        assert vulnerabilities[0].severity == "HIGH"
-        assert vulnerabilities[0].analyzer == "LLM"
-        assert "command_executor" in vulnerabilities[0].details["tool_name"]
+        assert len(findings) == 1
+        assert findings[0].severity == "HIGH"
+        assert findings[0].analyzer == "LLM"
+        assert "command_executor" in findings[0].details["tool_name"]
 
         # Verify LLM API was called correctly
         mock_completion.assert_called_once()
@@ -242,9 +242,9 @@ class TestLLMAnalyzer:
         content = "Test content"
         context = {"tool_name": "test_tool"}
 
-        vulnerabilities = await analyzer.analyze(content, context)
+        findings = await analyzer.analyze(content, context)
 
-        assert len(vulnerabilities) == 0
+        assert len(findings) == 0
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
@@ -269,9 +269,9 @@ class TestLLMAnalyzer:
 
         content = "This tool adds two numbers"
 
-        vulnerabilities = await analyzer.analyze(content)
+        findings = await analyzer.analyze(content)
 
-        assert len(vulnerabilities) == 0  # No vulnerabilities for safe tool
+        assert len(findings) == 0  # No security findings for safe tool
 
         # Verify the prompt included "Unknown Tool" as default
         call_args = mock_completion.call_args
@@ -312,17 +312,17 @@ class TestLLMAnalyzer:
         content = "Tool that executes commands and reads files"
         context = {"tool_name": "dangerous_tool"}
 
-        vulnerabilities = await analyzer.analyze(content, context)
+        findings = await analyzer.analyze(content, context)
 
-        assert len(vulnerabilities) == 2
+        assert len(findings) == 2
 
-        # Check that all vulnerability types are present
-        threat_categories = {v.threat_category for v in vulnerabilities}
+        # Check that all finding types are present
+        threat_categories = {v.threat_category for v in findings}
         assert "PROMPT_INJECTION" in threat_categories
         assert "DATA_EXFILTRATION" in threat_categories
 
         # Check severity distribution
-        severities = {v.severity for v in vulnerabilities}
+        severities = {v.severity for v in findings}
         assert (
             "UNKNOWN" in severities
         )  # CRITICAL is not in severity map, defaults to UNKNOWN

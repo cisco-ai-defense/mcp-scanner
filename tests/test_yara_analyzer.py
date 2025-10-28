@@ -62,9 +62,9 @@ async def test_yara_analyzer_no_matches():
         mock_load_rules.return_value = mock_rules
 
         analyzer = YaraAnalyzer()
-        vulnerabilities = await analyzer.analyze("This is safe content")
+        findings = await analyzer.analyze("This is safe content")
 
-        assert len(vulnerabilities) == 0
+        assert len(findings) == 0
         mock_rules.match.assert_called_once()
 
 
@@ -89,17 +89,17 @@ async def test_yara_analyzer_with_matches():
         mock_load_rules.return_value = mock_rules
 
         analyzer = YaraAnalyzer()
-        vulnerabilities = await analyzer.analyze("This content matches a rule")
+        findings = await analyzer.analyze("This content matches a rule")
 
-        assert len(vulnerabilities) == 1
+        assert len(findings) == 1
         assert (
-            vulnerabilities[0].severity == "UNKNOWN"
+            findings[0].severity == "UNKNOWN"
         )  # Default for unmapped threat types
-        assert vulnerabilities[0].summary == "Detected 1 threat: test rule"
-        assert vulnerabilities[0].analyzer == "YARA"
-        assert vulnerabilities[0].details["raw_response"]["rule"] == "test_rule"
+        assert findings[0].summary == "Detected 1 threat: test rule"
+        assert findings[0].analyzer == "YARA"
+        assert findings[0].details["raw_response"]["rule"] == "test_rule"
         assert (
-            vulnerabilities[0].details["raw_response"]["description"]
+            findings[0].details["raw_response"]["description"]
             == "Test description"
         )
 
@@ -126,11 +126,11 @@ async def test_yara_analyzer_with_context():
 
         analyzer = YaraAnalyzer()
         context = {"tool_name": "test_tool", "content_type": "parameters"}
-        vulnerabilities = await analyzer.analyze("This content matches a rule", context)
+        findings = await analyzer.analyze("This content matches a rule", context)
 
-        assert len(vulnerabilities) == 1
-        assert vulnerabilities[0].summary == "Detected 1 threat: test rule"
-        assert vulnerabilities[0].details["content_type"] == "parameters"
+        assert len(findings) == 1
+        assert findings[0].summary == "Detected 1 threat: test rule"
+        assert findings[0].details["content_type"] == "parameters"
 
 
 @pytest.mark.asyncio
@@ -142,9 +142,9 @@ async def test_yara_analyzer_empty_content():
         mock_load_rules.return_value = MagicMock()
 
         analyzer = YaraAnalyzer()
-        vulnerabilities = await analyzer.analyze("")
+        findings = await analyzer.analyze("")
 
-        assert len(vulnerabilities) == 0
+        assert len(findings) == 0
 
 
 @pytest.mark.asyncio

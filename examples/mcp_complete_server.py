@@ -99,7 +99,7 @@ def greet_user(name: str, style: str = "friendly") -> str:
 def analyze_code(language: str, focus: str = "security") -> str:
     """Generate a prompt to analyze code - Safe prompt"""
     prompt_text = f"Please analyze the following {language} code with focus on {focus}. "
-    prompt_text += "Identify any issues, vulnerabilities, or improvements."
+    prompt_text += "Identify any issues, security findings, or improvements."
     return prompt_text
 
 

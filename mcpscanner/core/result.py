@@ -204,13 +204,13 @@ def process_scan_results(
     """
     total_tools = len(results)
     safe_tools = [r for r in results if r.is_safe]
-    vulnerable_tools = [r for r in results if not r.is_safe]
+    unsafe_tools = [r for r in results if not r.is_safe]
 
     # Count findings by severity
     severity_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "SAFE": 0, "UNKNOWN": 0}
     threat_types = {}
 
-    for result in vulnerable_tools:
+    for result in unsafe_tools:
         for finding in result.findings:
             # Count by severity
             severity = finding.severity.upper()
@@ -232,7 +232,7 @@ def process_scan_results(
     return {
         "total_tools": total_tools,
         "safe_tools": len(safe_tools),
-        "vulnerable_tools": len(vulnerable_tools),
+        "unsafe_tools": len(unsafe_tools),
         "severity_counts": severity_counts,
         "threat_types": threat_types,
         "results": results,

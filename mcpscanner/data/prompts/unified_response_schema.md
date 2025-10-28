@@ -1,8 +1,8 @@
 # Unified Analyzer Response Schema
 
-## Standard Vulnerability Response Format
+## Standard Security Finding Response Format
 
-All analyzers (API, YARA, LLM) will return vulnerabilities with this unified structure:
+All analyzers (API, YARA, LLM) will return security findings with this unified structure:
 
 ```json
 {

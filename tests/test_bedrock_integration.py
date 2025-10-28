@@ -74,7 +74,7 @@ class TestBedrockAPIKeyAuthentication:
         # Test analysis
         content = "This tool reads a file"
         context = {"tool_name": "file_reader"}
-        vulnerabilities = await analyzer.analyze(content, context)
+        findings = await analyzer.analyze(content, context)
 
         # Verify API was called with correct parameters
         mock_completion.assert_called_once()
@@ -134,7 +134,7 @@ class TestBedrockAWSProfileAuthentication:
         # Test analysis
         content = "This tool writes a file"
         context = {"tool_name": "file_writer"}
-        vulnerabilities = await analyzer.analyze(content, context)
+        findings = await analyzer.analyze(content, context)
 
         # Verify API was called with correct parameters
         mock_completion.assert_called_once()
@@ -182,7 +182,7 @@ class TestBedrockSessionTokenAuthentication:
         # Test analysis
         content = "This tool executes system commands"
         context = {"tool_name": "command_executor"}
-        vulnerabilities = await analyzer.analyze(content, context)
+        findings = await analyzer.analyze(content, context)
 
         # Verify API was called with correct parameters
         mock_completion.assert_called_once()
@@ -214,8 +214,8 @@ class TestBedrockErrorHandling:
         context = {"tool_name": "test_tool"}
 
         # Should return empty list on error after retries
-        vulnerabilities = await analyzer.analyze(content, context)
-        assert len(vulnerabilities) == 0
+        findings = await analyzer.analyze(content, context)
+        assert len(findings) == 0
 
         # Verify retries occurred (initial + max_retries)
         assert mock_completion.call_count == 3
@@ -238,8 +238,8 @@ class TestBedrockErrorHandling:
         content = "Test content"
         context = {"tool_name": "test_tool"}
 
-        vulnerabilities = await analyzer.analyze(content, context)
-        assert len(vulnerabilities) == 0
+        findings = await analyzer.analyze(content, context)
+        assert len(findings) == 0
 
         # Verify retries with exponential backoff
         assert mock_completion.call_count == 3
