@@ -73,6 +73,12 @@ class FunctionContext:
     cross_file_calls: List[Dict[str, Any]] = field(default_factory=list)  # Calls to functions in other files
     reachable_functions: List[str] = field(default_factory=list)  # All functions reachable from this entry point
     
+    # High-value security indicators
+    string_literals: List[str] = field(default_factory=list)  # All string literals in function
+    return_expressions: List[str] = field(default_factory=list)  # What the function returns
+    exception_handlers: List[Dict[str, Any]] = field(default_factory=list)  # Exception handling details
+    env_var_access: List[str] = field(default_factory=list)  # Environment variable accesses
+    
     # Dataflow facts
     dataflow_summary: Dict[str, Any] = field(default_factory=dict)
 
@@ -219,6 +225,12 @@ class CodeContextExtractor:
         # Dataflow summary
         dataflow_summary = self._create_dataflow_summary(node)
         
+        # High-value security indicators
+        string_literals = self._extract_string_literals(node)
+        return_expressions = self._extract_return_expressions(node)
+        exception_handlers = self._extract_exception_handlers(node)
+        env_var_access = self._extract_env_var_access(node)
+        
         return FunctionContext(
             name=name,
             decorator_types=decorator_types,
@@ -239,6 +251,10 @@ class CodeContextExtractor:
             has_eval_exec=has_eval_exec,
             has_dangerous_imports=has_dangerous_imports,
             dataflow_summary=dataflow_summary,
+            string_literals=string_literals,
+            return_expressions=return_expressions,
+            exception_handlers=exception_handlers,
+            env_var_access=env_var_access,
         )
 
     def _extract_parameters(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
@@ -570,6 +586,97 @@ class CodeContextExtractor:
             elif isinstance(child, ast.BoolOp):
                 complexity += len(child.values) - 1
         return complexity
+    
+    def _extract_string_literals(self, node: ast.FunctionDef) -> List[str]:
+        """Extract all string literals from function.
+        
+        Args:
+            node: Function definition node
+            
+        Returns:
+            List of string literals
+        """
+        literals = []
+        for child in ast.walk(node):
+            if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                # Limit length to avoid huge strings
+                literal = child.value[:200]
+                if literal and literal not in literals:
+                    literals.append(literal)
+        return literals[:20]  # Limit to 20 strings
+    
+    def _extract_return_expressions(self, node: ast.FunctionDef) -> List[str]:
+        """Extract return expressions from function.
+        
+        Args:
+            node: Function definition node
+            
+        Returns:
+            List of return expression strings
+        """
+        returns = []
+        for child in ast.walk(node):
+            if isinstance(child, ast.Return) and child.value:
+                try:
+                    return_expr = ast.unparse(child.value)[:100]
+                    returns.append(return_expr)
+                except Exception:
+                    returns.append("<unparseable>")
+        return returns
+    
+    def _extract_exception_handlers(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
+        """Extract exception handling details.
+        
+        Args:
+            node: Function definition node
+            
+        Returns:
+            List of exception handler info
+        """
+        handlers = []
+        for child in ast.walk(node):
+            if isinstance(child, ast.ExceptHandler):
+                handler_info = {
+                    "line": child.lineno,
+                    "exception_type": ast.unparse(child.type) if child.type else "Exception",
+                    "has_body": len(child.body) > 0,
+                    "is_silent": len(child.body) == 1 and isinstance(child.body[0], ast.Pass)
+                }
+                handlers.append(handler_info)
+        return handlers
+    
+    def _extract_env_var_access(self, node: ast.FunctionDef) -> List[str]:
+        """Extract environment variable accesses.
+        
+        Args:
+            node: Function definition node
+            
+        Returns:
+            List of env var access patterns
+        """
+        env_accesses = []
+        for child in ast.walk(node):
+            # os.environ.get('KEY'), os.getenv('KEY'), etc.
+            if isinstance(child, ast.Call):
+                call_name = ""
+                if isinstance(child.func, ast.Attribute):
+                    if isinstance(child.func.value, ast.Attribute):
+                        # os.environ.get
+                        if isinstance(child.func.value.value, ast.Name):
+                            call_name = f"{child.func.value.value.id}.{child.func.value.attr}.{child.func.attr}"
+                    elif isinstance(child.func.value, ast.Name):
+                        # os.getenv
+                        call_name = f"{child.func.value.id}.{child.func.attr}"
+                
+                if "environ" in call_name or "getenv" in call_name:
+                    # Try to get the key name
+                    if child.args and isinstance(child.args[0], ast.Constant):
+                        key = child.args[0].value
+                        env_accesses.append(f"{call_name}('{key}')")
+                    else:
+                        env_accesses.append(call_name)
+        
+        return env_accesses
 
     def to_json(self, contexts: List[FunctionContext]) -> str:
         """Convert contexts to JSON for LLM.

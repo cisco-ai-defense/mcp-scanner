@@ -351,7 +351,7 @@ class BehaviouralAnalyzer(BaseAnalyzer):
             reachable = cross_file_analyzer.get_reachable_functions(full_func_name)
             func_context.reachable_functions = reachable
             
-            # Get cross-file calls (calls to functions in other files)
+            # Get cross-file calls with transitive chains
             cross_file_calls = []
             for caller, callee in cross_file_analyzer.call_graph.calls:
                 if caller == full_func_name:
@@ -361,10 +361,15 @@ class BehaviouralAnalyzer(BaseAnalyzer):
                     # Check if it's a cross-file call
                     if caller_file and callee_file and caller_file != callee_file:
                         callee_func_name = callee.split("::")[-1] if "::" in callee else callee
+                        
+                        # Build transitive call chain from this callee (deep traversal)
+                        call_chain = self._build_call_chain(callee, cross_file_analyzer, max_depth=10)
+                        
                         cross_file_calls.append({
                             "function": callee_func_name,
                             "file": callee_file,
-                            "full_name": callee
+                            "full_name": callee,
+                            "call_chain": call_chain
                         })
             
             func_context.cross_file_calls = cross_file_calls
@@ -374,6 +379,67 @@ class BehaviouralAnalyzer(BaseAnalyzer):
                 
         except Exception as e:
             self.logger.warning(f"Failed to enrich cross-file context for {func_context.name}: {e}")
+    
+    def _build_call_chain(
+        self, 
+        func_name: str, 
+        cross_file_analyzer: CrossFileAnalyzer,
+        max_depth: int = 3,
+        visited: Optional[set] = None
+    ) -> List[Dict[str, Any]]:
+        """Build transitive call chain from a function.
+        
+        Args:
+            func_name: Starting function name
+            cross_file_analyzer: Cross-file analyzer
+            max_depth: Maximum depth to traverse
+            visited: Set of already visited functions (to avoid cycles)
+            
+        Returns:
+            List of calls in the chain
+        """
+        if visited is None:
+            visited = set()
+        
+        if max_depth <= 0 or func_name in visited:
+            return []
+        
+        visited.add(func_name)
+        chain = []
+        
+        # Get direct callees
+        callees = cross_file_analyzer.call_graph.get_callees(func_name)
+        
+        for callee in callees[:10]:  # Limit to 10 to avoid explosion
+            callee_func = callee.split("::")[-1] if "::" in callee else callee
+            
+            # Recursively build chain
+            sub_chain = self._build_call_chain(callee, cross_file_analyzer, max_depth - 1, visited.copy())
+            
+            chain.append({
+                "function": callee_func,
+                "full_name": callee,
+                "calls": sub_chain
+            })
+        
+        return chain
+    
+    def _format_call_chain(self, chain: List[Dict[str, Any]], indent: int = 0) -> str:
+        """Format call chain recursively for display.
+        
+        Args:
+            chain: Call chain to format
+            indent: Current indentation level
+            
+        Returns:
+            Formatted call chain string
+        """
+        result = ""
+        for call in chain:
+            result += " " * indent + f"└─ {call['function']}()\n"
+            if call.get('calls'):
+                result += self._format_call_chain(call['calls'], indent + 3)
+        return result
     
     def _load_prompt(self) -> str:
         """Load the description mismatch prompt template.
@@ -487,27 +553,77 @@ Parameter Flow Tracking:
             analysis_content += f"\n**CONTROL FLOW:**\n"
             analysis_content += f"{json.dumps(ctx.control_flow, indent=2)}\n"
         
-        # Add cross-file analysis if available
+        # Add cross-file analysis with transitive call chains
         if ctx.cross_file_calls:
-            analysis_content += f"\n**CROSS-FILE CALLS ({len(ctx.cross_file_calls)} calls to other files):**\n"
-            analysis_content += "⚠️  This function calls functions from other files:\n"
+            analysis_content += f"\n**CROSS-FILE CALL CHAINS ({len(ctx.cross_file_calls)} calls to other files):**\n"
+            analysis_content += "⚠️  This function calls functions from other files. Full call chains shown:\n\n"
             for call in ctx.cross_file_calls[:10]:
-                analysis_content += f"  - {call['function']}() in {call['file']}\n"
-            analysis_content += "\nNote: These external functions may perform operations not visible in this file.\n"
+                analysis_content += f"  {call['function']}() in {call['file']}\n"
+                # Show transitive calls
+                if call.get('call_chain'):
+                    analysis_content += self._format_call_chain(call['call_chain'], indent=4)
+                analysis_content += "\n"
+            analysis_content += "Note: Analyze the entire call chain to understand what operations are performed.\n"
         
+        # Add detailed reachability analysis
         if ctx.reachable_functions:
             total_reachable = len(ctx.reachable_functions)
-            cross_file_reachable = sum(1 for f in ctx.reachable_functions if "::" in f and f.split("::")[0] != str(ctx.line_number))
-            if cross_file_reachable > 0:
+            # Group reachable functions by file
+            functions_by_file = {}
+            for func in ctx.reachable_functions:
+                if "::" in func:
+                    file_path, func_name = func.rsplit("::", 1)
+                    if file_path not in functions_by_file:
+                        functions_by_file[file_path] = []
+                    functions_by_file[file_path].append(func_name)
+            
+            if len(functions_by_file) > 1:  # More than just the current file
                 analysis_content += f"\n**REACHABILITY ANALYSIS:**\n"
-                analysis_content += f"- Total reachable functions: {total_reachable}\n"
-                analysis_content += f"- Functions in other files: {cross_file_reachable}\n"
+                analysis_content += f"Total reachable functions: {total_reachable} across {len(functions_by_file)} file(s)\n\n"
+                for file_path, funcs in list(functions_by_file.items())[:5]:  # Show top 5 files
+                    file_name = file_path.split('/')[-1] if '/' in file_path else file_path
+                    analysis_content += f"  {file_name}: {', '.join(funcs[:10])}\n"
+                    if len(funcs) > 10:
+                        analysis_content += f"    ... and {len(funcs) - 10} more\n"
         
         # Add constants
         if ctx.constants:
             analysis_content += f"\n**CONSTANTS:**\n"
             for var, val in list(ctx.constants.items())[:10]:
                 analysis_content += f"  {var} = {val}\n"
+        
+        # Add string literals (high-value security indicator)
+        if ctx.string_literals:
+            analysis_content += f"\n**STRING LITERALS ({len(ctx.string_literals)} total):**\n"
+            for literal in ctx.string_literals[:15]:
+                # Escape and truncate for safety
+                safe_literal = literal.replace('\n', '\\n').replace('\r', '\\r')[:150]
+                analysis_content += f"  \"{safe_literal}\"\n"
+        
+        # Add return expressions
+        if ctx.return_expressions:
+            analysis_content += f"\n**RETURN EXPRESSIONS:**\n"
+            if ctx.return_type:
+                analysis_content += f"Declared return type: {ctx.return_type}\n"
+            for ret_expr in ctx.return_expressions:
+                analysis_content += f"  return {ret_expr}\n"
+        
+        # Add exception handling details
+        if ctx.exception_handlers:
+            analysis_content += f"\n**EXCEPTION HANDLING:**\n"
+            for handler in ctx.exception_handlers:
+                analysis_content += f"  Line {handler['line']}: except {handler['exception_type']}"
+                if handler['is_silent']:
+                    analysis_content += " (⚠️  SILENT - just 'pass')\n"
+                else:
+                    analysis_content += "\n"
+        
+        # Add environment variable access
+        if ctx.env_var_access:
+            analysis_content += f"\n**ENVIRONMENT VARIABLE ACCESS:**\n"
+            analysis_content += "⚠️  This function accesses environment variables:\n"
+            for env_access in ctx.env_var_access:
+                analysis_content += f"  {env_access}\n"
         
         # Security validation: Check that the untrusted input doesn't contain our delimiter tags
         if start_tag in analysis_content or end_tag in analysis_content:
