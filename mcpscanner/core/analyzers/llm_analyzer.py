@@ -94,6 +94,35 @@ class LLMAnalyzer(BaseAnalyzer):
                 self.logger.debug("Bedrock: Using AWS credentials (profile/IAM/session)")
 
         # Store configuration for per-request usage
+
+        # Get model configuration from config
+        self._model = config.llm_model
+
+        # Detect Bedrock model
+        is_bedrock = self._model and "bedrock/" in self._model
+
+        # Authentication strategy based on provider:
+        # 1. Non-Bedrock providers (OpenAI, Anthropic, etc.): API key required
+        # 2. Bedrock with API key: Use Bedrock API key (MCP_SCANNER_LLM_API_KEY or AWS_BEARER_TOKEN_BEDROCK)
+        # 3. Bedrock without API key: Use AWS credentials (profile/IAM/session token)
+
+        if not is_bedrock:
+            # Non-Bedrock providers always require API key
+            if not hasattr(config, "llm_provider_api_key") or not config.llm_provider_api_key:
+                raise ValueError("LLM provider API key is required for LLM analyzer")
+            self._api_key = config.llm_provider_api_key
+        else:
+            # Bedrock: API key is optional (can use AWS credentials instead)
+            if hasattr(config, "llm_provider_api_key") and config.llm_provider_api_key:
+                # Use Bedrock API key authentication
+                self._api_key = config.llm_provider_api_key
+                self.logger.debug("Bedrock: Using API key authentication")
+            else:
+                # Use AWS credentials (profile/IAM/session token)
+                self._api_key = None
+                self.logger.debug("Bedrock: Using AWS credentials (profile/IAM/session)")
+
+        # Store configuration for per-request usage
         self._base_url = config.llm_base_url
         self._api_version = config.llm_api_version
         self._max_tokens = config.llm_max_tokens

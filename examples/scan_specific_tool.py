@@ -56,15 +56,15 @@ async def main():
         print(f"Status: {result.status}")
         print(f"Is Safe: {result.is_safe}")
 
-        if result.vulnerabilities:
-            print(f"\nFound {len(result.vulnerabilities)} vulnerabilities:")
-            for i, vuln in enumerate(result.vulnerabilities, 1):
-                print(f"\nVulnerability #{i}:")
-                print(f"  Severity: {vuln.severity}")
-                print(f"  Summary: {vuln.summary}")
-                print(f"  Analyzer: {vuln.analyzer}")
+        if result.findings:
+            print(f"\nFound {len(result.findings)} security findings:")
+            for i, finding in enumerate(result.findings, 1):
+                print(f"\nSecurity Finding #{i}:")
+                print(f"  Severity: {finding.severity}")
+                print(f"  Summary: {finding.summary}")
+                print(f"  Analyzer: {finding.analyzer}")
         else:
-            print("\nNo vulnerabilities found. Tool appears to be safe.")
+            print("\nNo security findings found. Tool appears to be safe.")
 
     except ValueError as e:
         print(f"Error: {e}")
