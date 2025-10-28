@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Set
 
 from ..analyzers.base import BaseAnalyzer
 from ..analyzers.python_analyzer import PythonAnalyzer
+from .typing import TypeAnalyzer
 
 
 class CallGraph:
@@ -93,6 +94,7 @@ class CrossFileAnalyzer:
         self.call_graph = CallGraph()
         self.analyzers: Dict[Path, BaseAnalyzer] = {}
         self.import_map: Dict[Path, List[Path]] = {}  # file -> imported files
+        self.type_analyzers: Dict[Path, TypeAnalyzer] = {}  # file -> type analyzer
 
     def add_file(self, file_path: Path, source_code: str) -> None:
         """Add a file to the analysis.
@@ -106,6 +108,11 @@ class CrossFileAnalyzer:
             analyzer.parse()
             self.analyzers[file_path] = analyzer
             
+            # Run type analysis
+            type_analyzer = TypeAnalyzer(analyzer)
+            type_analyzer.analyze()
+            self.type_analyzers[file_path] = type_analyzer
+            
             # Extract function definitions and MCP entry points
             self._extract_python_functions(file_path, analyzer)
             
@@ -115,17 +122,31 @@ class CrossFileAnalyzer:
             pass  # Skip files that can't be parsed
 
     def _extract_python_functions(self, file_path: Path, analyzer: PythonAnalyzer) -> None:
-        """Extract function definitions from Python file.
+        """Extract function definitions and class methods from Python file.
 
         Args:
             file_path: File path
             analyzer: Python analyzer
         """
-        func_defs = analyzer.get_function_defs()
-        for func_def in func_defs:
-            # Check if it's an MCP entry point
-            is_mcp = self._is_mcp_entry_point(func_def)
-            self.call_graph.add_function(func_def.name, func_def, file_path, is_mcp)
+        # Get AST
+        tree = analyzer.get_ast()
+        
+        # Extract top-level functions only (not methods inside classes)
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Check if it's an MCP entry point
+                is_mcp = self._is_mcp_entry_point(node)
+                self.call_graph.add_function(node.name, node, file_path, is_mcp)
+        
+        # Extract class methods
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                class_name = node.name
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        # Add as ClassName.method_name
+                        method_full_name = f"{class_name}.{item.name}"
+                        self.call_graph.add_function(method_full_name, item, file_path, is_mcp_entry=False)
 
     def _is_mcp_entry_point(self, func_def: ast.FunctionDef) -> bool:
         """Check if function is an MCP entry point.
@@ -239,37 +260,90 @@ class CrossFileAnalyzer:
             file_path: File path
             analyzer: Python analyzer
         """
-        func_defs = analyzer.get_function_defs()
+        tree = analyzer.get_ast()
         
-        # For each function, find calls within it
-        for func_def in func_defs:
-            caller_name = f"{file_path}::{func_def.name}"
-            
-            # Walk the function body to find calls
-            for node in ast.walk(func_def):
-                if isinstance(node, ast.Call):
-                    callee_name = analyzer.get_call_name(node)
-                    
-                    # Try to resolve to full name
-                    full_callee = self._resolve_call_target(file_path, callee_name)
-                    
-                    if full_callee:
-                        self.call_graph.add_call(caller_name, full_callee)
-                    else:
-                        # Add with partial name (might be external library)
-                        self.call_graph.add_call(caller_name, callee_name)
+        # Extract calls from top-level functions
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                caller_name = f"{file_path}::{node.name}"
+                self._extract_calls_from_function(file_path, node, caller_name, analyzer)
+        
+        # Extract calls from class methods
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                class_name = node.name
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        caller_name = f"{file_path}::{class_name}.{item.name}"
+                        self._extract_calls_from_function(file_path, item, caller_name, analyzer)
+    
+    def _extract_calls_from_function(
+        self, 
+        file_path: Path, 
+        func_node: ast.FunctionDef, 
+        caller_name: str,
+        analyzer: PythonAnalyzer
+    ) -> None:
+        """Extract calls from a single function.
+        
+        Args:
+            file_path: File path
+            func_node: Function AST node
+            caller_name: Full caller name
+            analyzer: Python analyzer
+        """
+        # Walk the function body to find calls
+        for node in ast.walk(func_node):
+            if isinstance(node, ast.Call):
+                callee_name = analyzer.get_call_name(node)
+                
+                # Try to resolve to full name
+                full_callee = self._resolve_call_target(file_path, callee_name)
+                
+                if full_callee:
+                    self.call_graph.add_call(caller_name, full_callee)
+                else:
+                    # Add with partial name (might be external library)
+                    self.call_graph.add_call(caller_name, callee_name)
 
     def _resolve_call_target(self, file_path: Path, call_name: str) -> str | None:
         """Resolve a function call to its full qualified name.
 
         Args:
             file_path: File where call occurs
-            call_name: Function call name
+            call_name: Function call name (could be 'func' or 'obj.method')
 
         Returns:
             Full qualified name or None
         """
-        # Check if it's defined in the same file
+        # Handle method calls (e.g., 'processor.process' or 'DataProcessor.process')
+        if '.' in call_name:
+            # Use type analyzer to resolve instance.method() to ClassName.method
+            if file_path in self.type_analyzers:
+                resolved = self.type_analyzers[file_path].resolve_method_call(call_name)
+                if resolved:
+                    # Look for ClassName.method in call graph
+                    for func_name in self.call_graph.functions.keys():
+                        if func_name.endswith(f"::{resolved}"):
+                            if func_name.startswith(str(file_path)):
+                                return func_name
+            
+            # Try to match ClassName.method_name directly
+            for func_name in self.call_graph.functions.keys():
+                if func_name.endswith(f"::{call_name}"):
+                    if func_name.startswith(str(file_path)):
+                        return func_name
+            
+            # Try to match just the method part (e.g., 'DataProcessor.process')
+            parts = call_name.split('.')
+            if len(parts) >= 2:
+                class_method = '.'.join(parts[-2:])  # Get last two parts
+                for func_name in self.call_graph.functions.keys():
+                    if func_name.endswith(f"::{class_method}"):
+                        if func_name.startswith(str(file_path)):
+                            return func_name
+        
+        # Check if it's a regular function defined in the same file
         for func_name in self.call_graph.functions.keys():
             if func_name.endswith(f"::{call_name}"):
                 if func_name.startswith(str(file_path)):

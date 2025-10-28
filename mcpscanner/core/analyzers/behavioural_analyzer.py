@@ -131,7 +131,19 @@ class BehaviouralAnalyzer(BaseAnalyzer):
                     
             # Check if content is a single file
             elif os.path.isfile(content):
-                all_findings = await self._analyze_file(content, context, None)
+                # Build call graph even for single file to track method calls
+                cross_file_analyzer = CrossFileAnalyzer()
+                try:
+                    with open(content, 'r') as f:
+                        source_code = f.read()
+                    cross_file_analyzer.add_file(Path(content), source_code)
+                    call_graph = cross_file_analyzer.build_call_graph()
+                    self.logger.info(f"Built call graph with {len(call_graph.functions)} functions")
+                except Exception as e:
+                    self.logger.warning(f"Failed to build call graph for {content}: {e}")
+                    cross_file_analyzer = None
+                
+                all_findings = await self._analyze_file(content, context, cross_file_analyzer)
                 
             else:
                 # Content is source code string
@@ -624,6 +636,21 @@ Parameter Flow Tracking:
             analysis_content += "⚠️  This function accesses environment variables:\n"
             for env_access in ctx.env_var_access:
                 analysis_content += f"  {env_access}\n"
+        
+        # Add global variable writes
+        if ctx.global_writes:
+            analysis_content += f"\n**GLOBAL VARIABLE WRITES:**\n"
+            analysis_content += "⚠️  This function modifies global state:\n"
+            for gwrite in ctx.global_writes:
+                analysis_content += f"  Line {gwrite['line']}: global {gwrite['variable']} = {gwrite['value']}\n"
+        
+        # Add attribute access (self.attr, obj.attr)
+        if ctx.attribute_access:
+            writes = [op for op in ctx.attribute_access if op['type'] == 'write']
+            if writes:
+                analysis_content += f"\n**ATTRIBUTE WRITES:**\n"
+                for op in writes[:10]:
+                    analysis_content += f"  Line {op['line']}: {op['object']}.{op['attribute']} = {op['value']}\n"
         
         # Security validation: Check that the untrusted input doesn't contain our delimiter tags
         if start_tag in analysis_content or end_tag in analysis_content:

@@ -79,6 +79,10 @@ class FunctionContext:
     exception_handlers: List[Dict[str, Any]] = field(default_factory=list)  # Exception handling details
     env_var_access: List[str] = field(default_factory=list)  # Environment variable accesses
     
+    # State manipulation
+    global_writes: List[Dict[str, Any]] = field(default_factory=list)  # global var = value
+    attribute_access: List[Dict[str, Any]] = field(default_factory=list)  # self.attr or obj.attr
+    
     # Dataflow facts
     dataflow_summary: Dict[str, Any] = field(default_factory=dict)
 
@@ -231,6 +235,10 @@ class CodeContextExtractor:
         exception_handlers = self._extract_exception_handlers(node)
         env_var_access = self._extract_env_var_access(node)
         
+        # State manipulation
+        global_writes = self._extract_global_writes(node)
+        attribute_access = self._extract_attribute_access(node)
+        
         return FunctionContext(
             name=name,
             decorator_types=decorator_types,
@@ -255,6 +263,8 @@ class CodeContextExtractor:
             return_expressions=return_expressions,
             exception_handlers=exception_handlers,
             env_var_access=env_var_access,
+            global_writes=global_writes,
+            attribute_access=attribute_access,
         )
 
     def _extract_parameters(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
@@ -677,6 +687,102 @@ class CodeContextExtractor:
                         env_accesses.append(call_name)
         
         return env_accesses
+    
+    def _extract_global_writes(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
+        """Extract global variable writes.
+        
+        Args:
+            node: Function definition node
+            
+        Returns:
+            List of global write operations
+        """
+        global_writes = []
+        global_vars = set()
+        
+        # First, find all global declarations
+        for child in ast.walk(node):
+            if isinstance(child, ast.Global):
+                global_vars.update(child.names)
+        
+        # Then find assignments to those globals
+        for child in ast.walk(node):
+            if isinstance(child, ast.Assign):
+                for target in child.targets:
+                    if isinstance(target, ast.Name) and target.id in global_vars:
+                        try:
+                            value_str = ast.unparse(child.value)[:100]
+                        except Exception:
+                            value_str = "<complex>"
+                        
+                        global_writes.append({
+                            "variable": target.id,
+                            "value": value_str,
+                            "line": child.lineno
+                        })
+        
+        return global_writes
+    
+    def _extract_attribute_access(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
+        """Extract attribute access patterns (self.attr, obj.attr).
+        
+        Args:
+            node: Function definition node
+            
+        Returns:
+            List of attribute access operations
+        """
+        attribute_ops = []
+        
+        for child in ast.walk(node):
+            # Attribute writes: self.attr = value or obj.attr = value
+            if isinstance(child, ast.Assign):
+                for target in child.targets:
+                    if isinstance(target, ast.Attribute):
+                        obj_name = ""
+                        if isinstance(target.value, ast.Name):
+                            obj_name = target.value.id
+                        
+                        try:
+                            value_str = ast.unparse(child.value)[:100]
+                        except Exception:
+                            value_str = "<complex>"
+                        
+                        attribute_ops.append({
+                            "type": "write",
+                            "object": obj_name,
+                            "attribute": target.attr,
+                            "value": value_str,
+                            "line": child.lineno
+                        })
+            
+            # Attribute reads: x = self.attr or obj.attr
+            elif isinstance(child, ast.Attribute):
+                obj_name = ""
+                if isinstance(child.value, ast.Name):
+                    obj_name = child.value.id
+                
+                # Only track interesting objects (self, class instances, etc.)
+                if obj_name and obj_name not in ['str', 'int', 'list', 'dict']:
+                    attribute_ops.append({
+                        "type": "read",
+                        "object": obj_name,
+                        "attribute": child.attr,
+                        "line": child.lineno
+                    })
+        
+        # Deduplicate and limit
+        seen = set()
+        unique_ops = []
+        for op in attribute_ops:
+            key = (op['type'], op['object'], op['attribute'])
+            if key not in seen:
+                seen.add(key)
+                unique_ops.append(op)
+                if len(unique_ops) >= 20:
+                    break
+        
+        return unique_ops
 
     def to_json(self, contexts: List[FunctionContext]) -> str:
         """Convert contexts to JSON for LLM.

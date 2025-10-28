@@ -90,6 +90,7 @@ class TypeAnalyzer:
         self.node_types: dict[Any, Type] = {}
         self.var_types: dict[str, Type] = {}
         self.param_var_types: dict[str, Type] = {}  # Types of parameter-influenced vars
+        self.instance_to_class: dict[str, str] = {}  # variable_name -> ClassName for instances
 
     def analyze(self) -> None:
         """Perform type analysis on the AST."""
@@ -122,7 +123,7 @@ class TypeAnalyzer:
                             self.var_types[arg.arg] = Type(TypeKind.ANY)
                             self.param_var_types[arg.arg] = Type(TypeKind.ANY)
         
-        # Second pass: propagate types through assignments
+        # Second pass: propagate types through assignments and track class instances
         for n in ast.walk(node):
             if isinstance(n, ast.Assign):
                 rhs_type = self.node_types.get(n.value, Type(TypeKind.UNKNOWN))
@@ -130,6 +131,12 @@ class TypeAnalyzer:
                 for target in n.targets:
                     if isinstance(target, ast.Name):
                         self.var_types[target.id] = rhs_type
+                        
+                        # Track class instantiations: var = ClassName()
+                        if isinstance(n.value, ast.Call):
+                            if isinstance(n.value.func, ast.Name):
+                                class_name = n.value.func.id
+                                self.instance_to_class[target.id] = class_name
                         
                         # Check if RHS uses parameters
                         if self._uses_parameters(n.value):
@@ -254,3 +261,36 @@ class TypeAnalyzer:
             Dictionary mapping variable names to types
         """
         return self.param_var_types.copy()
+    
+    def resolve_method_call(self, call_name: str) -> str | None:
+        """Resolve instance.method() to ClassName.method.
+        
+        Args:
+            call_name: Call name like 'processor.process' or 'obj.method'
+            
+        Returns:
+            Resolved name like 'DataProcessor.process' or None
+        """
+        if '.' not in call_name:
+            return None
+        
+        parts = call_name.split('.', 1)
+        if len(parts) != 2:
+            return None
+        
+        instance_name, method_name = parts
+        
+        # Look up the class for this instance
+        class_name = self.instance_to_class.get(instance_name)
+        if class_name:
+            return f"{class_name}.{method_name}"
+        
+        return None
+    
+    def get_instance_mappings(self) -> dict[str, str]:
+        """Get all instance to class mappings.
+        
+        Returns:
+            Dictionary mapping instance names to class names
+        """
+        return self.instance_to_class.copy()
