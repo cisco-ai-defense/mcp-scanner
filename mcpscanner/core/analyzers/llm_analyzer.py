@@ -87,6 +87,13 @@ class LLMAnalyzer(BaseAnalyzer):
         self._max_retries = config.llm_max_retries
         self._llm_timeout = config.llm_timeout
 
+        # Concurrency limit for LLM requests
+        try:
+            llm_limit = int(getattr(config, "max_concurrent_llm_requests", 8) or 8)
+        except Exception:
+            llm_limit = 8
+        self._llm_sem = asyncio.Semaphore(llm_limit)
+
         # Load shared protection rules and analysis prompts
         self._protection_rules = self._load_prompt(
             "boilerplate_protection_rule_prompt.md"
@@ -492,7 +499,8 @@ class LLMAnalyzer(BaseAnalyzer):
                     "attempt": attempt + 1,
                     "max_tokens": self._max_tokens,
                 }):
-                    response = await acompletion(**request_params)
+                    async with self._llm_sem:
+                        response = await acompletion(**request_params)
                 return response
 
             except Exception as e:

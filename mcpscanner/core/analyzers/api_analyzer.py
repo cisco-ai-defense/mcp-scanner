@@ -81,6 +81,13 @@ class ApiAnalyzer(BaseAnalyzer):
             timeout=self._DEFAULT_TIMEOUT,
         )
 
+    async def aclose(self) -> None:
+        """Close underlying HTTP client to release sockets."""
+        try:
+            await self._client.aclose()
+        except Exception:
+            pass
+
     def _get_headers(self) -> Dict[str, str]:
         """Get the headers for the API request.
 

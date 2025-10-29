@@ -81,6 +81,7 @@ class YaraAnalyzer(BaseAnalyzer):
         self._rules = self._load_rules()
 
     _YARA_CACHE: dict = {}
+    _MAX_CACHE_ENTRIES: int = 16
 
     def _rules_cache_key(self) -> Tuple[str, Tuple[Tuple[str, float], ...]]:
         # Build a cache key based on directory and mtimes of rule files
@@ -125,6 +126,12 @@ class YaraAnalyzer(BaseAnalyzer):
         cache_key = self._rules_cache_key()
         cached = self._YARA_CACHE.get(cache_key)
         if cached:
+            # Refresh insertion order for simple LRU effect
+            try:
+                self._YARA_CACHE.pop(cache_key)
+                self._YARA_CACHE[cache_key] = cached
+            except Exception:
+                pass
             return cached
 
         self.logger.debug(
@@ -134,6 +141,14 @@ class YaraAnalyzer(BaseAnalyzer):
             rules = yara.compile(sources=rule_sources)
             self.logger.info("YARA rules compiled successfully")
             self._YARA_CACHE[cache_key] = rules
+            # Enforce simple LRU capacity
+            if len(self._YARA_CACHE) > self._MAX_CACHE_ENTRIES:
+                try:
+                    oldest_key = next(iter(self._YARA_CACHE))
+                    if oldest_key != cache_key:
+                        self._YARA_CACHE.pop(oldest_key, None)
+                except Exception:
+                    pass
             return rules
         except yara.Error as e:
             self.logger.error(f"Error compiling YARA rules: {e}")

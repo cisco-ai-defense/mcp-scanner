@@ -120,6 +120,29 @@ class Config:
             else int(os.getenv("MCP_SCANNER_MAX_CONCURRENCY_RESOURCES", "8"))
         )
 
+        # Optional LLM concurrency (env override)
+        self._max_concurrent_llm_requests = int(
+            os.getenv("MCP_SCANNER_MAX_CONCURRENT_LLM", "8")
+        )
+
+        # Validate and clamp concurrency values to the range [1, 8]
+        self._max_concurrency_tools = self._clamp_concurrency(self._max_concurrency_tools)
+        self._max_concurrency_prompts = self._clamp_concurrency(self._max_concurrency_prompts)
+        self._max_concurrency_resources = self._clamp_concurrency(self._max_concurrency_resources)
+        self._max_concurrent_llm_requests = self._clamp_concurrency(self._max_concurrent_llm_requests)
+
+    @staticmethod
+    def _clamp_concurrency(value: int) -> int:
+        try:
+            v = int(value)
+        except Exception:
+            v = 8
+        if v < 1:
+            return 1
+        if v > 8:
+            return 8
+        return v
+
     @property
     def api_key(self) -> str:
         """Get the API key.
@@ -259,13 +282,33 @@ class Config:
     def max_concurrency_tools(self) -> int:
         return self._max_concurrency_tools
 
+    @max_concurrency_tools.setter
+    def max_concurrency_tools(self, value: int) -> None:
+        self._max_concurrency_tools = self._clamp_concurrency(value)
+
     @property
     def max_concurrency_prompts(self) -> int:
         return self._max_concurrency_prompts
 
+    @max_concurrency_prompts.setter
+    def max_concurrency_prompts(self, value: int) -> None:
+        self._max_concurrency_prompts = self._clamp_concurrency(value)
+
     @property
     def max_concurrency_resources(self) -> int:
         return self._max_concurrency_resources
+
+    @max_concurrency_resources.setter
+    def max_concurrency_resources(self, value: int) -> None:
+        self._max_concurrency_resources = self._clamp_concurrency(value)
+
+    @property
+    def max_concurrent_llm_requests(self) -> int:
+        return self._max_concurrent_llm_requests
+
+    @max_concurrent_llm_requests.setter
+    def max_concurrent_llm_requests(self, value: int) -> None:
+        self._max_concurrent_llm_requests = self._clamp_concurrency(value)
 
     @property
     def base_url(self) -> str:

@@ -774,11 +774,11 @@ async def main():
             cfg = _build_config(selected_analyzers)
             # Override concurrency if provided
             if args.max_concurrency_tools is not None:
-                cfg._max_concurrency_tools = args.max_concurrency_tools
+                cfg.max_concurrency_tools = args.max_concurrency_tools
             if args.max_concurrency_prompts is not None:
-                cfg._max_concurrency_prompts = args.max_concurrency_prompts
+                cfg.max_concurrency_prompts = args.max_concurrency_prompts
             if args.max_concurrency_resources is not None:
-                cfg._max_concurrency_resources = args.max_concurrency_resources
+                cfg.max_concurrency_resources = args.max_concurrency_resources
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             results_raw = await scanner.scan_remote_server_tools(
@@ -789,11 +789,11 @@ async def main():
         elif args.cmd == "stdio":
             cfg = _build_config(selected_analyzers)
             if args.max_concurrency_tools is not None:
-                cfg._max_concurrency_tools = args.max_concurrency_tools
+                cfg.max_concurrency_tools = args.max_concurrency_tools
             if args.max_concurrency_prompts is not None:
-                cfg._max_concurrency_prompts = args.max_concurrency_prompts
+                cfg.max_concurrency_prompts = args.max_concurrency_prompts
             if args.max_concurrency_resources is not None:
-                cfg._max_concurrency_resources = args.max_concurrency_resources
+                cfg.max_concurrency_resources = args.max_concurrency_resources
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             env_dict = {}
             for item in args.stdio_env or []:
@@ -821,11 +821,11 @@ async def main():
         elif args.cmd == "config":
             cfg = _build_config(selected_analyzers)
             if args.max_concurrency_tools is not None:
-                cfg._max_concurrency_tools = args.max_concurrency_tools
+                cfg.max_concurrency_tools = args.max_concurrency_tools
             if args.max_concurrency_prompts is not None:
-                cfg._max_concurrency_prompts = args.max_concurrency_prompts
+                cfg.max_concurrency_prompts = args.max_concurrency_prompts
             if args.max_concurrency_resources is not None:
-                cfg._max_concurrency_resources = args.max_concurrency_resources
+                cfg.max_concurrency_resources = args.max_concurrency_resources
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             scan_results = await scanner.scan_mcp_config_file(
@@ -836,11 +836,11 @@ async def main():
         elif args.cmd == "known-configs":
             cfg = _build_config(selected_analyzers)
             if args.max_concurrency_tools is not None:
-                cfg._max_concurrency_tools = args.max_concurrency_tools
+                cfg.max_concurrency_tools = args.max_concurrency_tools
             if args.max_concurrency_prompts is not None:
-                cfg._max_concurrency_prompts = args.max_concurrency_prompts
+                cfg.max_concurrency_prompts = args.max_concurrency_prompts
             if args.max_concurrency_resources is not None:
-                cfg._max_concurrency_resources = args.max_concurrency_resources
+                cfg.max_concurrency_resources = args.max_concurrency_resources
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             results_by_cfg = await scanner.scan_well_known_mcp_configs(
@@ -860,11 +860,11 @@ async def main():
         elif args.cmd == "prompts":
             cfg = _build_config(selected_analyzers)
             if args.max_concurrency_tools is not None:
-                cfg._max_concurrency_tools = args.max_concurrency_tools
+                cfg.max_concurrency_tools = args.max_concurrency_tools
             if args.max_concurrency_prompts is not None:
-                cfg._max_concurrency_prompts = args.max_concurrency_prompts
+                cfg.max_concurrency_prompts = args.max_concurrency_prompts
             if args.max_concurrency_resources is not None:
-                cfg._max_concurrency_resources = args.max_concurrency_resources
+                cfg.max_concurrency_resources = args.max_concurrency_resources
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
 

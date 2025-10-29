@@ -103,7 +103,11 @@ export MCP_SCANNER_TRACING=1
 export MCP_SCANNER_MAX_CONCURRENCY_TOOLS=8
 export MCP_SCANNER_MAX_CONCURRENCY_PROMPTS=8
 export MCP_SCANNER_MAX_CONCURRENCY_RESOURCES=8
+# Cap concurrent LLM requests (default: 8)
+export MCP_SCANNER_MAX_CONCURRENT_LLM=8
 ```
+
+Note: Concurrency values are clamped to the range [1, 8] regardless of whether they come from environment variables or CLI overrides.
 
 ### Quick Start Examples
 
@@ -174,6 +178,13 @@ async def main():
     for result in resource_results:
         print(f"Resource: {result.resource_name}, Safe: {result.is_safe}, Status: {result.status}")
 
+    # Reuse a single MCP session for all scans (more efficient)
+    tools, prompts, resources = await scanner.scan_remote_server_all(
+        "http://127.0.0.1:8000/mcp",
+        analyzers=[AnalyzerEnum.YARA],
+        allowed_mime_types=["text/plain", "text/html"],
+    )
+
 # Run the scanner
 asyncio.run(main())
 ```
@@ -195,6 +206,11 @@ Additional global flags:
 - `--max-concurrency-tools N` — bound parallel tool analyses (env: `MCP_SCANNER_MAX_CONCURRENCY_TOOLS`)
 - `--max-concurrency-prompts N` — bound parallel prompt analyses (env: `MCP_SCANNER_MAX_CONCURRENCY_PROMPTS`)
 - `--max-concurrency-resources N` — bound parallel resource analyses (env: `MCP_SCANNER_MAX_CONCURRENCY_RESOURCES`)
+  (all concurrency values are clamped to [1, 8])
+
+LLM request concurrency is controlled via environment variable:
+
+- `MCP_SCANNER_MAX_CONCURRENT_LLM` — maximum in-flight LLM requests (clamped to [1, 8])
 
 #### Additional Examples
 

@@ -43,6 +43,33 @@ class TestConfig:
         assert config.llm_rate_limit_delay == 1.0
         assert config.llm_max_retries == 3
 
+    def test_concurrency_clamping_explicit_values(self):
+        """Concurrency values are clamped to [1, 8] for explicit args."""
+        cfg = Config(
+            max_concurrency_tools=-5,
+            max_concurrency_prompts=0,
+            max_concurrency_resources=999,
+        )
+        assert cfg.max_concurrency_tools == 1
+        assert cfg.max_concurrency_prompts == 1
+        assert cfg.max_concurrency_resources == 8
+
+    def test_concurrency_clamping_env_values(self, monkeypatch):
+        """Concurrency values from env are clamped to [1, 8]."""
+        with patch.dict(
+            "os.environ",
+            {
+                "MCP_SCANNER_MAX_CONCURRENCY_TOOLS": "64",
+                "MCP_SCANNER_MAX_CONCURRENCY_PROMPTS": "-2",
+                "MCP_SCANNER_MAX_CONCURRENCY_RESOURCES": "0",
+            },
+            clear=False,
+        ):
+            cfg = Config()
+            assert cfg.max_concurrency_tools == 8
+            assert cfg.max_concurrency_prompts == 1
+            assert cfg.max_concurrency_resources == 1
+
     def test_config_initialization_with_api_key(self):
         """Test Config initialization with API key."""
         config = Config(api_key="test_api_key")

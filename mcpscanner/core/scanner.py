@@ -23,8 +23,10 @@ import asyncio
 import json
 import logging as stdlib_logging
 import warnings
+import asyncio as _asyncio
 from typing import Any, Dict, List, Optional, Tuple, Callable
 import httpx
+from types import SimpleNamespace
 
 # MCP client imports
 from mcp.client.session import ClientSession
@@ -66,6 +68,12 @@ ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
 
 
 logger = get_logger(__name__)
+
+# Synchronization for temporary httpx logger modifications
+_HTTPX_LOGGER_LOCK = _asyncio.Lock()
+_HTTPX_LOGGER_OVERRIDE_COUNT = 0
+_HTTPX_LOGGER_ORIGINAL_LEVEL = None
+_HTTPX_LOGGER_ORIGINAL_PROPAGATE = None
 
 
 class Scanner:
@@ -593,13 +601,9 @@ class Scanner:
         http_status_code = None
         capture_handler = None
         httpx_logger = None
-        original_httpx_level = None
-        original_propagate = None
 
         # Set up httpx logging capture to detect HTTP errors
         httpx_logger = stdlib_logging.getLogger("httpx")
-        original_httpx_level = httpx_logger.level
-        original_propagate = httpx_logger.propagate
 
         class StatusCodeCapture(stdlib_logging.Handler):
             def __init__(self):
@@ -613,12 +617,20 @@ class Scanner:
         capture_handler = StatusCodeCapture()
         capture_handler._check_http_error_in_logs = self._check_http_error_in_logs
 
-        # Temporarily set httpx logger to INFO to ensure it emits logs we can capture
-        # Disable propagation only if we're raising the log level to avoid console output
-        httpx_logger.addHandler(capture_handler)
-        if httpx_logger.level > stdlib_logging.INFO or httpx_logger.level == stdlib_logging.NOTSET:
-            httpx_logger.setLevel(stdlib_logging.INFO)
-            httpx_logger.propagate = False  # Prevent console output
+        # Safely add handler and adjust logger level with a global lock and refcount
+        global _HTTPX_LOGGER_OVERRIDE_COUNT, _HTTPX_LOGGER_ORIGINAL_LEVEL, _HTTPX_LOGGER_ORIGINAL_PROPAGATE
+        async with _HTTPX_LOGGER_LOCK:
+            if _HTTPX_LOGGER_OVERRIDE_COUNT == 0:
+                _HTTPX_LOGGER_ORIGINAL_LEVEL = httpx_logger.level
+                _HTTPX_LOGGER_ORIGINAL_PROPAGATE = httpx_logger.propagate
+                if (
+                    httpx_logger.level > stdlib_logging.INFO
+                    or httpx_logger.level == stdlib_logging.NOTSET
+                ):
+                    httpx_logger.setLevel(stdlib_logging.INFO)
+                    httpx_logger.propagate = False  # Prevent console output
+            httpx_logger.addHandler(capture_handler)
+            _HTTPX_LOGGER_OVERRIDE_COUNT += 1
 
         try:
             logger.debug(f'Attempting to connect to MCP server: server="{server_url}"')
@@ -708,13 +720,20 @@ class Scanner:
                 ) from e
             raise
         finally:
-            # Clean up httpx logger handler and restore original settings
+            # Clean up httpx logger handler and restore original settings safely
             if capture_handler and httpx_logger:
-                httpx_logger.removeHandler(capture_handler)
-                if original_httpx_level is not None:
-                    httpx_logger.setLevel(original_httpx_level)
-                if original_propagate is not None:
-                    httpx_logger.propagate = original_propagate
+                async with _HTTPX_LOGGER_LOCK:
+                    try:
+                        httpx_logger.removeHandler(capture_handler)
+                    except Exception:
+                        pass
+                    if _HTTPX_LOGGER_OVERRIDE_COUNT > 0:
+                        _HTTPX_LOGGER_OVERRIDE_COUNT -= 1
+                    if _HTTPX_LOGGER_OVERRIDE_COUNT == 0:
+                        if _HTTPX_LOGGER_ORIGINAL_LEVEL is not None:
+                            httpx_logger.setLevel(_HTTPX_LOGGER_ORIGINAL_LEVEL)
+                        if _HTTPX_LOGGER_ORIGINAL_PROPAGATE is not None:
+                            httpx_logger.propagate = _HTTPX_LOGGER_ORIGINAL_PROPAGATE
 
     async def scan_remote_server_tool(
         self,
@@ -864,6 +883,121 @@ class Scanner:
         except Exception as e:
             logger.error(f"Error scanning server {server_url}: {e}")
             raise
+        finally:
+            await self._close_mcp_session(client_context, session)
+
+    async def scan_remote_server_all(
+        self,
+        server_url: str,
+        auth: Optional[Auth] = None,
+        analyzers: Optional[List[AnalyzerEnum]] = None,
+        http_headers: Optional[dict] = None,
+        allowed_mime_types: Optional[List[str]] = None,
+    ) -> Tuple[List[ToolScanResult], List[PromptScanResult], List[ResourceScanResult]]:
+        """Scan tools, prompts, and resources on a server, reusing a single MCP session.
+
+        Returns tuple of (tool_results, prompt_results, resource_results).
+        """
+        if analyzers is None:
+            analyzers = self.DEFAULT_ANALYZERS
+        if allowed_mime_types is None:
+            allowed_mime_types = ["text/plain", "text/html"]
+
+        self._validate_analyzer_requirements(analyzers)
+
+        client_context = None
+        session = None
+        try:
+            client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # Tools
+            try:
+                tool_list = await session.list_tools()
+            except McpError as e:
+                tool_list = SimpleNamespace(tools=[])
+
+            max_tools = getattr(self._config, "max_concurrency_tools", 8)
+            tools_sem = asyncio.Semaphore(max_tools)
+
+            async def _bounded_tool(t):
+                async with tools_sem:
+                    return await self._analyze_tool(t, analyzers, http_headers)
+
+            tool_results = []
+            if getattr(tool_list, "tools", None):
+                tool_results = await asyncio.gather(*[_bounded_tool(t) for t in tool_list.tools])
+
+            # Prompts
+            try:
+                prompt_list = await session.list_prompts()
+            except McpError as e:
+                prompt_list = SimpleNamespace(prompts=[])
+
+            max_prompts = getattr(self._config, "max_concurrency_prompts", 8)
+            prompts_sem = asyncio.Semaphore(max_prompts)
+
+            async def _bounded_prompt(p):
+                async with prompts_sem:
+                    async with get_tracer().span("scanner.analyze.prompt", {"prompt": p.name}):
+                        return await self._analyze_prompt(p, analyzers, http_headers)
+
+            prompt_results = []
+            if getattr(prompt_list, "prompts", None):
+                prompt_results = await asyncio.gather(*[_bounded_prompt(p) for p in prompt_list.prompts])
+
+            # Resources
+            try:
+                resource_list = await session.list_resources()
+            except McpError as e:
+                resource_list = SimpleNamespace(resources=[])
+
+            max_res = getattr(self._config, "max_concurrency_resources", 8)
+            res_sem = asyncio.Semaphore(max_res)
+
+            async def _bounded_resource(r):
+                if r.mimeType and r.mimeType not in allowed_mime_types:
+                    return ResourceScanResult(
+                        resource_uri=r.uri,
+                        resource_name=r.name or "",
+                        resource_mime_type=r.mimeType or "unknown",
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                    )
+                async with res_sem:
+                    resource_contents = await session.read_resource(r.uri)
+                parts = []
+                for content in resource_contents.contents:
+                    if hasattr(content, "text"):
+                        parts.append(content.text)
+                text_content = "".join(parts)
+                if not text_content:
+                    return ResourceScanResult(
+                        resource_uri=r.uri,
+                        resource_name=r.name or "",
+                        resource_mime_type=r.mimeType or "unknown",
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                    )
+                async with res_sem:
+                    async with get_tracer().span("scanner.analyze.resource", {"uri": str(r.uri)}):
+                        return await self._analyze_resource(
+                            text_content,
+                            r.uri,
+                            r.name or "",
+                            r.description or "",
+                            r.mimeType or "unknown",
+                            analyzers,
+                            http_headers,
+                        )
+
+            resource_results = []
+            if getattr(resource_list, "resources", None):
+                resource_results = await asyncio.gather(*[_bounded_resource(r) for r in resource_list.resources])
+
+            return tool_results, prompt_results, resource_results
+
         finally:
             await self._close_mcp_session(client_context, session)
 
@@ -1019,9 +1153,16 @@ class Scanner:
                         return []
                     raise
 
-                # Create analysis tasks for each tool
+                # Create analysis tasks for each tool with bounded concurrency
+                max_concurrency = getattr(self._config, "max_concurrency_tools", 8)
+                sem = asyncio.Semaphore(max_concurrency)
+
+                async def _bounded_tool_analyze(t):
+                    async with sem:
+                        return await self._analyze_tool(t, analyzers)
+
                 scan_tasks = [
-                    self._analyze_tool(tool, analyzers) for tool in tool_list.tools
+                    _bounded_tool_analyze(tool) for tool in tool_list.tools
                 ]
 
                 # Run all tasks concurrently
@@ -1496,9 +1637,16 @@ class Scanner:
                         return []
                     raise
 
-                # Create analysis tasks for each prompt
+                # Create analysis tasks for each prompt with bounded concurrency
+                max_concurrency = getattr(self._config, "max_concurrency_prompts", 8)
+                sem = asyncio.Semaphore(max_concurrency)
+
+                async def _bounded_prompt_analyze(p):
+                    async with sem:
+                        return await self._analyze_prompt(p, analyzers)
+
                 scan_tasks = [
-                    self._analyze_prompt(prompt, analyzers) for prompt in prompt_list.prompts
+                    _bounded_prompt_analyze(prompt) for prompt in prompt_list.prompts
                 ]
 
                 # Run all tasks concurrently
@@ -1835,19 +1983,20 @@ class Scanner:
                             findings=[],
                         )
 
-                    # Analyze the resource
+                    # Analyze the resource (bounded by semaphore)
                     try:
-                        async with get_tracer().span("scanner.analyze.resource", {"uri": str(resource.uri)}):
-                            result = await self._analyze_resource(
-                            text_content,
-                            resource.uri,
-                            resource.name or "",
-                            resource.description or "",
-                            resource.mimeType or "unknown",
-                            analyzers,
-                            http_headers
-                            )
-                        return result
+                        async with sem:
+                            async with get_tracer().span("scanner.analyze.resource", {"uri": str(resource.uri)}):
+                                result = await self._analyze_resource(
+                                    text_content,
+                                    resource.uri,
+                                    resource.name or "",
+                                    resource.description or "",
+                                    resource.mimeType or "unknown",
+                                    analyzers,
+                                    http_headers,
+                                )
+                            return result
                     except Exception as e:
                         logger.error(f"Error analyzing resource '{resource.uri}': {e}")
                         return ResourceScanResult(
