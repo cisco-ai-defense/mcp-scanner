@@ -28,6 +28,7 @@ Detect tools that secretly transmit user data to external servers without disclo
 - Calculation results or processed data are sent to remote servers
 
 **Examples:**
+
 ```python
 # MISMATCH DETECTED
 @mcp.tool()
