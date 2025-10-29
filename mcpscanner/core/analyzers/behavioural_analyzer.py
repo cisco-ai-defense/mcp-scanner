@@ -652,6 +652,36 @@ Parameter Flow Tracking:
                 for op in writes[:10]:
                     analysis_content += f"  Line {op['line']}: {op['object']}.{op['attribute']} = {op['value']}\n"
         
+        # Add liveness analysis results
+        if ctx.dead_variables:
+            analysis_content += f"\n**DEAD CODE ANALYSIS:**\n"
+            analysis_content += "Variables assigned but never used:\n"
+            for var in ctx.dead_variables[:10]:
+                analysis_content += f"  {var}\n"
+        
+        if ctx.unused_expressions:
+            analysis_content += f"\n**UNUSED FUNCTION CALLS:**\n"
+            analysis_content += "Functions called but results not captured or used:\n"
+            for expr in ctx.unused_expressions[:10]:
+                analysis_content += f"  {expr}\n"
+        
+        # Add scope and naming issues
+        if ctx.scope_issues:
+            analysis_content += f"\n**SCOPE/NAMING ISSUES:**\n"
+            for issue in ctx.scope_issues[:10]:
+                if issue['type'] == 'used_before_definition':
+                    analysis_content += f"  Line {issue['line']}: Variable '{issue['variable']}' used before definition\n"
+        
+        # Add use-def chains for parameter-influenced variables
+        if ctx.use_def_chains:
+            param_influenced = {var: defs for var, defs in ctx.use_def_chains.items() 
+                               if any('parameter:' in d for d in defs)}
+            if param_influenced:
+                analysis_content += f"\n**PARAMETER DATA FLOW:**\n"
+                analysis_content += "Variables derived from parameters and their definitions:\n"
+                for var, defs in list(param_influenced.items())[:10]:
+                    analysis_content += f"  {var}: {', '.join(defs[:5])}\n"
+        
         # Security validation: Check that the untrusted input doesn't contain our delimiter tags
         if start_tag in analysis_content or end_tag in analysis_content:
             self.logger.warning(

@@ -34,11 +34,11 @@ from typing import Any, Dict, List, Optional
 
 from .analyzers.python_analyzer import PythonAnalyzer
 from .analysis.constant_prop import ConstantPropagator
-from .analysis.dataflow import ControlFlowGraph
-from .analysis.forward_tracker import ForwardFlowTracker, FlowPath
+from .analysis.forward_tracker import ForwardFlowTracker
+from .analysis.liveness import LivenessAnalyzer
+from .analysis.available_exprs import AvailableExpressionsAnalyzer
 from .analysis.naming import NameResolver
 from .analysis.reaching_defs import ReachingDefinitionsAnalyzer
-from .analysis.cross_file import CrossFileAnalyzer
 
 
 @dataclass
@@ -82,6 +82,13 @@ class FunctionContext:
     # State manipulation
     global_writes: List[Dict[str, Any]] = field(default_factory=list)  # global var = value
     attribute_access: List[Dict[str, Any]] = field(default_factory=list)  # self.attr or obj.attr
+    
+    # Advanced dataflow analysis
+    dead_variables: List[str] = field(default_factory=list)  # Variables that are never used
+    live_sensitive_vars: List[Dict[str, Any]] = field(default_factory=list)  # Sensitive data in memory
+    unused_expressions: List[str] = field(default_factory=list)  # Computed but never used
+    scope_issues: List[Dict[str, Any]] = field(default_factory=list)  # Scope/naming issues
+    use_def_chains: Dict[str, List[str]] = field(default_factory=dict)  # Variable use-def chains
     
     # Dataflow facts
     dataflow_summary: Dict[str, Any] = field(default_factory=dict)
@@ -239,6 +246,11 @@ class CodeContextExtractor:
         global_writes = self._extract_global_writes(node)
         attribute_access = self._extract_attribute_access(node)
         
+        # Advanced dataflow analysis
+        param_names = [p['name'] for p in parameters]
+        dead_vars, live_sensitive, unused_exprs = self._extract_liveness_and_availability(node, param_names)
+        scope_issues, use_def_chains = self._extract_name_resolution_and_reaching_defs(node, param_names)
+        
         return FunctionContext(
             name=name,
             decorator_types=decorator_types,
@@ -265,6 +277,11 @@ class CodeContextExtractor:
             env_var_access=env_var_access,
             global_writes=global_writes,
             attribute_access=attribute_access,
+            dead_variables=dead_vars,
+            live_sensitive_vars=live_sensitive,
+            unused_expressions=unused_exprs,
+            scope_issues=scope_issues,
+            use_def_chains=use_def_chains,
         )
 
     def _extract_parameters(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
@@ -783,6 +800,149 @@ class CodeContextExtractor:
                     break
         
         return unique_ops
+    
+    def _extract_liveness_and_availability(
+        self, 
+        node: ast.FunctionDef, 
+        param_names: List[str]
+    ) -> tuple[List[str], List[Dict[str, Any]], List[str]]:
+        """Extract liveness and available expressions analysis.
+        
+        Args:
+            node: Function definition node
+            param_names: Parameter names
+            
+        Returns:
+            Tuple of (dead_variables, live_sensitive_vars, unused_expressions)
+        """
+        dead_vars = []
+        live_sensitive = []
+        unused_exprs = []
+        
+        try:
+            # Run liveness analysis
+            liveness_analyzer = LivenessAnalyzer(self.analyzer, param_names)
+            live_vars_map = liveness_analyzer.analyze_liveness()
+            
+            # Find dead variables (assigned but never used)
+            all_assigned = set()
+            all_used = set()
+            
+            for child in ast.walk(node):
+                if isinstance(child, ast.Assign):
+                    for target in child.targets:
+                        if isinstance(target, ast.Name):
+                            all_assigned.add(target.id)
+                elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                    all_used.add(child.id)
+            
+            dead_vars = list(all_assigned - all_used)
+            
+            # Run available expressions analysis
+            avail_analyzer = AvailableExpressionsAnalyzer(self.analyzer, param_names)
+            available_exprs = avail_analyzer.analyze_available_exprs()
+            
+            # Find expressions that are computed but never used
+            # Look for function calls in expression statements (not assigned to anything)
+            for child in ast.walk(node):
+                if isinstance(child, ast.Expr) and isinstance(child.value, ast.Call):
+                    try:
+                        call_str = ast.unparse(child.value)
+                        unused_exprs.append(call_str)
+                    except Exception:
+                        pass
+        
+        except Exception as e:
+            # If analysis fails, return empty results
+            self.logger.debug(f"Liveness/availability analysis failed: {e}")
+        
+        return dead_vars, live_sensitive, unused_exprs
+    
+    def _extract_name_resolution_and_reaching_defs(
+        self,
+        node: ast.FunctionDef,
+        param_names: List[str]
+    ) -> tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+        """Extract name resolution and reaching definitions analysis.
+        
+        Args:
+            node: Function definition node
+            param_names: Parameter names
+            
+        Returns:
+            Tuple of (scope_issues, use_def_chains)
+        """
+        scope_issues = []
+        use_def_chains = {}
+        
+        try:
+            # Run name resolution
+            name_resolver = NameResolver(self.analyzer, param_names)
+            name_resolver.resolve()
+            
+            # Check for scope issues
+            # 1. Variables used before definition (excluding function calls)
+            defined_vars = set()
+            function_calls = set()
+            
+            # First pass: collect all function calls and decorators
+            for child in ast.walk(node):
+                if isinstance(child, ast.Call):
+                    if isinstance(child.func, ast.Name):
+                        function_calls.add(child.func.id)
+                    elif isinstance(child.func, ast.Attribute):
+                        # Handle obj.method() calls
+                        if isinstance(child.func.value, ast.Name):
+                            function_calls.add(child.func.value.id)
+            
+            # Second pass: check for variables used before definition
+            for child in ast.walk(node):
+                if isinstance(child, ast.Assign):
+                    for target in child.targets:
+                        if isinstance(target, ast.Name):
+                            defined_vars.add(target.id)
+                elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                    # Skip if it's a function call, parameter, or builtin
+                    if (child.id not in defined_vars and 
+                        child.id not in param_names and
+                        child.id not in function_calls and
+                        not self._is_builtin_or_import(child.id)):
+                        scope_issues.append({
+                            'type': 'used_before_definition',
+                            'variable': child.id,
+                            'line': getattr(child, 'lineno', 0)
+                        })
+            
+            # Run reaching definitions
+            reaching_defs = ReachingDefinitionsAnalyzer(self.analyzer, param_names)
+            use_def_map = reaching_defs.analyze_reaching_defs()
+            
+            # Build simplified use-def chains for LLM
+            for (node_id, var), defs in use_def_map.items():
+                if var not in use_def_chains:
+                    use_def_chains[var] = []
+                for definition in defs:
+                    if definition.is_parameter:
+                        use_def_chains[var].append(f"parameter:{definition.var}")
+                    else:
+                        use_def_chains[var].append(f"line:{definition.node_id}")
+            
+        except Exception as e:
+            self.logger.debug(f"Name resolution/reaching defs analysis failed: {e}")
+        
+        return scope_issues, use_def_chains
+    
+    def _is_builtin_or_import(self, name: str) -> bool:
+        """Check if name is a builtin or imported.
+        
+        Args:
+            name: Variable name
+            
+        Returns:
+            True if builtin or imported
+        """
+        import builtins
+        return name in dir(builtins) or name in ['self', 'cls']
 
     def to_json(self, contexts: List[FunctionContext]) -> str:
         """Convert contexts to JSON for LLM.
