@@ -14,15 +14,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Code context extractor for LLM-based analysis.
+"""Code Context Extractor for Static Analysis.
 
-This module extracts comprehensive code context including:
-- AST structure
-- Dataflow information
-- Taint analysis results
-- Constant propagation
-- Function call graphs
-- Variable dependencies
+This module extracts comprehensive code context from Python source by traversing
+and analyzing Abstract Syntax Trees (AST). It provides:
+- Extracts complete function context for MCP entry points
+- Performs forward dataflow analysis from parameters
+- Tracks taint flows to dangerous operations
+- Collects constants, imports, and behavioral patterns
+- Supports cross-file interprocedural analysis
+
+Classes:
+    FunctionContext: Complete context for a function
+    ContextExtractor: Main extractor for comprehensive code analysis
 """
 
 import ast
@@ -32,13 +36,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .analyzers.python_analyzer import PythonAnalyzer
-from .analysis.constant_prop import ConstantPropagator
-from .analysis.dataflow import ControlFlowGraph
-from .analysis.forward_tracker import ForwardFlowTracker, FlowPath
-from .analysis.naming import NameResolver
-from .analysis.reaching_defs import ReachingDefinitionsAnalyzer
-from .analysis.cross_file import CrossFileAnalyzer
+from .parser.python_parser import PythonParser
+from .dataflow.constant_propagation import ConstantPropagationAnalysis
+from .dataflow.forward_analysis import ForwardDataflowAnalysis
 
 
 @dataclass
@@ -87,8 +87,13 @@ class FunctionContext:
     dataflow_summary: Dict[str, Any] = field(default_factory=dict)
 
 
-class CodeContextExtractor:
-    """Extracts comprehensive code context for LLM analysis."""
+class ContextExtractor:
+    """Extracts comprehensive code context by analyzing Abstract Syntax Trees.
+    
+    This class traverses Python ASTs (created by ast.parse()) to extract
+    rich context information including dataflow, taint tracking, and behavioral
+    patterns for security analysis.
+    """
 
     def __init__(self, source_code: str, file_path: str = "unknown.py"):
         """Initialize context extractor.
@@ -99,8 +104,8 @@ class CodeContextExtractor:
         """
         self.source_code = source_code
         self.file_path = Path(file_path)
-        self.analyzer = PythonAnalyzer(self.file_path, source_code)
-        self.const_prop = ConstantPropagator(self.analyzer)
+        self.analyzer = PythonParser(self.file_path, source_code)
+        self.const_prop = ConstantPropagationAnalysis(self.analyzer)
         
         # Parse and analyze
         try:
@@ -423,11 +428,11 @@ class CodeContextExtractor:
             # PERFORMANCE FIX: Create a new analyzer with ONLY this function's AST
             # instead of the entire file. This makes the CFG much smaller and faster.
             func_source = ast.unparse(node)
-            func_analyzer = PythonAnalyzer(self.file_path, func_source)
+            func_analyzer = PythonParser(self.file_path, func_source)
             func_analyzer.parse()
             
             # Create forward flow tracker with the function-specific analyzer
-            tracker = ForwardFlowTracker(func_analyzer, param_names)
+            tracker = ForwardDataflowAnalysis(func_analyzer, param_names)
             
             # Analyze flows from parameters
             flows = tracker.analyze_forward_flows()

@@ -14,14 +14,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Analyzers package for MCP Scanner SDK.
+"""Analyzers package for MCP Scanner
 
-This package contains different analyzers for scanning MCP tools.
+This package contains different analyzers for scanning MCP tools:
+- Pattern-based analyzers (YARA, API)
+- LLM-based semantic analyzers
+- Behavioral code analyzers (static analysis + semantic alignment)
 """
 
 from .api_analyzer import ApiAnalyzer
 from .base import BaseAnalyzer, SecurityFinding
-from .behavioural_analyzer import BehaviouralAnalyzer
+from .behavioral import BehavioralCodeAnalyzer, AlignmentOrchestrator
 from .llm_analyzer import LLMAnalyzer
 from .yara_analyzer import YaraAnalyzer
 
@@ -31,5 +34,6 @@ __all__ = [
     "ApiAnalyzer",
     "YaraAnalyzer",
     "LLMAnalyzer",
-    "BehaviouralAnalyzer",
+    "BehavioralCodeAnalyzer",
+    "AlignmentOrchestrator",
 ]

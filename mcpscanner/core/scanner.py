@@ -46,7 +46,7 @@ from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
-from .analyzers.behavioural_analyzer import BehaviouralAnalyzer
+from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .auth import (
     Auth,
     AuthType,
@@ -111,8 +111,8 @@ class Scanner:
         self._llm_analyzer = (
             LLMAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
         )
-        self._behavioural_analyzer = (
-            BehaviouralAnalyzer(config) if config.llm_provider_api_key else None
+        self._behavioral_analyzer = (
+            BehavioralCodeAnalyzer(config) if config.llm_provider_api_key else None
         )
         self._custom_analyzers = custom_analyzers or []
 
@@ -124,8 +124,8 @@ class Scanner:
             active_analyzers.append("YARA")
         if self._llm_analyzer:
             active_analyzers.append("LLM")
-        if self._behavioural_analyzer:
-            active_analyzers.append("Behavioural")
+        if self._behavioral_analyzer:
+            active_analyzers.append("Behavioral")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -160,9 +160,9 @@ class Scanner:
                 "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured (or AWS credentials for Bedrock models)"
             )
 
-        if AnalyzerEnum.BEHAVIOURAL in requested_analyzers and not self._behavioural_analyzer:
+        if AnalyzerEnum.BEHAVIORAL in requested_analyzers and not self._behavioral_analyzer:
             missing_requirements.append(
-                "Behavioural analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
+                "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
             )
 
         # YARA analyzer should always be available since it doesn't require API keys

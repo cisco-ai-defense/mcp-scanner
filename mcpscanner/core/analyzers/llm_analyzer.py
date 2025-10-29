@@ -33,8 +33,7 @@ from .base import BaseAnalyzer, SecurityFinding
 
 
 class SecurityError(Exception):
-    """Exception raised when security validation fails."""
-
+    """Custom exception for security violations in LLM prompts."""
     pass
 
 

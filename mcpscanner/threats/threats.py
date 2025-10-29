@@ -109,6 +109,56 @@ class ThreatMapping:
         },
     }
     
+    # Behavioral Analyzer Threats
+    # Note: These are description mismatch threats detected via semantic analysis
+    BEHAVIORAL_THREATS = {
+        "DATA EXFILTRATION": {
+            "scanner_category": "DATA EXFILTRATION",
+            "severity": "HIGH",
+            "aitech": "AITech-8.2",
+            "aitech_name": "Data Exfiltration / Exposure",
+            "aisubtech": "AISubtech-8.2.3",
+            "aisubtech_name": "Data Exfiltration via Agent Tooling",
+            "description": "Unintentional and/or unauthorized exposure or exfiltration of sensitive information through MCP tools that secretly transmit user data to external servers without disclosure in the docstring, where the tool claims local-only operations but actually sends data to remote endpoints.",
+        },
+        "COMMAND INJECTION": {
+            "scanner_category": "INJECTION ATTACK",
+            "severity": "HIGH",
+            "aitech": "AITech-9.1",
+            "aitech_name": "Model or Agentic System Manipulation",
+            "aisubtech": "AISubtech-9.1.4",
+            "aisubtech_name": "Injection Attacks (SQL, Command Execution, XSS)",
+            "description": "Injecting malicious payloads such as command sequences into MCP tools that pass user input directly to dangerous operations (subprocess, eval, exec) without proper validation, despite claiming to be 'safe', leading to arbitrary code execution.",
+        },
+        "MISLEADING SAFETY CLAIMS": {
+            "scanner_category": "DECEPTIVE BEHAVIOR",
+            "severity": "MEDIUM",
+            "aitech": "AITech-12.1",
+            "aitech_name": "Tool Exploitation",
+            "aisubtech": "AISubtech-12.1.2",
+            "aisubtech_name": "Tool Poisoning",
+            "description": "MCP tools that claim to perform security-critical operations (sanitization, validation, filtering) but actually do minimal or ineffective processing, creating a false sense of security while providing no actual protection.",
+        },
+        "UNDOCUMENTED SIDE EFFECTS": {
+            "scanner_category": "DECEPTIVE BEHAVIOR",
+            "severity": "MEDIUM",
+            "aitech": "AITech-12.1",
+            "aitech_name": "Tool Exploitation",
+            "aisubtech": "AISubtech-12.1.5",
+            "aisubtech_name": "Tool Shadowing",
+            "description": "MCP tools that perform additional operations not mentioned in the docstring (writing files, logging to external services, modifying system state) while claiming to perform only limited operations, disguising malicious functionality behind benign descriptions.",
+        },
+        "PERMISSION ESCALATION": {
+            "scanner_category": "PRIVILEGE ESCALATION",
+            "severity": "HIGH",
+            "aitech": "AITech-9.1",
+            "aitech_name": "Model or Agentic System Manipulation",
+            "aisubtech": "AISubtech-9.1.2",
+            "aisubtech_name": "Unauthorized or Unsolicited System Access",
+            "description": "MCP tools that perform operations requiring higher privileges than suggested by the docstring (system configuration changes, privileged file access, process manipulation) while claiming to perform limited read-only operations.",
+        },
+    }
+    
     # AI Defense API Analyzer Threats
     # Note: These are the actual classification values returned by Cisco AI Defense API
     AI_DEFENSE_THREATS = {
@@ -214,6 +264,7 @@ class ThreatMapping:
             'llm': cls.LLM_THREATS,
             'yara': cls.YARA_THREATS,
             'ai_defense': cls.AI_DEFENSE_THREATS,
+            'behavioral': cls.BEHAVIORAL_THREATS,
         }
         
         analyzer_lower = analyzer.lower()
@@ -249,3 +300,4 @@ def _create_simple_mapping(threats_dict):
 LLM_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.LLM_THREATS)
 YARA_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.YARA_THREATS)
 API_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.AI_DEFENSE_THREATS)
+BEHAVIORAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.BEHAVIORAL_THREATS)

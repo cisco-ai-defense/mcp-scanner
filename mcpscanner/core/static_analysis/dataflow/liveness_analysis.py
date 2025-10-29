@@ -24,9 +24,9 @@ import ast
 from dataclasses import dataclass, field
 from typing import Any
 
-from .dataflow import CFGNode, DataFlowAnalyzer
-from ..analyzers.base import BaseAnalyzer
-from ..analyzers.python_analyzer import PythonAnalyzer
+from ..cfg.builder import CFGNode, DataFlowAnalyzer
+from ..parser.base import BaseParser
+from ..parser.python_parser import PythonParser
 
 
 @dataclass
@@ -57,7 +57,7 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
     This is a BACKWARD analysis - facts flow from exit to entry.
     """
     
-    def __init__(self, analyzer: BaseAnalyzer, parameter_names: list[str] = None):
+    def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None):
         """Initialize liveness analyzer.
         
         Args:
@@ -103,7 +103,7 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
         in_fact = out_fact.copy()
         ast_node = node.ast_node
         
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             self._transfer_python(ast_node, in_fact)
         
         return in_fact
@@ -225,7 +225,7 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
         for node in self.cfg.nodes:
             ast_node = node.ast_node
             
-            if isinstance(self.analyzer, PythonAnalyzer):
+            if isinstance(self.analyzer, PythonParser):
                 if isinstance(ast_node, ast.Assign):
                     live_after = self.out_facts.get(node.id, LivenessFact())
                     

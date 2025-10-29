@@ -23,8 +23,8 @@ import ast
 from enum import Enum
 from typing import Any
 
-from ..analyzers.base import BaseAnalyzer
-from ..analyzers.python_analyzer import PythonAnalyzer
+from ..parser.base import BaseParser
+from ..parser.python_parser import PythonParser
 
 
 class TypeKind(Enum):
@@ -78,7 +78,7 @@ class TypeAnalyzer:
     parameter-influenced variables.
     """
 
-    def __init__(self, analyzer: BaseAnalyzer, parameter_names: list[str] = None):
+    def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None):
         """Initialize type analyzer.
 
         Args:
@@ -96,7 +96,7 @@ class TypeAnalyzer:
         """Perform type analysis on the AST."""
         ast_root = self.analyzer.get_ast()
 
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             self._analyze_python(ast_root)
 
     def _analyze_python(self, node: ast.AST) -> None:

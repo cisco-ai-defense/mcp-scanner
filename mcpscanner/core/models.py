@@ -56,7 +56,7 @@ class AnalyzerEnum(str, Enum):
     API = "api"
     YARA = "yara"
     LLM = "llm"
-    BEHAVIOURAL = "behavioural"
+    BEHAVIORAL = "behavioral"
 
 
 class AnalysisContext(BaseModel):

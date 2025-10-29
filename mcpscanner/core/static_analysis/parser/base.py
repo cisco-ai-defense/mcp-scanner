@@ -14,7 +14,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Base analyzer interface."""
+"""Base parser interface for language-specific parsers.
+
+This module defines the abstract base class for all language parsers
+in the static analysis engine, following SAST tool conventions.
+"""
 
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -23,11 +27,15 @@ from typing import Any
 from ..types import Position, Range
 
 
-class BaseAnalyzer(ABC):
-    """Base class for language analyzers."""
+class BaseParser(ABC):
+    """Base class for language-specific source code parsers.
+    
+    This follows the parser abstraction pattern used in tools like
+    Semgrep, where each language has its own parser implementation.
+    """
 
     def __init__(self, file_path: Path, source_code: str) -> None:
-        """Initialize analyzer.
+        """Initialize parser.
 
         Args:
             file_path: Path to the source file
@@ -49,7 +57,7 @@ class BaseAnalyzer(ABC):
 
     @abstractmethod
     def get_node_range(self, node: Any) -> Range:
-        """Get source range for a node.
+        """Get source range for an AST node.
 
         Args:
             node: AST node
@@ -61,7 +69,7 @@ class BaseAnalyzer(ABC):
 
     @abstractmethod
     def get_node_text(self, node: Any) -> str:
-        """Get source text for a node.
+        """Get source text for an AST node.
 
         Args:
             node: AST node

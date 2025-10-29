@@ -19,8 +19,8 @@
 import ast
 from typing import Any, Generic, TypeVar
 
-from ..analyzers.base import BaseAnalyzer
-from ..analyzers.python_analyzer import PythonAnalyzer
+from ..parser.base import BaseParser
+from ..parser.python_parser import PythonParser
 
 T = TypeVar("T")
 
@@ -108,7 +108,7 @@ class ControlFlowGraph:
 class DataFlowAnalyzer(Generic[T]):
     """Generic dataflow analysis framework."""
 
-    def __init__(self, analyzer: BaseAnalyzer) -> None:
+    def __init__(self, analyzer: BaseParser) -> None:
         """Initialize dataflow analyzer.
 
         Args:
@@ -128,7 +128,7 @@ class DataFlowAnalyzer(Generic[T]):
         ast_root = self.analyzer.get_ast()
         cfg = ControlFlowGraph()
 
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             self._build_python_cfg(ast_root, cfg)
 
         self.cfg = cfg

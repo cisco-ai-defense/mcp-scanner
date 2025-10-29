@@ -14,17 +14,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""MCP Supply Chain Analysis Engine.
+"""Behavioral Code Analysis Analyzers.
 
-Complete analysis engine for MCP tools including:
-- AST-based code analysis
-- Pattern matching with metavariables
-- Dataflow analysis
-- Taint tracking
-- Constant propagation
-- LLM-based semantic analysis
+This package contains analyzers that perform behavioral code analysis
+to detect description/implementation mismatches in MCP tools.
+
+Following SAST tool conventions:
+- code_analyzer.py: Main analyzer orchestrating static analysis
+- alignment/: Complete alignment verification layer with all components
 """
 
-__version__ = "1.0.0"
+from .code_analyzer import BehavioralCodeAnalyzer
+from .alignment import AlignmentOrchestrator
 
-__all__ = ["__version__"]
+__all__ = [
+    "BehavioralCodeAnalyzer",
+    "AlignmentOrchestrator",
+]

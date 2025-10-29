@@ -20,9 +20,9 @@ import ast
 from dataclasses import dataclass, field
 from typing import Any
 
-from .dataflow import CFGNode, DataFlowAnalyzer
-from ..analyzers.base import BaseAnalyzer
-from ..analyzers.python_analyzer import PythonAnalyzer
+from ..cfg.builder import CFGNode, DataFlowAnalyzer
+from ..parser.base import BaseParser
+from ..parser.python_parser import PythonParser
 
 
 @dataclass(frozen=True)
@@ -53,13 +53,13 @@ class ReachingDefsFact:
         return self.defs == other.defs
 
 
-class ReachingDefinitionsAnalyzer(DataFlowAnalyzer[ReachingDefsFact]):
+class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
     """Analyzes which definitions reach which program points.
     
     REVERSED APPROACH: Tracks how MCP entry point parameters flow through definitions.
     """
     
-    def __init__(self, analyzer: BaseAnalyzer, parameter_names: list[str] = None):
+    def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None):
         """Initialize reaching definitions analyzer.
         
         Args:
@@ -103,7 +103,7 @@ class ReachingDefinitionsAnalyzer(DataFlowAnalyzer[ReachingDefsFact]):
         out_fact = in_fact.copy()
         ast_node = node.ast_node
         
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             self._transfer_python(ast_node, node, out_fact)
         
         return out_fact
@@ -212,7 +212,7 @@ class ReachingDefinitionsAnalyzer(DataFlowAnalyzer[ReachingDefsFact]):
         """
         uses = set()
         
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             for child in ast.walk(node):
                 if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
                     uses.add(child.id)

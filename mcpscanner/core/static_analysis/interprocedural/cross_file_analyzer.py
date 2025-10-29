@@ -18,15 +18,18 @@
 
 REVERSED APPROACH: Track how MCP entry point parameters flow through
 function calls across multiple files in the codebase.
+
+This is the original CrossFileAnalyzer class that was refactored to CallGraphAnalyzer.
+Kept here for compatibility and full-featured cross-file analysis.
 """
 
 import ast
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
-from ..analyzers.base import BaseAnalyzer
-from ..analyzers.python_analyzer import PythonAnalyzer
-from .typing import TypeAnalyzer
+from ..parser.base import BaseParser
+from ..parser.python_parser import PythonParser
+from ..semantic.type_analyzer import TypeAnalyzer
 
 
 class CallGraph:
@@ -87,12 +90,16 @@ class CrossFileAnalyzer:
     
     REVERSED APPROACH: Tracks parameter flow from MCP entry points through
     the entire codebase across multiple files.
+    
+    Note: This is the original implementation. The refactored version is
+    CallGraphAnalyzer in call_graph_analyzer.py. This version is kept for
+    compatibility and provides additional features.
     """
 
     def __init__(self) -> None:
         """Initialize cross-file analyzer."""
         self.call_graph = CallGraph()
-        self.analyzers: Dict[Path, BaseAnalyzer] = {}
+        self.analyzers: Dict[Path, BaseParser] = {}
         self.import_map: Dict[Path, List[Path]] = {}  # file -> imported files
         self.type_analyzers: Dict[Path, TypeAnalyzer] = {}  # file -> type analyzer
 
@@ -103,7 +110,7 @@ class CrossFileAnalyzer:
             file_path: Path to the file
             source_code: Source code content
         """
-        analyzer = PythonAnalyzer(file_path, source_code)
+        analyzer = PythonParser(file_path, source_code)
         try:
             analyzer.parse()
             self.analyzers[file_path] = analyzer
@@ -121,12 +128,12 @@ class CrossFileAnalyzer:
         except Exception:
             pass  # Skip files that can't be parsed
 
-    def _extract_python_functions(self, file_path: Path, analyzer: PythonAnalyzer) -> None:
+    def _extract_python_functions(self, file_path: Path, analyzer: PythonParser) -> None:
         """Extract function definitions and class methods from Python file.
 
         Args:
             file_path: File path
-            analyzer: Python analyzer
+            analyzer: Python parser
         """
         # Get AST
         tree = analyzer.get_ast()
@@ -186,7 +193,7 @@ class CrossFileAnalyzer:
         
         return ""
 
-    def _extract_imports(self, file_path: Path, analyzer: PythonAnalyzer) -> None:
+    def _extract_imports(self, file_path: Path, analyzer: PythonParser) -> None:
         """Extract import relationships.
 
         Args:
@@ -253,12 +260,12 @@ class CrossFileAnalyzer:
 
         return self.call_graph
 
-    def _extract_python_calls(self, file_path: Path, analyzer: PythonAnalyzer) -> None:
+    def _extract_python_calls(self, file_path: Path, analyzer: PythonParser) -> None:
         """Extract function calls from Python file.
 
         Args:
             file_path: File path
-            analyzer: Python analyzer
+            analyzer: Python parser
         """
         tree = analyzer.get_ast()
         
@@ -282,7 +289,7 @@ class CrossFileAnalyzer:
         file_path: Path, 
         func_node: ast.FunctionDef, 
         caller_name: str,
-        analyzer: PythonAnalyzer
+        analyzer: PythonParser
     ) -> None:
         """Extract calls from a single function.
         
@@ -290,7 +297,7 @@ class CrossFileAnalyzer:
             file_path: File path
             func_node: Function AST node
             caller_name: Full caller name
-            analyzer: Python analyzer
+            analyzer: Python parser
         """
         # Walk the function body to find calls
         for node in ast.walk(func_node):

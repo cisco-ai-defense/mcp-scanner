@@ -24,9 +24,9 @@ import ast
 from dataclasses import dataclass, field
 from typing import Any
 
-from .dataflow import CFGNode, DataFlowAnalyzer
-from ..analyzers.base import BaseAnalyzer
-from ..analyzers.python_analyzer import PythonAnalyzer
+from ..cfg.builder import CFGNode, DataFlowAnalyzer
+from ..parser.base import BaseParser
+from ..parser.python_parser import PythonParser
 
 
 @dataclass
@@ -55,7 +55,7 @@ class AvailableExpressionsAnalyzer(DataFlowAnalyzer[AvailableExprsFact]):
     REVERSED APPROACH: Specifically tracks expressions involving MCP parameters.
     """
     
-    def __init__(self, analyzer: BaseAnalyzer, parameter_names: list[str] = None):
+    def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None):
         """Initialize available expressions analyzer.
         
         Args:
@@ -94,7 +94,7 @@ class AvailableExpressionsAnalyzer(DataFlowAnalyzer[AvailableExprsFact]):
         out_fact = in_fact.copy()
         ast_node = node.ast_node
         
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             self._transfer_python(ast_node, out_fact)
         
         return out_fact

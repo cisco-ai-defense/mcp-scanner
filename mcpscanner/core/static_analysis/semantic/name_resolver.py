@@ -19,8 +19,8 @@
 import ast
 from typing import Any
 
-from ..analyzers.base import BaseAnalyzer
-from ..analyzers.python_analyzer import PythonAnalyzer
+from ..parser.base import BaseParser
+from ..parser.python_parser import PythonParser
 
 
 class Scope:
@@ -85,7 +85,7 @@ class NameResolver:
     REVERSED APPROACH: Tracks which names are influenced by MCP entry point parameters.
     """
 
-    def __init__(self, analyzer: BaseAnalyzer, parameter_names: list[str] = None):
+    def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None):
         """Initialize name resolver.
 
         Args:
@@ -103,7 +103,7 @@ class NameResolver:
         """Resolve all names in the AST."""
         ast_root = self.analyzer.get_ast()
 
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             self._resolve_python(ast_root)
 
     def _resolve_python(self, node: ast.AST) -> None:

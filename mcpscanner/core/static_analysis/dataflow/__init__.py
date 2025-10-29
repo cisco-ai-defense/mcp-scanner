@@ -14,9 +14,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Analyzers for MCP Supply Chain."""
+"""Dataflow analysis passes for static analysis."""
 
-from .base import BaseAnalyzer
-from .python_analyzer import PythonAnalyzer
+from .constant_propagation import ConstantPropagationAnalysis
+from .forward_analysis import ForwardDataflowAnalysis, FlowPath
+from .reaching_definitions import ReachingDefinitionsAnalysis
+from .liveness_analysis import LivenessAnalyzer
+from .available_expressions import AvailableExpressionsAnalyzer
 
-__all__ = ["BaseAnalyzer", "PythonAnalyzer"]
+__all__ = [
+    "ConstantPropagationAnalysis",
+    "ForwardDataflowAnalysis",
+    "FlowPath",
+    "ReachingDefinitionsAnalysis",
+    "LivenessAnalyzer",
+    "AvailableExpressionsAnalyzer",
+]

@@ -21,8 +21,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from ..analyzers.base import BaseAnalyzer
-from ..analyzers.python_analyzer import PythonAnalyzer
+from ..parser.base import BaseParser
+from ..parser.python_parser import PythonParser
 
 
 class ValueKind(Enum):
@@ -61,10 +61,10 @@ class SymbolicValue:
             return "NotCst"
 
 
-class ConstantPropagator:
+class ConstantPropagationAnalysis:
     """Propagates constant values for matching."""
 
-    def __init__(self, analyzer: BaseAnalyzer) -> None:
+    def __init__(self, analyzer: BaseParser) -> None:
         """Initialize constant propagator.
 
         Args:
@@ -78,7 +78,7 @@ class ConstantPropagator:
         """Analyze code and build constant table."""
         ast_root = self.analyzer.get_ast()
 
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             self._analyze_python(ast_root)
 
     def _analyze_python(self, node: ast.AST) -> None:
@@ -225,7 +225,7 @@ class ConstantPropagator:
         Returns:
             Constant value or None
         """
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             if isinstance(node, ast.Name):
                 return self.get_constant_value(node.id)
             elif isinstance(node, ast.Constant):
@@ -247,7 +247,7 @@ class ConstantPropagator:
         if code_value is not None:
             return pattern_value == code_value
 
-        if isinstance(self.analyzer, PythonAnalyzer):
+        if isinstance(self.analyzer, PythonParser):
             if isinstance(code_node, ast.BinOp):
                 computed = self._eval_binop(code_node)
                 if computed is not None:
