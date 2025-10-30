@@ -70,18 +70,25 @@ class ForwardFlowTracker(DataFlowAnalyzer[ForwardFlowFact]):
     - Parameters are sources (untrusted input)
     - Track ALL operations parameters flow through
     - No predefined sinks - capture everything
+    - INTER-PROCEDURAL: Follows function calls across files
     """
 
-    def __init__(self, analyzer: BaseAnalyzer, parameter_names: List[str]):
+    def __init__(self, analyzer: BaseAnalyzer, parameter_names: List[str], 
+                 call_graph=None, max_depth: int = 3):
         """Initialize forward flow tracker.
 
         Args:
             analyzer: Language-specific analyzer
             parameter_names: Names of function parameters to track
+            call_graph: Optional CallGraph for inter-procedural analysis
+            max_depth: Maximum depth for inter-procedural tracking
         """
         super().__init__(analyzer)
         self.parameter_names = parameter_names
         self.all_flows: List[FlowPath] = []
+        self.call_graph = call_graph
+        self.max_depth = max_depth
+        self._analyzed_functions: Set[str] = set()  # Avoid infinite recursion
 
     def analyze_forward_flows(self) -> List[FlowPath]:
         """Run forward flow analysis from parameters.
@@ -141,26 +148,26 @@ class ForwardFlowTracker(DataFlowAnalyzer[ForwardFlowFact]):
                         # Propagate taint
                         fact.shape_env.set_taint(target.id, rhs_taint)
                         
-                        # Track which parameters flow here
+                        # Track which parameters flow to this assignment
                         for param_name in self.parameter_names:
                             if self._expr_uses_var(node.value, param_name, fact):
-                                if param_name in fact.parameter_flows:
-                                    fact.parameter_flows[param_name].reaches_assignments.append(
-                                        f"{target.id} = {ast.unparse(node.value)}"
-                                    )
-                                    fact.parameter_flows[param_name].operations.append({
-                                        "type": "assignment",
-                                        "target": target.id,
-                                        "value": ast.unparse(node.value),
-                                        "line": node.lineno if hasattr(node, "lineno") else 0,
-                                    })
+                                fact.parameter_flows[param_name].operations.append({
+                                    "type": "assignment",
+                                    "target": target.id,
+                                    "line": node.lineno if hasattr(node, "lineno") else 0,
+                                })
+                                
+                                # If RHS is a function call, track it inter-procedurally
+                                if isinstance(node.value, ast.Call):
+                                    call_name = self._get_call_name(node.value)
+                                    fact.parameter_flows[param_name].reaches_calls.append(call_name)
                                     
-                                    # Check if RHS is a call to external operation
-                                    if isinstance(node.value, ast.Call):
-                                        call_name = self._get_call_name(node.value)
-                                        fact.parameter_flows[param_name].reaches_calls.append(call_name)
-                                        if self._is_external_operation(call_name):
-                                            fact.parameter_flows[param_name].reaches_external = True
+                                    if self._is_external_operation(call_name):
+                                        fact.parameter_flows[param_name].reaches_external = True
+                                    
+                                    # INTER-PROCEDURAL: Analyze called function
+                                    if self.call_graph and len(self._analyzed_functions) < self.max_depth:
+                                        self._analyze_called_function(call_name, node.value, param_name, fact)
                     else:
                         # Clear taint
                         fact.shape_env.set_taint(target.id, Taint(status=TaintStatus.UNTAINTED))
@@ -318,11 +325,106 @@ class ForwardFlowTracker(DataFlowAnalyzer[ForwardFlowFact]):
         """
         external_patterns = [
             "subprocess", "os.system", "os.popen",
-            "requests", "urllib", "http", "socket",
+            "requests", "urllib", "http", "socket", "httpx",
             "open", "write", "read",
             "eval", "exec", "compile",
         ]
         return any(pattern in call_name for pattern in external_patterns)
+    
+    def _analyze_called_function(self, call_name: str, call_node: ast.Call, 
+                                  param_name: str, fact: ForwardFlowFact) -> None:
+        """Analyze a called function inter-procedurally.
+        
+        Args:
+            call_name: Name of the called function
+            call_node: The call AST node
+            param_name: Parameter being tracked
+            fact: Current flow fact
+        """
+        if not self.call_graph or call_name in self._analyzed_functions:
+            return
+        
+        # Mark as analyzed to avoid infinite recursion
+        self._analyzed_functions.add(call_name)
+        
+        try:
+            # Find the function definition in the call graph
+            func_def = self._find_function_definition(call_name)
+            if not func_def:
+                return
+            
+            # Extract all operations in the called function (no filtering)
+            operations = self._extract_function_operations(func_def)
+            
+            if operations:
+                # Add these operations to the flow - LLM will interpret them
+                for op in operations:
+                    fact.parameter_flows[param_name].operations.append({
+                        "type": "inter_procedural",
+                        "function": call_name,
+                        "operation": op["operation"],
+                        "details": op["details"],
+                        "line": op.get("line", 0)
+                    })
+                    
+                    # Mark as reaching external for any external-looking operation
+                    if self._is_external_operation(op["operation"]):
+                        fact.parameter_flows[param_name].reaches_external = True
+                        
+        except Exception as e:
+            # Silently fail - inter-procedural analysis is best-effort
+            pass
+    
+    def _find_function_definition(self, func_name: str) -> ast.FunctionDef:
+        """Find function definition in the codebase.
+        
+        Args:
+            func_name: Function name to find
+            
+        Returns:
+            Function definition AST node or None
+        """
+        if not self.call_graph:
+            return None
+        
+        # Search in the call graph's function definitions
+        for full_name, func_info in getattr(self.call_graph, 'functions', {}).items():
+            if func_name in full_name or full_name.endswith(f"::{func_name}"):
+                return func_info.get('ast_node')
+        
+        return None
+    
+    def _extract_function_operations(self, func_node: ast.FunctionDef) -> List[Dict[str, Any]]:
+        """Extract all operations from a function (no filtering - let LLM decide).
+        
+        Args:
+            func_node: Function AST node
+            
+        Returns:
+            List of all operations found
+        """
+        operations = []
+        
+        for node in ast.walk(func_node):
+            # Extract all function calls - LLM will interpret their significance
+            if isinstance(node, ast.Call):
+                call_name = self._get_call_name(node)
+                
+                # Get arguments for context
+                args_str = []
+                try:
+                    for arg in node.args[:3]:  # First 3 args only
+                        args_str.append(ast.unparse(arg)[:50])
+                except:
+                    pass
+                
+                operations.append({
+                    "operation": call_name,
+                    "details": f"Calls {call_name}({', '.join(args_str)}{'...' if len(node.args) > 3 else ''})",
+                    "line": getattr(node, 'lineno', 0)
+                })
+        
+        return operations[:10]  # Limit to first 10 operations to avoid overwhelming the LLM
 
     def _collect_flows(self) -> None:
         """Collect all flows from analysis results."""

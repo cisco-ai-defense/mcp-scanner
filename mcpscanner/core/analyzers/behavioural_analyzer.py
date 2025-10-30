@@ -231,8 +231,13 @@ class BehaviouralAnalyzer(BaseAnalyzer):
         findings = []
         
         try:
+            # Get cross-file analyzer if available
+            cross_file_analyzer = context.get('cross_file_analyzer')
+            
             # Use behavioural context extractor for complete analysis
-            extractor = CodeContextExtractor(source_code, file_path)
+            # Pass call graph for inter-procedural dataflow tracking
+            call_graph = cross_file_analyzer.call_graph if cross_file_analyzer else None
+            extractor = CodeContextExtractor(source_code, file_path, call_graph=call_graph)
             mcp_contexts = extractor.extract_mcp_function_contexts()
             
             if not mcp_contexts:
@@ -242,7 +247,6 @@ class BehaviouralAnalyzer(BaseAnalyzer):
             self.logger.info(f"Found {len(mcp_contexts)} MCP functions in {file_path}")
             
             # Enrich with cross-file context if available
-            cross_file_analyzer = context.get('cross_file_analyzer')
             if cross_file_analyzer:
                 for func_context in mcp_contexts:
                     self._enrich_with_cross_file_context(func_context, file_path, cross_file_analyzer)

@@ -97,19 +97,21 @@ class FunctionContext:
 class CodeContextExtractor:
     """Extracts comprehensive code context for LLM analysis."""
 
-    def __init__(self, source_code: str, file_path: str = "unknown.py"):
+    def __init__(self, source_code: str, file_path: str = "unknown.py", call_graph=None):
         """Initialize context extractor.
 
         Args:
-            source_code: Python source code
-            file_path: Path to source file
+            source_code: Python source code to analyze
+            file_path: Path to the source file
+            call_graph: Optional CallGraph for inter-procedural analysis
         """
         self.source_code = source_code
-        self.file_path = Path(file_path)
-        self.analyzer = PythonAnalyzer(self.file_path, source_code)
+        self.file_path = file_path
+        self.analyzer = PythonAnalyzer(file_path, source_code)
+        self.analyzer.parse()
         self.const_prop = ConstantPropagator(self.analyzer)
-        
-        # Parse and analyze
+        self.call_graph = call_graph
+        self.logger = logging.getLogger(__name__)
         try:
             self.ast = self.analyzer.parse()
             self.const_prop.analyze()
@@ -444,7 +446,9 @@ class CodeContextExtractor:
             func_analyzer.parse()
             
             # Create forward flow tracker with the function-specific analyzer
-            tracker = ForwardFlowTracker(func_analyzer, param_names)
+            # Pass call_graph for inter-procedural analysis (follows calls across files)
+            tracker = ForwardFlowTracker(func_analyzer, param_names, 
+                                        call_graph=self.call_graph, max_depth=3)
             
             # Analyze flows from parameters
             flows = tracker.analyze_forward_flows()
