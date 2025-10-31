@@ -14,26 +14,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Analyzers package for MCP Scanner
+"""Behavioral Code Analysis Analyzers.
 
-This package contains different analyzers for scanning MCP tools:
-- Pattern-based analyzers (YARA, API)
-- LLM-based semantic analyzers
-- Behavioral code analyzers (static analysis + semantic alignment)
+This package contains analyzers that perform behavioral code analysis
+to detect description/implementation mismatches in MCP tools.
+
+Following SAST tool conventions:
+- code_analyzer.py: Main analyzer orchestrating static analysis
+- alignment/: Complete alignment verification layer with all components
 """
 
-from .api_analyzer import ApiAnalyzer
-from .base import BaseAnalyzer, SecurityFinding
-from .behavioral import BehavioralCodeAnalyzer, AlignmentOrchestrator
-from .llm_analyzer import LLMAnalyzer
-from .yara_analyzer import YaraAnalyzer
+from .code_analyzer import BehavioralCodeAnalyzer
+from .alignment import AlignmentOrchestrator
 
 __all__ = [
-    "BaseAnalyzer",
-    "SecurityFinding",
-    "ApiAnalyzer",
-    "YaraAnalyzer",
-    "LLMAnalyzer",
     "BehavioralCodeAnalyzer",
     "AlignmentOrchestrator",
 ]

@@ -98,6 +98,7 @@ class SecurityFinding:
                 "LLM": "llm",
                 "YARA": "yara",
                 "API": "ai_defense",
+                "BEHAVIORAL": "behavioral",
             }
             
             # Check if this is a built-in analyzer

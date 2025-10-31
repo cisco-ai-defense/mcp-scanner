@@ -14,26 +14,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Analyzers package for MCP Scanner
+"""Dataflow analysis passes for static analysis."""
 
-This package contains different analyzers for scanning MCP tools:
-- Pattern-based analyzers (YARA, API)
-- LLM-based semantic analyzers
-- Behavioral code analyzers (static analysis + semantic alignment)
-"""
-
-from .api_analyzer import ApiAnalyzer
-from .base import BaseAnalyzer, SecurityFinding
-from .behavioral import BehavioralCodeAnalyzer, AlignmentOrchestrator
-from .llm_analyzer import LLMAnalyzer
-from .yara_analyzer import YaraAnalyzer
+from .constant_propagation import ConstantPropagationAnalysis
+from .forward_analysis import ForwardDataflowAnalysis, FlowPath
+from .reaching_definitions import ReachingDefinitionsAnalysis
+from .liveness_analysis import LivenessAnalyzer
+from .available_expressions import AvailableExpressionsAnalyzer
 
 __all__ = [
-    "BaseAnalyzer",
-    "SecurityFinding",
-    "ApiAnalyzer",
-    "YaraAnalyzer",
-    "LLMAnalyzer",
-    "BehavioralCodeAnalyzer",
-    "AlignmentOrchestrator",
+    "ConstantPropagationAnalysis",
+    "ForwardDataflowAnalysis",
+    "FlowPath",
+    "ReachingDefinitionsAnalysis",
+    "LivenessAnalyzer",
+    "AvailableExpressionsAnalyzer",
 ]
