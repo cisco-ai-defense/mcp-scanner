@@ -264,7 +264,10 @@ class PythonParser(BaseParser):
                 parts.append(current.id)
             return ".".join(reversed(parts))
         else:
-            return ast.unparse(node.func)
+            try:
+                return ast.unparse(node.func)
+            except (AttributeError, TypeError, ValueError):
+                return "<unknown_call>"
 
     def get_docstring(self, node: ast.AST) -> str | None:
         """Extract docstring from a function or class definition.
