@@ -229,7 +229,7 @@ class ContextExtractor:
         has_network_ops = self._has_network_operations(node)
         has_subprocess = self._has_subprocess_calls(node)
         has_eval_exec = self._has_eval_exec(node)
-        has_dangerous_imports = self._has_dangerous_imports(imports)
+        has_dangerous_imports = len(imports) > 0  # LLM will analyze all imports
         
         # Dataflow summary
         dataflow_summary = self._create_dataflow_summary(node)
@@ -557,19 +557,6 @@ class ContextExtractor:
                 if call_name in ["eval", "exec", "compile", "__import__"]:
                     return True
         return False
-
-    def _has_dangerous_imports(self, imports: List[str]) -> bool:
-        """Report all imports - LLM decides what's dangerous.
-
-        Args:
-            imports: List of import statements
-
-        Returns:
-            True if any imports detected (LLM will analyze)
-        """
-        # Don't hardcode what's "dangerous" - report all imports to LLM
-        # LLM will determine context-appropriate risk
-        return len(imports) > 0
 
     def _create_dataflow_summary(self, node: ast.FunctionDef) -> Dict[str, Any]:
         """Create dataflow summary.

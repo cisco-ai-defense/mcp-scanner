@@ -159,8 +159,7 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
                                     if isinstance(node.value, ast.Call):
                                         call_name = self._get_call_name(node.value)
                                         fact.parameter_flows[param_name].reaches_calls.append(call_name)
-                                        if self._is_external_operation(call_name):
-                                            fact.parameter_flows[param_name].reaches_external = True
+                                        # LLM will determine if operations are dangerous
                     else:
                         # Clear taint
                         fact.shape_env.set_taint(target.id, Taint(status=TaintStatus.UNTAINTED))
@@ -184,9 +183,7 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
                                     "line": node.lineno if hasattr(node, "lineno") else 0,
                                 })
                                 
-                                # Check if external operation
-                                if self._is_external_operation(call_name):
-                                    fact.parameter_flows[param_name].reaches_external = True
+                                # LLM will determine if operations are dangerous
         
         # Track returns
         elif isinstance(node, ast.Return):
@@ -306,19 +303,6 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
                 parts.append(current.id)
             return ".".join(reversed(parts))
         return ast.unparse(node.func)
-
-    def _is_external_operation(self, call_name: str) -> bool:
-        """Report all operations - LLM decides what's external/dangerous.
-
-        Args:
-            call_name: Function call name
-
-        Returns:
-            Always False - LLM analyzes all operations without filtering
-        """
-        # Don't hardcode what's "external" or "dangerous"
-        # All operations are reported to LLM for context-aware analysis
-        return False
 
     def _collect_flows(self) -> None:
         """Collect all flows from analysis results."""
