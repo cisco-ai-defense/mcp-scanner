@@ -112,9 +112,10 @@ class CodeContextExtractor:
         self.const_prop = ConstantPropagator(self.analyzer)
         self.call_graph = call_graph
         self.logger = logging.getLogger(__name__)
+        self._const_prop_analyzed = False  # Lazy evaluation flag
         try:
             self.ast = self.analyzer.parse()
-            self.const_prop.analyze()
+            # Don't run const_prop.analyze() upfront - do it on-demand
         except SyntaxError as e:
             raise ValueError(f"Failed to parse source code: {e}")
 
@@ -471,18 +472,62 @@ class CodeContextExtractor:
             return []
 
     def _extract_constants(self, node: ast.FunctionDef) -> Dict[str, Any]:
-        """Extract constant values.
+        """Extract constant values on-demand (only for external ops/control flow).
 
         Args:
             node: Function definition node
 
         Returns:
-            Dictionary of constants
+            Dictionary of constants (sparse - only relevant ones)
         """
+        # Run const prop analysis only if not done yet (lazy)
+        if not self._const_prop_analyzed:
+            try:
+                self.const_prop.analyze()
+                self._const_prop_analyzed = True
+            except:
+                return {}
+        
+        # Only extract constants that are used in external operations or control flow
         constants = {}
-        for var_name, value in self.const_prop.constants.items():
-            constants[var_name] = value
+        relevant_vars = self._find_relevant_constant_vars(node)
+        
+        for var_name in relevant_vars:
+            if var_name in self.const_prop.constants:
+                constants[var_name] = self.const_prop.constants[var_name]
+        
         return constants
+    
+    def _find_relevant_constant_vars(self, node: ast.FunctionDef) -> set:
+        """Find variables that need constant propagation (sparse).
+        
+        Only variables used in:
+        - External operations (HTTP, subprocess, file I/O)
+        - Control flow conditions
+        - Return statements
+        """
+        relevant = set()
+        
+        for child in ast.walk(node):
+            # Variables in function calls (potential external ops)
+            if isinstance(child, ast.Call):
+                for arg in child.args:
+                    if isinstance(arg, ast.Name):
+                        relevant.add(arg.id)
+            
+            # Variables in conditionals
+            elif isinstance(child, (ast.If, ast.While)):
+                for name_node in ast.walk(child.test):
+                    if isinstance(name_node, ast.Name):
+                        relevant.add(name_node.id)
+            
+            # Variables in returns
+            elif isinstance(child, ast.Return) and child.value:
+                for name_node in ast.walk(child.value):
+                    if isinstance(name_node, ast.Name):
+                        relevant.add(name_node.id)
+        
+        return relevant
 
     def _analyze_variable_dependencies(self, node: ast.FunctionDef) -> Dict[str, List[str]]:
         """Analyze variable dependencies.
