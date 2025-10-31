@@ -1,0 +1,42 @@
+2025-10-30 15:36:55,226 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:36:55,226 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server
+2025-10-30 15:36:55,229 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 27 Python file(s) to analyze
+2025-10-30 15:36:55,369 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 156 functions
+2025-10-30 15:36:55,369 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/__init__.py
+2025-10-30 15:36:55,369 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/office_word_mcp_server/__init__.py
+2025-10-30 15:36:55,369 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/setup_mcp.py
+2025-10-30 15:36:55,375 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/test_formatting.py
+2025-10-30 15:36:55,376 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/tests/test_convert_to_pdf.py
+2025-10-30 15:36:55,377 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/__init__.py
+2025-10-30 15:36:55,377 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/core/__init__.py
+2025-10-30 15:36:55,377 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/core/comments.py
+2025-10-30 15:36:55,379 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/core/footnotes.py
+2025-10-30 15:36:55,389 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/core/protection.py
+2025-10-30 15:36:55,391 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/core/styles.py
+2025-10-30 15:36:55,392 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/core/tables.py
+2025-10-30 15:36:55,400 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/core/unprotect.py
+2025-10-30 15:36:55,400 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/main.py
+2025-10-30 15:36:56,066 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 54 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/main.py
+2025-10-30 15:38:06,922 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/tools/__init__.py
+2025-10-30 15:38:06,923 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/tools/comment_tools.py
+2025-10-30 15:38:06,926 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/tools/content_tools.py
+2025-10-30 15:38:06,934 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/tools/document_tools.py
+2025-10-30 15:38:06,937 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/tools/extended_document_tools.py
+2025-10-30 15:38:06,940 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/tools/footnote_tools.py
+2025-10-30 15:38:06,947 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/tools/format_tools.py
+2025-10-30 15:38:06,963 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/tools/protection_tools.py
+2025-10-30 15:38:06,966 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/utils/__init__.py
+2025-10-30 15:38:06,966 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/utils/document_utils.py
+2025-10-30 15:38:06,974 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/utils/extended_document_utils.py
+2025-10-30 15:38:06,976 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_document_server/utils/file_utils.py
+2025-10-30 15:38:06,977 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server/word_mcp_server.py
+2025-10-30 15:38:06,977 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-Word-MCP-Server",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

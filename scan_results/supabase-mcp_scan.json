@@ -1,0 +1,19 @@
+2025-10-30 15:41:47,427 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:41:47,427 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/supabase-mcp
+2025-10-30 15:41:47,430 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 4 Python file(s) to analyze
+2025-10-30 15:41:47,439 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 19 functions
+2025-10-30 15:41:47,439 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/supabase-mcp/supabase_mcp/__init__.py
+2025-10-30 15:41:47,439 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/supabase-mcp/supabase_mcp/server.py
+2025-10-30 15:41:47,460 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 4 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/supabase-mcp/supabase_mcp/server.py
+2025-10-30 15:41:53,725 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/supabase-mcp/supabase_mcp/tests/__init__.py
+2025-10-30 15:41:53,726 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/supabase-mcp/supabase_mcp/tests/test_server.py
+2025-10-30 15:41:53,741 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/supabase-mcp",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

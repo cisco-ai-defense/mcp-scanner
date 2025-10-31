@@ -1,0 +1,26 @@
+2025-10-30 15:30:22,066 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:30:22,066 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy
+2025-10-30 15:30:22,069 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 12 Python file(s) to analyze
+2025-10-30 15:30:22,111 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 92 functions
+2025-10-30 15:30:22,111 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/src/mcp_proxy/__init__.py
+2025-10-30 15:30:22,111 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/src/mcp_proxy/__main__.py
+2025-10-30 15:30:22,115 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/src/mcp_proxy/config_loader.py
+2025-10-30 15:30:22,116 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/src/mcp_proxy/httpx_client.py
+2025-10-30 15:30:22,117 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/src/mcp_proxy/mcp_server.py
+2025-10-30 15:30:22,119 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/src/mcp_proxy/proxy_server.py
+2025-10-30 15:30:22,121 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/src/mcp_proxy/sse_client.py
+2025-10-30 15:30:22,121 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/src/mcp_proxy/streamablehttp_client.py
+2025-10-30 15:30:22,121 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/tests/test_cli_arguments.py
+2025-10-30 15:30:22,122 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/tests/test_config_loader.py
+2025-10-30 15:30:22,124 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/tests/test_mcp_server.py
+2025-10-30 15:30:22,130 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy/tests/test_proxy_server.py
+2025-10-30 15:30:22,135 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-proxy",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

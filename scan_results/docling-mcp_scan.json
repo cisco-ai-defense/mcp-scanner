@@ -1,0 +1,68 @@
+2025-10-30 15:49:19,816 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:49:19,816 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp
+2025-10-30 15:49:19,820 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 48 Python file(s) to analyze
+2025-10-30 15:49:19,929 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 144 functions
+2025-10-30 15:49:19,929 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/__init__.py
+2025-10-30 15:49:19,929 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/docling_cache.py
+2025-10-30 15:49:19,931 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/logger.py
+2025-10-30 15:49:19,931 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/servers/__init__.py
+2025-10-30 15:49:19,931 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/servers/mcp_server.py
+2025-10-30 15:49:19,932 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/settings/__init__.py
+2025-10-30 15:49:19,932 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/settings/conversion.py
+2025-10-30 15:49:19,932 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/settings/llama_index.py
+2025-10-30 15:49:19,932 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/settings/llama_stack.py
+2025-10-30 15:49:19,932 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/shared.py
+2025-10-30 15:49:19,932 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/__init__.py
+2025-10-30 15:49:19,932 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/conversion.py
+2025-10-30 15:49:19,952 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 3 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/conversion.py
+2025-10-30 15:49:24,433 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/generation.py
+2025-10-30 15:49:24,626 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 11 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/generation.py
+2025-10-30 15:49:41,282 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_index/__init__.py
+2025-10-30 15:49:41,283 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_index/_shared.py
+2025-10-30 15:49:41,285 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_index/milvus_rag.py
+2025-10-30 15:49:41,303 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 2 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_index/milvus_rag.py
+2025-10-30 15:49:44,130 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_stack/__init__.py
+2025-10-30 15:49:44,131 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_stack/_shared.py
+2025-10-30 15:49:44,132 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_stack/rag.py
+2025-10-30 15:49:44,146 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_stack/rag.py
+2025-10-30 15:49:45,864 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_stack/structured_output.py
+2025-10-30 15:49:45,884 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/llama_stack/structured_output.py
+2025-10-30 15:49:47,713 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/manipulation.py
+2025-10-30 15:49:47,787 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 5 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/docling_mcp/tools/manipulation.py
+2025-10-30 15:49:55,392 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/llama-stack/create_doclingdocument.py
+2025-10-30 15:49:55,396 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/llama-stack/src/utils.py
+2025-10-30 15:49:55,396 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/__init__.py
+2025-10-30 15:49:55,396 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/agent/__init__.py
+2025-10-30 15:49:55,397 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/agent/base.py
+2025-10-30 15:49:55,398 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/agent/base_functions.py
+2025-10-30 15:49:55,403 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/agent/editor.py
+2025-10-30 15:49:55,407 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/agent/writer.py
+2025-10-30 15:49:55,413 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/agent_models.py
+2025-10-30 15:49:55,414 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/agents.py
+2025-10-30 15:49:55,414 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/example_01_write_report.py
+2025-10-30 15:49:55,414 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/example_02_edit_report.py
+2025-10-30 15:49:55,415 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/resources/__init__.py
+2025-10-30 15:49:55,415 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/mellea/resources/prompts.py
+2025-10-30 15:49:55,415 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/smolagents/__init__.py
+2025-10-30 15:49:55,415 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/smolagents/agent_model.py
+2025-10-30 15:49:55,416 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/smolagents/agent_tools.py
+2025-10-30 15:49:55,417 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/smolagents/agents.py
+2025-10-30 15:49:55,424 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/smolagents/resources/__init__.py
+2025-10-30 15:49:55,424 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/smolagents/resources/prompts.py
+2025-10-30 15:49:55,424 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/examples/smolagents/smolagentfactory.py
+2025-10-30 15:49:55,428 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/tests/__init__.py
+2025-10-30 15:49:55,428 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/tests/conftest.py
+2025-10-30 15:49:55,429 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/tests/test_conversion_tools.py
+2025-10-30 15:49:55,429 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/tests/test_document_manipulation.py
+2025-10-30 15:49:55,430 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/tests/test_generation_tools.py
+2025-10-30 15:49:55,431 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp/tests/test_mcp_server.py
+2025-10-30 15:49:55,431 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/docling-mcp",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

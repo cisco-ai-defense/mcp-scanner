@@ -1,0 +1,40 @@
+2025-10-30 15:41:16,520 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:41:16,520 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server
+2025-10-30 15:41:16,523 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 22 Python file(s) to analyze
+2025-10-30 15:41:16,559 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 80 functions
+2025-10-30 15:41:16,560 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/__init__.py
+2025-10-30 15:41:16,560 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/__main__.py
+2025-10-30 15:41:16,560 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/authentication.py
+2025-10-30 15:41:16,560 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/cli.py
+2025-10-30 15:41:16,561 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/cli_main.py
+2025-10-30 15:41:16,565 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/config/__init__.py
+2025-10-30 15:41:16,565 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/config/loaders.py
+2025-10-30 15:41:16,567 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/config/messages.py
+2025-10-30 15:41:16,568 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/config/providers.py
+2025-10-30 15:41:16,570 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/config/schema.py
+2025-10-30 15:41:16,570 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/config/secrets.py
+2025-10-30 15:41:16,571 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/drivers/__init__.py
+2025-10-30 15:41:16,571 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/drivers/chrome.py
+2025-10-30 15:41:16,574 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/error_handler.py
+2025-10-30 15:41:16,575 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/exceptions.py
+2025-10-30 15:41:16,575 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/logging_config.py
+2025-10-30 15:41:16,576 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/server.py
+2025-10-30 15:41:16,577 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/server.py
+2025-10-30 15:41:18,543 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/setup.py
+2025-10-30 15:41:18,549 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/tools/__init__.py
+2025-10-30 15:41:18,549 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/tools/company.py
+2025-10-30 15:41:18,558 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/tools/company.py
+2025-10-30 15:41:19,956 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/tools/job.py
+2025-10-30 15:41:19,971 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 3 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/tools/job.py
+2025-10-30 15:41:23,773 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/tools/person.py
+2025-10-30 15:41:23,791 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server/linkedin_mcp_server/tools/person.py
+2025-10-30 15:41:25,264 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/linkedin-mcp-server",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

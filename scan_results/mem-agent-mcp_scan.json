@@ -1,0 +1,68 @@
+2025-10-30 15:32:57,584 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:32:57,584 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp
+2025-10-30 15:32:57,589 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 42 Python file(s) to analyze
+2025-10-30 15:32:57,855 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 308 functions
+2025-10-30 15:32:57,855 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/agent/__init__.py
+2025-10-30 15:32:57,855 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/agent/agent.py
+2025-10-30 15:32:57,857 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/agent/engine.py
+2025-10-30 15:32:57,861 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/agent/model.py
+2025-10-30 15:32:57,862 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/agent/schemas.py
+2025-10-30 15:32:57,863 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/agent/settings.py
+2025-10-30 15:32:57,864 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/agent/tools.py
+2025-10-30 15:32:57,867 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/agent/utils.py
+2025-10-30 15:32:57,869 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/chat_cli.py
+2025-10-30 15:32:57,871 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/examples/mem_agent_cli.py
+2025-10-30 15:32:57,881 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/__init__.py
+2025-10-30 15:32:57,881 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/http_server.py
+2025-10-30 15:32:57,882 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/mcp_http_server.py
+2025-10-30 15:32:57,885 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/mcp_sse_server.py
+2025-10-30 15:32:57,888 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/scripts/filters.py
+2025-10-30 15:32:57,889 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/scripts/memory_setup.py
+2025-10-30 15:32:57,892 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/scripts/memory_setup_cli.py
+2025-10-30 15:32:57,894 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/scripts/setup_scripts_and_json.py
+2025-10-30 15:32:57,895 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/server.py
+2025-10-30 15:32:57,902 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/server.py
+2025-10-30 15:33:00,705 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/settings.py
+2025-10-30 15:33:00,705 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/__init__.py
+2025-10-30 15:33:00,705 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/base.py
+2025-10-30 15:33:00,706 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/chatgpt_history/__init__.py
+2025-10-30 15:33:00,706 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/chatgpt_history/connector.py
+2025-10-30 15:33:00,710 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/chatgpt_history/converter.py
+2025-10-30 15:33:00,715 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/chatgpt_history/embedding_connector.py
+2025-10-30 15:33:00,724 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/chatgpt_history/parser.py
+2025-10-30 15:33:00,728 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/chatgpt_history/types.py
+2025-10-30 15:33:00,728 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/github_live/__init__.py
+2025-10-30 15:33:00,729 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/github_live/connector.py
+2025-10-30 15:33:00,740 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/google_docs_live/__init__.py
+2025-10-30 15:33:00,740 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/google_docs_live/connector.py
+2025-10-30 15:33:00,746 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/memory_connect.py
+2025-10-30 15:33:00,752 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/memory_wizard.py
+2025-10-30 15:33:00,759 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/notion/__init__.py
+2025-10-30 15:33:00,759 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/notion/connector.py
+2025-10-30 15:33:00,763 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/notion/parser.py
+2025-10-30 15:33:00,767 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/notion/types.py
+2025-10-30 15:33:00,768 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/nuclino/__init__.py
+2025-10-30 15:33:00,768 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/nuclino/connector.py
+2025-10-30 15:33:00,772 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/nuclino/parser.py
+2025-10-30 15:33:00,777 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/memory_connectors/nuclino/types.py
+2025-10-30 15:33:00,778 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 1 finding(s) detected
+[
+  {
+    "tool_name": "use_memory_agent",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "MEDIUM",
+        "threat_summary": "Line 114: Description claims: 'Provide the local memory agent with the user query as is, without any modifications.' | Actual behavior: The code modifies the user query by appending filter data to it before passing it to the agent (question = question + '\\n\\n' + '<filter>' + filters + '</filter>').",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mem-agent-mcp/mcp_server/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  }
+]

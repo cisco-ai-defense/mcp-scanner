@@ -1,0 +1,33 @@
+2025-10-30 15:50:40,919 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:50:40,919 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server
+2025-10-30 15:50:40,921 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 7 Python file(s) to analyze
+2025-10-30 15:50:40,936 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 46 functions
+2025-10-30 15:50:40,936 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server/adbdevicemanager.py
+2025-10-30 15:50:40,939 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server/run_tests.py
+2025-10-30 15:50:40,939 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server/server.py
+2025-10-30 15:50:40,950 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 5 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server/server.py
+2025-10-30 15:50:48,085 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server/tests/__init__.py
+2025-10-30 15:50:48,086 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server/tests/test_adb_device_manager.py
+2025-10-30 15:50:48,091 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server/tests/test_config.py
+2025-10-30 15:50:48,098 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server/tests/test_integration.py
+2025-10-30 15:50:48,102 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 1 finding(s) detected
+[
+  {
+    "tool_name": "execute_adb_shell_command",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "HIGH",
+        "threat_summary": "Line 63: Description claims: 'Executes an ADB command and returns the output or an error.' | Actual behavior: Passes user-provided input directly to deviceManager.execute_adb_shell_command, which likely executes the command on a connected device without any validation or sanitization.",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/android-mcp-server/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  }
+]

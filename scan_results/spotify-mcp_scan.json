@@ -1,0 +1,18 @@
+2025-10-30 15:36:54,149 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:36:54,149 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/spotify-mcp
+2025-10-30 15:36:54,152 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 4 Python file(s) to analyze
+2025-10-30 15:36:54,170 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 45 functions
+2025-10-30 15:36:54,170 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/spotify-mcp/src/spotify_mcp/__init__.py
+2025-10-30 15:36:54,170 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/spotify-mcp/src/spotify_mcp/server.py
+2025-10-30 15:36:54,175 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/spotify-mcp/src/spotify_mcp/spotify_api.py
+2025-10-30 15:36:54,179 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/spotify-mcp/src/spotify_mcp/utils.py
+2025-10-30 15:36:54,183 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/spotify-mcp",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

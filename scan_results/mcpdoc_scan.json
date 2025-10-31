@@ -1,0 +1,36 @@
+2025-10-30 15:33:02,152 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:33:02,152 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc
+2025-10-30 15:33:02,155 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 9 Python file(s) to analyze
+2025-10-30 15:33:02,166 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 15 functions
+2025-10-30 15:33:02,166 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/mcpdoc/__init__.py
+2025-10-30 15:33:02,166 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/mcpdoc/_version.py
+2025-10-30 15:33:02,166 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/mcpdoc/cli.py
+2025-10-30 15:33:02,168 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/mcpdoc/langgraph.py
+2025-10-30 15:33:02,170 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/mcpdoc/langgraph.py
+2025-10-30 15:33:04,184 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/mcpdoc/main.py
+2025-10-30 15:33:04,205 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 2 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/mcpdoc/main.py
+2025-10-30 15:33:08,076 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/mcpdoc/splash.py
+2025-10-30 15:33:08,080 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/tests/unit_tests/__init__.py
+2025-10-30 15:33:08,080 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/tests/unit_tests/test_imports.py
+2025-10-30 15:33:08,080 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/tests/unit_tests/test_main.py
+2025-10-30 15:33:08,082 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 1 finding(s) detected
+[
+  {
+    "tool_name": "fetch_docs",
+    "tool_description": "MCP function from main.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "MEDIUM",
+        "threat_summary": "Line 231: Description claims: 'No docstring is provided, so the tool does not disclose its behavior or security boundaries.' | Actual behavior: The function fetches content from user-supplied URLs using httpx_client.get(), and also allows reading local files if the URL is not HTTP/HTTPS, with some checks on allowed files and domains.",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcpdoc/mcpdoc/main.py",
+        "mcp_taxonomy": null
+      }
+    }
+  }
+]

@@ -1,0 +1,37 @@
+2025-10-30 15:46:56,784 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:46:56,784 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp
+2025-10-30 15:46:56,788 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 11 Python file(s) to analyze
+2025-10-30 15:46:56,813 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 67 functions
+2025-10-30 15:46:56,813 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/addon/FreeCADMCP/Init.py
+2025-10-30 15:46:56,813 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/addon/FreeCADMCP/InitGui.py
+2025-10-30 15:46:56,813 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/addon/FreeCADMCP/rpc_server/__init__.py
+2025-10-30 15:46:56,813 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/addon/FreeCADMCP/rpc_server/parts_library.py
+2025-10-30 15:46:56,814 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/addon/FreeCADMCP/rpc_server/rpc_server.py
+2025-10-30 15:46:56,820 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/addon/FreeCADMCP/rpc_server/serialize.py
+2025-10-30 15:46:56,821 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/examples/adk/__init__.py
+2025-10-30 15:46:56,821 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/examples/adk/agent.py
+2025-10-30 15:46:56,821 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/examples/langchain/react.py
+2025-10-30 15:46:56,822 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/src/freecad_mcp/__init__.py
+2025-10-30 15:46:56,822 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/src/freecad_mcp/server.py
+2025-10-30 15:46:56,907 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 11 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/src/freecad_mcp/server.py
+2025-10-30 15:47:13,935 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 1 finding(s) detected
+[
+  {
+    "tool_name": "execute_code",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "HIGH",
+        "threat_summary": "Line 407: Description claims: 'Execute arbitrary Python code in FreeCAD and return a message, output, and screenshot.' | Actual behavior: Directly executes arbitrary user-supplied Python code in the FreeCAD environment via freecad.execute_code(code) without any validation or restriction.",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/freecad-mcp/src/freecad_mcp/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  }
+]

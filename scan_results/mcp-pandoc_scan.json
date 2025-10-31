@@ -1,0 +1,18 @@
+2025-10-30 15:47:15,017 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:47:15,018 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-pandoc
+2025-10-30 15:47:15,020 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 4 Python file(s) to analyze
+2025-10-30 15:47:15,032 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 23 functions
+2025-10-30 15:47:15,032 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-pandoc/src/mcp_pandoc/__init__.py
+2025-10-30 15:47:15,032 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-pandoc/src/mcp_pandoc/server.py
+2025-10-30 15:47:15,036 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-pandoc/tests/test_advanced_features.py
+2025-10-30 15:47:15,039 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-pandoc/tests/test_conversions.py
+2025-10-30 15:47:15,040 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/mcp-pandoc",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

@@ -1,0 +1,46 @@
+2025-10-30 15:40:18,859 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:40:18,859 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server
+2025-10-30 15:40:18,862 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 21 Python file(s) to analyze
+2025-10-30 15:40:18,959 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 129 functions
+2025-10-30 15:40:18,959 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/__init__.py
+2025-10-30 15:40:18,959 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/ppt_mcp_server.py
+2025-10-30 15:40:18,998 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 3 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/ppt_mcp_server.py
+2025-10-30 15:40:23,087 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/setup_mcp.py
+2025-10-30 15:40:23,105 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/__init__.py
+2025-10-30 15:40:23,105 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/chart_tools.py
+2025-10-30 15:40:23,115 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/chart_tools.py
+2025-10-30 15:40:24,459 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/connector_tools.py
+2025-10-30 15:40:24,477 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/connector_tools.py
+2025-10-30 15:40:26,011 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/content_tools.py
+2025-10-30 15:40:26,204 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 8 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/content_tools.py
+2025-10-30 15:40:38,186 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/hyperlink_tools.py
+2025-10-30 15:40:38,211 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/hyperlink_tools.py
+2025-10-30 15:40:39,545 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/master_tools.py
+2025-10-30 15:40:39,564 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/master_tools.py
+2025-10-30 15:40:41,094 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/presentation_tools.py
+2025-10-30 15:40:41,163 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 7 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/presentation_tools.py
+2025-10-30 15:40:50,814 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/professional_tools.py
+2025-10-30 15:40:50,869 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 3 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/professional_tools.py
+2025-10-30 15:40:55,729 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/structural_tools.py
+2025-10-30 15:40:55,818 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 4 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/structural_tools.py
+2025-10-30 15:41:03,195 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/template_tools.py
+2025-10-30 15:41:03,300 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 7 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/template_tools.py
+2025-10-30 15:41:13,707 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/transition_tools.py
+2025-10-30 15:41:13,717 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 1 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/tools/transition_tools.py
+2025-10-30 15:41:15,436 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/utils/__init__.py
+2025-10-30 15:41:15,437 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/utils/content_utils.py
+2025-10-30 15:41:15,452 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/utils/core_utils.py
+2025-10-30 15:41:15,454 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/utils/design_utils.py
+2025-10-30 15:41:15,466 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/utils/presentation_utils.py
+2025-10-30 15:41:15,468 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/utils/template_utils.py
+2025-10-30 15:41:15,484 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server/utils/validation_utils.py
+2025-10-30 15:41:15,488 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/Office-PowerPoint-MCP-Server",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

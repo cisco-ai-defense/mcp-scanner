@@ -1,0 +1,30 @@
+2025-10-30 15:41:55,926 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:41:55,926 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp
+2025-10-30 15:41:55,929 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 15 Python file(s) to analyze
+2025-10-30 15:41:56,053 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 132 functions
+2025-10-30 15:41:56,053 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/setup.py
+2025-10-30 15:41:56,053 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/__init__.py
+2025-10-30 15:41:56,053 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/_version.py
+2025-10-30 15:41:56,053 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/better_bibtex_client.py
+2025-10-30 15:41:56,056 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/chroma_client.py
+2025-10-30 15:41:56,060 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/cli.py
+2025-10-30 15:41:56,067 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/client.py
+2025-10-30 15:41:56,070 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/local_db.py
+2025-10-30 15:41:56,074 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/pdfannots_downloader.py
+2025-10-30 15:41:56,075 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/pdfannots_helper.py
+2025-10-30 15:41:56,076 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/semantic_search.py
+2025-10-30 15:41:56,084 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/server.py
+2025-10-30 15:41:56,729 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 20 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/server.py
+2025-10-30 15:42:32,468 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/setup_helper.py
+2025-10-30 15:42:32,486 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/updater.py
+2025-10-30 15:42:32,494 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp/src/zotero_mcp/utils.py
+2025-10-30 15:42:32,495 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/zotero-mcp",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

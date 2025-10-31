@@ -1,0 +1,143 @@
+2025-10-30 15:30:23,140 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:30:23,140 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp
+2025-10-30 15:30:23,142 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 9 Python file(s) to analyze
+2025-10-30 15:30:23,169 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 60 functions
+2025-10-30 15:30:23,169 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/__init__.py
+2025-10-30 15:30:23,169 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/__main__.py
+2025-10-30 15:30:23,170 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/convai.py
+2025-10-30 15:30:23,171 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/model.py
+2025-10-30 15:30:23,171 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/server.py
+2025-10-30 15:30:23,934 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 25 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/server.py
+2025-10-30 15:31:04,661 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/utils.py
+2025-10-30 15:31:04,674 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/setup.py
+2025-10-30 15:31:04,675 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/tests/conftest.py
+2025-10-30 15:31:04,675 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/tests/test_utils.py
+2025-10-30 15:31:04,677 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 7 finding(s) detected
+[
+  {
+    "tool_name": "voice_clone",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "MEDIUM",
+        "threat_summary": "Line 517: Description claims: 'No docstring provided; user has no information about what the tool does.' | Actual behavior: Receives user-provided audio files and metadata, processes file paths, and sends them to an external API (client.voices.ivc.create), likely for voice cloning via ElevenLabs.",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  },
+  {
+    "tool_name": "isolate_audio",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "HIGH",
+        "threat_summary": "Line 540: Description claims: 'No docstring provided; user has no information about external operations or costs.' | Actual behavior: Reads audio data from a user-supplied file and sends it to an external API (ElevenLabs) for processing via client.audio_isolation.convert().",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  },
+  {
+    "tool_name": "create_agent",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "MEDIUM",
+        "threat_summary": "Line 590: Description claims: 'No docstring provided; the tool does not disclose its purpose or any side effects.' | Actual behavior: Creates a conversational AI agent by making an external API call via client.conversational_ai.agents.create(), potentially incurring costs and transmitting user-supplied configuration data to an external service (e.g., ElevenLabs).",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  },
+  {
+    "tool_name": "add_knowledge_base_to_agent",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "MEDIUM",
+        "threat_summary": "Line 656: Description claims: 'No docstring provided; user cannot know what the tool does.' | Actual behavior: Accepts agent ID, knowledge base name, and either a URL, file path, or text, then uploads the provided data (potentially file contents or text) to an external API via client.conversational_ai.knowledge_base.documents.create_from_url or create_from_file.",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  },
+  {
+    "tool_name": "speech_to_speech",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "MEDIUM",
+        "threat_summary": "Line 897: Description claims: 'No docstring is provided, so the tool does not disclose its purpose or external interactions.' | Actual behavior: The function takes an input audio file, a voice name, and an output directory, then calls an external API (client.speech_to_speech.convert) to perform speech-to-speech conversion using the ElevenLabs service, which may incur costs and transmits user audio data externally.",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  },
+  {
+    "tool_name": "make_outbound_call",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "MEDIUM",
+        "threat_summary": "Line 1027: Description claims: 'No docstring provided; the tool does not disclose its purpose or operations.' | Actual behavior: Initiates an outbound call using either Twilio or SIP trunk APIs, transmitting agent_id, agent_phone_number_id, and to_number to external telephony services.",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  },
+  {
+    "tool_name": "play_audio",
+    "tool_description": "MCP function from server.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "MEDIUM",
+        "threat_summary": "Line 1159: Description claims: 'No docstring provided; the function lacks any description of its behavior.' | Actual behavior: Accepts a user-supplied file path, processes it via handle_input_file, reads the file in binary mode, and plays its contents using a play() function.",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/elevenlabs-mcp/elevenlabs_mcp/server.py",
+        "mcp_taxonomy": null
+      }
+    }
+  }
+]

@@ -1,0 +1,144 @@
+2025-10-30 15:38:12,613 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:38:12,613 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp
+2025-10-30 15:38:12,618 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 115 Python file(s) to analyze
+2025-10-30 15:38:13,533 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 582 functions
+2025-10-30 15:38:13,533 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/__main__.py
+2025-10-30 15:38:13,533 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/analyze_kik_hash_generation.py
+2025-10-30 15:38:13,537 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/anayasa_mcp_module/__init__.py
+2025-10-30 15:38:13,537 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/anayasa_mcp_module/bireysel_client.py
+2025-10-30 15:38:13,542 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/anayasa_mcp_module/client.py
+2025-10-30 15:38:13,548 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/anayasa_mcp_module/models.py
+2025-10-30 15:38:13,552 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/anayasa_mcp_module/unified_client.py
+2025-10-30 15:38:13,554 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/asgi_app.py
+2025-10-30 15:38:13,559 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/bddk_mcp_module/__init__.py
+2025-10-30 15:38:13,559 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/bddk_mcp_module/client.py
+2025-10-30 15:38:13,561 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/bddk_mcp_module/models.py
+2025-10-30 15:38:13,561 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/bedesten_mcp_module/__init__.py
+2025-10-30 15:38:13,562 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/bedesten_mcp_module/client.py
+2025-10-30 15:38:13,563 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/bedesten_mcp_module/enums.py
+2025-10-30 15:38:13,564 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/bedesten_mcp_module/models.py
+2025-10-30 15:38:13,565 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/check_response_format.py
+2025-10-30 15:38:13,566 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/danistay_mcp_module/__init__.py
+2025-10-30 15:38:13,566 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/danistay_mcp_module/client.py
+2025-10-30 15:38:13,568 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/danistay_mcp_module/models.py
+2025-10-30 15:38:13,570 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/emsal_mcp_module/__init__.py
+2025-10-30 15:38:13,570 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/emsal_mcp_module/client.py
+2025-10-30 15:38:13,572 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/emsal_mcp_module/models.py
+2025-10-30 15:38:13,573 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/example_fastapi_app.py
+2025-10-30 15:38:13,582 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/kik_mcp_module/__init__.py
+2025-10-30 15:38:13,582 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/kik_mcp_module/client.py
+2025-10-30 15:38:13,598 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/kik_mcp_module/client_v2.py
+2025-10-30 15:38:13,602 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/kik_mcp_module/models.py
+2025-10-30 15:38:13,603 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/kik_mcp_module/models_v2.py
+2025-10-30 15:38:13,605 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/kvkk_mcp_module/__init__.py
+2025-10-30 15:38:13,606 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/kvkk_mcp_module/client.py
+2025-10-30 15:38:13,609 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/kvkk_mcp_module/models.py
+2025-10-30 15:38:13,610 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth/__init__.py
+2025-10-30 15:38:13,610 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth/clerk_config.py
+2025-10-30 15:38:13,611 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth/middleware.py
+2025-10-30 15:38:13,665 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth/oauth.py
+2025-10-30 15:38:13,668 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth/policy.py
+2025-10-30 15:38:13,670 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth/storage.py
+2025-10-30 15:38:13,672 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth_factory.py
+2025-10-30 15:38:13,688 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 4 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth_factory.py
+2025-10-30 15:38:18,899 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth_http_adapter.py
+2025-10-30 15:38:18,910 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_auth_http_simple.py
+2025-10-30 15:38:18,921 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_server_main.py
+2025-10-30 15:38:19,646 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 21 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_server_main.py
+2025-10-30 15:38:53,669 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/redis_session_store.py
+2025-10-30 15:38:53,684 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/rekabet_mcp_module/__init__.py
+2025-10-30 15:38:53,684 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/rekabet_mcp_module/client.py
+2025-10-30 15:38:53,699 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/rekabet_mcp_module/models.py
+2025-10-30 15:38:53,701 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/run_asgi.py
+2025-10-30 15:38:53,702 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/__main__.py
+2025-10-30 15:38:53,703 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/anayasa_mcp_module/__init__.py
+2025-10-30 15:38:53,703 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/anayasa_mcp_module/bireysel_client.py
+2025-10-30 15:38:53,710 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/anayasa_mcp_module/client.py
+2025-10-30 15:38:53,718 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/anayasa_mcp_module/models.py
+2025-10-30 15:38:53,723 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/anayasa_mcp_module/unified_client.py
+2025-10-30 15:38:53,724 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/asgi_app.py
+2025-10-30 15:38:53,730 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/bddk_mcp_module/__init__.py
+2025-10-30 15:38:53,730 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/bddk_mcp_module/client.py
+2025-10-30 15:38:53,733 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/bddk_mcp_module/models.py
+2025-10-30 15:38:53,733 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/bedesten_mcp_module/__init__.py
+2025-10-30 15:38:53,733 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/bedesten_mcp_module/client.py
+2025-10-30 15:38:53,735 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/bedesten_mcp_module/enums.py
+2025-10-30 15:38:53,736 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/bedesten_mcp_module/models.py
+2025-10-30 15:38:53,737 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/check_response_format.py
+2025-10-30 15:38:53,738 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/danistay_mcp_module/__init__.py
+2025-10-30 15:38:53,738 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/danistay_mcp_module/client.py
+2025-10-30 15:38:53,740 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/danistay_mcp_module/models.py
+2025-10-30 15:38:53,742 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/emsal_mcp_module/__init__.py
+2025-10-30 15:38:53,742 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/emsal_mcp_module/client.py
+2025-10-30 15:38:53,744 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/emsal_mcp_module/models.py
+2025-10-30 15:38:53,745 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/example_fastapi_app.py
+2025-10-30 15:38:53,754 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/kik_mcp_module/__init__.py
+2025-10-30 15:38:53,754 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/kik_mcp_module/client.py
+2025-10-30 15:38:53,769 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/kik_mcp_module/models.py
+2025-10-30 15:38:53,770 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/kvkk_mcp_module/__init__.py
+2025-10-30 15:38:53,770 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/kvkk_mcp_module/client.py
+2025-10-30 15:38:53,773 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/kvkk_mcp_module/models.py
+2025-10-30 15:38:53,774 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth/__init__.py
+2025-10-30 15:38:53,774 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth/clerk_config.py
+2025-10-30 15:38:53,775 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth/middleware.py
+2025-10-30 15:38:53,778 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth/oauth.py
+2025-10-30 15:38:53,781 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth/policy.py
+2025-10-30 15:38:53,783 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth/storage.py
+2025-10-30 15:38:53,785 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth_factory.py
+2025-10-30 15:38:53,800 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 4 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth_factory.py
+2025-10-30 15:38:58,944 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth_http_adapter.py
+2025-10-30 15:38:58,959 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_auth_http_simple.py
+2025-10-30 15:38:58,972 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_server_main.py
+2025-10-30 15:39:00,023 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 31 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/mcp_server_main.py
+2025-10-30 15:39:44,163 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/redis_session_store.py
+2025-10-30 15:39:44,172 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/rekabet_mcp_module/__init__.py
+2025-10-30 15:39:44,173 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/rekabet_mcp_module/client.py
+2025-10-30 15:39:44,183 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/rekabet_mcp_module/models.py
+2025-10-30 15:39:44,185 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/run_asgi.py
+2025-10-30 15:39:44,186 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/sayistay_mcp_module/__init__.py
+2025-10-30 15:39:44,186 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/sayistay_mcp_module/client.py
+2025-10-30 15:39:44,195 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/sayistay_mcp_module/enums.py
+2025-10-30 15:39:44,196 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/sayistay_mcp_module/models.py
+2025-10-30 15:39:44,199 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/sayistay_mcp_module/unified_client.py
+2025-10-30 15:39:44,201 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/starlette_app.py
+2025-10-30 15:39:44,202 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/stripe_webhook.py
+2025-10-30 15:39:44,203 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/uyusmazlik_mcp_module/__init__.py
+2025-10-30 15:39:44,203 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/uyusmazlik_mcp_module/client.py
+2025-10-30 15:39:44,206 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/uyusmazlik_mcp_module/models.py
+2025-10-30 15:39:44,207 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/yargitay_mcp_module/__init__.py
+2025-10-30 15:39:44,207 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/yargitay_mcp_module/client.py
+2025-10-30 15:39:44,209 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/saidsurucu-yargi-mcp-f5fa007/yargitay_mcp_module/models.py
+2025-10-30 15:39:44,211 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/sayistay_mcp_module/__init__.py
+2025-10-30 15:39:44,211 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/sayistay_mcp_module/client.py
+2025-10-30 15:39:44,218 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/sayistay_mcp_module/enums.py
+2025-10-30 15:39:44,219 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/sayistay_mcp_module/models.py
+2025-10-30 15:39:44,222 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/sayistay_mcp_module/unified_client.py
+2025-10-30 15:39:44,223 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/starlette_app.py
+2025-10-30 15:39:44,224 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/stripe_webhook.py
+2025-10-30 15:39:44,224 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/uyusmazlik_mcp_module/__init__.py
+2025-10-30 15:39:44,224 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/uyusmazlik_mcp_module/client.py
+2025-10-30 15:39:44,227 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/uyusmazlik_mcp_module/models.py
+2025-10-30 15:39:44,228 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/yargitay_mcp_module/__init__.py
+2025-10-30 15:39:44,228 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/yargitay_mcp_module/client.py
+2025-10-30 15:39:44,230 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/yargitay_mcp_module/models.py
+2025-10-30 15:39:44,231 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 1 finding(s) detected
+[
+  {
+    "tool_name": "search_anayasa_unified",
+    "tool_description": "MCP function from mcp_server_main.py",
+    "status": "completed",
+    "is_safe": false,
+    "findings": {
+      "behavioural_analyzer": {
+        "severity": "MEDIUM",
+        "threat_summary": "Line 816: Description claims: 'No docstring provided; the tool does not disclose its purpose or operations.' | Actual behavior: Receives multiple user parameters, constructs an AnayasaUnifiedSearchRequest, and sends it to anayasa_unified_client_instance.search_unified(), returning the result as JSON.",
+        "threat_names": [
+          "DESCRIPTION_MISMATCH"
+        ],
+        "total_findings": 1,
+        "source_file": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/yargi-mcp/mcp_server_main.py",
+        "mcp_taxonomy": null
+      }
+    }
+  }
+]

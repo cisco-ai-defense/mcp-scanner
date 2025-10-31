@@ -1,0 +1,59 @@
+2025-10-30 15:34:24,406 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:34:24,406 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server
+2025-10-30 15:34:24,413 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 44 Python file(s) to analyze
+2025-10-30 15:34:24,597 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 268 functions
+2025-10-30 15:34:24,597 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/CLI.py
+2025-10-30 15:34:24,601 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/__init__.py
+2025-10-30 15:34:24,601 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/__main__.py
+2025-10-30 15:34:24,601 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/__version__.py
+2025-10-30 15:34:24,601 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/config.py
+2025-10-30 15:34:24,603 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/enroll.py
+2025-10-30 15:34:24,603 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/__init__.py
+2025-10-30 15:34:24,603 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/backends/__init__.py
+2025-10-30 15:34:24,603 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/backends/base.py
+2025-10-30 15:34:24,604 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/backends/local_backend.py
+2025-10-30 15:34:24,608 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/backends/remote_backend.py
+2025-10-30 15:34:24,609 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/context.py
+2025-10-30 15:34:24,611 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/extension.py
+2025-10-30 15:34:24,613 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/handlers.py
+2025-10-30 15:34:24,620 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/protocol/__init__.py
+2025-10-30 15:34:24,620 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/jupyter_extension/protocol/messages.py
+2025-10-30 15:34:24,623 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/log.py
+2025-10-30 15:34:24,623 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/models.py
+2025-10-30 15:34:24,624 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/notebook_manager.py
+2025-10-30 15:34:24,627 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/server.py
+2025-10-30 15:34:24,852 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 14 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/server.py
+2025-10-30 15:34:47,674 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/server_context.py
+2025-10-30 15:34:47,678 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/server_modes.py
+2025-10-30 15:34:47,678 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/__init__.py
+2025-10-30 15:34:47,679 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/_base.py
+2025-10-30 15:34:47,680 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/delete_cell_tool.py
+2025-10-30 15:34:47,683 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/execute_cell_tool.py
+2025-10-30 15:34:47,688 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/execute_code_tool.py
+2025-10-30 15:34:47,690 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/insert_cell_tool.py
+2025-10-30 15:34:47,692 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/list_files_tool.py
+2025-10-30 15:34:47,695 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/list_kernels_tool.py
+2025-10-30 15:34:47,698 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/list_notebooks_tool.py
+2025-10-30 15:34:47,699 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/overwrite_cell_source_tool.py
+2025-10-30 15:34:47,701 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/read_cell_tool.py
+2025-10-30 15:34:47,702 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/read_notebook_tool.py
+2025-10-30 15:34:47,702 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/restart_notebook_tool.py
+2025-10-30 15:34:47,703 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/unuse_notebook_tool.py
+2025-10-30 15:34:47,704 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/tools/use_notebook_tool.py
+2025-10-30 15:34:47,709 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/jupyter_mcp_server/utils.py
+2025-10-30 15:34:47,719 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/tests/__init__.py
+2025-10-30 15:34:47,720 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/tests/conftest.py
+2025-10-30 15:34:47,723 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/tests/test_common.py
+2025-10-30 15:34:47,728 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/tests/test_config.py
+2025-10-30 15:34:47,729 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/tests/test_jupyter_extension.py
+2025-10-30 15:34:47,730 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server/tests/test_tools.py
+2025-10-30 15:34:47,733 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/jupyter-mcp-server",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]

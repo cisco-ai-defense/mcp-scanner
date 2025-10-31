@@ -1,0 +1,68 @@
+2025-10-30 15:49:56,475 - mcpscanner.core.analyzers.base.Behavioural - INFO - BehaviouralAnalyzer initialized with LLM-based analysis
+2025-10-30 15:49:56,475 - mcpscanner.core.analyzers.base.Behavioural - INFO - Scanning directory: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server
+2025-10-30 15:49:56,479 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 53 Python file(s) to analyze
+2025-10-30 15:49:57,658 - mcpscanner.core.analyzers.base.Behavioural - INFO - Built call graph with 878 functions
+2025-10-30 15:49:57,658 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_client/__init__.py
+2025-10-30 15:49:57,658 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_client/client.py
+2025-10-30 15:49:57,664 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/__init__.py
+2025-10-30 15:49:57,665 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/__main__.py
+2025-10-30 15:49:57,665 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/__init__.py
+2025-10-30 15:49:57,665 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/auth_middleware.py
+2025-10-30 15:49:57,667 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/jwt_manager.py
+2025-10-30 15:49:57,671 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/key_manager.py
+2025-10-30 15:49:57,674 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/oauth_client.py
+2025-10-30 15:49:57,679 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/oauth_handlers.py
+2025-10-30 15:49:57,681 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/oauth_provider.py
+2025-10-30 15:49:57,683 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/oauth_types.py
+2025-10-30 15:49:57,684 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/token_handlers.py
+2025-10-30 15:49:57,688 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/token_manager.py
+2025-10-30 15:49:57,697 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/token_security_middleware.py
+2025-10-30 15:49:57,699 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/auth/token_validators.py
+2025-10-30 15:49:57,702 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/main.py
+2025-10-30 15:49:57,713 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/multiworker_app.py
+2025-10-30 15:49:57,719 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/tools/__init__.py
+2025-10-30 15:49:57,719 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/tools/prompts_manager.py
+2025-10-30 15:49:57,722 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/tools/resources_manager.py
+2025-10-30 15:49:57,725 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/tools/tools_manager.py
+2025-10-30 15:49:58,032 - mcpscanner.core.analyzers.base.Behavioural - INFO - Found 25 MCP functions in /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/tools/tools_manager.py
+2025-10-30 15:50:30,427 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/__init__.py
+2025-10-30 15:50:30,427 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/adbc_query_tools.py
+2025-10-30 15:50:30,445 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/analysis_tools.py
+2025-10-30 15:50:30,468 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/config.py
+2025-10-30 15:50:30,484 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/data_exploration_tools.py
+2025-10-30 15:50:30,497 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/data_governance_tools.py
+2025-10-30 15:50:30,510 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/data_quality_tools.py
+2025-10-30 15:50:30,526 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/db.py
+2025-10-30 15:50:30,540 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/dependency_analysis_tools.py
+2025-10-30 15:50:30,551 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/logger.py
+2025-10-30 15:50:30,557 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/monitoring_tools.py
+2025-10-30 15:50:30,573 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/performance_analytics_tools.py
+2025-10-30 15:50:30,675 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/query_executor.py
+2025-10-30 15:50:30,685 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/schema_extractor.py
+2025-10-30 15:50:30,706 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/security.py
+2025-10-30 15:50:30,720 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/doris_mcp_server/utils/security_analytics_tools.py
+2025-10-30 15:50:30,730 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/generate_requirements.py
+2025-10-30 15:50:30,732 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/__init__.py
+2025-10-30 15:50:30,732 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/conftest.py
+2025-10-30 15:50:30,733 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/integration/test_end_to_end.py
+2025-10-30 15:50:30,735 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/security/test_authentication.py
+2025-10-30 15:50:30,736 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/security/test_authorization.py
+2025-10-30 15:50:30,737 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/security/test_data_masking.py
+2025-10-30 15:50:30,739 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/security/test_security_manager.py
+2025-10-30 15:50:30,740 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/security/test_sql_validation.py
+2025-10-30 15:50:30,742 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/test_config_loader.py
+2025-10-30 15:50:30,744 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/tools/test_tools_client_server.py
+2025-10-30 15:50:30,745 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/tools/test_tools_manager.py
+2025-10-30 15:50:30,748 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/utils/test_db.py
+2025-10-30 15:50:30,749 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/utils/test_query_executor.py
+2025-10-30 15:50:30,751 - mcpscanner.core.analyzers.base.Behavioural - INFO - Analyzing file: /var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server/test/utils/test_query_executor_client_server.py
+2025-10-30 15:50:30,752 - mcpscanner.core.analyzers.base.Behavioural - INFO - Behavioural analysis complete: 0 finding(s) detected
+[
+  {
+    "tool_name": "/var/folders/5b/tl5xxjnx1qng1bxm4kxfsjk00000gn/T/mcp_scan_hjoozfe1/doris-mcp-server",
+    "tool_description": "MCP server source code",
+    "status": "completed",
+    "is_safe": true,
+    "findings": {}
+  }
+]
