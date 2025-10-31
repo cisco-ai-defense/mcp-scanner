@@ -193,6 +193,7 @@ asyncio.run(main())
 - **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`.
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`.
+- **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
 
