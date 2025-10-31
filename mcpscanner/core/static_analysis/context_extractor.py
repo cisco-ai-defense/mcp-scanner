@@ -285,7 +285,10 @@ class ContextExtractor:
         for arg in node.args.args:
             param_info = {"name": arg.arg}
             if arg.annotation:
-                param_info["type"] = ast.unparse(arg.annotation)
+                try:
+                    param_info["type"] = ast.unparse(arg.annotation)
+                except (AttributeError, TypeError, ValueError):
+                    param_info["type"] = "<unknown>"
             params.append(param_info)
         return params
 
@@ -299,7 +302,10 @@ class ContextExtractor:
             Return type or None
         """
         if node.returns:
-            return ast.unparse(node.returns)
+            try:
+                return ast.unparse(node.returns)
+            except (AttributeError, TypeError, ValueError):
+                return "<unknown>"
         return None
 
     def _extract_imports(self, node: ast.FunctionDef) -> List[str]:
@@ -334,9 +340,16 @@ class ContextExtractor:
         calls = []
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
+                args_list = []
+                for arg in child.args:
+                    try:
+                        args_list.append(ast.unparse(arg))
+                    except (AttributeError, TypeError, ValueError):
+                        args_list.append("<complex>")
+                
                 call_info = {
                     "name": self._get_call_name(child),
-                    "args": [ast.unparse(arg) for arg in child.args],
+                    "args": args_list,
                     "line": child.lineno if hasattr(child, "lineno") else 0,
                 }
                 calls.append(call_info)
@@ -378,9 +391,14 @@ class ContextExtractor:
             if isinstance(child, ast.Assign):
                 for target in child.targets:
                     if isinstance(target, ast.Name):
+                        try:
+                            value_str = ast.unparse(child.value)
+                        except (AttributeError, TypeError, ValueError):
+                            value_str = "<complex>"
+                        
                         assign_info = {
                             "variable": target.id,
-                            "value": ast.unparse(child.value),
+                            "value": value_str,
                             "line": child.lineno if hasattr(child, "lineno") else 0,
                         }
                         assignments.append(assign_info)
@@ -427,7 +445,12 @@ class ContextExtractor:
             
             # PERFORMANCE FIX: Create a new analyzer with ONLY this function's AST
             # instead of the entire file. This makes the CFG much smaller and faster.
-            func_source = ast.unparse(node)
+            try:
+                func_source = ast.unparse(node)
+            except (AttributeError, TypeError, ValueError) as e:
+                self.logger.error(f"Failed to unparse function AST: {e}")
+                return []
+            
             func_analyzer = PythonParser(self.file_path, func_source)
             func_analyzer.parse()
             
