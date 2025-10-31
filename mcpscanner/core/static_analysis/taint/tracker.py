@@ -80,19 +80,24 @@ class Taint:
 
 
 class TaintShape:
-    """Represents the shape of tainted data structures."""
+    """Represents the shape of tainted data structures with bounded depth."""
     
-    def __init__(self, taint: Taint | None = None):
+    MAX_DEPTH = 3  # Cap nesting depth to prevent explosion
+    
+    def __init__(self, taint: Taint | None = None, depth: int = 0):
         """Initialize taint shape.
         
         Args:
             taint: Base taint for scalar values
+            depth: Current nesting depth (for bounding)
         """
         self.scalar_taint = taint or Taint()
         self.fields: dict[str, TaintShape] = {}
         self.element_shape: TaintShape | None = None
         self.is_object = False
         self.is_array = False
+        self.depth = depth
+        self.collapsed = depth >= self.MAX_DEPTH  # Collapse at max depth
     
     def get_taint(self) -> Taint:
         """Get the taint of this shape."""
@@ -126,10 +131,15 @@ class TaintShape:
             field: Field name
             taint: Taint to set
         """
+        # If collapsed, just merge taint into scalar (summary node)
+        if self.collapsed:
+            self.scalar_taint = self.scalar_taint.merge(taint)
+            return
+        
         self.is_object = True
         
         if field not in self.fields:
-            self.fields[field] = TaintShape()
+            self.fields[field] = TaintShape(depth=self.depth + 1)
         
         self.fields[field].set_taint(taint)
     
@@ -153,10 +163,15 @@ class TaintShape:
         Args:
             taint: Taint to set
         """
+        # If collapsed, just merge taint into scalar (summary node)
+        if self.collapsed:
+            self.scalar_taint = self.scalar_taint.merge(taint)
+            return
+        
         self.is_array = True
         
         if not self.element_shape:
-            self.element_shape = TaintShape()
+            self.element_shape = TaintShape(depth=self.depth + 1)
         
         self.element_shape.set_taint(taint)
     
