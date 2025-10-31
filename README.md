@@ -310,21 +310,6 @@ mcp-scanner behavioral /path/to/mcp_server.py --format detailed
 mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 ```
 
-**Key Features:**
-- **Zero Hardcoded Patterns**: LLM determines threats based on context, not predefined rules
-- **Cross-File Dataflow**: Tracks parameter flows across imported functions
-- **Alignment Checking**: Compares docstring claims against actual behavior
-- **AITech Taxonomy**: Maps findings to official security taxonomy
-- **9 Threat Categories**: Data exfiltration, command injection, unauthorized access, and more
-
-**Supported Output Formats:**
-- `summary` - High-level overview (default)
-- `detailed` - Full threat analysis with line numbers
-- `by_tool` - Organized by tool name
-- `by_analyzer` - Grouped by analyzer
-- `by_severity` - Prioritized by severity (HIGH/MEDIUM/LOW)
-- `table` - Tabular format
-- `raw` - JSON output for programmatic processing
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
 
