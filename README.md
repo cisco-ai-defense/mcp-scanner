@@ -289,6 +289,45 @@ mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
   --mime-types "text/plain,text/html,application/json"
 ```
 
+#### Behavioral Code Scanning
+
+The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking.
+
+```bash
+# Scan a single Python file
+mcp-scanner behavioral /path/to/mcp_server.py
+
+# Scan a directory
+mcp-scanner behavioral /path/to/mcp_servers/
+
+# With specific output format
+mcp-scanner behavioral /path/to/mcp_server.py --format by_severity
+
+# Detailed analysis with all findings
+mcp-scanner behavioral /path/to/mcp_server.py --format detailed
+
+# Save results to file
+mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
+```
+
+**Key Features:**
+- **Zero Hardcoded Patterns**: LLM determines threats based on context, not predefined rules
+- **Cross-File Dataflow**: Tracks parameter flows across imported functions
+- **Alignment Checking**: Compares docstring claims against actual behavior
+- **AITech Taxonomy**: Maps findings to official security taxonomy
+- **9 Threat Categories**: Data exfiltration, command injection, unauthorized access, and more
+
+**Supported Output Formats:**
+- `summary` - High-level overview (default)
+- `detailed` - Full threat analysis with line numbers
+- `by_tool` - Organized by tool name
+- `by_analyzer` - Grouped by analyzer
+- `by_severity` - Prioritized by severity (HIGH/MEDIUM/LOW)
+- `table` - Tabular format
+- `raw` - JSON output for programmatic processing
+
+See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
+
 ### API Server Usage
 
 The API server provides a REST interface to the MCP scanner functionality, allowing you to integrate security scanning into web applications, CI/CD pipelines, or other services. It exposes the same scanning capabilities as the CLI tool but through HTTP endpoints.
@@ -381,6 +420,9 @@ http://127.0.0.1:8002/sse     safe_command  SAFE       SAFE     SAFE     SAFE   
 For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs) directory:
 
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
+- **[Behavioral Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
+- **[LLM Providers](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/llm-providers.md)** - LLM configuration for all providers
+- **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration
 - **[Programmatic Usage](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/programmatic-usage.md)** - Programmatic usage examples and advanced usage
 - **[API Reference](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md)** - Complete REST API documentation
