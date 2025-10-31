@@ -55,7 +55,7 @@ class SymbolicValue:
         elif self.kind == ValueKind.SYMBOLIC:
             try:
                 return f"Sym({ast.unparse(self.expr)})"
-            except:
+            except (AttributeError, TypeError, ValueError):
                 return "Sym(?)"
         else:
             return "NotCst"
@@ -168,7 +168,7 @@ class ConstantPropagationAnalysis:
                 return left // right if right != 0 else None
             elif isinstance(op, ast.Mod):
                 return left % right if right != 0 else None
-        except:
+        except (TypeError, ValueError, ZeroDivisionError):
             return None
         
         return None

@@ -125,8 +125,8 @@ class CrossFileAnalyzer:
             
             # Extract imports
             self._extract_imports(file_path, analyzer)
-        except Exception:
-            pass  # Skip files that can't be parsed
+        except Exception as e:
+            self.logger.debug(f"Skipping unparseable file {file_path}: {e}")
 
     def _extract_python_functions(self, file_path: Path, analyzer: PythonParser) -> None:
         """Extract function definitions and class methods from Python file.

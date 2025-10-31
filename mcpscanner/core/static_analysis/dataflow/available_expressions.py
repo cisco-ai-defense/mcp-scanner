@@ -165,7 +165,7 @@ class AvailableExpressionsAnalyzer(DataFlowAnalyzer[AvailableExprsFact]):
         """
         try:
             return ast.unparse(node)
-        except:
+        except (AttributeError, TypeError, ValueError):
             return ""
     
     def _expr_uses_vars(self, expr_str: str, vars: set[str]) -> bool:

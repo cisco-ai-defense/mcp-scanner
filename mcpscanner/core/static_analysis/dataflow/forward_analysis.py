@@ -308,21 +308,17 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
         return ast.unparse(node.func)
 
     def _is_external_operation(self, call_name: str) -> bool:
-        """Check if call is an external operation.
+        """Report all operations - LLM decides what's external/dangerous.
 
         Args:
             call_name: Function call name
 
         Returns:
-            True if external operation
+            Always False - LLM analyzes all operations without filtering
         """
-        external_patterns = [
-            "subprocess", "os.system", "os.popen",
-            "requests", "urllib", "http", "socket",
-            "open", "write", "read",
-            "eval", "exec", "compile",
-        ]
-        return any(pattern in call_name for pattern in external_patterns)
+        # Don't hardcode what's "external" or "dangerous"
+        # All operations are reported to LLM for context-aware analysis
+        return False
 
     def _collect_flows(self) -> None:
         """Collect all flows from analysis results."""

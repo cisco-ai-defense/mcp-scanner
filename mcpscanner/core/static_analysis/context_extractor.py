@@ -559,16 +559,17 @@ class ContextExtractor:
         return False
 
     def _has_dangerous_imports(self, imports: List[str]) -> bool:
-        """Check for dangerous imports.
+        """Report all imports - LLM decides what's dangerous.
 
         Args:
             imports: List of import statements
 
         Returns:
-            True if dangerous imports detected
+            True if any imports detected (LLM will analyze)
         """
-        dangerous = ["subprocess", "os", "eval", "exec", "pickle", "marshal"]
-        return any(danger in imp for danger in dangerous for imp in imports)
+        # Don't hardcode what's "dangerous" - report all imports to LLM
+        # LLM will determine context-appropriate risk
+        return len(imports) > 0
 
     def _create_dataflow_summary(self, node: ast.FunctionDef) -> Dict[str, Any]:
         """Create dataflow summary.
