@@ -55,7 +55,7 @@ uv sync --python 3.13
 
 ### Install as a dependency in other projects
 
-Use uv to add MCP Scanner as a dependency in other projects. From the project directory you want to use this SKD from:
+Add MCP Scanner as a dependency using uv. From your project root (initialize with uv if needed):
 
 ```bash
 uv init --python 3.13 #if not already done
