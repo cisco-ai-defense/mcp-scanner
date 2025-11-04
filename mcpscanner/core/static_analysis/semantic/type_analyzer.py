@@ -17,14 +17,18 @@
 """Type analysis and inference with reversed approach.
 
 REVERSED APPROACH: Track types of MCP parameters and parameter-influenced variables.
+
+MULTI-LANGUAGE SUPPORT: Now supports all 10 languages through unified AST.
 """
 
 import ast
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ..unified_ast import UnifiedASTNode, NodeType
+from ..language_detector import Language
 
 
 class TypeKind(Enum):
@@ -78,15 +82,17 @@ class TypeAnalyzer:
     parameter-influenced variables.
     """
 
-    def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None):
+    def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None, language: Optional[Language] = None):
         """Initialize type analyzer.
 
         Args:
             analyzer: Language-specific analyzer
             parameter_names: MCP entry point parameter names
+            language: Programming language (for unified analysis)
         """
         self.analyzer = analyzer
         self.parameter_names = set(parameter_names or [])
+        self.language = language
         self.node_types: dict[Any, Type] = {}
         self.var_types: dict[str, Type] = {}
         self.param_var_types: dict[str, Type] = {}  # Types of parameter-influenced vars
@@ -98,6 +104,139 @@ class TypeAnalyzer:
 
         if isinstance(self.analyzer, PythonParser):
             self._analyze_python(ast_root)
+
+    def analyze_unified(self, unified_nodes: list[UnifiedASTNode]) -> None:
+        """Perform type analysis on unified AST nodes (supports all languages).
+
+        Args:
+            unified_nodes: List of UnifiedASTNode (typically functions)
+        """
+        for node in unified_nodes:
+            self._analyze_unified_node(node)
+
+    def _analyze_unified_node(self, node: UnifiedASTNode) -> None:
+        """Analyze types in a unified AST node.
+
+        Args:
+            node: Unified AST node
+        """
+        # Track parameter types from function signatures
+        if node.type in [NodeType.FUNCTION, NodeType.ASYNC_FUNCTION]:
+            for param_name in node.parameters:
+                if param_name in self.parameter_names:
+                    # Try to get type from metadata
+                    param_type = self._infer_unified_param_type(node, param_name)
+                    self.var_types[param_name] = param_type
+                    self.param_var_types[param_name] = param_type
+
+        # Analyze assignments to track type propagation
+        if node.metadata and 'assignments' in node.metadata:
+            for assignment in node.metadata['assignments']:
+                target = assignment.get('target')
+                if target:
+                    # Infer type from assignment context
+                    inferred_type = self._infer_unified_assignment_type(assignment, node)
+                    self.var_types[target] = inferred_type
+                    
+                    # Check if assignment uses parameters
+                    if self._unified_uses_parameters(assignment, node):
+                        self.param_var_types[target] = inferred_type
+
+        # Recursively analyze children
+        for child in node.children:
+            self._analyze_unified_node(child)
+
+    def _infer_unified_param_type(self, func_node: UnifiedASTNode, param_name: str) -> Type:
+        """Infer parameter type from unified function node.
+
+        Args:
+            func_node: Unified function node
+            param_name: Parameter name
+
+        Returns:
+            Inferred type
+        """
+        # Check for type annotations in metadata
+        if func_node.metadata and 'params_with_types' in func_node.metadata:
+            params_with_types = func_node.metadata['params_with_types']
+            for param_info in params_with_types:
+                if isinstance(param_info, dict) and param_info.get('name') == param_name:
+                    type_str = param_info.get('type', '')
+                    return self._string_to_type(type_str)
+        
+        # Default to ANY if no type info
+        return Type(TypeKind.ANY)
+
+    def _infer_unified_assignment_type(self, assignment: dict, context_node: UnifiedASTNode) -> Type:
+        """Infer type from assignment in unified AST.
+
+        Args:
+            assignment: Assignment metadata dict
+            context_node: Context node
+
+        Returns:
+            Inferred type
+        """
+        # Check if it's a string literal assignment
+        if context_node.metadata and 'string_literals' in context_node.metadata:
+            for lit in context_node.metadata['string_literals']:
+                if isinstance(lit, dict) and lit.get('line') == assignment.get('line'):
+                    return Type(TypeKind.STR)
+        
+        # Check if it's a function call result
+        if context_node.metadata and 'all_calls' in context_node.metadata:
+            for call in context_node.metadata['all_calls']:
+                if isinstance(call, dict) and call.get('line') == assignment.get('line'):
+                    # Function call result - type unknown
+                    return Type(TypeKind.UNKNOWN)
+        
+        return Type(TypeKind.UNKNOWN)
+
+    def _unified_uses_parameters(self, assignment: dict, context_node: UnifiedASTNode) -> bool:
+        """Check if assignment uses tracked parameters.
+
+        Args:
+            assignment: Assignment metadata
+            context_node: Context node
+
+        Returns:
+            True if uses parameters
+        """
+        # Check variable dependencies
+        if context_node.metadata and 'variable_dependencies' in context_node.metadata:
+            deps = context_node.metadata['variable_dependencies']
+            target = assignment.get('target')
+            if target in deps:
+                dep_vars = deps[target]
+                return any(var in self.parameter_names for var in dep_vars)
+        
+        return False
+
+    def _string_to_type(self, type_str: str) -> Type:
+        """Convert type string to Type object.
+
+        Args:
+            type_str: Type string (e.g., 'string', 'int', 'bool')
+
+        Returns:
+            Type object
+        """
+        type_str_lower = type_str.lower()
+        
+        if 'string' in type_str_lower or 'str' in type_str_lower:
+            return Type(TypeKind.STR)
+        elif 'int' in type_str_lower or 'integer' in type_str_lower or 'number' in type_str_lower:
+            return Type(TypeKind.INT)
+        elif 'float' in type_str_lower or 'double' in type_str_lower:
+            return Type(TypeKind.FLOAT)
+        elif 'bool' in type_str_lower:
+            return Type(TypeKind.BOOL)
+        elif 'list' in type_str_lower or 'array' in type_str_lower or '[]' in type_str:
+            return Type(TypeKind.LIST)
+        elif 'dict' in type_str_lower or 'map' in type_str_lower or 'object' in type_str_lower:
+            return Type(TypeKind.DICT)
+        else:
+            return Type(TypeKind.ANY)
 
     def _analyze_python(self, node: ast.AST) -> None:
         """Analyze types in Python AST.

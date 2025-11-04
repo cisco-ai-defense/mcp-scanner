@@ -14,13 +14,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Name resolution analysis with reversed approach for MCP entry points."""
+"""Name resolution analysis with reversed approach for MCP entry points.
+
+MULTI-LANGUAGE SUPPORT: Now supports all 10 languages through unified AST.
+"""
 
 import ast
-from typing import Any
+from typing import Any, Optional
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ..unified_ast import UnifiedASTNode, NodeType
+from ..language_detector import Language
 
 
 class Scope:
@@ -85,15 +90,17 @@ class NameResolver:
     REVERSED APPROACH: Tracks which names are influenced by MCP entry point parameters.
     """
 
-    def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None):
+    def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None, language: Optional[Language] = None):
         """Initialize name resolver.
 
         Args:
             analyzer: Language-specific analyzer
             parameter_names: MCP entry point parameter names
+            language: Programming language (for unified analysis)
         """
         self.analyzer = analyzer
         self.parameter_names = parameter_names or []
+        self.language = language
         self.global_scope = Scope()
         self.current_scope = self.global_scope
         self.name_to_def: dict[Any, Any] = {}
@@ -105,6 +112,74 @@ class NameResolver:
 
         if isinstance(self.analyzer, PythonParser):
             self._resolve_python(ast_root)
+
+    def resolve_unified(self, unified_nodes: list[UnifiedASTNode]) -> None:
+        """Resolve names in unified AST nodes (supports all languages).
+
+        Args:
+            unified_nodes: List of UnifiedASTNode (typically functions)
+        """
+        for node in unified_nodes:
+            self._resolve_unified_node(node)
+
+    def _resolve_unified_node(self, node: UnifiedASTNode) -> None:
+        """Resolve names in a unified AST node.
+
+        Args:
+            node: Unified AST node
+        """
+        # Define function parameters in scope
+        if node.type in [NodeType.FUNCTION, NodeType.ASYNC_FUNCTION]:
+            for param_name in node.parameters:
+                is_param = param_name in self.parameter_names
+                self.current_scope.define(param_name, node, is_param)
+                if is_param:
+                    self.param_influenced.add(param_name)
+
+        # Track assignments and variable dependencies
+        if node.metadata:
+            # Process assignments
+            if 'assignments' in node.metadata:
+                for assignment in node.metadata['assignments']:
+                    target = assignment.get('target')
+                    if target:
+                        self.current_scope.define(target, node, False)
+                        
+                        # Check if assignment uses parameter-influenced variables
+                        if self._unified_assignment_uses_params(assignment, node):
+                            self.param_influenced.add(target)
+
+            # Process variable dependencies
+            if 'variable_dependencies' in node.metadata:
+                deps = node.metadata['variable_dependencies']
+                for var_name, dep_vars in deps.items():
+                    # If any dependency is parameter-influenced, mark this var as influenced
+                    if any(dep in self.param_influenced for dep in dep_vars):
+                        self.param_influenced.add(var_name)
+
+        # Recursively resolve children
+        for child in node.children:
+            self._resolve_unified_node(child)
+
+    def _unified_assignment_uses_params(self, assignment: dict, context_node: UnifiedASTNode) -> bool:
+        """Check if assignment uses parameter-influenced variables.
+
+        Args:
+            assignment: Assignment metadata
+            context_node: Context node
+
+        Returns:
+            True if uses parameters
+        """
+        # Check variable dependencies
+        if context_node.metadata and 'variable_dependencies' in context_node.metadata:
+            deps = context_node.metadata['variable_dependencies']
+            target = assignment.get('target')
+            if target in deps:
+                dep_vars = deps[target]
+                return any(var in self.param_influenced for var in dep_vars)
+        
+        return False
 
     def _resolve_python(self, node: ast.AST) -> None:
         """Resolve names in Python AST.
