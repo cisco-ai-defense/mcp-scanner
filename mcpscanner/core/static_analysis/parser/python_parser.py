@@ -294,3 +294,71 @@ class PythonParser(BaseParser):
                 return value.s
 
         return None
+    
+    def find_mcp_decorated_functions(self) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+        """Find all MCP-decorated functions in the AST.
+        
+        Looks for functions decorated with MCP decorators like:
+        - @app.call_tool()
+        - @server.tool()
+        - @mcp.tool()
+        
+        Returns:
+            List of function definition nodes that have MCP decorators
+        """
+        mcp_functions = []
+        
+        # Ensure AST is parsed
+        if self._ast is None:
+            self._ast = self.parse()
+        
+        if self._ast is None:
+            return mcp_functions
+        
+        for node in ast.walk(self._ast):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Check if function has MCP decorators
+                for decorator in node.decorator_list:
+                    decorator_name = self._get_decorator_name(decorator)
+                    
+                    # Common MCP decorator patterns
+                    if any(pattern in decorator_name for pattern in [
+                        'call_tool',
+                        'tool',
+                        'list_tools',
+                        'get_prompt',
+                        'list_prompts',
+                        'list_resources',
+                        'read_resource',
+                    ]):
+                        mcp_functions.append(node)
+                        break
+        
+        return mcp_functions
+    
+    def _get_decorator_name(self, decorator: ast.expr) -> str:
+        """Extract decorator name from decorator node.
+        
+        Args:
+            decorator: Decorator expression node
+            
+        Returns:
+            Decorator name as string
+        """
+        if isinstance(decorator, ast.Name):
+            return decorator.id
+        elif isinstance(decorator, ast.Attribute):
+            # Handle @app.call_tool() or @server.tool()
+            parts = []
+            current = decorator
+            while isinstance(current, ast.Attribute):
+                parts.append(current.attr)
+                current = current.value
+            if isinstance(current, ast.Name):
+                parts.append(current.id)
+            return ".".join(reversed(parts))
+        elif isinstance(decorator, ast.Call):
+            # Handle @app.call_tool() with parentheses
+            return self._get_decorator_name(decorator.func)
+        else:
+            return ""

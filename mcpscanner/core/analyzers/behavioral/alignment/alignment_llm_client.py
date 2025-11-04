@@ -117,11 +117,22 @@ class AlignmentLLMClient:
             content = response.choices[0].message.content
             
             # Log response for debugging
+            self.logger.info(f"\n{'='*80}")
+            self.logger.info(f"LLM RESPONSE DEBUG")
+            self.logger.info(f"{'='*80}")
+            self.logger.info(f"Model: {self._model}")
+            self.logger.info(f"Response object type: {type(response)}")
+            self.logger.info(f"Response choices: {len(response.choices) if hasattr(response, 'choices') else 'N/A'}")
+            if hasattr(response, 'choices') and response.choices:
+                self.logger.info(f"First choice message: {response.choices[0].message}")
+                self.logger.info(f"Content type: {type(content)}")
+                self.logger.info(f"Content length: {len(content) if content else 0}")
+                self.logger.info(f"Content value: {repr(content)[:500]}")
+            self.logger.info(f"Full response: {response}")
+            self.logger.info(f"{'='*80}\n")
+            
             if not content or not content.strip():
                 self.logger.warning(f"Empty response from LLM model {self._model}")
-                self.logger.debug(f"Full response object: {response}")
-            else:
-                self.logger.debug(f"LLM response length: {len(content)} chars")
             
             return content if content else ""
             

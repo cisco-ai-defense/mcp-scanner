@@ -21,11 +21,17 @@ function calls across multiple files in the codebase.
 """
 
 import ast
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, Union
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ..parser.javascript_parser import JavaScriptParser
+from ..parser.typescript_parser import TypeScriptParser
+from ..normalizers.javascript_normalizer import JavaScriptASTNormalizer
+from ..normalizers.typescript_normalizer import TypeScriptASTNormalizer
+from ..unified_ast import UnifiedASTNode, NodeType
 from ..semantic.type_analyzer import TypeAnalyzer
 
 
@@ -91,6 +97,7 @@ class CallGraphAnalyzer:
 
     def __init__(self) -> None:
         """Initialize cross-file analyzer."""
+        self.logger = logging.getLogger(__name__)
         self.call_graph = CallGraph()
         self.analyzers: Dict[Path, BaseParser] = {}
         self.import_map: Dict[Path, List[Path]] = {}  # file -> imported files
@@ -439,3 +446,74 @@ class CallGraphAnalyzer:
             List of file paths
         """
         return list(self.analyzers.keys())
+    
+    def add_unified_file(self, file_path: Path, unified_functions: List[UnifiedASTNode]) -> None:
+        """Add a file analyzed with unified AST.
+        
+        Args:
+            file_path: Path to the file
+            unified_functions: List of unified AST function nodes
+        """
+        # Extract function definitions and calls from unified AST
+        for func in unified_functions:
+            func_name = func.name or "<anonymous>"
+            full_name = f"{file_path}::{func_name}"
+            
+            # Add function to call graph
+            self.call_graph.add_function(func_name, func, file_path, is_mcp_entry=False)
+            
+            # Extract function calls from the function body
+            calls = self._extract_calls_from_unified(func)
+            for call_name in calls:
+                callee_full_name = f"{file_path}::{call_name}"
+                self.call_graph.add_call(full_name, callee_full_name)
+    
+    def _extract_calls_from_unified(self, node: UnifiedASTNode) -> List[str]:
+        """Extract function call names from unified AST node.
+        
+        Args:
+            node: Unified AST node
+            
+        Returns:
+            List of function names called
+        """
+        calls = []
+        
+        if node.type == NodeType.CALL and node.name:
+            calls.append(node.name)
+        
+        # Recursively search children
+        for child in node.children:
+            calls.extend(self._extract_calls_from_unified(child))
+        
+        return calls
+    
+    def analyze_unified_cross_file(self, entry_points: List[str], param_names: List[str]) -> Dict[str, Any]:
+        """Analyze cross-file flows for unified AST (JS/TS).
+        
+        Args:
+            entry_points: List of MCP entry point function names
+            param_names: Parameter names to track
+            
+        Returns:
+            Cross-file analysis results
+        """
+        all_flows = []
+        all_reachable = set()
+        
+        for entry_point in entry_points:
+            # Get reachable functions from this entry point
+            reachable = self.get_reachable_functions(entry_point)
+            all_reachable.update(reachable)
+            
+            # Analyze parameter flows
+            flow_info = self.analyze_parameter_flow_across_files(entry_point, param_names)
+            all_flows.extend(flow_info.get("cross_file_flows", []))
+        
+        return {
+            "entry_points": entry_points,
+            "reachable_functions": list(all_reachable),
+            "cross_file_flows": all_flows,
+            "total_functions": len(all_reachable),
+            "total_cross_file_calls": len(all_flows),
+        }

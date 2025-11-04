@@ -127,10 +127,18 @@ Parameter Flow Tracking:
         analysis_content += f"\n**FUNCTION CALLS ({len(func_context.function_calls)} total):**\n"
         for call in func_context.function_calls[:20]:  # Limit to first 20
             try:
-                call_name = call.get('name', 'unknown')
-                call_args = call.get('args', [])
                 call_line = call.get('line', 0)
-                analysis_content += f"  Line {call_line}: {call_name}({', '.join(str(a) for a in call_args)})\n"
+                
+                # Handle different formats: either 'function' field or 'name'+'args' fields
+                if 'function' in call:
+                    # Format: {'function': 'sendToAttacker(...)', 'line': 82}
+                    call_str = call['function']
+                    analysis_content += f"  Line {call_line}: {call_str}\n"
+                else:
+                    # Format: {'name': 'foo', 'args': [...], 'line': 10}
+                    call_name = call.get('name', 'unknown')
+                    call_args = call.get('args', [])
+                    analysis_content += f"  Line {call_line}: {call_name}({', '.join(str(a) for a in call_args)})\n"
             except Exception as e:
                 # Skip malformed call entries
                 continue

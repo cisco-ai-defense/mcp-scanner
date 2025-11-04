@@ -14,13 +14,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavioral Code Analyzer for MCP Scanner.
+"""Behavioral Code Analyzer for MCP Scanner - Multi-Language Support.
 
-This analyzer detects mismatches between MCP tool docstrings and their actual 
+This analyzer detects mismatches between MCP tool docstrings/descriptions and their actual 
 code behavior using deep code analysis and LLM-based comparison.
 
+Supports: Python, JavaScript, TypeScript, Java, Kotlin, Go, Swift, C#
+
 This analyzer:
-1. Identifies MCP decorator usage (@mcp.tool, @mcp.prompt, @mcp.resource)
+1. Identifies MCP decorator usage (@mcp.tool, @tool, [McpServerTool], etc.)
 2. Extracts comprehensive code context (dataflow, taint, constants)
 3. Analyzes actual code behavior using full AST + dataflow analysis
 4. Uses LLM to detect semantic mismatches between description and implementation
@@ -32,8 +34,18 @@ from typing import Any, Dict, List, Optional
 
 from ....config.config import Config
 from ....threats.threats import ThreatMapping
-from ...static_analysis.context_extractor import ContextExtractor
+from ...static_analysis.context_extractor import ContextExtractor, FunctionContext
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
+from ...static_analysis.language_detector import (
+    Language,
+    detect_language,
+    get_parser_for_language,
+    get_normalizer_for_language,
+    get_mcp_functions,
+)
+from ...static_analysis.unified_ast import NodeType
+from ...static_analysis.cfg.unified_cfg_builder import UnifiedCFGBuilder
+from ...static_analysis.dataflow.unified_forward_analysis import UnifiedForwardDataflowAnalysis
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 
@@ -41,17 +53,13 @@ from .alignment import AlignmentOrchestrator
 class BehavioralCodeAnalyzer(BaseAnalyzer):
     """Analyzer that detects docstring/behavior mismatches in MCP tool source code.
     
+    Supports 8 languages: Python, JavaScript, TypeScript, Java, Kotlin, Go, Swift, C#
+    
     This analyzer:
     1. Extracts MCP tool source code from the server
     2. Performs deep dataflow analysis using the behavioural engine
     3. Uses LLM to compare docstring claims vs actual behavior
     4. Detects hidden behaviors like data exfiltration
-    
-    Example:
-        >>> from mcpscanner import Config
-        >>> from mcpscanner.core.analyzers import BehaviouralAnalyzer
-        >>> analyzer = BehaviouralAnalyzer(config)
-        >>> findings = await analyzer.analyze("/path/to/mcp_server.py", {})
     """
 
     def __init__(self, config: Config):
@@ -77,7 +85,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """Analyze MCP tool source code for docstring/behavior mismatches.
         
         Args:
-            content: File path to Python file/directory OR source code string
+            content: File path to source file/directory OR source code string
             context: Analysis context with tool_name, file_path, etc.
             
         Returns:
@@ -89,27 +97,27 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # Check if content is a directory
             if os.path.isdir(content):
                 self.logger.info(f"Scanning directory: {content}")
-                python_files = self._find_python_files(content)
-                self.logger.info(f"Found {len(python_files)} Python file(s) to analyze")
+                source_files = self._find_source_files(content)
+                self.logger.info(f"Found {len(source_files)} source file(s) to analyze")
                 
                 # Build cross-file analyzer for the entire directory
                 cross_file_analyzer = CallGraphAnalyzer()
-                for py_file in python_files:
+                for source_file in source_files:
                     try:
-                        with open(py_file, 'r') as f:
+                        with open(source_file, 'r') as f:
                             source_code = f.read()
-                        cross_file_analyzer.add_file(Path(py_file), source_code)
+                        cross_file_analyzer.add_file(Path(source_file), source_code)
                     except Exception as e:
-                        self.logger.warning(f"Failed to add file {py_file} to cross-file analyzer: {e}")
+                        self.logger.warning(f"Failed to add file {source_file} to cross-file analyzer: {e}")
                 
                 # Build the call graph
                 call_graph = cross_file_analyzer.build_call_graph()
                 self.logger.info(f"Built call graph with {len(call_graph.functions)} functions")
                 
                 # Analyze each file with cross-file context
-                for py_file in python_files:
-                    self.logger.info(f"Analyzing file: {py_file}")
-                    file_findings = await self._analyze_file(py_file, context, cross_file_analyzer)
+                for source_file in source_files:
+                    self.logger.info(f"Analyzing file: {source_file}")
+                    file_findings = await self._analyze_file(source_file, context, cross_file_analyzer)
                     all_findings.extend(file_findings)
                     
             # Check if content is a single file
@@ -141,27 +149,33 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.logger.error(f"Behavioural analysis failed: {e}", exc_info=True)
             return []
     
-    def _find_python_files(self, directory: str) -> List[str]:
-        """Find all Python files in a directory.
+    def _find_source_files(self, directory: str) -> List[str]:
+        """Find all supported source files in a directory.
+        
+        Supports: Python (.py), JavaScript (.js), TypeScript (.ts, .tsx),
+                  Java (.java), Kotlin (.kt, .kts), Go (.go), Swift (.swift), C# (.cs), Ruby (.rb), Rust (.rs)
         
         Args:
             directory: Directory path to search
             
         Returns:
-            List of Python file paths
+            List of source file paths
         """
-        python_files = []
+        source_files = []
         path = Path(directory)
         
-        # Recursively find all .py files
-        for py_file in path.rglob("*.py"):
-            # Skip __pycache__ and hidden directories
-            if "__pycache__" not in str(py_file) and not any(
-                part.startswith(".") for part in py_file.parts
-            ):
-                python_files.append(str(py_file))
+        # Supported extensions
+        extensions = ['*.py', '*.js', '*.ts', '*.tsx', '*.java', '*.kt', '*.kts', '*.go', '*.swift', '*.cs', '*.rb', '*.rs']
         
-        return sorted(python_files)
+        for ext in extensions:
+            for source_file in path.rglob(ext):
+                # Skip __pycache__, node_modules, and hidden directories
+                if ("__pycache__" not in str(source_file) and 
+                    "node_modules" not in str(source_file) and
+                    not any(part.startswith(".") for part in source_file.parts)):
+                    source_files.append(str(source_file))
+        
+        return sorted(source_files)
     
     async def _analyze_file(
         self, 
@@ -169,10 +183,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         context: Dict[str, Any],
         cross_file_analyzer: Optional[CallGraphAnalyzer] = None
     ) -> List[SecurityFinding]:
-        """Analyze a single Python file.
+        """Analyze a single source file (supports multiple languages).
         
         Args:
-            file_path: Path to Python file
+            file_path: Path to source file
             context: Analysis context
             cross_file_analyzer: Optional cross-file analyzer for tracking imports
             
@@ -180,19 +194,30 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             List of SecurityFinding objects
         """
         try:
+            # Detect language
+            language = detect_language(Path(file_path))
+            
+            if language == Language.UNKNOWN:
+                self.logger.warning(f"Unsupported file type: {file_path}")
+                return []
+            
+            self.logger.info(f"Detected language: {language.value} for {file_path}")
+            
             with open(file_path, 'r', encoding='utf-8') as f:
                 source_code = f.read()
             
             file_context = context.copy()
             file_context['file_path'] = file_path
-            file_context['cross_file_analyzer'] = cross_file_analyzer
+            file_context['language'] = language
+            file_context['cross_file_analyzer'] = cross_file_analyzer if language == Language.PYTHON else None
             
             findings = await self._analyze_source_code(source_code, file_context)
             
-            # Tag findings with file path
+            # Tag findings with file path and language
             for finding in findings:
                 if finding.details:
                     finding.details['source_file'] = file_path
+                    finding.details['language'] = language.value
             
             return findings
             
@@ -201,52 +226,272 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             return []
     
     async def _analyze_source_code(self, source_code: str, context: Dict[str, Any]) -> List[SecurityFinding]:
-        """Analyze Python source code for MCP docstring mismatches.
+        """Analyze source code for MCP docstring/description mismatches.
+        
+        Supports: Python, JavaScript, TypeScript, Java, Kotlin, Go, Swift, C#
         
         Args:
-            source_code: Python source code to analyze
-            context: Analysis context with file_path
+            source_code: Source code to analyze
+            context: Analysis context with file_path and language
             
         Returns:
             List of security findings
         """
         file_path = context.get("file_path", "unknown")
+        language = context.get("language", Language.PYTHON)
         findings = []
         
         try:
-            # Use context extractor for complete analysis
-            extractor = ContextExtractor(source_code, file_path)
-            mcp_contexts = extractor.extract_mcp_function_contexts()
-            
-            if not mcp_contexts:
-                self.logger.debug(f"No MCP functions found in {file_path}")
-                return findings
-            
-            self.logger.info(f"Found {len(mcp_contexts)} MCP functions in {file_path}")
-            
-            # Enrich with cross-file context if available
-            if context.get('cross_file_analyzer'):
-                for func_context in mcp_contexts:
-                    self._enrich_with_cross_file_context(
-                        func_context, 
-                        file_path, 
-                        context['cross_file_analyzer']
-                    )
-            
-            # Analyze each MCP entry point using alignment orchestrator
-            for func_context in mcp_contexts:
-                result = await self.alignment_orchestrator.check_alignment(func_context)
+            # Route to language-specific analyzer
+            if language == Language.PYTHON:
+                # Use context extractor for Python (legacy path with full features)
+                extractor = ContextExtractor(source_code, file_path)
+                mcp_contexts = extractor.extract_mcp_function_contexts()
                 
-                if result:
-                    analysis, ctx = result
-                    finding = self._create_security_finding(analysis, ctx, file_path)
-                    if finding:
-                        findings.append(finding)
+                if not mcp_contexts:
+                    self.logger.debug(f"No MCP functions found in {file_path}")
+                    return findings
+                
+                self.logger.info(f"Found {len(mcp_contexts)} MCP functions in {file_path}")
+                
+                # Enrich with cross-file context if available
+                if context.get('cross_file_analyzer'):
+                    for func_context in mcp_contexts:
+                        self._enrich_with_cross_file_context(
+                            func_context, 
+                            file_path, 
+                            context['cross_file_analyzer']
+                        )
+                
+                # Analyze each MCP entry point using alignment orchestrator
+                for func_context in mcp_contexts:
+                    result = await self.alignment_orchestrator.check_alignment(func_context)
+                    
+                    if result:
+                        analysis, ctx = result
+                        finding = self._create_security_finding(analysis, ctx, file_path)
+                        if finding:
+                            findings.append(finding)
+            
+            else:
+                # Use unified infrastructure for other languages
+                findings = await self._analyze_unified_language(source_code, file_path, language)
         
         except Exception as e:
             self.logger.error(f"Analysis failed for {file_path}: {e}", exc_info=True)
         
         return findings
+    
+    async def _analyze_unified_language(
+        self,
+        source_code: str,
+        file_path: str,
+        language: 'Language'
+    ) -> List[SecurityFinding]:
+        """Analyze non-Python languages using unified infrastructure.
+        
+        Supports: JavaScript, TypeScript, Java, Kotlin, Go, Swift, C#
+        
+        Args:
+            source_code: Source code to analyze
+            file_path: Path to source file
+            language: Detected language
+            
+        Returns:
+            List of security findings
+        """
+        findings = []
+        
+        try:
+            # Parse source code using language-specific parser
+            parser = get_parser_for_language(language, Path(file_path), source_code)
+            ast = parser.parse()
+            
+            if not ast:
+                self.logger.warning(f"Failed to parse {file_path}")
+                return findings
+            
+            # Find MCP-decorated functions
+            mcp_functions = get_mcp_functions(language, parser, ast)
+            
+            if not mcp_functions:
+                self.logger.debug(f"No MCP functions found in {file_path}")
+                return findings
+            
+            self.logger.info(f"Found {len(mcp_functions)} MCP function(s) in {file_path}")
+            
+            # Get normalizer for this language
+            normalizer = get_normalizer_for_language(language, parser)
+            
+            # Analyze each MCP function
+            for func_node in mcp_functions:
+                try:
+                    # Normalize to unified AST
+                    unified_func = normalizer.normalize_function(func_node)
+                    
+                    # Extract docstring/comment
+                    docstring = parser.extract_comment(func_node) if hasattr(parser, 'extract_comment') else None
+                    
+                    # Build CFG
+                    # Perform dataflow analysis
+                    dataflow_analyzer = UnifiedForwardDataflowAnalysis(unified_func, unified_func.parameters)
+                    dataflow_result = dataflow_analyzer.analyze_forward_flows()
+                    
+                    # Build function context for LLM analysis
+                    func_context = self._build_function_context(
+                        unified_func,
+                        docstring,
+                        dataflow_result,
+                        file_path,
+                        language
+                    )
+                    
+                    # Log analysis details
+                    self.logger.info(f"\n{'='*80}")
+                    self.logger.info(f"{language.value.upper()} FUNCTION FULL ANALYSIS FOR: {unified_func.name}")
+                    self.logger.info(f"{'='*80}")
+                    self.logger.info(f"Parameters: {unified_func.parameters}")
+                    self.logger.info(f"Doc: {docstring[:100] if docstring else 'None'}")
+                    self.logger.info(f"Line number: {unified_func.location.line if unified_func.location else 'unknown'}")
+                    self.logger.info(f"Is async: {unified_func.is_async}")
+                    self.logger.info(f"Return type: {unified_func.return_type}")
+                    
+                    # Log function calls
+                    if func_context.function_calls:
+                        self.logger.info(f"\nFunction calls ({len(func_context.function_calls)} total):")
+                        for i, call in enumerate(func_context.function_calls[:20], 1):
+                            self.logger.info(f"  {i}. {call}")
+                    
+                    # Log parameter flows
+                    if func_context.parameter_flows:
+                        self.logger.info(f"\nParameter flows ({len(func_context.parameter_flows)} total):")
+                        for i, flow in enumerate(func_context.parameter_flows, 1):
+                            self.logger.info(f"  Flow {i}:")
+                            self.logger.info(f"    - Parameter: {flow.get('parameter')}")
+                            self.logger.info(f"    - Operations: {flow.get('operations', [])}")
+                            self.logger.info(f"    - Reaches calls: {flow.get('reaches_calls', [])}")
+                            self.logger.info(f"    - Reaches returns: {flow.get('reaches_returns')}")
+                            self.logger.info(f"    - Reaches external: {flow.get('reaches_external')}")
+                    
+                    # Log assignments
+                    if func_context.assignments:
+                        self.logger.info(f"\nAssignments: {func_context.assignments}")
+                    
+                    self.logger.info(f"{'='*80}\n")
+                    
+                    # Check alignment using LLM
+                    result = await self.alignment_orchestrator.check_alignment(func_context)
+                    
+                    if result:
+                        analysis, ctx = result
+                        finding = self._create_security_finding(analysis, ctx, file_path)
+                        if finding:
+                            findings.append(finding)
+                
+                except Exception as e:
+                    self.logger.error(f"Failed to analyze function in {file_path}: {e}", exc_info=True)
+                    continue
+        
+        except Exception as e:
+            self.logger.error(f"Failed to analyze {language.value} file {file_path}: {e}", exc_info=True)
+        
+        return findings
+    
+    def _build_function_context(
+        self,
+        unified_func,
+        docstring,
+        dataflow_result,
+        file_path: str,
+        language: 'Language'
+    ):
+        """Build function context from unified AST and dataflow analysis.
+        
+        Args:
+            unified_func: Unified AST function node
+            docstring: Function documentation
+            dataflow_result: Dataflow analysis result
+            file_path: Source file path
+            language: Programming language
+            
+        Returns:
+            FunctionContext object for LLM analysis
+        """
+        # Extract function calls from AST with source code context
+        function_calls = []
+        for node in unified_func.walk():
+            if node.type == NodeType.CALL:
+                call_info = {
+                    'type': 'function_call',
+                    'function': node.name,
+                    'line': node.location.line if node.location else 0
+                }
+                # Include source code if available (for non-Python languages)
+                if node.metadata and 'source_code' in node.metadata:
+                    call_info['source'] = node.metadata['source_code']
+                function_calls.append(call_info)
+        
+        # Extract assignments
+        assignments = []
+        for node in unified_func.walk():
+            if node.type == NodeType.ASSIGNMENT:
+                assignments.append({
+                    'type': 'assignment',
+                    'target': node.name,
+                    'line': node.location.line if node.location else 0
+                })
+        
+        # Extract string literals from function metadata (for non-Python languages)
+        string_literals = []
+        if unified_func.metadata and 'string_literals' in unified_func.metadata:
+            string_literals = unified_func.metadata['string_literals']
+        
+        # Build parameter flows from dataflow analysis
+        parameter_flows = []
+        if dataflow_result:
+            # Use the ACTUAL dataflow results from UnifiedForwardDataflowAnalysis
+            for flow_path in dataflow_result:
+                flow = {
+                    'parameter': flow_path.parameter_name,
+                    'operations': [op for op in flow_path.operations] if hasattr(flow_path, 'operations') else [],
+                    'reaches_calls': flow_path.reaches_calls if hasattr(flow_path, 'reaches_calls') else [],
+                    'reaches_returns': flow_path.reaches_returns if hasattr(flow_path, 'reaches_returns') else False,
+                    'reaches_external': flow_path.reaches_external if hasattr(flow_path, 'reaches_external') else False
+                }
+                parameter_flows.append(flow)
+        
+        # Create function context
+        func_context = FunctionContext(
+            name=unified_func.name or "<unknown>",
+            parameters=unified_func.parameters,
+            docstring=docstring,
+            line_number=unified_func.location.line if unified_func.location else 0,
+            decorator_types=[],
+            return_type=unified_func.return_type,
+            parameter_flows=parameter_flows,
+            variable_dependencies={},
+            imports=[],
+            function_calls=function_calls,
+            assignments=assignments,
+            control_flow={},
+            cross_file_calls=[],
+            reachable_functions=[],
+            constants={},
+            string_literals=string_literals,  # Include extracted string literals
+            return_expressions=[],
+            exception_handlers=[],
+            env_var_access=[],
+            global_writes=[],
+            attribute_access=[],
+            has_file_operations=False,
+            has_network_operations=False,
+            has_subprocess_calls=False,
+            has_eval_exec=False,
+            has_dangerous_imports=False,
+            dataflow_summary={'language': language.value}
+        )
+        
+        return func_context
     
     def _create_security_finding(
         self,
@@ -281,37 +526,25 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # Use LLM severity if available, otherwise use mapping default
             severity = analysis.get("severity", threat_info["severity"]).upper()
             
-            # Build threat summary from analysis
-            description_claims = analysis.get("description_claims", "")
-            actual_behavior = analysis.get("actual_behavior", "")
-            line_info = f"Line {func_context.line_number}: "
+            # Build comprehensive summary
+            summary = f"Line {func_context.line_number}: {threat_name} - "
+            summary += f"Description claims: '{analysis.get('description_claims', 'N/A')}' | "
+            summary += f"Actual behavior: {analysis.get('actual_behavior', 'N/A')}"
             
-            if description_claims and actual_behavior:
-                threat_summary = f"{line_info}{threat_name} - Description claims: '{description_claims}' | Actual behavior: {actual_behavior}"
-            else:
-                threat_summary = f"{line_info}{threat_name} in {func_context.name}"
-            
-            # Create SecurityFinding with complete threat taxonomy
-            # SecurityFinding will auto-generate mcp_taxonomy from threat_type
-            # Also include taxonomy in details for display purposes
+            # Create finding with MCP Taxonomy information
             finding = SecurityFinding(
                 severity=severity,
-                summary=threat_summary,
-                analyzer="Behavioral",
+                summary=summary,
+                analyzer="behavioral_analyzer",
                 threat_category=threat_info["scanner_category"],
                 details={
                     "function_name": func_context.name,
-                    "decorator_type": func_context.decorator_types[0] if func_context.decorator_types else "unknown",
                     "line_number": func_context.line_number,
-                    "source_file": file_path,
-                    "threat_name": threat_name,
-                    "threat_type": threat_name,  # Used by SecurityFinding for auto-generating mcp_taxonomy
-                    "mismatch_type": analysis.get("mismatch_type"),
-                    "description_claims": description_claims,
-                    "actual_behavior": actual_behavior,
-                    "security_implications": analysis.get("security_implications"),
-                    "confidence": analysis.get("confidence"),
-                    "dataflow_evidence": analysis.get("dataflow_evidence"),
+                    "mismatch_type": analysis.get("mismatch_type", "unknown"),
+                    "confidence": analysis.get("confidence", "MEDIUM"),
+                    "security_implications": analysis.get("security_implications", ""),
+                    "dataflow_evidence": analysis.get("dataflow_evidence", ""),
+                    "full_analysis": analysis,
                     # Include MCP Taxonomy in details for easy access in reports
                     "aitech": threat_info["aitech"],
                     "aitech_name": threat_info["aitech_name"],
@@ -371,4 +604,3 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         
         except Exception as e:
             self.logger.warning(f"Failed to enrich with cross-file context: {e}")
-    

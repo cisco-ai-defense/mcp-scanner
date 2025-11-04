@@ -19,10 +19,11 @@
 import ast
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Union
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ..unified_ast import UnifiedASTNode, NodeType
 
 
 class ValueKind(Enum):
@@ -80,6 +81,60 @@ class ConstantPropagationAnalysis:
 
         if isinstance(self.analyzer, PythonParser):
             self._analyze_python(ast_root)
+    
+    def analyze_unified(self, unified_ast: UnifiedASTNode) -> None:
+        """Analyze unified AST for constants.
+        
+        Args:
+            unified_ast: Unified AST node
+        """
+        self._analyze_unified_node(unified_ast)
+    
+    def _analyze_unified_node(self, node: UnifiedASTNode) -> None:
+        """Recursively analyze unified AST node.
+        
+        Args:
+            node: Unified AST node
+        """
+        # Handle assignments
+        if node.type == NodeType.ASSIGNMENT:
+            # Try to evaluate the RHS
+            if node.children:
+                rhs_value = self._eval_unified_expr(node.children[0])
+                if node.name and rhs_value.is_constant():
+                    self.constants[node.name] = rhs_value.value
+                    self.symbolic_values[node.name] = rhs_value
+        
+        # Recursively process children
+        for child in node.children:
+            self._analyze_unified_node(child)
+    
+    def _eval_unified_expr(self, node: UnifiedASTNode) -> SymbolicValue:
+        """Evaluate a unified AST expression.
+        
+        Args:
+            node: Unified AST node
+            
+        Returns:
+            Symbolic value
+        """
+        # Literal values
+        if node.type == NodeType.LITERAL:
+            return SymbolicValue(kind=ValueKind.LITERAL, value=node.name)
+        
+        # Identifiers - look up in constants
+        if node.type == NodeType.IDENTIFIER:
+            if node.name in self.symbolic_values:
+                return self.symbolic_values[node.name]
+            return SymbolicValue(kind=ValueKind.SYMBOLIC, dependencies={node.name})
+        
+        # Binary operations on constants
+        if node.type == NodeType.BINARY_OP:
+            # Could evaluate if both sides are constants
+            return SymbolicValue(kind=ValueKind.NOT_CONST)
+        
+        # Default: not constant
+        return SymbolicValue(kind=ValueKind.NOT_CONST)
 
     def _analyze_python(self, node: ast.AST) -> None:
         """Analyze Python code for constants and symbolic values.

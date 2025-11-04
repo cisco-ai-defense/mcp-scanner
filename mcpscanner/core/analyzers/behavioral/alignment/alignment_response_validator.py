@@ -57,8 +57,16 @@ class AlignmentResponseValidator:
             self.logger.warning("Empty response from LLM")
             return None
         
+        # First try to extract from markdown if it looks like markdown
+        if "```" in response:
+            self.logger.debug("Response contains markdown code fences, extracting JSON")
+            extracted = self._extract_json_from_markdown(response)
+            if extracted:
+                self.logger.info("Successfully extracted JSON from markdown")
+                return extracted
+        
         try:
-            # Try to parse JSON
+            # Try to parse JSON directly
             data = json.loads(response)
             
             # Validate it's a dictionary
@@ -77,8 +85,7 @@ class AlignmentResponseValidator:
         except json.JSONDecodeError as e:
             self.logger.warning(f"Invalid JSON response: {e}")
             self.logger.debug(f"Raw response (first 500 chars): {response[:500]}")
-            # Try to extract JSON from markdown code blocks
-            return self._extract_json_from_markdown(response)
+            return None
         except Exception as e:
             self.logger.error(f"Unexpected error validating response: {e}")
             return None

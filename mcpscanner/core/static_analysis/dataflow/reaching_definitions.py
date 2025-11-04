@@ -18,12 +18,13 @@
 
 import ast
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict, List, Set
 
-from ..cfg.builder import CFGNode, DataFlowAnalyzer
+from ..cfg.builder import ControlFlowGraph as CFG, CFGNode, DataFlowAnalyzer
+from ..cfg.unified_cfg_builder import UnifiedCFGBuilder
 from ..parser.base import BaseParser
+from ..unified_ast import UnifiedASTNode, NodeType
 from ..parser.python_parser import PythonParser
-
 
 @dataclass(frozen=True)
 class Definition:
@@ -218,6 +219,52 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
                     uses.add(child.id)
         
         return uses
+    
+    def analyze_unified(self, unified_ast: UnifiedASTNode, parameter_names: List[str]) -> Dict[str, List[Definition]]:
+        """Analyze reaching definitions for unified AST.
+        
+        Args:
+            unified_ast: Unified AST node
+            parameter_names: Parameter names to track
+            
+        Returns:
+            Dictionary mapping variable names to their definitions
+        """
+        self.parameter_names = set(parameter_names)
+        
+        # Build CFG from unified AST
+        cfg_builder = UnifiedCFGBuilder()
+        self.cfg = cfg_builder.build_cfg(unified_ast)
+        
+        # Collect all definitions
+        definitions = {}
+        self._collect_unified_definitions(unified_ast, definitions, node_id=0)
+        
+        return definitions
+    
+    def _collect_unified_definitions(self, node: UnifiedASTNode, definitions: Dict[str, List[Definition]], node_id: int) -> None:
+        """Collect variable definitions from unified AST.
+        
+        Args:
+            node: Unified AST node
+            definitions: Dictionary to populate with definitions
+            node_id: Current node ID
+        """
+        # Track assignments as definitions
+        if node.type == NodeType.ASSIGNMENT and node.name:
+            if node.name not in definitions:
+                definitions[node.name] = []
+            
+            is_param = node.name in self.parameter_names
+            definitions[node.name].append(Definition(
+                var=node.name,
+                node_id=node_id,
+                is_parameter=is_param
+            ))
+        
+        # Recursively process children
+        for i, child in enumerate(node.children):
+            self._collect_unified_definitions(child, definitions, node_id + i + 1)
     
     def get_reaching_defs(self, node_id: int, var: str) -> list[Definition]:
         """Get reaching definitions for a variable at a node.

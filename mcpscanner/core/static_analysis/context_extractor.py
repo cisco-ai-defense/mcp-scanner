@@ -147,23 +147,35 @@ class ContextExtractor:
         """
         for decorator in node.decorator_list:
             decorator_name = self._get_decorator_name(decorator)
+            decorator_lower = decorator_name.lower()
+            
+            # Common MCP decorator patterns
+            mcp_patterns = [
+                'call_tool',
+                'tool',
+                'list_tools',
+                'get_prompt',
+                'list_prompts',
+                'list_resources',
+                'read_resource',
+                'prompt',
+                'resource',
+            ]
+            
+            # Check if decorator contains any MCP pattern
+            if any(pattern in decorator_lower for pattern in mcp_patterns):
+                return decorator_name
             
             # Check if decorator matches pattern: <any_variable>.tool/prompt/resource
-            # Examples: mcp.tool, hello_mcp.tool, my_server.prompt, etc.
+            # Examples: mcp.tool, hello_mcp.tool, my_server.prompt, app.call_tool, etc.
             if '.' in decorator_name:
                 # Split on the last dot to get the method name
                 parts = decorator_name.rsplit('.', 1)
                 if len(parts) == 2:
                     method_name = parts[1].lower()
                     # Check if it's one of the MCP decorator methods
-                    if method_name in ['tool', 'prompt', 'resource']:
+                    if any(pattern in method_name for pattern in mcp_patterns):
                         return decorator_name
-            
-            # Fallback: check if decorator name contains tool, prompt, or resource
-            # This handles edge cases like direct function decorators
-            decorator_lower = decorator_name.lower()
-            if decorator_lower in ['tool', 'prompt', 'resource']:
-                return decorator_name
         
         return None
 

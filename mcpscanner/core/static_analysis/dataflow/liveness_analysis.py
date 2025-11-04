@@ -22,10 +22,12 @@ variables are live (used later) at each program point.
 
 import ast
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Dict, List, Set
 
-from ..cfg.builder import CFGNode, DataFlowAnalyzer
+from ..cfg.builder import ControlFlowGraph as CFG, CFGNode, DataFlowAnalyzer
+from ..cfg.unified_cfg_builder import UnifiedCFGBuilder
 from ..parser.base import BaseParser
+from ..unified_ast import UnifiedASTNode, NodeType
 from ..parser.python_parser import PythonParser
 
 
@@ -254,3 +256,49 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
         """
         fact = self.in_facts.get(node_id, LivenessFact())
         return var in fact.param_influenced_live
+    
+    def analyze_unified(self, unified_ast: UnifiedASTNode, parameter_names: List[str]) -> Dict[str, Set[str]]:
+        """Analyze liveness for unified AST.
+        
+        Args:
+            unified_ast: Unified AST node
+            parameter_names: Parameter names to track
+            
+        Returns:
+            Dictionary mapping variable names to their uses
+        """
+        self.parameter_names = set(parameter_names)
+        self.param_influenced = set(parameter_names)
+        
+        # Build CFG from unified AST
+        cfg_builder = UnifiedCFGBuilder()
+        self.cfg = cfg_builder.build_cfg(unified_ast)
+        
+        # Simple liveness: collect all variable uses
+        live_vars = {}
+        self._collect_unified_uses(unified_ast, live_vars)
+        
+        return live_vars
+    
+    def _collect_unified_uses(self, node: UnifiedASTNode, live_vars: Dict[str, Set[str]]) -> None:
+        """Collect variable uses from unified AST.
+        
+        Args:
+            node: Unified AST node
+            live_vars: Dictionary to populate with uses
+        """
+        # Track identifier uses
+        if node.type == NodeType.IDENTIFIER and node.name:
+            if node.name not in live_vars:
+                live_vars[node.name] = set()
+            live_vars[node.name].add('used')
+        
+        # Track assignments (definitions)
+        if node.type == NodeType.ASSIGNMENT and node.name:
+            if node.name not in live_vars:
+                live_vars[node.name] = set()
+            live_vars[node.name].add('defined')
+        
+        # Recursively process children
+        for child in node.children:
+            self._collect_unified_uses(child, live_vars)
