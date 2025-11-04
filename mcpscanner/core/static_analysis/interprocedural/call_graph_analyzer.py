@@ -18,21 +18,43 @@
 
 REVERSED APPROACH: Track how MCP entry point parameters flow through
 function calls across multiple files in the codebase.
+
+MULTI-LANGUAGE SUPPORT: Now supports all 10 languages through unified AST.
 """
 
 import ast
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Set, Union
+from typing import Any, Dict, List, Set, Optional
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
-from ..parser.javascript_parser import JavaScriptParser
-from ..parser.typescript_parser import TypeScriptParser
-from ..normalizers.javascript_normalizer import JavaScriptASTNormalizer
-from ..normalizers.typescript_normalizer import TypeScriptASTNormalizer
-from ..unified_ast import UnifiedASTNode, NodeType
 from ..semantic.type_analyzer import TypeAnalyzer
+from ..language_detector import detect_language, Language, get_mcp_functions
+from ..unified_ast import UnifiedASTNode, NodeType
+from ..normalizers import (
+    PythonASTNormalizer,
+    JavaScriptASTNormalizer,
+    TypeScriptASTNormalizer,
+    GoASTNormalizer,
+    JavaASTNormalizer,
+    KotlinASTNormalizer,
+    RubyASTNormalizer,
+    RustASTNormalizer,
+    SwiftASTNormalizer,
+    CSharpASTNormalizer
+)
+from ..parser import (
+    JavaScriptParser,
+    TypeScriptParser,
+    GoParser,
+    JavaParser,
+    KotlinParser,
+    RubyParser,
+    RustParser,
+    SwiftParser,
+    CSharpParser
+)
 
 
 class CallGraph:
@@ -127,6 +149,182 @@ class CallGraphAnalyzer:
             self._extract_imports(file_path, analyzer)
         except Exception as e:
             self.logger.debug(f"Skipping unparseable file {file_path}: {e}")
+
+    def add_file_unified(self, file_path: Path, source_code: str) -> None:
+        """Add a file to the analysis using unified AST (supports all 10 languages).
+
+        Args:
+            file_path: Path to the file
+            source_code: Source code content
+        """
+        try:
+            # Detect language
+            language = detect_language(file_path)
+            self.logger.info(f"Detected language: {language} for {file_path}")
+            if not language or language == Language.UNKNOWN:
+                self.logger.debug(f"Could not detect language for {file_path}")
+                return
+
+            # Get appropriate parser and normalizer
+            parser_class, normalizer_class = self._get_parser_and_normalizer(language)
+            self.logger.info(f"Parser: {parser_class}, Normalizer: {normalizer_class}")
+            if not parser_class or not normalizer_class:
+                self.logger.debug(f"No parser/normalizer for language {language}")
+                return
+
+            # Parse the file
+            parser = parser_class(file_path, source_code)
+            parser.parse()
+            self.analyzers[file_path] = parser
+            self.logger.info(f"Parsed {file_path} successfully")
+
+            # Create normalizer
+            normalizer = normalizer_class(parser)
+            self.logger.info(f"Created normalizer for {file_path}")
+
+            # Extract functions using unified AST
+            self.logger.info(f"Extracting functions from {file_path}")
+            self._extract_unified_functions(file_path, parser, normalizer, language)
+
+        except Exception as e:
+            self.logger.error(f"Error processing file {file_path}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _get_parser_and_normalizer(self, language: Language):
+        """Get parser and normalizer classes for a language.
+
+        Args:
+            language: Detected language
+
+        Returns:
+            Tuple of (parser_class, normalizer_class)
+        """
+        mapping = {
+            Language.PYTHON: (PythonParser, PythonASTNormalizer),
+            Language.JAVASCRIPT: (JavaScriptParser, JavaScriptASTNormalizer),
+            Language.TYPESCRIPT: (TypeScriptParser, TypeScriptASTNormalizer),
+            Language.GO: (GoParser, GoASTNormalizer),
+            Language.JAVA: (JavaParser, JavaASTNormalizer),
+            Language.KOTLIN: (KotlinParser, KotlinASTNormalizer),
+            Language.RUBY: (RubyParser, RubyASTNormalizer),
+            Language.RUST: (RustParser, RustASTNormalizer),
+            Language.SWIFT: (SwiftParser, SwiftASTNormalizer),
+            Language.CSHARP: (CSharpParser, CSharpASTNormalizer),
+        }
+        return mapping.get(language, (None, None))
+
+    def _extract_unified_functions(self, file_path: Path, parser: BaseParser, normalizer, language: Language) -> None:
+        """Extract function definitions using unified AST.
+
+        Args:
+            file_path: File path
+            parser: Language parser
+            normalizer: AST normalizer
+            language: Detected language
+        """
+        # Get functions using language-agnostic helper
+        try:
+            # Get AST root
+            ast_root = parser.get_ast() if hasattr(parser, 'get_ast') else parser.tree.root_node
+            
+            # Use get_mcp_functions which works for all languages
+            func_nodes = get_mcp_functions(language, parser, ast_root)
+            self.logger.info(f"{language.value}: Found {len(func_nodes)} MCP functions in {file_path}")
+            
+            # Also get all functions (not just MCP ones) for complete call graph
+            if language == Language.PYTHON:
+                all_funcs = parser.get_function_defs()
+                self.logger.info(f"Python: Found {len(all_funcs)} total functions")
+                # Add non-MCP functions too
+                for func in all_funcs:
+                    if func not in func_nodes:
+                        func_nodes.append(func)
+        except Exception as e:
+            self.logger.error(f"Failed to get functions in {file_path}: {e}")
+            import traceback
+            traceback.print_exc()
+            return
+
+        self.logger.info(f"Processing {len(func_nodes)} functions from {file_path}")
+        for func_node in func_nodes:
+            try:
+                # Normalize to UnifiedASTNode
+                unified_func = normalizer.normalize_function(func_node)
+
+                # Check if it's an MCP entry point
+                is_mcp = self._is_mcp_entry_point_unified(unified_func, language)
+
+                # Add to call graph
+                self.call_graph.add_function(
+                    unified_func.name,
+                    unified_func,  # Store UnifiedASTNode instead of raw AST
+                    file_path,
+                    is_mcp
+                )
+
+            except Exception as e:
+                self.logger.debug(f"Failed to normalize function in {file_path}: {e}")
+
+    def _get_function_query(self, language: Language) -> Optional[str]:
+        """Get tree-sitter query for finding functions in a language.
+
+        Args:
+            language: Language
+
+        Returns:
+            Tree-sitter query string
+        """
+        queries = {
+            Language.PYTHON: "(function_definition) @function",
+            Language.JAVASCRIPT: "(function_declaration) @function (arrow_function) @function (method_definition) @function",
+            Language.TYPESCRIPT: "(function_declaration) @function (arrow_function) @function (method_definition) @function",
+            Language.GO: "(function_declaration) @function (method_declaration) @function",
+            Language.JAVA: "(method_declaration) @function",
+            Language.KOTLIN: "(function_declaration) @function",
+            Language.RUBY: "(method) @function (singleton_method) @function",
+            Language.RUST: "(function_item) @function",
+            Language.SWIFT: "(function_declaration) @function",
+            Language.CSHARP: "(method_declaration) @function",
+        }
+        return queries.get(language)
+
+    def _is_mcp_entry_point_unified(self, func: UnifiedASTNode, language: Language) -> bool:
+        """Check if function is an MCP entry point using unified AST.
+
+        Args:
+            func: Unified function node
+            language: Language
+
+        Returns:
+            True if MCP entry point
+        """
+        # Check decorators (Python, TypeScript, JavaScript)
+        if func.decorators:
+            for decorator in func.decorators:
+                decorator_str = str(decorator)
+                # Support custom variable names: @hello_mcp.tool(), @jira_mcp.tool(), etc.
+                if '.' in decorator_str:
+                    parts = decorator_str.rsplit('.', 1)
+                    if len(parts) == 2 and parts[1] in ['tool', 'prompt', 'resource']:
+                        return True
+
+        # Check annotations (Java, Kotlin)
+        if language in [Language.JAVA, Language.KOTLIN]:
+            # Look for @MCPTool, @MCPPrompt, @MCPResource annotations
+            if func.metadata and 'annotations' in func.metadata:
+                annotations = func.metadata['annotations']
+                for annotation in annotations:
+                    if any(mcp_type in str(annotation) for mcp_type in ['MCPTool', 'MCPPrompt', 'MCPResource', 'Tool', 'Prompt', 'Resource']):
+                        return True
+
+        # Check comments/docstrings for MCP markers
+        if func.jsdoc or func.docstring:
+            doc = func.jsdoc or func.docstring or ""
+            if any(marker in doc for marker in ['@mcp', '@tool', '@prompt', '@resource', 'MCP tool', 'MCP prompt']):
+                return True
+
+        return False
 
     def _extract_python_functions(self, file_path: Path, analyzer: PythonParser) -> None:
         """Extract function definitions and class methods from Python file.

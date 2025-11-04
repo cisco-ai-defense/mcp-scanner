@@ -19,4 +19,30 @@
 from .base import BaseParser
 from .python_parser import PythonParser
 
-__all__ = ["BaseParser", "PythonParser"]
+try:
+    from .javascript_parser import JavaScriptParser
+    from .typescript_parser import TypeScriptParser
+    from .go_parser import GoParser
+    from .java_parser import JavaParser
+    from .kotlin_parser import KotlinParser
+    from .ruby_parser import RubyParser
+    from .rust_parser import RustParser
+    from .swift_parser import SwiftParser
+    from .csharp_parser import CSharpParser
+    
+    __all__ = [
+        "BaseParser",
+        "PythonParser",
+        "JavaScriptParser",
+        "TypeScriptParser",
+        "GoParser",
+        "JavaParser",
+        "KotlinParser",
+        "RubyParser",
+        "RustParser",
+        "SwiftParser",
+        "CSharpParser",
+    ]
+except ImportError:
+    # tree-sitter not available
+    __all__ = ["BaseParser", "PythonParser"]

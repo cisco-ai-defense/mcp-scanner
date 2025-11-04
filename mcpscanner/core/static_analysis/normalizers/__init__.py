@@ -21,7 +21,26 @@ from .python_normalizer import PythonASTNormalizer
 try:
     from .javascript_normalizer import JavaScriptASTNormalizer
     from .typescript_normalizer import TypeScriptASTNormalizer
-    __all__ = ["PythonASTNormalizer", "JavaScriptASTNormalizer", "TypeScriptASTNormalizer"]
+    from .go_normalizer import GoASTNormalizer
+    from .java_normalizer import JavaASTNormalizer
+    from .kotlin_normalizer import KotlinASTNormalizer
+    from .ruby_normalizer import RubyASTNormalizer
+    from .rust_normalizer import RustASTNormalizer
+    from .swift_normalizer import SwiftASTNormalizer
+    from .csharp_normalizer import CSharpASTNormalizer
+    
+    __all__ = [
+        "PythonASTNormalizer",
+        "JavaScriptASTNormalizer",
+        "TypeScriptASTNormalizer",
+        "GoASTNormalizer",
+        "JavaASTNormalizer",
+        "KotlinASTNormalizer",
+        "RubyASTNormalizer",
+        "RustASTNormalizer",
+        "SwiftASTNormalizer",
+        "CSharpASTNormalizer",
+    ]
 except ImportError:
     # tree-sitter not available
     __all__ = ["PythonASTNormalizer"]
