@@ -72,7 +72,6 @@ class TypeScriptASTNormalizer(JavaScriptASTNormalizer):
         env_var_access = self._extract_env_var_access(node)
         attribute_access = self._extract_attribute_access(node)
         variable_dependencies = self._extract_variable_dependencies(node)
-        parameter_flows = self._extract_parameter_flows(node, params)
         
         func_node = UnifiedASTNode(
             type=NodeType.ASYNC_FUNCTION if is_async else NodeType.FUNCTION,
@@ -143,7 +142,6 @@ class TypeScriptASTNormalizer(JavaScriptASTNormalizer):
         env_var_access = self._extract_env_var_access(node)
         attribute_access = self._extract_attribute_access(node)
         variable_dependencies = self._extract_variable_dependencies(node)
-        parameter_flows = self._extract_parameter_flows(node, params)
         
         func_node = UnifiedASTNode(
             type=NodeType.ASYNC_FUNCTION if is_async else NodeType.FUNCTION,
@@ -220,7 +218,6 @@ class TypeScriptASTNormalizer(JavaScriptASTNormalizer):
         env_var_access = self._extract_env_var_access(node)
         attribute_access = self._extract_attribute_access(node)
         variable_dependencies = self._extract_variable_dependencies(node)
-        parameter_flows = self._extract_parameter_flows(node, params)
         
         func_node = UnifiedASTNode(
             type=NodeType.ASYNC_FUNCTION if is_async else NodeType.FUNCTION,
