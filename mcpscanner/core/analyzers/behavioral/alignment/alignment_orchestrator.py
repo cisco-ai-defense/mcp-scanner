@@ -64,6 +64,15 @@ class AlignmentOrchestrator:
         self.llm_client = AlignmentLLMClient(config)
         self.response_validator = AlignmentResponseValidator()
         
+        # Track analysis statistics
+        self.stats = {
+            "total_analyzed": 0,
+            "mismatches_detected": 0,
+            "no_mismatch": 0,
+            "skipped_invalid_response": 0,
+            "skipped_error": 0
+        }
+        
         self.logger.info("AlignmentOrchestrator initialized")
 
     async def check_alignment(
@@ -85,6 +94,8 @@ class AlignmentOrchestrator:
         Returns:
             Tuple of (analysis_dict, func_context) if mismatch detected, None if aligned
         """
+        self.stats["total_analyzed"] += 1
+        
         try:
             # Step 1: Build alignment verification prompt
             self.logger.debug(f"Building alignment prompt for {func_context.name}")
@@ -92,6 +103,7 @@ class AlignmentOrchestrator:
                 prompt = self.prompt_builder.build_prompt(func_context)
             except Exception as e:
                 self.logger.error(f"Prompt building failed for {func_context.name}: {e}", exc_info=True)
+                self.stats["skipped_error"] += 1
                 raise
             
             # Step 2: Query LLM for alignment verification
@@ -100,6 +112,7 @@ class AlignmentOrchestrator:
                 response = await self.llm_client.verify_alignment(prompt)
             except Exception as e:
                 self.logger.error(f"LLM verification failed for {func_context.name}: {e}", exc_info=True)
+                self.stats["skipped_error"] += 1
                 raise
             
             # Step 3: Validate and parse response
@@ -108,20 +121,38 @@ class AlignmentOrchestrator:
                 result = self.response_validator.validate(response)
             except Exception as e:
                 self.logger.error(f"Response validation failed for {func_context.name}: {e}", exc_info=True)
+                self.stats["skipped_error"] += 1
                 raise
             
             if not result:
                 self.logger.warning(f"Invalid response for {func_context.name}, skipping")
+                self.stats["skipped_invalid_response"] += 1
                 return None
             
             # Step 4: Return analysis if mismatch detected
             if result.get("mismatch_detected"):
                 self.logger.info(f"Alignment mismatch detected in {func_context.name}")
+                self.stats["mismatches_detected"] += 1
                 return (result, func_context)
             else:
                 self.logger.debug(f"No alignment mismatch in {func_context.name}")
+                self.stats["no_mismatch"] += 1
                 return None
             
         except Exception as e:
             self.logger.error(f"Alignment check failed for {func_context.name}: {e}")
+            self.stats["skipped_error"] += 1
             return None
+    
+    def get_statistics(self) -> Dict[str, int]:
+        """Get analysis statistics.
+        
+        Returns:
+            Dictionary with analysis statistics including:
+            - total_analyzed: Total functions analyzed
+            - mismatches_detected: Functions with detected mismatches
+            - no_mismatch: Functions with no mismatch
+            - skipped_invalid_response: Functions skipped due to invalid LLM response
+            - skipped_error: Functions skipped due to errors
+        """
+        return self.stats.copy()

@@ -21,6 +21,7 @@ function calls across multiple files in the codebase.
 """
 
 import ast
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -95,6 +96,7 @@ class CallGraphAnalyzer:
         self.analyzers: Dict[Path, BaseParser] = {}
         self.import_map: Dict[Path, List[Path]] = {}  # file -> imported files
         self.type_analyzers: Dict[Path, TypeAnalyzer] = {}  # file -> type analyzer
+        self.logger = logging.getLogger(__name__)
 
     def add_file(self, file_path: Path, source_code: str) -> None:
         """Add a file to the analysis.

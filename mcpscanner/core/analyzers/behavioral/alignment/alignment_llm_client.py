@@ -26,6 +26,7 @@ The client manages:
 - Response retrieval
 """
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -65,12 +66,13 @@ class AlignmentLLMClient:
         self._model = config.llm_model
         self._max_tokens = config.llm_max_tokens
         self._temperature = config.llm_temperature
+        self._llm_timeout = config.llm_timeout
         
         self.logger = logging.getLogger(__name__)
         self.logger.info(f"AlignmentLLMClient initialized with model: {self._model}")
     
     async def verify_alignment(self, prompt: str) -> str:
-        """Send alignment verification prompt to LLM.
+        """Send alignment verification prompt to LLM with retry logic.
         
         Args:
             prompt: Comprehensive prompt with alignment verification evidence
@@ -79,7 +81,41 @@ class AlignmentLLMClient:
             LLM response (JSON string)
             
         Raises:
-            Exception: If LLM API call fails
+            Exception: If LLM API call fails after retries
+        """
+        # Log prompt length for debugging
+        prompt_length = len(prompt)
+        self.logger.debug(f"Prompt length: {prompt_length} characters")
+        if prompt_length > 50000:
+            self.logger.warning(f"Large prompt detected: {prompt_length} characters - may be truncated by LLM")
+        
+        # Retry logic with exponential backoff
+        max_retries = 3
+        base_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                return await self._make_llm_request(prompt)
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    self.logger.warning(f"LLM request failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                else:
+                    self.logger.error(f"LLM request failed after {max_retries} attempts: {e}")
+                    raise
+    
+    async def _make_llm_request(self, prompt: str) -> str:
+        """Make a single LLM API request.
+        
+        Args:
+            prompt: Prompt to send
+            
+        Returns:
+            LLM response content
+            
+        Raises:
+            Exception: If API call fails
         """
         try:
             request_params = {
@@ -98,7 +134,7 @@ class AlignmentLLMClient:
                 ],
                 "max_tokens": self._max_tokens,
                 "temperature": self._temperature,
-                "timeout": 30.0,
+                "timeout": self._llm_timeout,
                 "api_key": self._api_key,
                 "response_format": {"type": "json_object"},  # Enable JSON mode
             }

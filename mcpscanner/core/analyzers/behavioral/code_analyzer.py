@@ -94,13 +94,29 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 
                 # Build cross-file analyzer for the entire directory
                 cross_file_analyzer = CallGraphAnalyzer()
+                total_size = 0
                 for py_file in python_files:
                     try:
+                        # Check file size before loading
+                        file_size = os.path.getsize(py_file)
+                        total_size += file_size
+                        
+                        if file_size > 1_000_000:  # 1MB
+                            self.logger.warning(f"Large file detected: {py_file} ({file_size:,} bytes)")
+                        elif file_size > 5_000_000:  # 5MB
+                            self.logger.error(f"Very large file detected, skipping: {py_file} ({file_size:,} bytes)")
+                            continue
+                        
                         with open(py_file, 'r') as f:
                             source_code = f.read()
                         cross_file_analyzer.add_file(Path(py_file), source_code)
                     except Exception as e:
                         self.logger.warning(f"Failed to add file {py_file} to cross-file analyzer: {e}")
+                
+                # Log total directory size
+                self.logger.info(f"Total directory size: {total_size:,} bytes across {len(python_files)} files")
+                if total_size > 10_000_000:  # 10MB
+                    self.logger.warning(f"Large codebase detected ({total_size:,} bytes) - analysis may be slow or memory-intensive")
                 
                 # Build the call graph
                 call_graph = cross_file_analyzer.build_call_graph()
@@ -130,6 +146,19 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 
             else:
                 # Content is source code string
+                # Try to build call graph even for source code strings if we can infer structure
+                cross_file_analyzer = None
+                try:
+                    # Create a temporary path for the source code
+                    temp_path = Path(context.get('file_path', 'inline_code.py'))
+                    cross_file_analyzer = CallGraphAnalyzer()
+                    cross_file_analyzer.add_file(temp_path, content)
+                    call_graph = cross_file_analyzer.build_call_graph()
+                    self.logger.info(f"Built call graph for inline source with {len(call_graph.functions)} functions")
+                    context['cross_file_analyzer'] = cross_file_analyzer
+                except Exception as e:
+                    self.logger.debug(f"Could not build call graph for inline source: {e}")
+                
                 all_findings = await self._analyze_source_code(content, context)
             
             self.logger.info(
@@ -235,6 +264,20 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             
             # Analyze each MCP entry point using alignment orchestrator
             for func_context in mcp_contexts:
+                # Check function source size
+                func_source_size = len(func_context.source) if hasattr(func_context, 'source') else 0
+                func_line_count = func_context.line_count if hasattr(func_context, 'line_count') else 0
+                
+                if func_source_size > 50000:  # 50KB
+                    self.logger.warning(
+                        f"Large function detected: {func_context.name} "
+                        f"({func_source_size:,} bytes, {func_line_count} lines) - prompt may be oversized"
+                    )
+                elif func_line_count > 500:
+                    self.logger.info(
+                        f"Long function: {func_context.name} ({func_line_count} lines)"
+                    )
+                
                 result = await self.alignment_orchestrator.check_alignment(func_context)
                 
                 if result:

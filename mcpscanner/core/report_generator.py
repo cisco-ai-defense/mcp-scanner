@@ -181,6 +181,8 @@ class ReportGenerator:
                 self.requested_analyzer_keys.add("api_analyzer")
             elif analyzer.upper() == "LLM":
                 self.requested_analyzer_keys.add("llm_analyzer")
+            elif analyzer.upper() == "BEHAVIORAL":
+                self.requested_analyzer_keys.add("behavioral_analyzer")
 
     def format_output(
         self,
@@ -617,17 +619,17 @@ class ReportGenerator:
             "server_source" in result and result["server_source"] for result in results
         )
         
-        # Check if this is a behavioural scan
-        is_behavioural = any(
-            "behavioural_analyzer" in result.get("findings", {}) for result in results
+        # Check if this is a behavioral scan
+        is_behavioral = any(
+            "behavioral_analyzer" in result.get("findings", {}) for result in results
         )
 
         if has_config_results:
             # Table header with Target Server column for config-based scans
             header = f"{'Scan Target':<20} {'Target Server':<20} {'Tool Name':<18} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
-        elif is_behavioural:
-            # Behavioural scan: show only BEHAVIOURAL column
-            header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'BEHAVIOURAL':<15} {'Severity':<10}"
+        elif is_behavioral:
+            # Behavioral scan: show only BEHAVIORAL column
+            header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'BEHAVIORAL':<15} {'Severity':<10}"
         else:
             # Table header without Target Server column for direct server scans
             header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
@@ -642,14 +644,14 @@ class ReportGenerator:
             else:
                 scan_target_source = self.server_url
             
-            # For behavioural scans, extract just the filename
-            if is_behavioural and "behavioural:" in scan_target_source:
-                # Extract filename from "behavioural:/path/to/file.py"
+            # For behavioral scans, extract just the filename
+            if is_behavioral and "behavioral:" in scan_target_source:
+                # Extract filename from "behavioral:/path/to/file.py"
                 import os
-                full_path = scan_target_source.replace("behavioural:", "")
+                full_path = scan_target_source.replace("behavioral:", "")
                 scan_target_source = os.path.basename(full_path)
             else:
-                # Truncate for non-behavioural scans
+                # Truncate for non-behavioral scans
                 scan_target_source = scan_target_source[:28] if not has_config_results else scan_target_source[:18]
 
             if has_config_results:
@@ -699,10 +701,10 @@ class ReportGenerator:
                 severity_emoji = severity_emojis.get(status, "🟢")
                 overall_severity = f"{severity_emoji} {status}"[:8]
 
-            if is_behavioural:
-                # Behavioural scan: show only behavioural analyzer status
-                behavioural_severity = get_analyzer_status("behavioural_analyzer")[:13]
-                row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {behavioural_severity:<15} {overall_severity:<10}"
+            if is_behavioral:
+                # Behavioral scan: show only behavioral analyzer status
+                behavioral_severity = get_analyzer_status("behavioral_analyzer")[:13]
+                row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {behavioral_severity:<15} {overall_severity:<10}"
             elif has_config_results:
                 api_severity = get_analyzer_status("api_analyzer")[:6]
                 yara_severity = get_analyzer_status("yara_analyzer")[:6]
