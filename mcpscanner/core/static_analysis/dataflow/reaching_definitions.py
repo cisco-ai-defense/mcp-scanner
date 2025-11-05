@@ -121,12 +121,14 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
                 if isinstance(target, ast.Name):
                     var_name = target.id
                     
+                    # GEN: Check if RHS uses any parameters BEFORE kill
+                    # This preserves taint chain for self-referential updates (x = x + 1)
+                    uses_param = self._expr_uses_parameters(ast_node.value, fact)
+                    
                     # KILL: Remove all previous definitions of this variable
                     fact.defs = {d for d in fact.defs if d.var != var_name}
                     
-                    # GEN: Add new definition
-                    # Check if RHS uses any parameters (transitive tracking)
-                    uses_param = self._expr_uses_parameters(ast_node.value, fact)
+                    # Add new definition with preserved parameter flag
                     new_def = Definition(var=var_name, node_id=cfg_node.id, is_parameter=uses_param)
                     fact.defs.add(new_def)
         
@@ -134,9 +136,15 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
             if isinstance(ast_node.target, ast.Name):
                 var_name = ast_node.target.id
                 
+                # Check BEFORE kill (augmented assignments always reference the target)
+                uses_param = self._expr_uses_parameters(ast_node.value, fact)
+                # Also check if target itself is parameter-derived
+                target_defs = [d for d in fact.defs if d.var == var_name]
+                if any(d.is_parameter for d in target_defs):
+                    uses_param = True
+                
                 fact.defs = {d for d in fact.defs if d.var != var_name}
                 
-                uses_param = self._expr_uses_parameters(ast_node.value, fact)
                 new_def = Definition(var=var_name, node_id=cfg_node.id, is_parameter=uses_param)
                 fact.defs.add(new_def)
         
@@ -144,9 +152,11 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
             if isinstance(ast_node.target, ast.Name):
                 var_name = ast_node.target.id
                 
+                # Check BEFORE kill
+                uses_param = self._expr_uses_parameters(ast_node.iter, fact)
+                
                 fact.defs = {d for d in fact.defs if d.var != var_name}
                 
-                uses_param = self._expr_uses_parameters(ast_node.iter, fact)
                 new_def = Definition(var=var_name, node_id=cfg_node.id, is_parameter=uses_param)
                 fact.defs.add(new_def)
     

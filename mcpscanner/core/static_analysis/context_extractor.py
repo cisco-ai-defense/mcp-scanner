@@ -44,30 +44,28 @@ from .dataflow.forward_analysis import ForwardDataflowAnalysis
 @dataclass
 class FunctionContext:
     """Complete context for a function."""
+    # Required fields (no defaults)
     name: str
     decorator_types: List[str]
-    docstring: Optional[str]
-    parameters: List[Dict[str, Any]]
-    return_type: Optional[str]
-    line_number: int
-    
-    # Code structure
     imports: List[str]
     function_calls: List[Dict[str, Any]]
     assignments: List[Dict[str, Any]]
     control_flow: Dict[str, Any]
-    
-    # Analysis results (REVERSED APPROACH)
     parameter_flows: List[Dict[str, Any]]  # All paths from parameters
     constants: Dict[str, Any]
     variable_dependencies: Dict[str, List[str]]
-    
-    # Behavioral patterns
     has_file_operations: bool
     has_network_operations: bool
     has_subprocess_calls: bool
     has_eval_exec: bool
     has_dangerous_imports: bool
+    
+    # Optional fields (with defaults)
+    decorator_params: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Decorator parameters (name, description, tags, meta)
+    docstring: Optional[str] = None
+    parameters: List[Dict[str, Any]] = field(default_factory=list)
+    return_type: Optional[str] = None
+    line_number: int = 0
     
     # Cross-file analysis
     cross_file_calls: List[Dict[str, Any]] = field(default_factory=list)  # Calls to functions in other files
@@ -94,18 +92,38 @@ class ContextExtractor:
     rich context information including dataflow, taint tracking, and behavioral
     patterns for security analysis.
     """
+    
+    # Configurable security pattern lists (can be overridden)
+    DEFAULT_FILE_PATTERNS = ["open", "read", "write", "Path", "file", "os.remove", "os.unlink", "shutil"]
+    DEFAULT_NETWORK_PATTERNS = ["requests", "urllib", "http", "socket", "post", "get", "fetch", "axios"]
+    DEFAULT_SUBPROCESS_PATTERNS = ["subprocess", "os.system", "os.popen", "shell", "exec", "eval"]
 
-    def __init__(self, source_code: str, file_path: str = "unknown.py"):
+    def __init__(
+        self, 
+        source_code: str, 
+        file_path: str = "unknown.py",
+        file_patterns: List[str] = None,
+        network_patterns: List[str] = None,
+        subprocess_patterns: List[str] = None
+    ):
         """Initialize context extractor.
 
         Args:
             source_code: Python source code
             file_path: Path to source file
+            file_patterns: Custom file operation patterns (default: DEFAULT_FILE_PATTERNS)
+            network_patterns: Custom network operation patterns (default: DEFAULT_NETWORK_PATTERNS)
+            subprocess_patterns: Custom subprocess patterns (default: DEFAULT_SUBPROCESS_PATTERNS)
         """
         self.source_code = source_code
         self.file_path = Path(file_path)
         self.analyzer = PythonParser(self.file_path, source_code)
         self.const_prop = ConstantPropagationAnalysis(self.analyzer)
+        
+        # Use provided patterns or defaults (convert to lowercase for case-insensitive matching)
+        self.file_patterns = [p.lower() for p in (file_patterns or self.DEFAULT_FILE_PATTERNS)]
+        self.network_patterns = [p.lower() for p in (network_patterns or self.DEFAULT_NETWORK_PATTERNS)]
+        self.subprocess_patterns = [p.lower() for p in (subprocess_patterns or self.DEFAULT_SUBPROCESS_PATTERNS)]
         
         # Parse and analyze
         try:
@@ -186,6 +204,58 @@ class ContextExtractor:
             return decorator.id
         
         return ""
+    
+    def _extract_decorator_params(self, decorator: ast.expr) -> dict[str, any]:
+        """Extract parameters from decorator call.
+        
+        Extracts explicit parameters like name, description, tags, meta from
+        @mcp.tool(name="...", description="...", tags={...}, meta={...})
+        
+        Args:
+            decorator: Decorator node
+            
+        Returns:
+            Dictionary of decorator parameters
+        """
+        params = {}
+        
+        if not isinstance(decorator, ast.Call):
+            return params
+        
+        # Extract keyword arguments
+        for keyword in decorator.keywords:
+            if keyword.arg is None:
+                continue
+                
+            try:
+                # Handle different value types
+                if isinstance(keyword.value, ast.Constant):
+                    params[keyword.arg] = keyword.value.value
+                elif isinstance(keyword.value, (ast.Set, ast.List, ast.Tuple)):
+                    # Extract set/list/tuple literals
+                    elements = []
+                    for elt in keyword.value.elts:
+                        if isinstance(elt, ast.Constant):
+                            elements.append(elt.value)
+                    params[keyword.arg] = elements
+                elif isinstance(keyword.value, ast.Dict):
+                    # Extract dict literals
+                    dict_val = {}
+                    for k, v in zip(keyword.value.keys, keyword.value.values):
+                        if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
+                            dict_val[k.value] = v.value
+                    params[keyword.arg] = dict_val
+                else:
+                    # For complex expressions, store the unparsed representation
+                    try:
+                        params[keyword.arg] = ast.unparse(keyword.value)
+                    except Exception:
+                        params[keyword.arg] = "<complex expression>"
+            except Exception:
+                # Skip parameters we can't extract
+                continue
+        
+        return params
 
     def _extract_function_context(
         self, node: ast.FunctionDef, decorator_type: str
@@ -206,8 +276,22 @@ class ContextExtractor:
         return_type = self._extract_return_type(node)
         line_number = node.lineno
         
-        # Decorators
+        # Decorators - extract both names and parameters
         decorator_types = [self._get_decorator_name(d) for d in node.decorator_list]
+        decorator_params = {}
+        for decorator in node.decorator_list:
+            dec_name = self._get_decorator_name(decorator)
+            dec_params = self._extract_decorator_params(decorator)
+            if dec_params:
+                decorator_params[dec_name] = dec_params
+        
+        # Override name and docstring if explicitly specified in decorator
+        # This handles cases like @mcp.tool(name="custom_name", description="...")
+        for dec_name, params in decorator_params.items():
+            if 'name' in params:
+                name = params['name']  # Use decorator name if specified
+            if 'description' in params and not docstring:
+                docstring = params['description']  # Use decorator description if no docstring
         
         # Code structure
         imports = self._extract_imports(node)
@@ -247,6 +331,7 @@ class ContextExtractor:
         return FunctionContext(
             name=name,
             decorator_types=decorator_types,
+            decorator_params=decorator_params,
             docstring=docstring,
             parameters=parameters,
             return_type=return_type,
@@ -388,6 +473,7 @@ class ContextExtractor:
         """
         assignments = []
         for child in ast.walk(node):
+            # Handle regular assignments (x = y)
             if isinstance(child, ast.Assign):
                 for target in child.targets:
                     if isinstance(target, ast.Name):
@@ -400,8 +486,60 @@ class ContextExtractor:
                             "variable": target.id,
                             "value": value_str,
                             "line": child.lineno if hasattr(child, "lineno") else 0,
+                            "type": "assign"
                         }
                         assignments.append(assign_info)
+            
+            # Handle annotated assignments (x: int = y)
+            elif isinstance(child, ast.AnnAssign):
+                if isinstance(child.target, ast.Name):
+                    try:
+                        value_str = ast.unparse(child.value) if child.value else "<no value>"
+                    except (AttributeError, TypeError, ValueError):
+                        value_str = "<complex>"
+                    
+                    assign_info = {
+                        "variable": child.target.id,
+                        "value": value_str,
+                        "line": child.lineno if hasattr(child, "lineno") else 0,
+                        "type": "annotated_assign"
+                    }
+                    assignments.append(assign_info)
+            
+            # Handle augmented assignments (x += y, x -= y, etc.)
+            elif isinstance(child, ast.AugAssign):
+                if isinstance(child.target, ast.Name):
+                    try:
+                        value_str = ast.unparse(child.value)
+                        op_str = child.op.__class__.__name__
+                    except (AttributeError, TypeError, ValueError):
+                        value_str = "<complex>"
+                        op_str = "<unknown>"
+                    
+                    assign_info = {
+                        "variable": child.target.id,
+                        "value": f"{op_str}= {value_str}",
+                        "line": child.lineno if hasattr(child, "lineno") else 0,
+                        "type": "augmented_assign"
+                    }
+                    assignments.append(assign_info)
+            
+            # Handle named expressions / walrus operator (x := y)
+            elif isinstance(child, ast.NamedExpr):
+                if isinstance(child.target, ast.Name):
+                    try:
+                        value_str = ast.unparse(child.value)
+                    except (AttributeError, TypeError, ValueError):
+                        value_str = "<complex>"
+                    
+                    assign_info = {
+                        "variable": child.target.id,
+                        "value": value_str,
+                        "line": child.lineno if hasattr(child, "lineno") else 0,
+                        "type": "named_expr"
+                    }
+                    assignments.append(assign_info)
+        
         return assignments
 
     def _analyze_control_flow(self, node: ast.FunctionDef) -> Dict[str, Any]:
@@ -414,14 +552,16 @@ class ContextExtractor:
             Control flow summary
         """
         has_if = any(isinstance(n, ast.If) for n in ast.walk(node))
-        has_for = any(isinstance(n, ast.For) for n in ast.walk(node))
+        has_for = any(isinstance(n, (ast.For, ast.AsyncFor)) for n in ast.walk(node))
         has_while = any(isinstance(n, ast.While) for n in ast.walk(node))
         has_try = any(isinstance(n, ast.Try) for n in ast.walk(node))
+        has_match = any(isinstance(n, ast.Match) for n in ast.walk(node))  # Python 3.10+ pattern matching
         
         return {
-            "has_conditionals": has_if,
+            "has_conditionals": has_if or has_match,
             "has_loops": has_for or has_while,
             "has_exception_handling": has_try,
+            "has_pattern_matching": has_match,
         }
 
     def _analyze_forward_flows(
@@ -503,6 +643,7 @@ class ContextExtractor:
         dependencies = {}
         
         for child in ast.walk(node):
+            # Handle regular assignments (x = y)
             if isinstance(child, ast.Assign):
                 for target in child.targets:
                     if isinstance(target, ast.Name):
@@ -511,6 +652,33 @@ class ContextExtractor:
                             if isinstance(name_node, ast.Name):
                                 deps.append(name_node.id)
                         dependencies[target.id] = deps
+            
+            # Handle annotated assignments (x: int = y)
+            elif isinstance(child, ast.AnnAssign):
+                if isinstance(child.target, ast.Name) and child.value:
+                    deps = []
+                    for name_node in ast.walk(child.value):
+                        if isinstance(name_node, ast.Name):
+                            deps.append(name_node.id)
+                    dependencies[child.target.id] = deps
+            
+            # Handle augmented assignments (x += y)
+            elif isinstance(child, ast.AugAssign):
+                if isinstance(child.target, ast.Name):
+                    deps = [child.target.id]  # Depends on itself
+                    for name_node in ast.walk(child.value):
+                        if isinstance(name_node, ast.Name):
+                            deps.append(name_node.id)
+                    dependencies[child.target.id] = deps
+            
+            # Handle named expressions (x := y)
+            elif isinstance(child, ast.NamedExpr):
+                if isinstance(child.target, ast.Name):
+                    deps = []
+                    for name_node in ast.walk(child.value):
+                        if isinstance(name_node, ast.Name):
+                            deps.append(name_node.id)
+                    dependencies[child.target.id] = deps
         
         return dependencies
 
@@ -523,11 +691,10 @@ class ContextExtractor:
         Returns:
             True if file operations detected
         """
-        file_patterns = ["open", "read", "write", "Path", "file"]
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
-                call_name = self._get_call_name(child)
-                if any(pattern in call_name for pattern in file_patterns):
+                call_name = self._get_call_name(child).lower()  # Case-insensitive
+                if any(pattern in call_name for pattern in self.file_patterns):
                     return True
         return False
 
@@ -540,11 +707,10 @@ class ContextExtractor:
         Returns:
             True if network operations detected
         """
-        network_patterns = ["requests", "urllib", "http", "socket", "post", "get"]
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
-                call_name = self._get_call_name(child)
-                if any(pattern in call_name for pattern in network_patterns):
+                call_name = self._get_call_name(child).lower()  # Case-insensitive
+                if any(pattern in call_name for pattern in self.network_patterns):
                     return True
         return False
 
@@ -557,11 +723,10 @@ class ContextExtractor:
         Returns:
             True if subprocess calls detected
         """
-        subprocess_patterns = ["subprocess", "os.system", "os.popen", "shell"]
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
-                call_name = self._get_call_name(child)
-                if any(pattern in call_name for pattern in subprocess_patterns):
+                call_name = self._get_call_name(child).lower()  # Case-insensitive
+                if any(pattern in call_name for pattern in self.subprocess_patterns):
                     return True
         return False
 

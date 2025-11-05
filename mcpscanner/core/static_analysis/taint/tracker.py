@@ -176,7 +176,7 @@ class TaintShape:
         self.element_shape.set_taint(taint)
     
     def merge(self, other: "TaintShape") -> "TaintShape":
-        """Merge two shapes.
+        """Merge two taint shapes.
         
         Args:
             other: Other shape to merge
@@ -184,19 +184,22 @@ class TaintShape:
         Returns:
             Merged shape
         """
-        result = TaintShape()
+        # Preserve the maximum depth and collapsed state from either input
+        max_depth = max(self.depth, other.depth)
+        result = TaintShape(depth=max_depth)
+        result.collapsed = self.collapsed or other.collapsed
         
         result.scalar_taint = self.scalar_taint.merge(other.scalar_taint)
         
         all_fields = set(self.fields.keys()) | set(other.fields.keys())
         for field in all_fields:
-            self_field = self.fields.get(field, TaintShape())
-            other_field = other.fields.get(field, TaintShape())
+            self_field = self.fields.get(field, TaintShape(depth=max_depth))
+            other_field = other.fields.get(field, TaintShape(depth=max_depth))
             result.fields[field] = self_field.merge(other_field)
         
         if self.element_shape or other.element_shape:
-            self_elem = self.element_shape or TaintShape()
-            other_elem = other.element_shape or TaintShape()
+            self_elem = self.element_shape or TaintShape(depth=max_depth)
+            other_elem = other.element_shape or TaintShape(depth=max_depth)
             result.element_shape = self_elem.merge(other_elem)
         
         result.is_object = self.is_object or other.is_object
@@ -206,9 +209,10 @@ class TaintShape:
     
     def copy(self) -> "TaintShape":
         """Create a deep copy."""
-        result = TaintShape(self.scalar_taint.copy())
+        result = TaintShape(self.scalar_taint.copy(), depth=self.depth)
         result.is_object = self.is_object
         result.is_array = self.is_array
+        result.collapsed = self.collapsed
         
         for field, shape in self.fields.items():
             result.fields[field] = shape.copy()
@@ -217,6 +221,43 @@ class TaintShape:
             result.element_shape = self.element_shape.copy()
         
         return result
+    
+    def __eq__(self, other: object) -> bool:
+        """Check equality including structural differences.
+        
+        Compares taint status, labels, structure (object/array), and per-field taints.
+        """
+        if not isinstance(other, TaintShape):
+            return False
+        
+        # Check basic properties
+        if (self.is_object != other.is_object or 
+            self.is_array != other.is_array or
+            self.collapsed != other.collapsed or
+            self.depth != other.depth):
+            return False
+        
+        # Check scalar taint (status and labels)
+        if (self.scalar_taint.status != other.scalar_taint.status or
+            self.scalar_taint.labels != other.scalar_taint.labels):
+            return False
+        
+        # Check fields for objects
+        if self.fields.keys() != other.fields.keys():
+            return False
+        
+        for field in self.fields:
+            if self.fields[field] != other.fields[field]:
+                return False
+        
+        # Check element shape for arrays
+        if (self.element_shape is None) != (other.element_shape is None):
+            return False
+        
+        if self.element_shape and self.element_shape != other.element_shape:
+            return False
+        
+        return True
     
     def __repr__(self) -> str:
         """String representation."""
@@ -306,7 +347,10 @@ class ShapeEnvironment:
         return result
     
     def __eq__(self, other: object) -> bool:
-        """Check equality."""
+        """Check equality including structural differences.
+        
+        Uses TaintShape's __eq__ which checks labels and per-field taints.
+        """
         if not isinstance(other, ShapeEnvironment):
             return False
         
@@ -314,7 +358,8 @@ class ShapeEnvironment:
             return False
         
         for var in self.shapes:
-            if self.get_taint(var).status != other.get_taint(var).status:
+            # Use TaintShape's __eq__ for proper structural comparison
+            if self.shapes[var] != other.shapes[var]:
                 return False
         
         return True

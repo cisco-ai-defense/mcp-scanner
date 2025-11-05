@@ -38,7 +38,6 @@ class CallGraph:
         self.functions: Dict[str, Any] = {}  # full_name -> function node
         self.calls: List[tuple[str, str]] = []  # (caller, callee) pairs
         self.mcp_entry_points: Set[str] = set()  # MCP decorated functions
-        self.param_flows: Dict[str, Set[str]] = {}  # func -> params that flow through it
 
     def add_function(self, name: str, node: Any, file_path: Path, is_mcp_entry: bool = False) -> None:
         """Add a function definition.
@@ -389,20 +388,38 @@ class CallGraphAnalyzer:
         
         return list(reachable)
 
-    def analyze_parameter_flow_across_files(self, entry_point: str, param_names: List[str]) -> Dict[str, Any]:
-        """Analyze how MCP entry point parameters flow across files.
-
+    def get_reachable_from_entry_point(
+        self, entry_point: str
+    ) -> Set[str]:
+        """Get all functions reachable from an MCP entry point.
+        
         Args:
             entry_point: MCP entry point function name
-            param_names: Parameter names to track
-
+            
         Returns:
-            Dictionary with cross-file flow information
+            Set of reachable function names
         """
         # Get all functions reachable from entry point
         reachable = self.get_reachable_functions(entry_point)
         
-        # Track which functions receive parameter data
+        return set(reachable)
+    
+    def analyze_parameter_flow_across_files(
+        self, entry_point: str, param_names: List[str]
+    ) -> Dict[str, Any]:
+        """Analyze how parameters flow across files from an entry point.
+        
+        Args:
+            entry_point: MCP entry point function name
+            param_names: Parameter names to track
+            
+        Returns:
+            Dictionary with cross-file flow information
+        """
+        # Get all reachable functions
+        reachable = self.get_reachable_functions(entry_point)
+        
+        # Track parameter-influenced functions (simplified heuristic)
         param_influenced_funcs = set()
         cross_file_flows = []
         
@@ -410,9 +427,9 @@ class CallGraphAnalyzer:
             if func_name == entry_point:
                 continue
             
-            # Check if this function is called with parameter data
+            # Check if this function is called from entry point or influenced functions
             for caller, callee in self.call_graph.calls:
-                if callee == func_name and caller in [entry_point] + list(param_influenced_funcs):
+                if callee == func_name and (caller == entry_point or caller in param_influenced_funcs):
                     param_influenced_funcs.add(func_name)
                     
                     # Extract file information

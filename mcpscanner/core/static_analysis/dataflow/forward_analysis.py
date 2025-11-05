@@ -41,6 +41,17 @@ class FlowPath:
     reaches_assignments: List[str] = field(default_factory=list)
     reaches_returns: bool = False
     reaches_external: bool = False  # Network, file, subprocess
+    
+    def copy(self) -> "FlowPath":
+        """Create a deep copy of the flow path."""
+        return FlowPath(
+            parameter_name=self.parameter_name,
+            operations=self.operations.copy(),
+            reaches_calls=self.reaches_calls.copy(),
+            reaches_assignments=self.reaches_assignments.copy(),
+            reaches_returns=self.reaches_returns,
+            reaches_external=self.reaches_external
+        )
 
 
 @dataclass
@@ -50,17 +61,43 @@ class ForwardFlowFact:
     parameter_flows: Dict[str, FlowPath] = field(default_factory=dict)
     
     def copy(self) -> "ForwardFlowFact":
-        """Create a copy."""
+        """Create a deep copy.
+        
+        Deep copies parameter_flows to prevent aliasing issues where mutations
+        to out_fact affect in_fact and other facts.
+        """
         return ForwardFlowFact(
             shape_env=self.shape_env.copy(),
-            parameter_flows={k: v for k, v in self.parameter_flows.items()},
+            parameter_flows={k: v.copy() for k, v in self.parameter_flows.items()},
         )
     
     def __eq__(self, other: object) -> bool:
-        """Check equality."""
+        """Check equality.
+        
+        Compares both shape_env and parameter_flows for proper fixpoint detection.
+        """
         if not isinstance(other, ForwardFlowFact):
             return False
-        return self.shape_env == other.shape_env
+        
+        if self.shape_env != other.shape_env:
+            return False
+        
+        # Check parameter_flows keys
+        if set(self.parameter_flows.keys()) != set(other.parameter_flows.keys()):
+            return False
+        
+        # Compare flow paths (simplified comparison - check if same operations reached)
+        for param in self.parameter_flows:
+            self_flow = self.parameter_flows[param]
+            other_flow = other.parameter_flows[param]
+            
+            if (len(self_flow.operations) != len(other_flow.operations) or
+                set(self_flow.reaches_calls) != set(other_flow.reaches_calls) or
+                self_flow.reaches_returns != other_flow.reaches_returns or
+                self_flow.reaches_external != other_flow.reaches_external):
+                return False
+        
+        return True
 
 
 class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
@@ -263,6 +300,9 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
 
     def _expr_uses_var(self, expr: ast.AST, var_name: str, fact: ForwardFlowFact) -> bool:
         """Check if expression uses a variable (directly or transitively).
+        
+        Uses source-sensitive tracking via taint labels to avoid false positives
+        when multiple parameters taint different variables.
 
         Args:
             expr: Expression node
@@ -270,16 +310,26 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
             fact: Current flow fact
 
         Returns:
-            True if expression uses the variable
+            True if expression uses the variable (with source sensitivity)
         """
+        # Get the taint label for the target variable
+        target_taint = fact.shape_env.get_taint(var_name)
+        target_labels = target_taint.labels if target_taint.is_tainted() else set()
+        
         for node in ast.walk(expr):
             if isinstance(node, ast.Name):
                 if node.id == var_name:
                     return True
-                # Check transitive dependencies
-                if fact.shape_env.get_taint(node.id).is_tainted():
-                    # This variable is tainted, might come from var_name
-                    return True
+                # Check transitive dependencies with source sensitivity
+                node_taint = fact.shape_env.get_taint(node.id)
+                if node_taint.is_tainted():
+                    # Only return True if this variable shares taint labels with target
+                    # This prevents false positives from unrelated parameters
+                    if target_labels and node_taint.labels & target_labels:
+                        return True
+                    # If target has no labels but node is tainted, be conservative
+                    elif not target_labels and node.id == var_name:
+                        return True
         return False
 
     def _get_call_name(self, node: ast.Call) -> str:

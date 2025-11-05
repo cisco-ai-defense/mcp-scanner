@@ -24,6 +24,7 @@ Kept here for compatibility and full-featured cross-file analysis.
 """
 
 import ast
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -40,7 +41,6 @@ class CallGraph:
         self.functions: Dict[str, Any] = {}  # full_name -> function node
         self.calls: List[tuple[str, str]] = []  # (caller, callee) pairs
         self.mcp_entry_points: Set[str] = set()  # MCP decorated functions
-        self.param_flows: Dict[str, Set[str]] = {}  # func -> params that flow through it
 
     def add_function(self, name: str, node: Any, file_path: Path, is_mcp_entry: bool = False) -> None:
         """Add a function definition.
@@ -102,6 +102,7 @@ class CrossFileAnalyzer:
         self.analyzers: Dict[Path, BaseParser] = {}
         self.import_map: Dict[Path, List[Path]] = {}  # file -> imported files
         self.type_analyzers: Dict[Path, TypeAnalyzer] = {}  # file -> type analyzer
+        self.logger = logging.getLogger(__name__)
 
     def add_file(self, file_path: Path, source_code: str) -> None:
         """Add a file to the analysis.

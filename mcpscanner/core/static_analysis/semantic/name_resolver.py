@@ -112,23 +112,86 @@ class NameResolver:
         Args:
             node: Python AST node
         """
-        # First pass: build symbol table
-        for n in ast.walk(node):
-            if isinstance(n, ast.FunctionDef):
-                self._define_function(n)
-            elif isinstance(n, ast.ClassDef):
-                self._define_class(n)
-            elif isinstance(n, ast.Assign):
-                self._define_assignment(n)
-            elif isinstance(n, ast.Import):
-                self._define_import(n)
-            elif isinstance(n, ast.ImportFrom):
-                self._define_import_from(n)
+        # Use visitor pattern to properly track scope entry/exit
+        self._visit_node(node)
 
-        # Second pass: resolve name references and track parameter influence
-        for n in ast.walk(node):
-            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
-                self._resolve_name(n)
+    def _visit_node(self, node: ast.AST) -> None:
+        """Visit a node and its children with proper scope tracking.
+        
+        Args:
+            node: AST node to visit
+        """
+        # Handle scope-creating nodes
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self._visit_function(node)
+        elif isinstance(node, ast.ClassDef):
+            self._visit_class(node)
+        elif isinstance(node, ast.Assign):
+            self._define_assignment(node)
+            # Visit children
+            for child in ast.iter_child_nodes(node):
+                self._visit_node(child)
+        elif isinstance(node, ast.Import):
+            self._define_import(node)
+        elif isinstance(node, ast.ImportFrom):
+            self._define_import_from(node)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            self._resolve_name(node)
+        else:
+            # Visit children for other nodes
+            for child in ast.iter_child_nodes(node):
+                self._visit_node(child)
+    
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """Visit function with proper scope management.
+        
+        Args:
+            node: Function definition node
+        """
+        # Define function in current scope
+        self.current_scope.define(node.name, node)
+        
+        # Create and enter new scope for function body
+        func_scope = Scope(parent=self.current_scope)
+        self.current_scope.children.append(func_scope)
+        old_scope = self.current_scope
+        self.current_scope = func_scope
+        
+        # Define parameters in function scope
+        for arg in node.args.args:
+            is_mcp_param = arg.arg in self.parameter_names
+            func_scope.define(arg.arg, arg, is_param=is_mcp_param)
+            if is_mcp_param:
+                self.param_influenced.add(arg.arg)
+        
+        # Visit function body
+        for child in node.body:
+            self._visit_node(child)
+        
+        # Exit function scope
+        self.current_scope = old_scope
+    
+    def _visit_class(self, node: ast.ClassDef) -> None:
+        """Visit class with proper scope management.
+        
+        Args:
+            node: Class definition node
+        """
+        # Define class in current scope
+        self.current_scope.define(node.name, node)
+        
+        # Create and enter new scope for class body
+        class_scope = Scope(parent=self.current_scope)
+        self.current_scope.children.append(class_scope)
+        old_scope = self.current_scope
+        self.current_scope = class_scope
+        
+        # Visit class body
+        for child in node.body:
+            self._visit_node(child)
+        
+        # Exit class scope
+        self.current_scope = old_scope
 
     def _define_function(self, node: ast.FunctionDef) -> None:
         """Define a function in current scope.

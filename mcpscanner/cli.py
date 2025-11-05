@@ -1005,8 +1005,15 @@ async def main():
                 import os
                 display_name = os.path.basename(source_file) if source_file != source_path else source_path
                 
+                # Collect all taxonomies from findings
+                mcp_taxonomies = []
+                for finding in func_findings:
+                    if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+                        if finding.mcp_taxonomy not in mcp_taxonomies:
+                            mcp_taxonomies.append(finding.mcp_taxonomy)
+                
                 results.append({
-                    "tool_name": func_name,
+                    "tool_name": func_name,  # This should match the name from decorator params or function name
                     "tool_description": f"MCP function from {display_name}",
                     "status": "completed",
                     "is_safe": False,
@@ -1018,6 +1025,7 @@ async def main():
                             "total_findings": len(func_findings),
                             "source_file": source_file,  # Include source file in output
                             "mcp_taxonomy": func_findings[0].mcp_taxonomy if hasattr(func_findings[0], "mcp_taxonomy") else None,
+                            "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
                         }
                     }
                 })

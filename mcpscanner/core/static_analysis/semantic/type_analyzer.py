@@ -219,17 +219,22 @@ class TypeAnalyzer:
         return Type(TypeKind.UNKNOWN)
 
     def _uses_parameters(self, node: ast.AST) -> bool:
-        """Check if node uses MCP parameters.
+        """Check if node uses MCP parameters (directly or transitively).
 
         Args:
             node: AST node
 
         Returns:
-            True if uses parameters
+            True if uses parameters (including parameter-influenced variables)
         """
         for child in ast.walk(node):
-            if isinstance(child, ast.Name) and child.id in self.parameter_names:
-                return True
+            if isinstance(child, ast.Name):
+                # Check direct parameter usage
+                if child.id in self.parameter_names:
+                    return True
+                # Check if variable is parameter-influenced (transitive)
+                if child.id in self.param_var_types:
+                    return True
         return False
 
     def get_type(self, var_name: str) -> Type:

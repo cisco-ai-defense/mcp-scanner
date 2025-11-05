@@ -120,6 +120,8 @@ class PythonParser(BaseParser):
     def walk(self, node: ast.AST | None = None) -> list[ast.AST]:
         """Walk AST and return all nodes.
 
+        Uses the built-in ast.walk() which is more efficient than recursive traversal.
+
         Args:
             node: Starting node (None for root)
 
@@ -129,11 +131,7 @@ class PythonParser(BaseParser):
         if node is None:
             node = self.get_ast()
 
-        nodes: list[ast.AST] = [node]
-        for child in ast.iter_child_nodes(node):
-            nodes.extend(self.walk(child))
-
-        return nodes
+        return list(ast.walk(node))
 
     def get_function_calls(self, node: ast.AST | None = None) -> list[ast.Call]:
         """Get all function calls in the AST.
@@ -154,8 +152,10 @@ class PythonParser(BaseParser):
 
         return calls
 
-    def get_assignments(self, node: ast.AST | None = None) -> list[ast.Assign | ast.AnnAssign]:
+    def get_assignments(self, node: ast.AST | None = None) -> list[ast.Assign | ast.AnnAssign | ast.AugAssign]:
         """Get all assignments in the AST.
+
+        Includes regular assignments (=), annotated assignments (:=), and augmented assignments (+=, -=, etc.).
 
         Args:
             node: Starting node (None for root)
@@ -166,26 +166,28 @@ class PythonParser(BaseParser):
         if node is None:
             node = self.get_ast()
 
-        assignments: list[ast.Assign | ast.AnnAssign] = []
+        assignments: list[ast.Assign | ast.AnnAssign | ast.AugAssign] = []
         for n in self.walk(node):
             if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
                 assignments.append(n)
 
         return assignments
 
-    def get_function_defs(self, node: ast.AST | None = None) -> list[ast.FunctionDef]:
+    def get_function_defs(self, node: ast.AST | None = None) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
         """Get all function definitions in the AST.
+
+        Includes both regular and async function definitions.
 
         Args:
             node: Starting node (None for root)
 
         Returns:
-            List of FunctionDef nodes
+            List of FunctionDef and AsyncFunctionDef nodes
         """
         if node is None:
             node = self.get_ast()
 
-        funcs: list[ast.FunctionDef] = []
+        funcs: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         for n in self.walk(node):
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 funcs.append(n)
