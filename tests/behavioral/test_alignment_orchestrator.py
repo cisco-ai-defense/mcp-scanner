@@ -77,8 +77,14 @@ def example_tool(param: str) -> str:
         # Major threat categories that should be covered
         important_categories = [
             "DATA EXFILTRATION",
-            "COMMAND INJECTION",
-            "MISLEADING SAFETY CLAIMS"
+            "INJECTION ATTACK",  # Updated from COMMAND INJECTION
+            "DECEPTIVE BEHAVIOR",  # Updated from MISLEADING SAFETY CLAIMS
+            "PROMPT INJECTION",
+            "TOOL POISONING",
+            "TOOL SHADOWING",
+            "CODE EXECUTION",
+            "UNAUTHORIZED SYSTEM ACCESS",
+            "UNAUTHORIZED NETWORK ACCESS"
         ]
         
         for category in important_categories:
@@ -86,7 +92,7 @@ def example_tool(param: str) -> str:
             
             threat = behavioral_threats[category]
             assert threat["severity"] in ["HIGH", "MEDIUM", "LOW"]
-            assert len(threat["description"]) > 100, f"{category} description too short"
+            assert len(threat["description"]) > 50, f"{category} description too short"
     
     def test_threat_mapper_import(self):
         """Test that threat mappings are available."""

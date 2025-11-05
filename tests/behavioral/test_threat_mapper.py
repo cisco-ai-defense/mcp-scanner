@@ -131,7 +131,7 @@ class TestThreatMapper:
         # Critical threats that should exist
         expected_critical_threats = [
             "DATA EXFILTRATION",
-            "COMMAND INJECTION",
+            "INJECTION ATTACK",  # Updated from COMMAND INJECTION
         ]
         
         for threat_name in expected_critical_threats:
@@ -160,9 +160,15 @@ class TestThreatMapper:
             "DATA EXFILTRATION",
             "INJECTION ATTACK",
             "DECEPTIVE BEHAVIOR",
-            "PRIVILEGE ESCALATION",
-            "SECURITY VIOLATION",
-            "SYSTEM MANIPULATION"
+            "TOOL POISONING",
+            "TOOL SHADOWING",
+            "GOAL MANIPULATION",
+            "UNAUTHORIZED ACCESS",
+            "CODE EXECUTION",
+            "BACKDOOR",
+            "DEFENSE EVASION",
+            "RESOURCE EXHAUSTION",
+            "PROMPT INJECTION"
         ]
         
         for threat_name, threat_data in behavioral_threats.items():
@@ -176,8 +182,8 @@ class TestThreatMapper:
         
         behavioral_threats = ThreatMapping.BEHAVIORAL_THREATS
         
-        # Should have at least 5 threat categories
-        assert len(behavioral_threats) >= 5, f"Expected at least 5 threats, got {len(behavioral_threats)}"
+        # Should have at least 15 threat categories (comprehensive taxonomy)
+        assert len(behavioral_threats) >= 15, f"Expected at least 15 threats, got {len(behavioral_threats)}"
     
     def test_data_exfiltration_threat_details(self):
         """Test specific details of DATA EXFILTRATION threat."""
@@ -192,11 +198,11 @@ class TestThreatMapper:
         assert "Agent Tooling" in threat["aisubtech_name"]
         assert "exfiltration" in threat["description"].lower()
     
-    def test_command_injection_threat_details(self):
-        """Test specific details of COMMAND INJECTION threat."""
+    def test_injection_attack_threat_details(self):
+        """Test specific details of INJECTION ATTACK threat."""
         from mcpscanner.threats.threats import ThreatMapping
         
-        threat = ThreatMapping.BEHAVIORAL_THREATS["COMMAND INJECTION"]
+        threat = ThreatMapping.BEHAVIORAL_THREATS["INJECTION ATTACK"]
         
         assert threat["severity"] == "HIGH"
         assert threat["aitech"] == "AITech-9.1"

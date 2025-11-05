@@ -42,9 +42,10 @@ class TestPromptBuilder:
         
         expected_threats = [
             "DATA EXFILTRATION",
-            "COMMAND INJECTION",
-            "MISLEADING SAFETY CLAIMS",
-            "UNDOCUMENTED SIDE EFFECTS",
+            "INJECTION ATTACK",  # Updated from COMMAND INJECTION
+            "DECEPTIVE BEHAVIOR",  # Updated from MISLEADING SAFETY CLAIMS
+            "TOOL POISONING",
+            "CODE EXECUTION",
         ]
         
         for threat in expected_threats:
