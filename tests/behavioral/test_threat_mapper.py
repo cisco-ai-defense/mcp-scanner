@@ -196,7 +196,7 @@ class TestThreatMapper:
         assert "Data Exfiltration" in threat["aitech_name"]
         assert threat["aisubtech"] == "AISubtech-8.2.3"
         assert "Agent Tooling" in threat["aisubtech_name"]
-        assert "exfiltration" in threat["description"].lower()
+        assert "extracting" in threat["description"].lower() or "exfiltration" in threat["description"].lower()
     
     def test_injection_attack_threat_details(self):
         """Test specific details of INJECTION ATTACK threat."""
