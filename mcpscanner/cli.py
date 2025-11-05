@@ -1021,7 +1021,7 @@ async def main():
                         "behavioral_analyzer": {
                             "severity": max_severity,
                             "threat_summary": func_findings[0].summary,
-                            "threat_names": [f.threat_category for f in func_findings],
+                            "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
                             "total_findings": len(func_findings),
                             "source_file": source_file,  # Include source file in output
                             "mcp_taxonomy": func_findings[0].mcp_taxonomy if hasattr(func_findings[0], "mcp_taxonomy") else None,
@@ -1156,7 +1156,7 @@ async def main():
                             "behavioral_analyzer": {
                                 "severity": max_severity,
                                 "threat_summary": func_findings[0].summary,
-                                "threat_names": [f.threat_category for f in func_findings],
+                                "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
                                 "total_findings": len(func_findings),
                                 "source_file": source_file,
                                 "mcp_taxonomies": mcp_taxonomies,  # Use plural and list format
