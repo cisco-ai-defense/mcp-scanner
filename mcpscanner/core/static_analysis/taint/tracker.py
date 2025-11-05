@@ -22,10 +22,16 @@ from typing import Any
 
 
 class TaintStatus(Enum):
-    """Taint status."""
+    """Taint status.
+    
+    Note: UNKNOWN is currently unused but reserved for future use cases where
+    taint status cannot be determined (e.g., external function calls, complex
+    control flow). The current implementation uses a binary taint model
+    (TAINTED/UNTAINTED) which is sufficient for MCP parameter tracking.
+    """
     TAINTED = "tainted"
     UNTAINTED = "untainted"
-    UNKNOWN = "unknown"
+    UNKNOWN = "unknown"  # Reserved for future use
 
 
 @dataclass
