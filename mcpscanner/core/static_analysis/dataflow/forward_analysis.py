@@ -128,10 +128,12 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
         """
         self.build_cfg()
         
-        # Initialize: mark all parameters as tainted
+        # Initialize: mark all parameters as tainted with unique labels
         initial_fact = ForwardFlowFact()
         for param_name in self.parameter_names:
+            # Add unique label per parameter for source-sensitive tracking
             taint = Taint(status=TaintStatus.TAINTED)
+            taint.add_label(f"param:{param_name}")  # Unique label per parameter
             initial_fact.shape_env.set_taint(param_name, taint)
             initial_fact.parameter_flows[param_name] = FlowPath(parameter_name=param_name)
         
@@ -301,8 +303,8 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
     def _expr_uses_var(self, expr: ast.AST, var_name: str, fact: ForwardFlowFact) -> bool:
         """Check if expression uses a variable (directly or transitively).
         
-        Uses source-sensitive tracking via taint labels to avoid false positives
-        when multiple parameters taint different variables.
+        Uses source-sensitive tracking via taint labels to avoid false positives.
+        Also checks structural shapes for per-field taints in objects/arrays.
 
         Args:
             expr: Expression node
@@ -312,24 +314,45 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
         Returns:
             True if expression uses the variable (with source sensitivity)
         """
-        # Get the taint label for the target variable
-        target_taint = fact.shape_env.get_taint(var_name)
+        # Get the target variable's taint shape and labels
+        target_shape = fact.shape_env.get(var_name)
+        target_taint = target_shape.get_taint()
         target_labels = target_taint.labels if target_taint.is_tainted() else set()
+        
+        # Expected label for this parameter
+        expected_label = f"param:{var_name}"
         
         for node in ast.walk(expr):
             if isinstance(node, ast.Name):
+                # Direct reference
                 if node.id == var_name:
                     return True
+                
                 # Check transitive dependencies with source sensitivity
-                node_taint = fact.shape_env.get_taint(node.id)
+                node_shape = fact.shape_env.get(node.id)
+                node_taint = node_shape.get_taint()
+                
                 if node_taint.is_tainted():
-                    # Only return True if this variable shares taint labels with target
-                    # This prevents false positives from unrelated parameters
+                    # Check if this variable has the expected label
+                    if expected_label in node_taint.labels:
+                        return True
+                    
+                    # Also check if shares any labels with target (transitive)
                     if target_labels and node_taint.labels & target_labels:
                         return True
-                    # If target has no labels but node is tainted, be conservative
-                    elif not target_labels and node.id == var_name:
-                        return True
+                    
+                    # Check structural shapes for per-field taints
+                    if node_shape.is_object:
+                        for field_name, field_shape in node_shape.fields.items():
+                            field_taint = field_shape.get_taint()
+                            if expected_label in field_taint.labels:
+                                return True
+                    
+                    if node_shape.is_array and node_shape.element_shape:
+                        elem_taint = node_shape.element_shape.get_taint()
+                        if expected_label in elem_taint.labels:
+                            return True
+        
         return False
 
     def _get_call_name(self, node: ast.Call) -> str:
