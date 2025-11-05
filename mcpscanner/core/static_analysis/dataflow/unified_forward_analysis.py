@@ -37,6 +37,8 @@ class UnifiedFlowPath:
     reaches_assignments: List[str] = field(default_factory=list)
     reaches_returns: bool = False
     reaches_external: bool = False
+    reaches_conditionals: bool = False
+    reaches_loops: bool = False
 
 
 @dataclass
@@ -57,6 +59,8 @@ class UnifiedForwardFlowFact:
                 reaches_assignments=flow.reaches_assignments.copy(),
                 reaches_returns=flow.reaches_returns,
                 reaches_external=flow.reaches_external,
+                reaches_conditionals=flow.reaches_conditionals,
+                reaches_loops=flow.reaches_loops,
             )
         new_fact.shape_env = self.shape_env  # ShapeEnvironment is immutable-ish
         return new_fact
@@ -209,11 +213,70 @@ class UnifiedForwardDataflowAnalysis:
             self._handle_return(node, new_fact)
         elif node.type == NodeType.AWAIT:
             self._handle_await(node, new_fact)
+        elif node.type in [NodeType.FUNCTION, NodeType.ASYNC_FUNCTION]:
+            # For function nodes, process metadata (calls, assignments)
+            self._process_metadata(node, new_fact)
+        elif node.type == NodeType.IF:
+            # Track that parameters reach conditionals
+            self._handle_conditional(node, new_fact)
+        elif node.type in [NodeType.WHILE, NodeType.FOR]:
+            # Track that parameters reach loops
+            self._handle_loop(node, new_fact)
         else:
             # For any other node type, recursively search for calls
             self._find_calls_in_node(node, new_fact)
         
         return new_fact
+    
+    def _process_metadata(self, node: UnifiedASTNode, fact: UnifiedForwardFlowFact) -> None:
+        """Process metadata from a node (calls, assignments, etc.).
+        
+        Args:
+            node: Node with metadata
+            fact: Dataflow fact to update
+        """
+        if not node.metadata:
+            return
+        
+        # Process function calls from metadata
+        for call_info in node.metadata.get('all_calls', []):
+            if isinstance(call_info, dict):
+                call_name = call_info.get('function', '')
+                call_args = call_info.get('arguments', [])
+                line = call_info.get('line', 0)
+                
+                # Check if any argument uses tracked parameters
+                for param_name in self.parameter_names:
+                    # Check if parameter is in arguments
+                    args_str = str(call_args)
+                    if param_name in args_str:
+                        if param_name in fact.parameter_flows:
+                            fact.parameter_flows[param_name].reaches_calls.append(call_name)
+                            fact.parameter_flows[param_name].operations.append({
+                                "type": "function_call",
+                                "function": call_name,
+                                "line": line,
+                            })
+        
+        # Process assignments from metadata
+        for assign_info in node.metadata.get('assignments', []):
+            if isinstance(assign_info, dict):
+                target = assign_info.get('variable', '')
+                value = assign_info.get('value', '')
+                line = assign_info.get('line', 0)
+                
+                # Check if value uses tracked parameters
+                for param_name in self.parameter_names:
+                    if param_name in str(value):
+                        if param_name in fact.parameter_flows:
+                            fact.parameter_flows[param_name].reaches_assignments.append(target)
+                            fact.parameter_flows[param_name].operations.append({
+                                "type": "assignment",
+                                "target": target,
+                                "line": line,
+                            })
+                            # Mark target as tainted
+                            fact.shape_env.set_taint(target, Taint(status=TaintStatus.TAINTED))
     
     def _handle_assignment(self, node: UnifiedASTNode, fact: UnifiedForwardFlowFact) -> None:
         """Handle assignment statement.
@@ -326,6 +389,40 @@ class UnifiedForwardDataflowAnalysis:
                 if param_name in fact.parameter_flows:
                     fact.parameter_flows[param_name].operations.append({
                         "type": "await",
+                        "line": node.location.line if node.location else 0,
+                    })
+    
+    def _handle_conditional(self, node: UnifiedASTNode, fact: UnifiedForwardFlowFact) -> None:
+        """Handle conditional (if) statement.
+        
+        Args:
+            node: IF node
+            fact: Dataflow fact to update
+        """
+        # Check if condition uses any tracked parameters
+        for param_name in self.parameter_names:
+            if self._expr_uses_param(node, param_name, fact):
+                if param_name in fact.parameter_flows:
+                    fact.parameter_flows[param_name].reaches_conditionals = True
+                    fact.parameter_flows[param_name].operations.append({
+                        "type": "conditional",
+                        "line": node.location.line if node.location else 0,
+                    })
+    
+    def _handle_loop(self, node: UnifiedASTNode, fact: UnifiedForwardFlowFact) -> None:
+        """Handle loop (while/for) statement.
+        
+        Args:
+            node: WHILE or FOR node
+            fact: Dataflow fact to update
+        """
+        # Check if loop condition/iterator uses any tracked parameters
+        for param_name in self.parameter_names:
+            if self._expr_uses_param(node, param_name, fact):
+                if param_name in fact.parameter_flows:
+                    fact.parameter_flows[param_name].reaches_loops = True
+                    fact.parameter_flows[param_name].operations.append({
+                        "type": "loop",
                         "line": node.location.line if node.location else 0,
                     })
     

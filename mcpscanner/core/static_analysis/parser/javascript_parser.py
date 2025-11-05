@@ -180,20 +180,20 @@ class JavaScriptParser(BaseParser):
         
         mcp_functions = []
         
-        # Pattern 1: Look for server.registerTool() or server.tool() calls
+        # Pattern 1: Look for server.registerTool(), server.tool(), or server.setRequestHandler() calls
         for node in self.walk():
             if node.type == 'call_expression':
                 callee = node.child_by_field_name('function')
                 
-                # Pattern 1a: server.registerTool() or server.tool()
+                # Pattern 1a: server.registerTool(), server.tool(), or server.setRequestHandler()
                 if callee and callee.type == 'member_expression':
                     obj = callee.child_by_field_name('object')
                     prop = callee.child_by_field_name('property')
                     
                     if (obj and prop and 
                         self.get_node_text(obj) == 'server' and
-                        self.get_node_text(prop) in ['tool', 'registerTool']):
-                        # Found server.registerTool() or server.tool()
+                        self.get_node_text(prop) in ['tool', 'registerTool', 'setRequestHandler']):
+                        # Found server.registerTool(), server.tool(), or server.setRequestHandler()
                         # Extract the function argument (usually last argument)
                         args = node.child_by_field_name('arguments')
                         if args:

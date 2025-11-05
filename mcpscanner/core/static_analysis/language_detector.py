@@ -320,11 +320,21 @@ def get_mcp_functions(language: Language, parser, ast_root):
         mcp_functions = []
         for node in ast.walk(ast_root):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                # Check for @mcp.tool decorator
+                # Check for MCP-related decorators
                 for decorator in node.decorator_list:
                     try:
                         decorator_name = ast.unparse(decorator)
-                        if 'mcp.tool' in decorator_name or '@tool' in decorator_name:
+                        # Check for various MCP decorator patterns
+                        mcp_patterns = [
+                            'mcp.tool',
+                            '@tool',
+                            'call_tool',  # @app.call_tool()
+                            'server.call_tool',
+                            '@mcp',
+                            'list_tools',
+                            'tool(',
+                        ]
+                        if any(pattern in decorator_name for pattern in mcp_patterns):
                             mcp_functions.append(node)
                             break
                     except:
