@@ -41,11 +41,11 @@ class TestPromptBuilder:
         content = prompt_path.read_text()
         
         # Check for key threat categories mentioned in the prompt
-        # Note: This prompt uses descriptive section titles, not exact threat names
+        # Note: This prompt uses descriptive section titles for mismatch detection
         expected_threat_patterns = [
             "DATA EXFILTRATION",
-            "COMMAND INJECTION",  # Section title in this prompt
-            "DECEPTIVE",  # Part of deceptive behavior descriptions
+            "COMMAND INJECTION",
+            "mismatch",  # Core concept of this analyzer
         ]
         
         for threat_pattern in expected_threat_patterns:
