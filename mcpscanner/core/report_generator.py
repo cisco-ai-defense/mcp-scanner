@@ -29,10 +29,10 @@ from .models import OutputFormat, SeverityFilter
 async def results_to_json(scan_results) -> List[Dict[str, Any]]:
     """Convert scan results to JSON format.
 
-    Note: expects ScanResult-like objects with .findings, .tool_name, .tool_description, .status, .is_safe
+    Handles ToolScanResult, PromptScanResult, and ResourceScanResult objects.
 
     Args:
-        scan_results: List of scan result objects
+        scan_results: List of scan result objects (ToolScanResult, PromptScanResult, or ResourceScanResult)
 
     Returns:
         List of dictionaries containing formatted scan results
@@ -127,13 +127,30 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                             f"Detected {len(threat_names)} threats: {', '.join([t.replace('_', ' ') for t in threat_names])}"
                         )
 
+        # Build result dict based on result type
         result_dict = {
-            "tool_name": result.tool_name,
-            "tool_description": result.tool_description,
             "status": result.status,
             "is_safe": result.is_safe,
             "findings": findings_by_analyzer,
         }
+        
+        # Add type-specific fields
+        if hasattr(result, "tool_name"):
+            # ToolScanResult
+            result_dict["tool_name"] = result.tool_name
+            result_dict["tool_description"] = result.tool_description
+            result_dict["item_type"] = "tool"
+        elif hasattr(result, "prompt_name"):
+            # PromptScanResult
+            result_dict["prompt_name"] = result.prompt_name
+            result_dict["prompt_description"] = result.prompt_description
+            result_dict["item_type"] = "prompt"
+        elif hasattr(result, "resource_uri"):
+            # ResourceScanResult
+            result_dict["resource_uri"] = result.resource_uri
+            result_dict["resource_name"] = result.resource_name
+            result_dict["resource_mime_type"] = result.resource_mime_type
+            result_dict["item_type"] = "resource"
 
         # Include server_source if available
         if hasattr(result, "server_source") and result.server_source:
@@ -316,16 +333,27 @@ class ReportGenerator:
         safe_count = sum(1 for r in results if r.get("is_safe", True))
         unsafe_count = len(results) - safe_count
 
-        output.append(f"Tools matching filters: {len(results)}")
-        output.append(f"Safe tools: {safe_count}")
-        output.append(f"Unsafe tools: {unsafe_count}")
+        output.append(f"Items matching filters: {len(results)}")
+        output.append(f"Safe items: {safe_count}")
+        output.append(f"Unsafe items: {unsafe_count}")
 
         unsafe_results = [r for r in results if not r.get("is_safe", True)]
 
         if unsafe_results:
-            output.append("\n=== Unsafe Tools ===")
+            output.append("\n=== Unsafe Items ===")
             for i, result in enumerate(unsafe_results, 1):
-                tool_name = result.get("tool_name", "Unknown")
+                item_type = result.get("item_type", "tool")
+                
+                # Get item name based on type
+                if item_type == "tool":
+                    item_name = result.get("tool_name", "Unknown")
+                elif item_type == "prompt":
+                    item_name = result.get("prompt_name", "Unknown")
+                elif item_type == "resource":
+                    item_name = result.get("resource_name", "Unknown")
+                else:
+                    item_name = "Unknown"
+                
                 findings = result.get("findings", {})
 
                 # Get the highest severity and total findings count
@@ -342,11 +370,11 @@ class ReportGenerator:
                 # Show server name for config-based scans
                 if "server_name" in result and result["server_name"]:
                     output.append(
-                        f"{i}. {tool_name} (Server: {result['server_name']}) - {highest_severity} ({total_findings} findings)"
+                        f"{i}. {item_name} ({item_type}) (Server: {result['server_name']}) - {highest_severity} ({total_findings} findings)"
                     )
                 else:
                     output.append(
-                        f"{i}. {tool_name} - {highest_severity} ({total_findings} findings)"
+                        f"{i}. {item_name} ({item_type}) - {highest_severity} ({total_findings} findings)"
                     )
 
         return "\n".join(output)
@@ -368,18 +396,39 @@ class ReportGenerator:
             return "\n".join(output)
 
         for i, result in enumerate(results, 1):
-            tool_name = result.get("tool_name", "Unknown")
+            item_type = result.get("item_type", "tool")
             status = result.get("status", "Unknown")
             is_safe = result.get("is_safe", True)
             findings = result.get("findings", {})
 
+            # Get item name and description based on type
+            if item_type == "tool":
+                item_name = result.get("tool_name", "Unknown")
+                item_label = "Tool"
+            elif item_type == "prompt":
+                item_name = result.get("prompt_name", "Unknown")
+                item_label = "Prompt"
+            elif item_type == "resource":
+                item_name = result.get("resource_name", "Unknown")
+                item_label = "Resource"
+            else:
+                item_name = "Unknown"
+                item_label = "Item"
+
             # Show server name for config-based scans
             if "server_name" in result and result["server_name"]:
                 output.append(
-                    f"Tool {i}: {tool_name} (Server: {result['server_name']})"
+                    f"{item_label} {i}: {item_name} (Server: {result['server_name']})"
                 )
             else:
-                output.append(f"Tool {i}: {tool_name}")
+                output.append(f"{item_label} {i}: {item_name}")
+            
+            # Add resource-specific info
+            if item_type == "resource" and "resource_uri" in result:
+                output.append(f"URI: {result['resource_uri']}")
+                if "resource_mime_type" in result:
+                    output.append(f"MIME Type: {result['resource_mime_type']}")
+            
             output.append(f"Status: {status}")
             output.append(f"Safe: {'Yes' if is_safe else 'No'}")
 
