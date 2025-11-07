@@ -73,7 +73,7 @@ class AlignmentOrchestrator:
             "skipped_error": 0
         }
         
-        self.logger.info("AlignmentOrchestrator initialized")
+        self.logger.debug("AlignmentOrchestrator initialized")
 
     async def check_alignment(
         self,
@@ -131,7 +131,7 @@ class AlignmentOrchestrator:
             
             # Step 4: Return analysis if mismatch detected
             if result.get("mismatch_detected"):
-                self.logger.info(f"Alignment mismatch detected in {func_context.name}")
+                self.logger.debug(f"Alignment mismatch detected in {func_context.name}")
                 self.stats["mismatches_detected"] += 1
                 return (result, func_context)
             else:

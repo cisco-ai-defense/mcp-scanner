@@ -69,7 +69,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # Initialize alignment orchestrator (handles all LLM interaction)
         self.alignment_orchestrator = AlignmentOrchestrator(config)
         
-        self.logger.info("BehavioralCodeAnalyzer initialized with alignment verification")
+        self.logger.debug("BehavioralCodeAnalyzer initialized with alignment verification")
 
     async def analyze(
         self, content: str, context: Dict[str, Any]
@@ -88,9 +88,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             
             # Check if content is a directory
             if os.path.isdir(content):
-                self.logger.info(f"Scanning directory: {content}")
+                self.logger.debug(f"Scanning directory: {content}")
                 python_files = self._find_python_files(content)
-                self.logger.info(f"Found {len(python_files)} Python file(s) to analyze")
+                self.logger.debug(f"Found {len(python_files)} Python file(s) to analyze")
                 
                 # Build cross-file analyzer for the entire directory
                 cross_file_analyzer = CallGraphAnalyzer()
@@ -114,17 +114,17 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         self.logger.warning(f"Failed to add file {py_file} to cross-file analyzer: {e}")
                 
                 # Log total directory size
-                self.logger.info(f"Total directory size: {total_size:,} bytes across {len(python_files)} files")
+                self.logger.debug(f"Total directory size: {total_size:,} bytes across {len(python_files)} files")
                 if total_size > 10_000_000:  # 10MB
                     self.logger.warning(f"Large codebase detected ({total_size:,} bytes) - analysis may be slow or memory-intensive")
                 
                 # Build the call graph
                 call_graph = cross_file_analyzer.build_call_graph()
-                self.logger.info(f"Built call graph with {len(call_graph.functions)} functions")
+                self.logger.debug(f"Built call graph with {len(call_graph.functions)} functions")
                 
                 # Analyze each file with cross-file context
                 for py_file in python_files:
-                    self.logger.info(f"Analyzing file: {py_file}")
+                    self.logger.debug(f"Analyzing file: {py_file}")
                     file_findings = await self._analyze_file(py_file, context, cross_file_analyzer)
                     all_findings.extend(file_findings)
                     
@@ -137,7 +137,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         source_code = f.read()
                     cross_file_analyzer.add_file(Path(content), source_code)
                     call_graph = cross_file_analyzer.build_call_graph()
-                    self.logger.info(f"Built call graph with {len(call_graph.functions)} functions")
+                    self.logger.debug(f"Built call graph with {len(call_graph.functions)} functions")
                 except Exception as e:
                     self.logger.warning(f"Failed to build call graph for {content}: {e}")
                     cross_file_analyzer = None
@@ -154,14 +154,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     cross_file_analyzer = CallGraphAnalyzer()
                     cross_file_analyzer.add_file(temp_path, content)
                     call_graph = cross_file_analyzer.build_call_graph()
-                    self.logger.info(f"Built call graph for inline source with {len(call_graph.functions)} functions")
+                    self.logger.debug(f"Built call graph for inline source with {len(call_graph.functions)} functions")
                     context['cross_file_analyzer'] = cross_file_analyzer
                 except Exception as e:
                     self.logger.debug(f"Could not build call graph for inline source: {e}")
                 
                 all_findings = await self._analyze_source_code(content, context)
             
-            self.logger.info(
+            self.logger.debug(
                 f"Behavioural analysis complete: {len(all_findings)} finding(s) detected"
             )
             return all_findings
@@ -251,7 +251,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 self.logger.debug(f"No MCP functions found in {file_path}")
                 return findings
             
-            self.logger.info(f"Found {len(mcp_contexts)} MCP functions in {file_path}")
+            self.logger.debug(f"Found {len(mcp_contexts)} MCP functions in {file_path}")
             
             # Enrich with cross-file context if available
             if context.get('cross_file_analyzer'):
@@ -274,7 +274,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         f"({func_source_size:,} bytes, {func_line_count} lines) - prompt may be oversized"
                     )
                 elif func_line_count > 500:
-                    self.logger.info(
+                    self.logger.debug(
                         f"Long function: {func_context.name} ({func_line_count} lines)"
                     )
                 

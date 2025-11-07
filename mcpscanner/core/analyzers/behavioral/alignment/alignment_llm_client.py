@@ -69,7 +69,7 @@ class AlignmentLLMClient:
         self._llm_timeout = config.llm_timeout
         
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"AlignmentLLMClient initialized with model: {self._model}")
+        self.logger.debug(f"AlignmentLLMClient initialized with model: {self._model}")
     
     async def verify_alignment(self, prompt: str) -> str:
         """Send alignment verification prompt to LLM with retry logic.
