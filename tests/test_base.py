@@ -203,15 +203,15 @@ class TestBaseAnalyzer:
         """Test safe_analyze with successful analysis."""
         analyzer = MockAnalyzer("test_analyzer")
 
-        with patch.object(analyzer.logger, "info") as mock_info:
+        with patch.object(analyzer.logger, "debug") as mock_debug:
             findings = await analyzer.safe_analyze("malicious content")
 
             assert len(findings) == 1
             assert findings[0].severity == "HIGH"
             assert analyzer.analyze_called
             assert analyzer.analyze_content == "malicious content"
-            mock_info.assert_called_once()
-            assert "Analysis complete" in mock_info.call_args[0][0]
+            mock_debug.assert_called_once()
+            assert "Analysis complete" in mock_debug.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_safe_analyze_with_context(self):
@@ -254,13 +254,13 @@ class TestBaseAnalyzer:
         """Test safe_analyze with no findings."""
         analyzer = MockAnalyzer("test_analyzer")
 
-        with patch.object(analyzer.logger, "info") as mock_info:
+        with patch.object(analyzer.logger, "debug") as mock_debug:
             findings = await analyzer.safe_analyze("safe content")
 
             assert findings == []
             assert analyzer.analyze_called
-            mock_info.assert_called_once()
-            assert "found 0 potential threats" in mock_info.call_args[0][0]
+            mock_debug.assert_called_once()
+            assert "found 0 potential threats" in mock_debug.call_args[0][0]
 
     def test_base_analyzer_abstract_method(self):
         """Test that BaseAnalyzer cannot be instantiated directly."""
