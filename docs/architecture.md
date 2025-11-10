@@ -56,10 +56,10 @@ The Behavioral Code Analyzer is the next-generation evolution of source code ana
 
 ### Key Innovations
 
-1. **LLM-Powered Alignment Checking**: Uses GPT-4/Azure OpenAI to compare docstring claims against actual code behavior
+1. **LLM-Powered Alignment Checking**: Uses LLM to compare docstring claims against actual code behavior
 2. **Cross-File Dataflow Analysis**: Tracks parameter flows across multiple files and imported functions
-3. **AITech Taxonomy Integration**: Maps every threat to official AITech/AISubtech security taxonomy
-4. **9 Threat Categories**: Comprehensive coverage of behavioral threats with detailed classifications
+3. **Cisco AI Threat Security Taxonomy Integration**: Maps every threat to Cisco AI Threat Security taxonomy (AITech/AISubtech)
+4. **16 Threat Categories**: Comprehensive coverage of behavioral threats with detailed classifications
 5. **Static Analysis Safety**: Analyzes code without execution - safe for scanning malicious code
 
 ### Component Flow Architecture
@@ -106,7 +106,7 @@ The Behavioral Code Analyzer is the next-generation evolution of source code ana
            └────────────────────────┼───────────────────────┘
                                     ▼
                     ┌───────────────────────────────┐
-                    │  LLM Analysis (GPT-4/Azure)   │
+                    │      LLM Analysis             │
                     │  • Compare docstring vs code  │
                     │  • Detect hidden behavior     │
                     │  • Classify threat type       │
@@ -186,7 +186,7 @@ findings = await analyzer.analyze("./mcp-server/", context={"file_path": "./mcp-
 **Prompt Template:** `code_alignment_threat_analysis_prompt.md`
 
 **Prompt Contents:**
-- Threat definitions with examples (9 threat categories)
+- Threat definitions with examples (16 threat categories)
 - Dataflow analysis instructions
 - Severity classification guidelines
 - Required JSON output format
