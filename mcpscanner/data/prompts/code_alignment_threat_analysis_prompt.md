@@ -222,7 +222,7 @@ Respond with ONLY a valid JSON object:
 
 **Field Instructions:**
 
-- **mismatch_detected**: `true` only if there is a clear discrepancy between docstring and implementation
+- **mismatch_detected**: `true` if there is a clear discrepancy between docstring and implementation, OR if malicious code is detected regardless of docstring quality
 - **severity**: 
   - `HIGH`: Data exfiltration, command injection, permission escalation
   - `MEDIUM`: Misleading safety claims, undocumented side effects
@@ -235,14 +235,9 @@ Respond with ONLY a valid JSON object:
   - `"MISLEADING SAFETY CLAIMS"` - Tool claims security but provides minimal protection
   - `"UNDOCUMENTED SIDE EFFECTS"` - Tool performs operations not mentioned in docstring
   - `"PERMISSION ESCALATION"` - Tool performs privileged operations beyond docstring claims
-- **severity**: 
-  - `HIGH`: Data exfiltration, command injection, permission escalation
-  - `MEDIUM`: Misleading safety claims, undocumented side effects
-  - `LOW`: Minor discrepancies without immediate security impact
-- **description_claims**: Quote or paraphrase what the docstring says (1 sentence)
+- **description_claims**: Quote or paraphrase what the docstring says (1 sentence). If no docstring or sparse docstring, state "No docstring provided" or "Minimal docstring"
 - **actual_behavior**: Describe what the code actually does based on dataflow (1-2 sentences)
 - **security_implications**: Explain the security risk in user-facing terms (1-2 sentences)
-- **confidence**: How certain you are about the mismatch
 - **dataflow_evidence**: Cite specific lines/operations from the analysis that prove the mismatch
 
 **Examples of Valid Responses:**
@@ -293,11 +288,12 @@ Respond with ONLY a valid JSON object:
 
 ## Critical Guidelines
 
-1. **Only report HIGH confidence mismatches** where the docstring clearly doesn't match the implementation
-2. **Use dataflow evidence** - cite specific operations and line numbers
-3. **Focus on security implications** - explain why the mismatch matters to users
-4. **Be precise** - distinguish between legitimate operations and hidden malicious behavior
-5. **Consider context** - some operations may be legitimate even if not explicitly documented
+1. **Report HIGH confidence mismatches** where the docstring clearly doesn't match the implementation
+2. **Handle missing/sparse docstrings**: If there is NO docstring or only a minimal docstring, BUT the code contains malicious operations (data exfiltration, command injection, etc.), still flag it as a mismatch with HIGH severity
+3. **Use dataflow evidence** - cite specific operations and line numbers
+4. **Focus on security implications** - explain why the mismatch matters to users
+5. **Be precise** - distinguish between legitimate operations and hidden malicious behavior
+6. **Consider context** - some operations may be legitimate even if not explicitly documented
 
 ---
 
