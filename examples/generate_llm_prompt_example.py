@@ -208,13 +208,17 @@ between what the function claims to do and what it actually does.
         
         # Option to save the full prompt
         print("\n" + "─" * 80)
-        save_prompt = input("\n💾 Save complete prompt to file? (y/n): ").strip().lower()
-        if save_prompt == 'y':
-            output_file = f"llm_prompt_{func_context.name}.txt"
-            with open(output_file, 'w') as f:
-                f.write(complete_prompt)
-            print(f"✅ Saved complete prompt to: {output_file}")
-            print(f"   File size: {len(complete_prompt):,} bytes")
+        try:
+            save_prompt = input("\n💾 Save complete prompt to file? (y/n): ").strip().lower()
+            if save_prompt == 'y':
+                output_file = f"llm_prompt_{func_context.name}.txt"
+                with open(output_file, 'w') as f:
+                    f.write(complete_prompt)
+                print(f"✅ Saved complete prompt to: {output_file}")
+                print(f"   File size: {len(complete_prompt):,} bytes")
+        except EOFError:
+            # Handle piped input (no interactive terminal)
+            print("\n💾 Skipping save prompt (non-interactive mode)")
 
 
 # Example malicious MCP tool for demonstration
