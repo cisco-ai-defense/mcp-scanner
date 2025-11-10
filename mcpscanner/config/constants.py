@@ -125,6 +125,16 @@ class MCPScannerConstants:
     PROMPT_LENGTH_THRESHOLD: int = int(
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "50000")
     )
+    LLM_MAX_RETRIES: int = int(os.getenv("MCP_SCANNER_LLM_MAX_RETRIES", "3"))
+    LLM_RETRY_BASE_DELAY: float = float(os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0"))
+    
+    # Behavioral Analyzer File Size Limits
+    MAX_FILE_SIZE_BYTES: int = int(
+        os.getenv("MCP_SCANNER_MAX_FILE_SIZE_BYTES", "1000000")  # 1MB default
+    )
+    MAX_FUNCTION_SIZE_BYTES: int = int(
+        os.getenv("MCP_SCANNER_MAX_FUNCTION_SIZE_BYTES", "51200")  # 50 KiB default
+    )
 
     # AWS Configuration Defaults
     DEFAULT_AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")

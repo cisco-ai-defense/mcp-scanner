@@ -50,9 +50,12 @@ export MCP_SCANNER_LLM_BASE_URL="https://api.openai.com/v1"
 export MCP_SCANNER_LLM_API_VERSION="2023-12-01-preview"
 export MCP_SCANNER_LLM_TEMPERATURE="0.1"
 export MCP_SCANNER_LLM_MAX_TOKENS="1000"
-export MCP_SCANNER_LLM_MAX_RETRIES="3"
+export MCP_SCANNER_LLM_MAX_RETRIES="3"  # Number of retry attempts for LLM API calls
+export MCP_SCANNER_LLM_RETRY_BASE_DELAY="1.0"  # Base delay in seconds for exponential backoff
 export MCP_SCANNER_LLM_RATE_LIMIT_DELAY="1.0"
 export MCP_SCANNER_PROMPT_LENGTH_THRESHOLD="50000"  # Warn if prompt exceeds this length
+export MCP_SCANNER_MAX_FILE_SIZE_BYTES="1000000"  # Max file size (1MB) before warning
+export MCP_SCANNER_MAX_FUNCTION_SIZE_BYTES="51200"  # Max function size (50 KiB) before warning
 ```
 
 ## Provider-Specific Configurations

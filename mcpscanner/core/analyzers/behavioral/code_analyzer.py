@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ....config.config import Config
+from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ...static_analysis.context_extractor import ContextExtractor
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
@@ -97,13 +98,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 total_size = 0
                 for py_file in python_files:
                     try:
-                        # Check file size before loading
+                        # Check file size before loading (configurable via constants)
                         file_size = os.path.getsize(py_file)
                         total_size += file_size
                         
-                        if file_size > 1_000_000:  # 1MB
+                        if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
                             self.logger.warning(f"Large file detected: {py_file} ({file_size:,} bytes)")
-                        elif file_size > 5_000_000:  # 5MB
+                        elif file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
                             self.logger.error(f"Very large file detected, skipping: {py_file} ({file_size:,} bytes)")
                             continue
                         
@@ -264,11 +265,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             
             # Analyze each MCP entry point using alignment orchestrator
             for func_context in mcp_contexts:
-                # Check function source size
+                # Check function source size (configurable via constants)
                 func_source_size = len(func_context.source) if hasattr(func_context, 'source') else 0
                 func_line_count = func_context.line_count if hasattr(func_context, 'line_count') else 0
                 
-                if func_source_size > 50000:  # 50KB
+                if func_source_size > MCPScannerConstants.MAX_FUNCTION_SIZE_BYTES:
                     self.logger.warning(
                         f"Large function detected: {func_context.name} "
                         f"({func_source_size:,} bytes, {func_line_count} lines) - prompt may be oversized"

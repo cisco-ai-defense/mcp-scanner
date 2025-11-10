@@ -95,9 +95,9 @@ class AlignmentLLMClient:
                 f"(threshold: {MCPScannerConstants.PROMPT_LENGTH_THRESHOLD}) - may be truncated by LLM"
             )
         
-        # Retry logic with exponential backoff
-        max_retries = 3
-        base_delay = 1.0
+        # Retry logic with exponential backoff (configurable via constants)
+        max_retries = MCPScannerConstants.LLM_MAX_RETRIES
+        base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
         
         for attempt in range(max_retries):
             try:
