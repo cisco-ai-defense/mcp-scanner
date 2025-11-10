@@ -52,6 +52,7 @@ export MCP_SCANNER_LLM_TEMPERATURE="0.1"
 export MCP_SCANNER_LLM_MAX_TOKENS="1000"
 export MCP_SCANNER_LLM_MAX_RETRIES="3"
 export MCP_SCANNER_LLM_RATE_LIMIT_DELAY="1.0"
+export MCP_SCANNER_PROMPT_LENGTH_THRESHOLD="50000"  # Warn if prompt exceeds this length
 ```
 
 ## Provider-Specific Configurations

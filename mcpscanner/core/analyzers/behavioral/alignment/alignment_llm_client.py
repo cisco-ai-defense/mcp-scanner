@@ -33,6 +33,7 @@ from typing import Optional
 from litellm import acompletion
 
 from .....config.config import Config
+from .....config.constants import MCPScannerConstants
 
 
 class AlignmentLLMClient:
@@ -86,8 +87,13 @@ class AlignmentLLMClient:
         # Log prompt length for debugging
         prompt_length = len(prompt)
         self.logger.debug(f"Prompt length: {prompt_length} characters")
-        if prompt_length > 50000:
-            self.logger.warning(f"Large prompt detected: {prompt_length} characters - may be truncated by LLM")
+        
+        # Check against configurable threshold
+        if prompt_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
+            self.logger.warning(
+                f"Large prompt detected: {prompt_length} characters "
+                f"(threshold: {MCPScannerConstants.PROMPT_LENGTH_THRESHOLD}) - may be truncated by LLM"
+            )
         
         # Retry logic with exponential backoff
         max_retries = 3
