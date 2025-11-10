@@ -89,6 +89,84 @@ def _build_config(
     return Config(**config_params)
 
 
+async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
+    """Run behavioral analyzer on source code and format results.
+    
+    Args:
+        source_path: Path to Python file or directory to analyze
+        
+    Returns:
+        List of formatted result dictionaries
+    """
+    import os
+    from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+    
+    cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
+    analyzer = BehavioralCodeAnalyzer(cfg)
+    
+    # Analyze the source file
+    findings = await analyzer.analyze(
+        source_path,
+        context={"file_path": source_path}
+    )
+    
+    # Format results to match Scanner output structure
+    findings_by_function = {}
+    for finding in findings:
+        func_name = finding.details.get("function_name", "unknown") if finding.details else "unknown"
+        
+        if func_name not in findings_by_function:
+            findings_by_function[func_name] = []
+        findings_by_function[func_name].append(finding)
+    
+    # Create ToolScanResult-like structure
+    results = []
+    for func_name, func_findings in findings_by_function.items():
+        severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+        max_severity = max((f.severity for f in func_findings), 
+                         key=lambda s: severity_order.get(s, 0))
+        
+        source_file = func_findings[0].details.get("source_file", source_path) if func_findings[0].details else source_path
+        display_name = os.path.basename(source_file) if source_file != source_path else source_path
+        
+        # Collect unique MCP taxonomies from all findings
+        mcp_taxonomies = []
+        for finding in func_findings:
+            if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+                taxonomy_key = (finding.mcp_taxonomy.get("aitech"), finding.mcp_taxonomy.get("aisubtech"))
+                existing_keys = [(t.get("aitech"), t.get("aisubtech")) for t in mcp_taxonomies]
+                if taxonomy_key not in existing_keys:
+                    mcp_taxonomies.append(finding.mcp_taxonomy)
+        
+        results.append({
+            "tool_name": func_name,
+            "tool_description": f"MCP function from {display_name}",
+            "status": "completed",
+            "is_safe": False,
+            "findings": {
+                "behavioral_analyzer": {
+                    "severity": max_severity,
+                    "threat_summary": func_findings[0].summary,
+                    "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
+                    "total_findings": len(func_findings),
+                    "source_file": source_file,
+                    "mcp_taxonomies": mcp_taxonomies,
+                }
+            }
+        })
+    
+    if not results:
+        results = [{
+            "tool_name": "No MCP functions found",
+            "tool_description": f"No @mcp.tool() decorators found in {source_path}",
+            "status": "completed",
+            "is_safe": True,
+            "findings": {}
+        }]
+    
+    return results
+
+
 async def scan_mcp_server_direct(
     server_url: str,
     analyzers: List[AnalyzerEnum],
@@ -1105,73 +1183,7 @@ async def main():
             # Check if behavioral analyzer with source path
             if AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
                 # Run behavioral analyzer on source code
-                cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
-                
-                from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
-                analyzer = BehavioralCodeAnalyzer(cfg)
-                
-                source_path = args.source_path
-                
-                # Analyze the source file
-                findings = await analyzer.analyze(
-                    source_path,
-                    context={"file_path": source_path}
-                )
-                
-                # Format results to match Scanner output structure
-                findings_by_function = {}
-                for finding in findings:
-                    func_name = finding.details.get("function_name", "unknown") if finding.details else "unknown"
-                    
-                    if func_name not in findings_by_function:
-                        findings_by_function[func_name] = []
-                    findings_by_function[func_name].append(finding)
-                
-                # Create ToolScanResult-like structure
-                results = []
-                for func_name, func_findings in findings_by_function.items():
-                    severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
-                    max_severity = max((f.severity for f in func_findings), 
-                                     key=lambda s: severity_order.get(s, 0))
-                    
-                    source_file = func_findings[0].details.get("source_file", source_path) if func_findings[0].details else source_path
-                    import os
-                    display_name = os.path.basename(source_file) if source_file != source_path else source_path
-                    
-                    # Collect unique MCP taxonomies from all findings
-                    mcp_taxonomies = []
-                    for finding in func_findings:
-                        if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
-                            taxonomy_key = (finding.mcp_taxonomy.get("aitech"), finding.mcp_taxonomy.get("aisubtech"))
-                            existing_keys = [(t.get("aitech"), t.get("aisubtech")) for t in mcp_taxonomies]
-                            if taxonomy_key not in existing_keys:
-                                mcp_taxonomies.append(finding.mcp_taxonomy)
-                    
-                    results.append({
-                        "tool_name": func_name,
-                        "tool_description": f"MCP function from {display_name}",
-                        "status": "completed",
-                        "is_safe": False,
-                        "findings": {
-                            "behavioral_analyzer": {
-                                "severity": max_severity,
-                                "threat_summary": func_findings[0].summary,
-                                "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
-                                "total_findings": len(func_findings),
-                                "source_file": source_file,
-                                "mcp_taxonomies": mcp_taxonomies,  # Use plural and list format
-                            }
-                        }
-                    })
-                
-                if not results:
-                    results = [{
-                        "tool_name": "No MCP functions found",
-                        "tool_description": f"No @mcp.tool() decorators found in {source_path}",
-                        "status": "completed",
-                        "is_safe": True,
-                        "findings": {}
-                    }]
+                results = await _run_behavioral_analyzer_on_source(args.source_path)
             else:
                 # Run the security scan against a server URL
                 if args.bearer_token:
