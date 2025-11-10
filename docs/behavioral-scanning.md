@@ -462,32 +462,26 @@ analyzer_output = format_results_by_analyzer(results)
 
 ## Best Practices
 
-### 1. Choose the Right LLM
-
-- **GPT-4o**: Best balance of speed and accuracy
-- **GPT-4.1**: Higher accuracy, slower
-- **Claude Sonnet**: Good for complex reasoning
-
-### 2. Use Appropriate Formats
+### 1. Use Appropriate Formats
 
 - **summary**: Quick overview for CI/CD
 - **by_severity**: Prioritize remediation
 - **detailed**: Deep investigation
 - **raw**: Programmatic processing
 
-### 3. Optimize for Scale
+### 2. Optimize for Scale
 
 - Scan directories in parallel (future feature)
 - Use `--output` to save results
 - Filter by severity for large codebases
 
-### 4. Interpret Results
+### 3. Interpret Results
 
 - HIGH severity: Immediate action required
 - MEDIUM severity: Review and assess
 - LOW severity: Monitor and track
 
-### 5. False Positive Handling
+### 4. False Positive Handling
 
 - Review alignment mismatches carefully
 - Consider legitimate use cases
