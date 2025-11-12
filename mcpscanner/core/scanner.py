@@ -871,9 +871,13 @@ class Scanner:
             logger.debug(f"Creating stdio client for command: {server_config.command}")
 
             # Normalize and validate command/args to avoid FileNotFoundError ([Errno 2])
-            # 1) Expand ~ and environment variables
+            # 1) Expand ~ and environment variables (merge server_config.env into expansion context)
             raw_command = server_config.command or ""
-            expanded_command = os.path.expanduser(os.path.expandvars(raw_command)).strip()
+            env_for_expansion = {**os.environ, **(server_config.env or {})}
+            expanded_command = os.path.expanduser(raw_command).strip()
+            # Manually expand vars using the merged env
+            for key, val in env_for_expansion.items():
+                expanded_command = expanded_command.replace(f"${key}", val).replace(f"${{{key}}}", val)
 
             # 2) If args not provided and command embeds args, split them
             cmd_args = list(server_config.args or [])
@@ -899,10 +903,12 @@ class Scanner:
                 )
 
             # 4) Build parameters with normalized command/args
+            # Merge parent process env with server-specific env (server config takes precedence)
+            merged_env = {**os.environ, **(server_config.env or {})}
             server_params = StdioServerParameters(
                 command=resolved_exe,
                 args=cmd_args,
-                env=server_config.env,
+                env=merged_env,
             )
 
             # Create client context and session with proper error handling
