@@ -76,6 +76,9 @@ class PythonParser(BaseParser):
         start_line = node.lineno
         start_col = node.col_offset if hasattr(node, "col_offset") else 0
 
+        # Handle end position: use end_lineno/end_col_offset if available
+        # The 'or' fallback handles cases where these attributes exist but are None
+        # (can occur with certain AST node types or incomplete parsing)
         if hasattr(node, "end_lineno") and hasattr(node, "end_col_offset"):
             end_line = node.end_lineno or start_line
             end_col = node.end_col_offset or start_col
@@ -155,7 +158,8 @@ class PythonParser(BaseParser):
     def get_assignments(self, node: ast.AST | None = None) -> list[ast.Assign | ast.AnnAssign | ast.AugAssign]:
         """Get all assignments in the AST.
 
-        Includes regular assignments (=), annotated assignments (:=), and augmented assignments (+=, -=, etc.).
+        Includes regular assignments (=), annotated assignments (a: int = 1), and augmented assignments (+=, -=, etc.).
+        Note: Does not include walrus operator (:=) which is ast.NamedExpr.
 
         Args:
             node: Starting node (None for root)
@@ -283,6 +287,15 @@ class PythonParser(BaseParser):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
             return None
 
+        # Try ast.get_docstring() first (standard approach)
+        try:
+            docstring = ast.get_docstring(node)
+            if docstring:
+                return docstring
+        except (AttributeError, TypeError):
+            pass
+
+        # Fallback: manual extraction for edge cases
         if not node.body:
             return None
 

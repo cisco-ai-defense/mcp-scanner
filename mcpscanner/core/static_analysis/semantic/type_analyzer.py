@@ -111,8 +111,9 @@ class TypeAnalyzer:
             if inferred_type:
                 self.node_types[n] = inferred_type
             
-            # Track parameter types
-            if isinstance(n, ast.FunctionDef):
+            # Track parameter types for both sync and async functions
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Process regular args
                 for arg in n.args.args:
                     if arg.arg in self.parameter_names:
                         if arg.annotation:
@@ -122,9 +123,41 @@ class TypeAnalyzer:
                         else:
                             self.var_types[arg.arg] = Type(TypeKind.ANY)
                             self.param_var_types[arg.arg] = Type(TypeKind.ANY)
+                
+                # Process *args (vararg)
+                if n.args.vararg and n.args.vararg.arg in self.parameter_names:
+                    if n.args.vararg.annotation:
+                        param_type = self._annotation_to_type(n.args.vararg.annotation)
+                        self.var_types[n.args.vararg.arg] = param_type
+                        self.param_var_types[n.args.vararg.arg] = param_type
+                    else:
+                        self.var_types[n.args.vararg.arg] = Type(TypeKind.ANY)
+                        self.param_var_types[n.args.vararg.arg] = Type(TypeKind.ANY)
+                
+                # Process keyword-only args
+                for arg in n.args.kwonlyargs:
+                    if arg.arg in self.parameter_names:
+                        if arg.annotation:
+                            param_type = self._annotation_to_type(arg.annotation)
+                            self.var_types[arg.arg] = param_type
+                            self.param_var_types[arg.arg] = param_type
+                        else:
+                            self.var_types[arg.arg] = Type(TypeKind.ANY)
+                            self.param_var_types[arg.arg] = Type(TypeKind.ANY)
+                
+                # Process **kwargs (kwarg)
+                if n.args.kwarg and n.args.kwarg.arg in self.parameter_names:
+                    if n.args.kwarg.annotation:
+                        param_type = self._annotation_to_type(n.args.kwarg.annotation)
+                        self.var_types[n.args.kwarg.arg] = param_type
+                        self.param_var_types[n.args.kwarg.arg] = param_type
+                    else:
+                        self.var_types[n.args.kwarg.arg] = Type(TypeKind.ANY)
+                        self.param_var_types[n.args.kwarg.arg] = Type(TypeKind.ANY)
         
         # Second pass: propagate types through assignments and track class instances
         for n in ast.walk(node):
+            # Handle regular assignments (=)
             if isinstance(n, ast.Assign):
                 rhs_type = self.node_types.get(n.value, Type(TypeKind.UNKNOWN))
                 
@@ -141,6 +174,55 @@ class TypeAnalyzer:
                         # Check if RHS uses parameters
                         if self._uses_parameters(n.value):
                             self.param_var_types[target.id] = rhs_type
+            
+            # Handle annotated assignments (a: int = 1)
+            elif isinstance(n, ast.AnnAssign):
+                if isinstance(n.target, ast.Name):
+                    # Use annotation type if available, otherwise infer from value
+                    if n.annotation:
+                        ann_type = self._annotation_to_type(n.annotation)
+                        self.var_types[n.target.id] = ann_type
+                    elif n.value:
+                        rhs_type = self.node_types.get(n.value, Type(TypeKind.UNKNOWN))
+                        self.var_types[n.target.id] = rhs_type
+                    
+                    # Track class instantiations
+                    if n.value and isinstance(n.value, ast.Call):
+                        if isinstance(n.value.func, ast.Name):
+                            class_name = n.value.func.id
+                            self.instance_to_class[n.target.id] = class_name
+                    
+                    # Check if RHS uses parameters
+                    if n.value and self._uses_parameters(n.value):
+                        self.param_var_types[n.target.id] = self.var_types[n.target.id]
+            
+            # Handle augmented assignments (+=, -=, etc.)
+            elif isinstance(n, ast.AugAssign):
+                if isinstance(n.target, ast.Name):
+                    # Keep existing type or infer from value
+                    if n.target.id not in self.var_types:
+                        rhs_type = self.node_types.get(n.value, Type(TypeKind.UNKNOWN))
+                        self.var_types[n.target.id] = rhs_type
+                    
+                    # Check if RHS uses parameters
+                    if self._uses_parameters(n.value):
+                        self.param_var_types[n.target.id] = self.var_types[n.target.id]
+            
+            # Handle walrus operator (:=)
+            elif isinstance(n, ast.NamedExpr):
+                if isinstance(n.target, ast.Name):
+                    rhs_type = self.node_types.get(n.value, Type(TypeKind.UNKNOWN))
+                    self.var_types[n.target.id] = rhs_type
+                    
+                    # Track class instantiations
+                    if isinstance(n.value, ast.Call):
+                        if isinstance(n.value.func, ast.Name):
+                            class_name = n.value.func.id
+                            self.instance_to_class[n.target.id] = class_name
+                    
+                    # Check if RHS uses parameters
+                    if self._uses_parameters(n.value):
+                        self.param_var_types[n.target.id] = rhs_type
 
     def _infer_python_type(self, node: ast.AST) -> Type | None:
         """Infer type of a Python AST node.
@@ -255,7 +337,7 @@ class TypeAnalyzer:
             Dictionary mapping parameter names to types
         """
         return {
-            name: self.var_types.get(name, Type(TypeKind.ANY))
+            name: self.var_types.get(name, Type(TypeKind.UNKNOWN))
             for name in self.parameter_names
         }
 

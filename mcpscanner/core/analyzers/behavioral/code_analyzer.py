@@ -103,7 +103,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         total_size += file_size
                         
                         if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
-                            self.logger.warning(f"Large file detected: {py_file} ({file_size:,} bytes)")
+                            self.logger.debug(f"Large file detected: {py_file} ({file_size:,} bytes)")
                         elif file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
                             self.logger.error(f"Very large file detected, skipping: {py_file} ({file_size:,} bytes)")
                             continue
@@ -117,7 +117,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # Log total directory size
                 self.logger.debug(f"Total directory size: {total_size:,} bytes across {len(python_files)} files")
                 if total_size > 10_000_000:  # 10MB
-                    self.logger.warning(f"Large codebase detected ({total_size:,} bytes) - analysis may be slow or memory-intensive")
+                    self.logger.warning(f"Detected large codebase ({total_size:,} bytes). Analysis performance may be affected.")
                 
                 # Build the call graph
                 call_graph = cross_file_analyzer.build_call_graph()
