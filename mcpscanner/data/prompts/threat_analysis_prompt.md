@@ -123,7 +123,7 @@ Respond with ONLY a valid JSON object:
 {
   "threat_analysis": {
     "overall_risk": "HIGH|MEDIUM|LOW|SAFE",
-    "primary_threats": ["PROMPT INJECTION", "DATA EXFILTRATION", "TOOL POISONING", "TOOL SHADOWING", "INJECTION ATTACK", "TEMPLATE INJECTION", "GOAL MANIPULATION", "UNAUTHORIZED NETWORK ACCESS", "UNAUTHORIZED SYSTEM ACCESS", "ARBITRARY RESOURCE ACCESS", "CODE EXECUTION", "BACKDOOR", "SANDBOX ESCAPE", "RESOURCE EXHAUSTION", "DECEPTIVE BEHAVIOR", "CROSS ORIGIN ESCALATION"],
+    "primary_threats": ["PROMPT INJECTION", "DATA EXFILTRATION", "TOOL POISONING", "TOOL SHADOWING"],
     "threat_summary": "Brief explanation of specific threats found, or empty string if SAFE",
     "malicious_content_detected": true|false
   }
