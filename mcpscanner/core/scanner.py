@@ -879,15 +879,22 @@ class Scanner:
             for key, val in env_for_expansion.items():
                 expanded_command = expanded_command.replace(f"${key}", val).replace(f"${{{key}}}", val)
 
-            # 2) If args not provided and command embeds args, split them
-            cmd_args = list(server_config.args or [])
+            # 2) Expand ~ and env vars in args too
+            cmd_args = []
+            for arg in (server_config.args or []):
+                expanded_arg = os.path.expanduser(arg)
+                for key, val in env_for_expansion.items():
+                    expanded_arg = expanded_arg.replace(f"${key}", val).replace(f"${{{key}}}", val)
+                cmd_args.append(expanded_arg)
+
+            # 3) If args not provided and command embeds args, split them
             cmd_command = expanded_command
             if not cmd_args and (" " in expanded_command or "\t" in expanded_command):
                 parts = shlex.split(expanded_command)
                 if parts:
                     cmd_command, cmd_args = parts[0], parts[1:]
 
-            # 3) Resolve executable path (absolute or via PATH)
+            # 4) Resolve executable path (absolute or via PATH)
             resolved_exe = cmd_command if os.path.isabs(cmd_command) else shutil.which(cmd_command or "")
             if not resolved_exe or not os.path.exists(resolved_exe):
                 # Provide a clear, actionable message and fail fast for this server only
@@ -902,7 +909,7 @@ class Scanner:
                     f"Please verify the command is correct and executable."
                 )
 
-            # 4) Build parameters with normalized command/args
+            # 5) Build parameters with normalized command/args
             # Merge parent process env with server-specific env (server config takes precedence)
             merged_env = {**os.environ, **(server_config.env or {})}
             server_params = StdioServerParameters(
