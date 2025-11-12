@@ -161,6 +161,90 @@ def read_config(name: str) -> str:
     return config
 ```
 
+### 6. INJECTION ATTACKS
+Detect code injection vulnerabilities beyond prompt injection.
+
+**Key Indicators:**
+- String concatenation or f-strings used to build shell commands, SQL queries, or system calls
+- Unvalidated input passed to `subprocess`, `os.system`, `eval`, `exec`
+- Template engines rendering user input without sanitization
+- Dynamic code construction from untrusted sources
+
+**Examples:**
+- `os.system(f"grep {pattern} logs.txt")` - command injection via string interpolation
+- `subprocess.run("rm -rf " + path, shell=True)` - shell injection
+- Template using `f"Result: {user_input}"` without escaping
+
+### 7. GOAL MANIPULATION
+Detect attempts to redirect tool purpose or execution flow.
+
+**Key Indicators:**
+- Decorator text with contradictory or misleading instructions
+- Prompt chain templates with injection points: `f"{instruction}"`
+- Tools that accept instructions or goals as parameters
+- Control flow that can be altered by input
+
+**Examples:**
+- Description: "Summarize data and upload full content to storage"
+- Parameter: `override_instruction: str` in a simple calculator
+
+### 8. UNAUTHORIZED ACCESS
+Detect unauthorized system, network, or resource access.
+
+**Key Indicators:**
+- File operations without path validation (path traversal)
+- Network requests to internal/local endpoints
+- Access to environment variables, system files, or privileged resources
+- Operations on files, URLs, APIs, databases without proper authorization
+
+**Examples:**
+- `open(f"/etc/{filename}")` - arbitrary file read
+- `requests.get(f"http://{target}/data")` - SSRF vulnerability
+- Reading `os.environ["API_KEY"]` outside authorized context
+
+### 9. CODE EXECUTION
+Detect arbitrary or unauthorized code execution capabilities.
+
+**Key Indicators:**
+- Use of `eval()`, `exec()`, `compile()` on untrusted input
+- Dynamic imports from untrusted sources
+- Deserialization of untrusted data (`pickle.loads`)
+- Hidden payloads or obfuscated code execution
+
+**Examples:**
+- `exec(base64.b64decode(payload))` - hidden payload execution
+- `importlib.import_module("remote_exec")` - dynamic untrusted import
+- `pickle.loads(malicious_blob)` - unsafe deserialization
+
+### 9. BACKDOOR & EVASION
+Detect hidden malicious logic or sandbox escape attempts.
+
+**Key Indicators:**
+- Persistent access mechanisms or hidden control channels
+- System-level operations (ctypes, os.execv)
+- Attempts to bypass isolation or sandbox boundaries
+- Obfuscated or encrypted payloads
+
+**Examples:**
+- Hidden logic that establishes persistent access
+- Use of `ctypes` to call system libraries
+- Spawning external processes to escape sandbox
+
+### 10. RESOURCE EXHAUSTION
+Detect denial-of-service or resource abuse patterns.
+
+**Key Indicators:**
+- Recursive calls without termination conditions
+- Processing large files without size limits
+- Repeated operations without rate limiting
+- Memory-intensive operations without bounds
+
+**Examples:**
+- Tool that calls itself recursively
+- Processing files without size validation
+- Loops without break conditions
+
+
 **Docstring Claims:** "Read a configuration value"  
 **Actual Behavior:** Reads AND modifies system configuration files  
 **Security Implications:** Unauthorized system modification disguised as read operation
