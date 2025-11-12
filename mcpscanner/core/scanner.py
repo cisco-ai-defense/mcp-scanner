@@ -25,6 +25,9 @@ import logging as stdlib_logging
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Callable
 import httpx
+import os
+import shlex
+import shutil
 
 # MCP client imports
 from mcp.client.session import ClientSession
@@ -867,9 +870,38 @@ class Scanner:
         try:
             logger.debug(f"Creating stdio client for command: {server_config.command}")
 
+            # Normalize and validate command/args to avoid FileNotFoundError ([Errno 2])
+            # 1) Expand ~ and environment variables
+            raw_command = server_config.command or ""
+            expanded_command = os.path.expanduser(os.path.expandvars(raw_command)).strip()
+
+            # 2) If args not provided and command embeds args, split them
+            cmd_args = list(server_config.args or [])
+            cmd_command = expanded_command
+            if not cmd_args and (" " in expanded_command or "\t" in expanded_command):
+                parts = shlex.split(expanded_command)
+                if parts:
+                    cmd_command, cmd_args = parts[0], parts[1:]
+
+            # 3) Resolve executable path (absolute or via PATH)
+            resolved_exe = cmd_command if os.path.isabs(cmd_command) else shutil.which(cmd_command or "")
+            if not resolved_exe or not os.path.exists(resolved_exe):
+                # Provide a clear, actionable message and fail fast for this server only
+                msg = (
+                    f"No such file or command: '{server_config.command}'. "
+                    f"Resolved path: '{resolved_exe or 'N/A'}'. "
+                    f"Tip: use absolute paths or ensure the binary is on PATH."
+                )
+                logger.warning(msg)
+                raise MCPConnectionError(
+                    f"Unable to connect to stdio MCP server with command {server_config.command}. "
+                    f"Please verify the command is correct and executable."
+                )
+
+            # 4) Build parameters with normalized command/args
             server_params = StdioServerParameters(
-                command=server_config.command,
-                args=server_config.args,
+                command=resolved_exe,
+                args=cmd_args,
                 env=server_config.env,
             )
 
