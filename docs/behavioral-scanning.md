@@ -114,33 +114,66 @@ Outputs pure JSON for programmatic processing and integration.
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      CLI / Scanner Entry Point                      │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │
-                                ▼
+└───────────────────────────────────┬─────────────────────────────────┘
+                                    │
+                                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    BehavioralCodeAnalyzer                           │
 │  • Finds Python files (.py)                                         │
 │  • Parses AST and extracts MCP entry points                         │
 │  • Orchestrates analysis workflow                                   │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │
-                ┌───────────────┴───────────────┐
-                ▼                               ▼
+└───────────────────────────────────┬─────────────────────────────────┘
+                                    │
+                    ┌───────────────┴───────────────┐
+                    ▼                               ▼
 ┌────────────────────────────────────┐  ┌──────────────────────────────┐
-│   Static Analysis Engine           │  │ AlignmentOrchestrator        │
-│  • AST parsing                     │  │ • Coordinates LLM analysis   │
-│  • Control Flow Graph (CFG)        │  │ • Manages prompt building    │
-│  • Dataflow analysis               │  │ • Validates responses        │
-│  • Taint tracking                  │  │ • Maps to AITech taxonomy    │
-└────────────────┬───────────────────┘  └────────────┬─────────────────┘
-                 │                                   │
-                 └───────────────┬───────────────────┘
-                                 ▼
-                    ┌─────────────────────────┐
-                    │   LLM (GPT-4/Claude)    │
-                    │  • Behavioral analysis  │
-                    │  • Threat classification│
-                    └─────────────────────────┘
+│   Python Parser / AST Extractor    │  │ CrossFileDataflowAnalyzer    │
+│  • Detect @mcp.tool() decorators   │  │ • Trace parameter flows      │
+│  • Extract function metadata       │  │ • Resolve imports            │
+│  • Build function context          │  │ • Build call graphs          │
+└────────────────────┬───────────────┘  └────────────┬─────────────────┘
+                     │                               │
+                     └───────────────┬───────────────┘
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    AlignmentOrchestrator                            │
+│  • Coordinates alignment checking workflow                          │
+│  • Manages component interactions                                   │
+└───────────────────────────────────┬─────────────────────────────────┘
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+┌───────────────────────┐  ┌──────────────────┐  ┌──────────────────────┐
+│AlignmentPromptBuilder │  │AlignmentLLMClient│  │AlignmentResponseValid│
+│ • Load prompt template│  │ • Call OpenAI API│  │ • Validate structure │
+│ • Inject code context │  │ • Handle retries │  │ • Parse JSON response│
+│ • Include dataflow    │  │ • Error recovery │  │ • Normalize severity │
+└───────────────────────┘  └──────────────────┘  └──────────────────────┘
+           │                         │                       │
+           └────────────►────────────┼──────────►────────────┘
+                                     ▼
+                    ┌───────────────────────────────┐
+                    │         LLM Analysis          │
+                    │  • Compare docstring vs code  │
+                    │  • Detect hidden behavior     │
+                    │  • Classify threat type       │
+                    └───────────────┬───────────────┘
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         ThreatMapper                                │
+│  • Map threat name → taxonomy                                       │
+│  • Provide AITech/AISubtech codes                                   │
+│  • Include descriptions and severity                                │
+└───────────────────────────────────┬─────────────────────────────────┘
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      SecurityFinding Objects                        │
+│  • Threat name, severity, confidence                                │
+│  • AITech/AISubtech taxonomy                                        │
+│  • Detailed descriptions and evidence                               │
+│  • Line numbers and code snippets                                   │
+└─────────────────────────────────────────────────────────────────────┘
+
 ```
 
 ### Static Analysis Components
