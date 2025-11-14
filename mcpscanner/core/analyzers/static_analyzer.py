@@ -335,7 +335,6 @@ class StaticAnalyzer:
                 result = {
                     "resource_uri": resource_uri,
                     "resource_name": resource_name,
-                    "resource_description": resource_description,
                     "resource_mime_type": resource_mime,
                     "is_safe": True,
                     "findings": [],
@@ -362,7 +361,6 @@ class StaticAnalyzer:
             result = {
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
-                "resource_description": resource_description,
                 "resource_mime_type": resource_mime,
                 "is_safe": len(findings) == 0,
                 "findings": findings,

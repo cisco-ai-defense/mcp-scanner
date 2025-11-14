@@ -1250,7 +1250,6 @@ async def main():
                     resource_result = ResourceScanResult(
                         resource_uri=r["resource_uri"],
                         resource_name=r["resource_name"],
-                        resource_description=r.get("resource_description", ""),
                         resource_mime_type=r.get("resource_mime_type", "unknown"),
                         status=r["status"],
                         analyzers=r.get("analyzers", []),

@@ -414,3 +414,166 @@ class TestEdgeCases:
         assert results[0]["is_safe"] == True
         assert len(results[0]["findings"]) == 0
 
+
+class TestResultGeneration:
+    """Tests for converting static analyzer output to result objects."""
+    
+    @pytest.mark.asyncio
+    async def test_tool_result_generation(self, tmp_path):
+        """Test that tool scan results can be converted to ToolScanResult objects."""
+        from mcpscanner.core.result import ToolScanResult
+        
+        analyzer = StaticAnalyzer(analyzers=[YaraAnalyzer()])
+        
+        tools_data = {
+            "tools": [
+                {
+                    "name": "safe_tool",
+                    "description": "A safe tool description",
+                    "inputSchema": {"type": "object"}
+                }
+            ]
+        }
+        
+        temp_json_file = tmp_path / "tools.json"
+        with open(temp_json_file, 'w') as f:
+            json.dump(tools_data, f)
+        
+        results = await analyzer.scan_tools_file(temp_json_file)
+        assert len(results) == 1
+        
+        # Verify we can create a ToolScanResult from the dictionary
+        r = results[0]
+        tool_result = ToolScanResult(
+            tool_name=r["tool_name"],
+            tool_description=r["tool_description"],
+            status=r["status"],
+            analyzers=r["analyzers"],
+            findings=r["findings"]
+        )
+        
+        assert tool_result.tool_name == "safe_tool"
+        assert tool_result.tool_description == "A safe tool description"
+        assert tool_result.status == "completed"
+        assert tool_result.is_safe == True
+    
+    @pytest.mark.asyncio
+    async def test_prompt_result_generation(self, tmp_path):
+        """Test that prompt scan results can be converted to PromptScanResult objects."""
+        from mcpscanner.core.result import PromptScanResult
+        
+        analyzer = StaticAnalyzer(analyzers=[YaraAnalyzer()])
+        
+        prompts_data = {
+            "prompts": [
+                {
+                    "name": "safe_prompt",
+                    "description": "A safe prompt description",
+                    "arguments": []
+                }
+            ]
+        }
+        
+        temp_json_file = tmp_path / "prompts.json"
+        with open(temp_json_file, 'w') as f:
+            json.dump(prompts_data, f)
+        
+        results = await analyzer.scan_prompts_file(temp_json_file)
+        assert len(results) == 1
+        
+        # Verify we can create a PromptScanResult from the dictionary
+        r = results[0]
+        prompt_result = PromptScanResult(
+            prompt_name=r["prompt_name"],
+            prompt_description=r["prompt_description"],
+            status=r["status"],
+            analyzers=r["analyzers"],
+            findings=r["findings"]
+        )
+        
+        assert prompt_result.prompt_name == "safe_prompt"
+        assert prompt_result.prompt_description == "A safe prompt description"
+        assert prompt_result.status == "completed"
+        assert prompt_result.is_safe == True
+    
+    @pytest.mark.asyncio
+    async def test_resource_result_generation(self, tmp_path):
+        """Test that resource scan results can be converted to ResourceScanResult objects."""
+        from mcpscanner.core.result import ResourceScanResult
+        
+        analyzer = StaticAnalyzer(analyzers=[YaraAnalyzer()])
+        
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///test/resource.txt",
+                    "name": "test_resource",
+                    "description": "A test resource",
+                    "mimeType": "text/plain"
+                }
+            ]
+        }
+        
+        temp_json_file = tmp_path / "resources.json"
+        with open(temp_json_file, 'w') as f:
+            json.dump(resources_data, f)
+        
+        results = await analyzer.scan_resources_file(temp_json_file)
+        assert len(results) == 1
+        
+        # Verify we can create a ResourceScanResult from the dictionary
+        r = results[0]
+        resource_result = ResourceScanResult(
+            resource_uri=r["resource_uri"],
+            resource_name=r["resource_name"],
+            resource_mime_type=r["resource_mime_type"],
+            status=r["status"],
+            analyzers=r["analyzers"],
+            findings=r["findings"]
+        )
+        
+        assert resource_result.resource_uri == "file:///test/resource.txt"
+        assert resource_result.resource_name == "test_resource"
+        assert resource_result.resource_mime_type == "text/plain"
+        assert resource_result.status == "completed"
+        assert resource_result.is_safe == True
+    
+    @pytest.mark.asyncio
+    async def test_result_generation_with_findings(self, tmp_path):
+        """Test result generation when findings are present."""
+        from mcpscanner.core.result import ToolScanResult
+        
+        analyzer = StaticAnalyzer(analyzers=[YaraAnalyzer()])
+        
+        tools_data = {
+            "tools": [
+                {
+                    "name": "malicious_tool",
+                    "description": "Execute subprocess.run() and eval() commands",
+                    "inputSchema": {"type": "object"}
+                }
+            ]
+        }
+        
+        temp_json_file = tmp_path / "tools.json"
+        with open(temp_json_file, 'w') as f:
+            json.dump(tools_data, f)
+        
+        results = await analyzer.scan_tools_file(temp_json_file)
+        assert len(results) == 1
+        
+        # Verify we can create a ToolScanResult with findings
+        r = results[0]
+        tool_result = ToolScanResult(
+            tool_name=r["tool_name"],
+            tool_description=r["tool_description"],
+            status=r["status"],
+            analyzers=r["analyzers"],
+            findings=r["findings"]
+        )
+        
+        assert tool_result.tool_name == "malicious_tool"
+        assert tool_result.is_safe == False
+        assert len(tool_result.findings) > 0
+        assert tool_result.status == "completed"
+
