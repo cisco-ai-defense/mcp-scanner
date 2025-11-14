@@ -25,6 +25,9 @@ import logging as stdlib_logging
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Callable
 import httpx
+import os
+import shlex
+import shutil
 
 # MCP client imports
 from mcp.client.session import ClientSession
@@ -878,10 +881,52 @@ class Scanner:
         try:
             logger.debug(f"Creating stdio client for command: {server_config.command}")
 
+            # Normalize and validate command/args to avoid FileNotFoundError ([Errno 2])
+            # 1) Expand ~ and environment variables (merge server_config.env into expansion context)
+            raw_command = server_config.command or ""
+            env_for_expansion = {**os.environ, **(server_config.env or {})}
+            expanded_command = os.path.expanduser(raw_command).strip()
+            # Manually expand vars using the merged env
+            for key, val in env_for_expansion.items():
+                expanded_command = expanded_command.replace(f"${key}", val).replace(f"${{{key}}}", val)
+
+            # 2) Expand ~ and env vars in args too
+            cmd_args = []
+            for arg in (server_config.args or []):
+                expanded_arg = os.path.expanduser(arg)
+                for key, val in env_for_expansion.items():
+                    expanded_arg = expanded_arg.replace(f"${key}", val).replace(f"${{{key}}}", val)
+                cmd_args.append(expanded_arg)
+
+            # 3) If args not provided and command embeds args, split them
+            cmd_command = expanded_command
+            if not cmd_args and (" " in expanded_command or "\t" in expanded_command):
+                parts = shlex.split(expanded_command)
+                if parts:
+                    cmd_command, cmd_args = parts[0], parts[1:]
+
+            # 4) Resolve executable path (absolute or via PATH)
+            resolved_exe = cmd_command if os.path.isabs(cmd_command) else shutil.which(cmd_command or "")
+            if not resolved_exe or not os.path.exists(resolved_exe):
+                # Provide a clear, actionable message and fail fast for this server only
+                msg = (
+                    f"No such file or command: '{server_config.command}'. "
+                    f"Resolved path: '{resolved_exe or 'N/A'}'. "
+                    f"Tip: use absolute paths or ensure the binary is on PATH."
+                )
+                logger.warning(msg)
+                raise MCPConnectionError(
+                    f"Unable to connect to stdio MCP server with command {server_config.command}. "
+                    f"Please verify the command is correct and executable."
+                )
+
+            # 5) Build parameters with normalized command/args
+            # Merge parent process env with server-specific env (server config takes precedence)
+            merged_env = {**os.environ, **(server_config.env or {})}
             server_params = StdioServerParameters(
-                command=server_config.command,
-                args=server_config.args,
-                env=server_config.env,
+                command=resolved_exe,
+                args=cmd_args,
+                env=merged_env,
             )
 
             # Create client context and session with proper error handling
