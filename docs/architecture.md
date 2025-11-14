@@ -94,16 +94,22 @@ The Behavioral Code Analyzer is the next-generation evolution of source code ana
 │  • Manages component interactions                                   │
 └───────────────────────────────────┬─────────────────────────────────┘
                                     │
-                    ┌───────────────┼───────────────┐
-                    ▼               ▼               ▼
-┌──────────────────────-┐  ┌──────────────────┐  ┌──────────────────────┐
-│AlignmentPromptBuilder │  │AlignmentLLMClient│  │AlignmentResponseValid│
-│ • Load prompt template│  │ • Call OpenAI API│  │ • Validate structure │
-│ • Inject code context │  │ • Handle retries │  │ • Parse JSON response│
-│ • Include dataflow    │  │ • Error recovery │  │ • Normalize severity │
-└──────────┬────────────┘  └─────────┬────────┘  └──────────┬───────────┘
-           │                        │                       │
-           └────────────────────────┼───────────────────────┘
+                                    ▼
+                    ┌───────────────────────────────┐
+                    │  AlignmentPromptBuilder       │
+                    │  • Load prompt template       │
+                    │  • Inject code context        │
+                    │  • Include dataflow           │
+                    └───────────────┬───────────────┘
+                                    │
+                                    ▼
+                    ┌───────────────────────────────┐
+                    │  AlignmentLLMClient           │
+                    │  • Call OpenAI API            │
+                    │  • Handle retries             │
+                    │  • Error recovery             │
+                    └───────────────┬───────────────┘
+                                    │
                                     ▼
                     ┌───────────────────────────────┐
                     │      LLM Analysis             │
@@ -111,6 +117,14 @@ The Behavioral Code Analyzer is the next-generation evolution of source code ana
                     │  • Detect hidden behavior     │
                     │  • Classify threat type       │
                     └───────────────┬───────────────┘
+                                    │
+                                    ▼
+                    ┌────────────────────────────────┐
+                    │  AlignmentResponseValidator    │
+                    │  • Validate structure          │
+                    │  • Parse JSON response         │
+                    │  • Normalize severity          │
+                    └────────────────┬───────────────┘
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         ThreatMapper                                │
