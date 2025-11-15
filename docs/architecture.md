@@ -59,7 +59,7 @@ The Behavioral Code Analyzer is the next-generation evolution of source code ana
 1. **LLM-Powered Alignment Checking**: Uses LLM to compare docstring claims against actual code behavior
 2. **Cross-File Dataflow Analysis**: Tracks parameter flows across multiple files and imported functions
 3. **Cisco AI Threat Security Taxonomy Integration**: Maps every threat to Cisco AI Threat Security taxonomy (AITech/AISubtech)
-4. **16 Threat Categories**: Comprehensive coverage of behavioral threats with detailed classifications
+4. **Multi Threat Categories**: Comprehensive coverage of behavioral threats with detailed classifications
 5. **Static Analysis Safety**: Analyzes code without execution - safe for scanning malicious code
 
 ### Component Flow Architecture
