@@ -171,41 +171,6 @@ async def generate_prompt_for_function(source_code: str, file_path: str = "examp
             "STEP 5: FUNCTION-SPECIFIC SECTION (Last 50 lines)",
             '\n'.join(prompt_lines[-50:])
         )
-        
-        # Summary
-        print("\n" + "=" * 80)
-        print("  SUMMARY: WHAT GETS SENT TO THE LLM")
-        print("=" * 80)
-        print("""
-The complete prompt includes:
-
-1. ✅ Threat Analysis Framework (from code_alignment_threat_analysis_prompt.md)
-   - 5 threat categories with examples
-   - Dataflow analysis instructions
-   - Severity classification guidelines
-   - JSON output format requirements
-
-2. ✅ Static Analysis Information
-   - Parameter dataflow tracking
-   - Operations performed on each parameter
-   - Function calls reached by parameters
-   - External operations detected
-
-3. ✅ MCP Function Context
-   - Function name and decorator
-   - Docstring (what it claims to do)
-   - Complete source code
-   - Parameters and return type
-
-4. ✅ Analysis Instructions
-   - Compare docstring claims vs actual behavior
-   - Detect hidden malicious operations
-   - Report mismatches with evidence
-
-The LLM analyzes this combined information to detect behavioral mismatches
-between what the function claims to do and what it actually does.
-        """)
-        
         # Option to save the full prompt
         print("\n" + "─" * 80)
         try:
