@@ -27,6 +27,9 @@ dependencies = [
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
     "litellm<1.77.0",
+    "tree-sitter>=0.21.0",
+    "tree-sitter-javascript>=0.21.0",
+    "tree-sitter-typescript>=0.21.0",
 ]
 
 [dependency-groups]
@@ -115,5 +118,8 @@ module = [
     "yara",
     "litellm",
     "mcp.*",
+    "tree_sitter",
+    "tree_sitter_javascript",
+    "tree_sitter_typescript",
 ]
 ignore_missing_imports = true
