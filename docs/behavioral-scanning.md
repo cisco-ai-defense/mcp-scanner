@@ -128,7 +128,7 @@ The analyzer implements multiple dataflow analysis:
 
 **Forward Flow Tracking**
 - Tracks how MCP entry point parameters flow through the code
-- Records all operations parameters are involved in
+- capture all function  parameters are involved 
 - Captures function calls, assignments, and returns
 - No predefined "dangerous" operations - reports everything to LLM
 
