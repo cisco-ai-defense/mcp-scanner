@@ -406,7 +406,6 @@ Respond with ONLY a valid JSON object:
   - `"INJECTION ATTACKS"` - Code injection, command injection, template injection vulnerabilities
   - `"TEMPLATE INJECTION"` - Server-side template injection or malicious template syntax
   - `"TOOL POISONING"` - Malicious code inserted into registered MCP tools
-  - `"TOOL SHADOWING"` - Malicious tool registered with same/similar name as legitimate one
   - `"GOAL MANIPULATION"` - Tampering with intended purpose to steer LLM toward attacker objectives
   - `"DATA EXFILTRATION"` - Extracting or leaking sensitive information via code behavior
   - `"UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS"` - Unauthorized requests to internal/external endpoints
