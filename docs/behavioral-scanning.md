@@ -124,7 +124,7 @@ Outputs pure JSON for programmatic processing and integration.
 
 #### 3. Dataflow Analysis
 
-The analyzer implements multiple dataflow analyses:
+The analyzer implements multiple dataflow analysis:
 
 **Forward Flow Tracking**
 - Tracks how MCP entry point parameters flow through the code
