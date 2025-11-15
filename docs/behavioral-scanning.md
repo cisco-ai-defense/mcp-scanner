@@ -170,7 +170,7 @@ The analyzer implements multiple dataflow analysis:
 
 **Cross-File Dataflow**
 - Follows function calls across file boundaries
-- Tracks parameter flows through imported functions
+- Tracks code flows through imported functions
 - Maximum depth of 3 to prevent infinite recursion
 - Reports all operations in called functions to LLM
 
