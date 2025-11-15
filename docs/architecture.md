@@ -81,7 +81,7 @@ The Behavioral Code Analyzer is the next-generation evolution of source code ana
                     ▼                               ▼
 ┌────────────────────────────────────┐  ┌──────────────────────────────┐
 │   Python Parser / AST Extractor    │  │ CrossFileDataflowAnalyzer    │
-│  • Detect @mcp.tool() decorators   │  │ • Trace parameter flows      │
+│  • Detect @mcp.tool() decorators   │  │ • Trace code flows           │
 │  • Extract function metadata       │  │ • Resolve imports            │
 │  • Build function context          │  │ • Build call graphs          │
 └────────────────────┬───────────────┘  └────────────┬─────────────────┘
