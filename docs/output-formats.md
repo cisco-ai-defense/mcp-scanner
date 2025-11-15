@@ -82,6 +82,7 @@ mcp-scanner --server-url http://127.0.0.1:8001/sse --format by_severity --severi
   "server_url": "http://127.0.0.1:8001/sse",
   "scan_results": [
     {
+      "item_type": "tool",
       "tool_name": "execute_command",
       "tool_description": "Execute shell commands",
       "status": "completed",
@@ -108,10 +109,37 @@ mcp-scanner --server-url http://127.0.0.1:8001/sse --format by_severity --severi
           }
         }
       }
+    },
+    {
+      "item_type": "prompt",
+      "prompt_name": "malicious_prompt",
+      "prompt_description": "A prompt template",
+      "status": "completed",
+      "is_safe": false,
+      "findings": {
+        "llm_analyzer": {
+          "severity": "HIGH",
+          "total_findings": 1
+        }
+      }
+    },
+    {
+      "item_type": "resource",
+      "resource_uri": "file://test/data.html",
+      "resource_name": "data.html",
+      "resource_mime_type": "text/html",
+      "status": "completed",
+      "is_safe": true,
+      "findings": {}
     }
   ]
 }
 ```
+
+**Note:** The `item_type` field indicates whether the result is for a `tool`, `prompt`, or `resource`. Each type has specific fields:
+- **Tools**: `tool_name`, `tool_description`
+- **Prompts**: `prompt_name`, `prompt_description`
+- **Resources**: `resource_uri`, `resource_name`, `resource_mime_type`
 
 ### Detailed Format Example
 ```
@@ -135,19 +163,36 @@ Analyzer Results:
           • AISubtech: AISubtech-1.1.1
           • AISubtech Name: Instruction Manipulation (Direct Prompt Injection)
           • Description: Explicit attempts to override, replace, or modify...
+
+Prompt 2: suspicious_prompt
+Status: completed
+Safe: No
+Analyzer Results:
+  • llm_analyzer:
+    - Severity: MEDIUM
+    - Threat Summary: Prompt injection attempt detected
+    - Total Findings: 1
+
+Resource 3: data.html
+URI: file://test/data.html
+MIME Type: text/html
+Status: completed
+Safe: Yes
 ```
 
 ### Summary Format
 ```
-=== MCP Scanner Results ===
+=== MCP Scanner Results Summary ===
 
-Server: http://127.0.0.1:8001/sse
-Tools Scanned: 3
-Safe Tools: 2
-Unsafe Tools: 1
+Scan Target: http://127.0.0.1:8001/sse
+Total tools scanned: 5
+Items matching filters: 5
+Safe items: 3
+Unsafe items: 2
 
-High Priority Issues:
-• execute_command - YARA: Command injection patterns detected
+=== Unsafe Items ===
+1. execute_command (tool) - HIGH (1 findings)
+2. malicious_prompt (prompt) - MEDIUM (1 findings)
 ```
 
 ### Table Format

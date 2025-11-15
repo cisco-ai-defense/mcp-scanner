@@ -98,6 +98,7 @@ class SecurityFinding:
                 "LLM": "llm",
                 "YARA": "yara",
                 "API": "ai_defense",
+                "BEHAVIORAL": "behavioral",
             }
             
             # Check if this is a built-in analyzer
@@ -232,7 +233,7 @@ class BaseAnalyzer(ABC):
             self.validate_content(content)
             # Analysis starting
             findings = await self.analyze(content, context)
-            self.logger.info(
+            self.logger.debug(
                 f"Analysis complete: found {len(findings)} potential threats"
             )
             return findings

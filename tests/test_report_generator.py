@@ -19,7 +19,7 @@ from unittest.mock import Mock, patch, mock_open
 from typing import List, Dict, Any
 
 from mcpscanner.core.report_generator import ReportGenerator, results_to_json
-from mcpscanner.core.result import ToolScanResult
+from mcpscanner.core.result import ToolScanResult, PromptScanResult, ResourceScanResult
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.models import OutputFormat, SeverityFilter
 from mcpscanner.config.constants import SeverityLevel
@@ -134,8 +134,8 @@ class TestReportGenerator:
 
         assert "=== MCP Scanner Results Summary ===" in output
         assert "Total tools scanned: 2" in output
-        assert "Safe tools: 1" in output
-        assert "Unsafe tools: 1" in output
+        assert "Safe items: 1" in output
+        assert "Unsafe items: 1" in output
 
     def test_report_generator_format_output_detailed(self):
         """Test formatting output as detailed."""
@@ -837,3 +837,131 @@ class TestReportGeneratorNegativeFlows:
         output = generator.format_output(OutputFormat.DETAILED)
         assert isinstance(output, str)
         assert unicode_name in output
+
+
+class TestPromptAndResourceResults:
+    """Test cases for PromptScanResult and ResourceScanResult."""
+
+    @pytest.mark.asyncio
+    async def test_results_to_json_with_prompt_results(self):
+        """Test converting prompt results to JSON."""
+        findings = [
+            SecurityFinding(
+                SeverityLevel.HIGH,
+                "Prompt injection detected",
+                "LLM",
+                "PROMPT_INJECTION",
+            )
+        ]
+        results = [
+            PromptScanResult(
+                "malicious_prompt",
+                "A prompt that attempts injection",
+                "completed",
+                ["LLM"],
+                findings
+            ),
+            PromptScanResult(
+                "safe_prompt",
+                "A safe prompt",
+                "completed",
+                [],
+                []
+            ),
+        ]
+
+        json_results = await results_to_json(results)
+
+        assert len(json_results) == 2
+        assert json_results[0]["prompt_name"] == "malicious_prompt"
+        assert json_results[0]["prompt_description"] == "A prompt that attempts injection"
+        assert json_results[0]["item_type"] == "prompt"
+        assert json_results[0]["status"] == "completed"
+        assert json_results[0]["is_safe"] is False
+
+        assert json_results[1]["prompt_name"] == "safe_prompt"
+        assert json_results[1]["item_type"] == "prompt"
+        assert json_results[1]["is_safe"] is True
+
+    @pytest.mark.asyncio
+    async def test_results_to_json_with_resource_results(self):
+        """Test converting resource results to JSON."""
+        findings = [
+            SecurityFinding(
+                SeverityLevel.MEDIUM,
+                "Suspicious content detected",
+                "LLM",
+                "DATA_EXFILTRATION",
+            )
+        ]
+        results = [
+            ResourceScanResult(
+                "file://test/malicious.html",
+                "malicious.html",
+                "text/html",
+                "completed",
+                ["LLM"],
+                findings
+            ),
+            ResourceScanResult(
+                "file://test/safe.txt",
+                "safe.txt",
+                "text/plain",
+                "completed",
+                [],
+                []
+            ),
+        ]
+
+        json_results = await results_to_json(results)
+
+        assert len(json_results) == 2
+        assert json_results[0]["resource_uri"] == "file://test/malicious.html"
+        assert json_results[0]["resource_name"] == "malicious.html"
+        assert json_results[0]["resource_mime_type"] == "text/html"
+        assert json_results[0]["item_type"] == "resource"
+        assert json_results[0]["status"] == "completed"
+        assert json_results[0]["is_safe"] is False
+
+        assert json_results[1]["resource_uri"] == "file://test/safe.txt"
+        assert json_results[1]["item_type"] == "resource"
+        assert json_results[1]["is_safe"] is True
+
+    @pytest.mark.asyncio
+    async def test_results_to_json_mixed_types(self):
+        """Test converting mixed tool, prompt, and resource results to JSON."""
+        tool_finding = SecurityFinding(
+            SeverityLevel.HIGH, "Tool issue", "YARA", "CODE_EXECUTION"
+        )
+        prompt_finding = SecurityFinding(
+            SeverityLevel.MEDIUM, "Prompt issue", "LLM", "PROMPT_INJECTION"
+        )
+        resource_finding = SecurityFinding(
+            SeverityLevel.LOW, "Resource issue", "LLM", "DATA_EXFILTRATION"
+        )
+
+        results = [
+            ToolScanResult("test_tool", "Test tool", "completed", ["YARA"], [tool_finding]),
+            PromptScanResult("test_prompt", "Test prompt", "completed", ["LLM"], [prompt_finding]),
+            ResourceScanResult("file://test.txt", "test.txt", "text/plain", "completed", ["LLM"], [resource_finding]),
+        ]
+
+        json_results = await results_to_json(results)
+
+        assert len(json_results) == 3
+        
+        # Check tool result
+        assert json_results[0]["item_type"] == "tool"
+        assert json_results[0]["tool_name"] == "test_tool"
+        assert "tool_description" in json_results[0]
+        
+        # Check prompt result
+        assert json_results[1]["item_type"] == "prompt"
+        assert json_results[1]["prompt_name"] == "test_prompt"
+        assert "prompt_description" in json_results[1]
+        
+        # Check resource result
+        assert json_results[2]["item_type"] == "resource"
+        assert json_results[2]["resource_uri"] == "file://test.txt"
+        assert json_results[2]["resource_name"] == "test.txt"
+        assert json_results[2]["resource_mime_type"] == "text/plain"
