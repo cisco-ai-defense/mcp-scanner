@@ -113,7 +113,7 @@ The Behavioral Code Analyzer is the next-generation evolution of source code ana
                                     ▼
                     ┌───────────────────────────────┐
                     │      LLM Analysis             │
-                    │  • Compare docstring vs code  │
+                    │  • Analyse the alignmemt      │
                     │  • Detect hidden behavior     │
                     │  • Classify threat type       │
                     └───────────────┬───────────────┘
