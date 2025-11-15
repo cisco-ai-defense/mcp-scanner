@@ -123,7 +123,7 @@ class MCPScannerConstants:
     
     # LLM Prompt Configuration
     PROMPT_LENGTH_THRESHOLD: int = int(
-        os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "50000")
+        os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
     )
     LLM_MAX_RETRIES: int = int(os.getenv("MCP_SCANNER_LLM_MAX_RETRIES", "3"))
     LLM_RETRY_BASE_DELAY: float = float(os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0"))
