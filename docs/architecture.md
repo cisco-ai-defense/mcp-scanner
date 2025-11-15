@@ -105,7 +105,7 @@ The Behavioral Code Analyzer is the next-generation evolution of source code ana
                                     ▼
                     ┌───────────────────────────────┐
                     │  AlignmentLLMClient           │
-                    │  • Call OpenAI API            │
+                    │  • Call LLM    API            │
                     │  • Handle retries             │
                     │  • Error recovery             │
                     └───────────────┬───────────────┘
