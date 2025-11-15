@@ -133,7 +133,7 @@ class MCPScannerConstants:
         os.getenv("MCP_SCANNER_MAX_FILE_SIZE_BYTES", "1000000")  # 1MB default
     )
     MAX_FUNCTION_SIZE_BYTES: int = int(
-        os.getenv("MCP_SCANNER_MAX_FUNCTION_SIZE_BYTES", "51200")  # 50 KiB default
+        os.getenv("MCP_SCANNER_MAX_FUNCTION_SIZE_BYTES", "51200")  # 50 KB default
     )
 
     # AWS Configuration Defaults
