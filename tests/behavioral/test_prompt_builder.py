@@ -44,7 +44,7 @@ class TestPromptBuilder:
         # Note: This prompt uses descriptive section titles for mismatch detection
         expected_threat_patterns = [
             "DATA EXFILTRATION",
-            "COMMAND INJECTION",
+            "INJECTION ATTACKS",  # Updated from "COMMAND INJECTION" to match new prompt structure
             "mismatch",  # Core concept of this analyzer
         ]
         
