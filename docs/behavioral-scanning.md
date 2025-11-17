@@ -26,9 +26,14 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json
 
 ### Environment Setup
 
-The Behavioral Analyzer requires an LLM provider (tested with OpenAI GPT-4o and GPT-4.1):
+The Behavioral Analyzer requires an LLM provider (tested with Claude 4.5 Sonnet from Bedrock):
 
 ```bash
+
+export AWS_PROFILE="your-profile"
+export AWS_REGION="us-east-1"
+export MCP_SCANNER_LLM_MODEL="bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0"
+
 # OpenAI
 export MCP_SCANNER_LLM_API_KEY="sk-your-openai-api-key"
 export MCP_SCANNER_LLM_MODEL="gpt-4o"
@@ -39,10 +44,6 @@ export MCP_SCANNER_LLM_BASE_URL="https://your-resource.openai.azure.com/"
 export MCP_SCANNER_LLM_API_VERSION="2024-02-15-preview"
 export MCP_SCANNER_LLM_MODEL="azure/gpt-4.1"
 
-# AWS Bedrock Claude
-export AWS_PROFILE="your-profile"
-export AWS_REGION="us-east-1"
-export MCP_SCANNER_LLM_MODEL="bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0"
 ```
 
 See [LLM Providers](llm-providers.md) for complete configuration options.
