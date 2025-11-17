@@ -131,7 +131,7 @@ class TestThreatMapper:
         # Critical threats that should exist
         expected_critical_threats = [
             "DATA EXFILTRATION",
-            "INJECTION ATTACK",  # Updated from COMMAND INJECTION
+            "INJECTION ATTACKS",  # Plural to match BEHAVIORAL_THREATS
         ]
         
         for threat_name in expected_critical_threats:
@@ -157,18 +157,20 @@ class TestThreatMapper:
         behavioral_threats = ThreatMapping.BEHAVIORAL_THREATS
         
         valid_categories = [
-            "DATA EXFILTRATION",
-            "INJECTION ATTACK",
-            "DECEPTIVE BEHAVIOR",
+            "PROMPT INJECTION",
+            "INJECTION ATTACKS",  # Plural
+            "TEMPLATE INJECTION",
             "TOOL POISONING",
-            "TOOL SHADOWING",
             "GOAL MANIPULATION",
-            "UNAUTHORIZED ACCESS",
-            "CODE EXECUTION",
+            "DATA EXFILTRATION",
+            "UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS",
+            "UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS",
+            "ARBITRARY RESOURCE READ/WRITE",
+            "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION",
             "BACKDOOR",
             "DEFENSE EVASION",
             "RESOURCE EXHAUSTION",
-            "PROMPT INJECTION"
+            "GENERAL DESCRIPTION-CODE MISMATCH"
         ]
         
         for threat_name, threat_data in behavioral_threats.items():
@@ -182,8 +184,8 @@ class TestThreatMapper:
         
         behavioral_threats = ThreatMapping.BEHAVIORAL_THREATS
         
-        # Should have at least 15 threat categories (comprehensive taxonomy)
-        assert len(behavioral_threats) >= 15, f"Expected at least 15 threats, got {len(behavioral_threats)}"
+        # Should have at least 14 threat categories (comprehensive taxonomy)
+        assert len(behavioral_threats) >= 14, f"Expected at least 14 threats, got {len(behavioral_threats)}"
     
     def test_data_exfiltration_threat_details(self):
         """Test specific details of DATA EXFILTRATION threat."""
@@ -199,10 +201,10 @@ class TestThreatMapper:
         assert "extracting" in threat["description"].lower() or "exfiltration" in threat["description"].lower()
     
     def test_injection_attack_threat_details(self):
-        """Test specific details of INJECTION ATTACK threat."""
+        """Test specific details of INJECTION ATTACKS threat."""
         from mcpscanner.threats.threats import ThreatMapping
         
-        threat = ThreatMapping.BEHAVIORAL_THREATS["INJECTION ATTACK"]
+        threat = ThreatMapping.BEHAVIORAL_THREATS["INJECTION ATTACKS"]
         
         assert threat["severity"] == "HIGH"
         assert threat["aitech"] == "AITech-9.1"

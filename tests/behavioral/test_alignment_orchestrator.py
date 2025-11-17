@@ -77,14 +77,14 @@ def example_tool(param: str) -> str:
         # Major threat categories that should be covered
         important_categories = [
             "DATA EXFILTRATION",
-            "INJECTION ATTACK",  # Updated from COMMAND INJECTION
-            "DECEPTIVE BEHAVIOR",  # Updated from MISLEADING SAFETY CLAIMS
+            "INJECTION ATTACKS",  # Plural to match BEHAVIORAL_THREATS
+            "GENERAL DESCRIPTION-CODE MISMATCH",  # Updated from DECEPTIVE BEHAVIOR
             "PROMPT INJECTION",
             "TOOL POISONING",
-            "TOOL SHADOWING",
-            "CODE EXECUTION",
-            "UNAUTHORIZED SYSTEM ACCESS",
-            "UNAUTHORIZED NETWORK ACCESS"
+            "GOAL MANIPULATION",  # Updated from TOOL SHADOWING
+            "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION",  # Full name
+            "UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS",  # Full name
+            "UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS"  # Full name
         ]
         
         for category in important_categories:

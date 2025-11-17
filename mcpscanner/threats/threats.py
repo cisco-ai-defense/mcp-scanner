@@ -122,8 +122,8 @@ class ThreatMapping:
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
             "description": "Malicious manipulation of tool metadata, descriptions, or decorators that mislead the LLM into invoking tools incorrectly or exposing confidential context; combined with injection of hidden or malicious instructions in MCP system/user prompts to alter model reasoning or bypass content restrictions.",
         },
-        "INJECTION ATTACK": {
-            "scanner_category": "INJECTION ATTACK",
+        "INJECTION ATTACKS": {
+            "scanner_category": "INJECTION ATTACKS",
             "severity": "HIGH",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
@@ -132,7 +132,7 @@ class ThreatMapping:
             "description": "Code carrying out injection attacks by embedding variables or unvalidated input into commands, templates, prompts, or expressions including shell or system commands built through string concatenation or variable substitution instead of fixed, parameterized calls.",
         },
         "TEMPLATE INJECTION": {
-            "scanner_category": "INJECTION ATTACK",
+            "scanner_category": "TEMPLATE INJECTION",
             "severity": "MEDIUM",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
@@ -147,27 +147,18 @@ class ThreatMapping:
             "severity": "HIGH",
             "aitech": "AITech-12.1",
             "aitech_name": "Tool Exploitation",
-            "aisubtech": "AISubtech-12.1.3",
+            "aisubtech": "AISubtech-12.1.2",
             "aisubtech_name": "Tool Poisoning",
-            "description": "Inserting malicious code or logic into registered MCP tools to mislead, manipulate outputs, or gain unauthorized access.",
-        },
-        "TOOL SHADOWING": {
-            "scanner_category": "TOOL SHADOWING",
-            "severity": "HIGH",
-            "aitech": "AITech-12.1",
-            "aitech_name": "Tool Exploitation",
-            "aisubtech": "AISubtech-12.1.4",
-            "aisubtech_name": "Tool Shadowing",
-            "description": "Registering a malicious tool with the same or similar name as a legitimate one to intercept calls or override trusted logic.",
+            "description": "Detect malicious code or logic inserted into registered MCP tools to mislead, manipulate outputs, or gain unauthorized access.",
         },
         "GOAL MANIPULATION": {
             "scanner_category": "GOAL MANIPULATION",
             "severity": "LOW",
-            "aitech": "AITech-2.1",
-            "aitech_name": "Jailbreaks",
-            "aisubtech": "AISubtech-2.2.1",
-            "aisubtech_name": "Goal Manipulation",
-            "description": "Tampering with the intended purpose of a tool, prompt, or resource to steer the LLM toward attacker-defined objectives. Code that contains injection points in tool chaining, prompt composition, or control-flow templates that allow inserted content to redefine task objectives or execution order.",
+            "aitech": "AITech-1.3",
+            "aitech_name": "Goal Manipulation",
+            "aisubtech": "AISubtech-1.3.2",
+            "aisubtech_name": "Goal Manipulation (Tools, Prompts, Resources)",
+            "description": "Detect tampering with the intended purpose of a tool, prompt, or resource to steer the LLM toward attacker-defined objectives. Includes code with injection points in tool chaining, prompt composition, or control-flow templates.",
         },
         
         # Data Exfiltration & Access Threats
@@ -180,17 +171,17 @@ class ThreatMapping:
             "aisubtech_name": "Data Exfiltration via Agent Tooling",
             "description": "Extracting or leaking sensitive information (e.g., API keys, configs, proprietary code) from the MCP environment via code behavior or LLM responses.",
         },
-        "UNAUTHORIZED NETWORK ACCESS": {
-            "scanner_category": "UNAUTHORIZED ACCESS",
+        "UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS": {
+            "scanner_category": "UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS",
             "severity": "HIGH",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.3",
             "aisubtech_name": "Unauthorized or Unsolicited Network Access",
-            "description": "Implementation that manipulates MCP tools or resources to send unauthorized requests to internal or external endpoints, potentially exposing sensitive infrastructure. MCP resource or tool sends unexpected requests to local services or other MCP endpoints via manipulated parameters.",
+            "description": "Implementation that manipulates MCP tools or resources to send unauthorized requests to internal or external endpoints, potentially exposing sensitive infrastructure (SSRF).",
         },
-        "UNAUTHORIZED SYSTEM ACCESS": {
-            "scanner_category": "UNAUTHORIZED ACCESS",
+        "UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS": {
+            "scanner_category": "UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS",
             "severity": "HIGH",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
@@ -198,19 +189,19 @@ class ThreatMapping:
             "aisubtech_name": "Unauthorized or Unsolicited System Access",
             "description": "Code includes file-system, process, or environment-level operations (os, pathlib, shutil, open, os.environ) that are not scoped, validated, or restricted, enabling direct access to system state.",
         },
-        "ARBITRARY RESOURCE ACCESS": {
-            "scanner_category": "UNAUTHORIZED ACCESS",
+        "ARBITRARY RESOURCE READ/WRITE": {
+            "scanner_category": "ARBITRARY RESOURCE READ/WRITE",
             "severity": "MEDIUM",
             "aitech": "AITech-12.1",
             "aitech_name": "Tool Exploitation",
             "aisubtech": "AISubtech-12.1.3",
             "aisubtech_name": "Unsafe System / Browser / File Exec",
-            "description": "Unauthorized reading from or writing to arbitrary resources such as files, URLs, APIs, databases, or local storage via tool or resource misuse. Includes path traversal attacks exploiting improper file path validation to read, write, or overwrite arbitrary files on the MCP host.",
+            "description": "Detect unauthorized reading from or writing to arbitrary resources such as files, URLs, APIs, databases, or local storage via tool or resource misuse. Includes path traversal attacks.",
         },
         
         # Execution & Payload Threats
-        "CODE EXECUTION": {
-            "scanner_category": "CODE EXECUTION",
+        "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION": {
+            "scanner_category": "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION",
             "severity": "HIGH",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
@@ -227,13 +218,13 @@ class ThreatMapping:
             "aisubtech_name": "Backdoors and Trojans",
             "description": "Hidden malicious logic embedded in code or decorators, allowing persistent unauthorized access or control over MCP behavior.",
         },
-        "SANDBOX ESCAPE": {
+        "DEFENSE EVASION": {
             "scanner_category": "DEFENSE EVASION",
             "severity": "LOW",
-            "aitech": "AITech-9.2",
-            "aitech_name": "Detection Evasion",
-            "aisubtech": "AISubtech-9.2.1",
-            "aisubtech_name": "Evasion Techniques",
+            "aitech": "AITech-11.1",
+            "aitech_name": "Environment-Aware Evasion",
+            "aisubtech": "AISubtech-11.1.2",
+            "aisubtech_name": "Tool-Scoped Evasion",
             "description": "Techniques to bypass sandbox or isolation boundaries to execute or modify code outside the restricted MCP environment. Tool imports ctypes or uses os.execv to spawn external processes; evidence of system-level interaction beyond allowed scope.",
         },
         "RESOURCE EXHAUSTION": {
@@ -247,23 +238,14 @@ class ThreatMapping:
         },
         
         # General Behavioral & Metadata Threats
-        "DECEPTIVE BEHAVIOR": {
-            "scanner_category": "DECEPTIVE BEHAVIOR",
+        "GENERAL DESCRIPTION-CODE MISMATCH": {
+            "scanner_category": "GENERAL DESCRIPTION-CODE MISMATCH",
             "severity": "LOW",
             "aitech": "AITech-12.1",
             "aitech_name": "Tool Exploitation",
             "aisubtech": "AISubtech-12.1.2",
             "aisubtech_name": "Tool Poisoning",
-            "description": "Tool definitions show semantic or functional divergence between declared purpose (decorator description, docstring, or metadata) and actual implemented logic, indicating hidden or deceptive functionality. This is a fallback category for behavior-code mismatches that don't fit other specific threat categories.",
-        },
-        "CROSS ORIGIN ESCALATION": {
-            "scanner_category": "UNAUTHORIZED ACCESS",
-            "severity": "LOW",
-            "aitech": "AITech-9.1",
-            "aitech_name": "Model or Agentic System Manipulation",
-            "aisubtech": "AISubtech-9.1.3",
-            "aisubtech_name": "Unauthorized or Unsolicited Network Access",
-            "description": "Exploiting weak boundaries between tool or resource origins (e.g., URLs or APIs) to access unauthorized domains or data.",
+            "description": "General behavioral mismatch category that don't fit other specific categories but still show semantic or functional divergence between declared purpose (decorator description, docstring, or metadata) and actual implemented logic, indicating hidden or deceptive functionality.",
         },
     }
     

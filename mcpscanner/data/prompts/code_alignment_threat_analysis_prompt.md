@@ -88,7 +88,7 @@ def search_logs(pattern: str) -> str:
 
 ### 3. TEMPLATE INJECTION (Including Server-Side Template Injection - SSTI)
 
-Detect injection of malicious template syntax into dynamically rendered prompts or server-side templates to execute arbitrary code.
+Detect injection of malicious template syntax into dynamically rendered prompts or server-side templates to execute arbitrary code. MCP decorator or response generator uses f-strings or template engines with unvalidated input.
 
 **Key Indicators:**
 - MCP decorator or response generator uses f-strings on unvalidated input
@@ -120,7 +120,7 @@ def generate_report(username: str, data: str) -> str:
 
 ### 4. TOOL POISONING
 
-Detect malicious code or logic inserted into registered MCP tools to mislead, manipulate outputs, or gain unauthorized access.
+Detect malicious code or logic inserted into registered MCP tools to mislead, manipulate outputs, or gain unauthorized access. Tool Definition and implementation poisoned with hidden logic not reflected in docstring.
 
 **Key Indicators:**
 - Tool contains hidden malicious logic not reflected in docstring
@@ -203,10 +203,10 @@ def cache_search_results(query: str, results: list) -> str:
 
 ### 6. DATA EXFILTRATION
 
-Detect tools that extract or leak sensitive information (e.g., API keys, configs, proprietary code) from the MCP environment via code behavior or LLM responses. **Primary focus: unauthorized transmission of data to external servers.**
+Detect code implementation or tools that unsolicitely extract or leak sensitive information (e.g., API keys, configs, proprietary code) from the MCP environment via code behavior or LLM responses. **Primary focus: unauthorized transmission of data to external entities.**
 
 **Key Indicators:**
-- Docstring claims **local-only operations** BUT code makes **network requests to external servers**
+- Docstring claims **local-only operations** BUT code makes **network requests to external entities**
 - **Sensitive data sent to suspicious domains** (not legitimate services)
 - **File contents, credentials, or secrets transmitted externally**
 - **Stealth exfiltration**: Data sent to attacker-controlled infrastructure
@@ -274,7 +274,7 @@ def fetch_resource(url: str) -> str:
 
 ### 8. UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS
 
-Detect code with file-system, process, or environment-level operations that are not scoped, validated, or restricted, enabling direct access to system state.
+Detect code that includes file-system, process, or environment-level operations (os, pathlib, shutil, open, os.environ) that are not scoped, validated, or restricted, enabling direct access to system state. **Primary focus: unauthorized access to system resources.**
 
 **Key Indicators:**
 - Uses `os.environ` to access environment variables
@@ -310,7 +310,7 @@ def get_system_info() -> dict:
 
 ### 9. ARBITRARY RESOURCE READ/WRITE (Including Path Traversal)
 
-Detect unauthorized reading from or writing to arbitrary resources such as files, URLs, APIs, databases, or local storage via tool or resource misuse.
+Detect unauthorized reading from or writing to arbitrary resources such as files, URLs, APIs, databases, or local storage via tool or resource misuse. Includes path traversal attacks. 
 
 **Key Indicators:**
 - File operations without path validation
@@ -345,7 +345,7 @@ def backup_config(config_name: str) -> str:
 
 ### 10. UNAUTHORIZED OR UNSOLICITED CODE EXECUTION
 
-Detect code carrying out arbitrary or unintended code execution through insecure tool definitions, unsafe evaluation constructs (eval, exec, compile, deserialization, or dynamic imports), or embedded logic that enables RCE-like behavior.
+Detect code carrying out arbitrary or unintended code execution through insecure tool definitions, unsafe evaluation constructs (eval, exec, compile, deserialization, or dynamic imports), or embedded logic that enables RCE-like behavior without explicit developer intent. **Primary focus: unauthorized code execution.**
 
 **Key Indicators:**
 - Use of `eval()`, `exec()`, `compile()` on untrusted input
@@ -384,8 +384,7 @@ def evaluate_formula(formula: str, variables: dict) -> any:
 
 ### 11. BACKDOOR
 
-Detect hidden malicious logic embedded in code or decorators, allowing persistent unauthorized access or control over MCP behavior.
-
+Detect hidden malicious logic or backdoor code snippets embedded in code or decorators, allowing persistent unauthorized access or control over MCP behavior.
 **Key Indicators:**
 - Hidden conditional logic activated by magic values, dates, or triggers
 - Obfuscated code sections or encrypted strings
@@ -426,7 +425,7 @@ def validate_input(data: str) -> dict:
 
 ### 12. DEFENSE EVASION (Environment or Sandbox Escape)
 
-Detect techniques to bypass sandbox or isolation boundaries to execute or modify code outside the restricted MCP environment.
+Detect techniques to bypass sandbox or isolation boundaries to execute or modify code outside the restricted MCP environment. Evidence of system-level interaction beyond allowed scope or attempts to modify sandbox configuration or evade the environment scope intended for server, tools or code.
 
 **Key Indicators:**
 - Imports `ctypes` for system-level access
@@ -456,7 +455,7 @@ def run_analysis(cmd: str) -> str:
 
 ### 13. RESOURCE EXHAUSTION
 
-Detect tools that overload the MCP server (via repeated tool invocations or large payloads) to degrade performance or cause denial of service.
+Overloading the MCP server (via repeated tool invocations or large payloads) to degrade performance or cause denial of service. Tools or code implementation which without developer or tool intent repeatedly processes large data/files or calls itself or other resources recursively without rate limits or break conditions to throttle the system.
 
 **Key Indicators:**
 - Recursive calls without termination conditions
@@ -533,13 +532,6 @@ You receive comprehensive analysis including **AST** (code structure, nodes, dec
 
 **Example**: `filepath` parameter → `open(filepath)` (file sink) → `requests.post()` (network sink) = data exfiltration
 
-## Severity Classification
-
-- **HIGH**: Active data exfiltration, command injection, or critical security bypass
-- **MEDIUM**: Misleading safety claims or undocumented behavior with security implications
-- **LOW**: Minor discrepancies or theoretical concerns
-- **SAFE**: Docstring accurately describes behavior, no security concerns
-
 ## Confidence Levels
 
 - **HIGH**: Clear mismatch with strong dataflow evidence
@@ -569,9 +561,9 @@ Respond with ONLY a valid JSON object:
 
 - **mismatch_detected**: `true` if there is a clear discrepancy between docstring and implementation, OR if malicious code is detected regardless of docstring quality
 - **severity**: 
-  - `HIGH`: Data exfiltration, command injection, permission escalation
-  - `MEDIUM`: Misleading safety claims, undocumented side effects
-  - `LOW`: Minor discrepancies without immediate security impact
+  - `HIGH`: Active data exfiltration, command injection, code execution (eval/exec), backdoors, critical security bypass, unauthorized system/network access, or permission escalation that poses immediate threat
+  - `MEDIUM`: Path traversal, template injection (when not leading to RCE), resource exhaustion, misleading safety claims, or undocumented side effects with security implications
+  - `LOW`: Goal manipulation without immediate impact, sandbox escape attempts without confirmed breach, minor behavioral discrepancies, or theoretical concerns without clear exploitation path
 - **confidence**: How certain you are about the mismatch
 - **summary**: Brief one-sentence description of the mismatch
 - **threat_name**: REQUIRED when mismatch_detected is true. Must be ONE of these 14 exact values:
@@ -612,7 +604,7 @@ Respond with ONLY a valid JSON object:
 }
 ```
 
-**Example 2: Command Injection**
+**Example 2: Injection Attacks**
 ```json
 {
   "mismatch_detected": true,
