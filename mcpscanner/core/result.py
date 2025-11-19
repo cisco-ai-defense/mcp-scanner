@@ -458,6 +458,8 @@ def format_results_as_json(
                 analyzer_finding = {
                     "severity": analyzer_severity,
                     "total_findings": len(vulns),
+                    "threat_names": list(set(threat_names)),  # Deduplicate threat names
+                    "threat_summary": threat_summary,
                 }
                 
                 # Add MCP Taxonomy if available (this replaces threat_names and threat_summary)
