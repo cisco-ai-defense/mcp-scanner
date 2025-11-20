@@ -429,6 +429,87 @@ curl -X POST "http://localhost:8001/scan-all-resources" \
 }
 ```
 
+### Scan Server Instructions
+
+**Endpoint:** `POST /scan-instructions`
+
+Scans the server instructions field from the `InitializeResult` response. Server instructions provide usage guidelines, security notes, and configuration details that should be analyzed for potential security issues.
+
+**Request Body:**
+```json
+{
+  "server_url": "http://127.0.0.1:8000/mcp",
+  "analyzers": ["llm"],
+  "output_format": "raw",
+  "severity_filter": "all",
+  "analyzer_filter": null,
+  "hide_safe": false,
+  "show_stats": false,
+  "rules_path": null,
+  "auth": null
+}
+```
+
+**Example Request:**
+```bash
+curl -X POST "http://localhost:8001/scan-instructions" \
+  -H "accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_url": "http://127.0.0.1:8000/mcp",
+    "analyzers": ["llm"],
+    "output_format": "raw"
+  }'
+```
+
+**Example Response:**
+```json
+{
+  "server_url": "http://127.0.0.1:8000/mcp",
+  "server_name": "example-server",
+  "protocol_version": "2025-06-18",
+  "instructions": "This server provides tools for data processing. Use with caution...",
+  "status": "completed",
+  "is_safe": false,
+  "findings": {
+    "llm_analyzer": {
+      "severity": "MEDIUM",
+      "total_findings": 1,
+      "threats": {
+        "items": [
+          {
+            "technique_id": "AITech-12.1",
+            "technique_name": "Tool Exploitation",
+            "items": [
+              {
+                "sub_technique_id": "AISubtech-12.1.2",
+                "sub_technique_name": "Tool Poisoning",
+                "max_severity": "MEDIUM",
+                "description": "Corrupting or modifying tool functionality..."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+**Response Fields:**
+- `server_url`: The scanned server URL
+- `server_name`: Name of the MCP server
+- `protocol_version`: MCP protocol version
+- `instructions`: The full instructions text from the server
+- `status`: Scan status ("completed", "skipped", or "failed")
+- `is_safe`: Boolean indicating if instructions are safe (null if skipped)
+- `findings`: Security findings grouped by analyzer
+
+**Notes:**
+- If the server doesn't provide instructions, the status will be "skipped"
+- LLM analyzer is recommended for instructions scanning as it can understand context
+- Instructions may contain references to dangerous tools or security concerns
+
 ## API Documentation
 
 Once the server is running, you can access the interactive API documentation at:

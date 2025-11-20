@@ -305,6 +305,12 @@ class SpecificResourceScanRequest(APIScanRequest):
     allowed_mime_types: Optional[List[str]] = ["text/plain", "text/html"]
 
 
+class SpecificInstructionsScanRequest(APIScanRequest):
+    """Request for scanning server instructions via API."""
+
+    pass  # No additional fields needed - scans the server's instructions field
+
+
 class AnalyzerFinding(BaseModel):
     """Analyzer finding with grouped structure."""
 
