@@ -1601,7 +1601,7 @@ class Scanner:
         Args:
             server_url (str): The URL of the MCP server to scan.
             auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
-            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API, YARA, and LLM.
+            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to self.DEFAULT_ANALYZERS (API and YARA).
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
 
         Returns:
