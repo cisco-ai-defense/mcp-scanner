@@ -15,7 +15,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
-- **Comprehensive Scanning**: Scan MCP tools, prompts, and resources for security findings
+- **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
 - **Custom Endpoints**: Configure the API endpoint to support any Cisco AI Defense environments.
@@ -193,6 +193,7 @@ asyncio.run(main())
 - **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`.
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`.
+- **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
 - **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
@@ -290,6 +291,44 @@ mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
   --mime-types "text/plain,text/html,application/json"
 ```
 
+#### Scan Server Instructions
+
+Server instructions provide usage guidelines, security notes, and configuration details in the MCP `InitializeResult`. Scanning instructions helps detect prompt injection, tool poisoning, and misleading guidance.
+
+```bash
+# Scan server instructions (defaults to API, YARA, and LLM analyzers)
+mcp-scanner instructions --server-url http://127.0.0.1:8000/mcp
+
+# Scan with detailed output
+mcp-scanner --detailed instructions --server-url http://127.0.0.1:8000/mcp
+
+# Scan with specific analyzers (LLM recommended for semantic analysis)
+mcp-scanner --analyzers llm instructions --server-url http://127.0.0.1:8000/mcp
+
+# Get raw JSON output
+mcp-scanner --raw instructions --server-url http://127.0.0.1:8000/mcp
+
+# With authentication
+mcp-scanner instructions --server-url https://your-server.com/mcp --bearer-token "$TOKEN"
+```
+
+**SDK Usage:**
+```python
+# Scan server instructions
+instructions_result = await scanner.scan_remote_server_instructions(
+    "http://127.0.0.1:8000/mcp",
+    analyzers=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
+)
+
+print(f"Instructions: {instructions_result.instructions}")
+print(f"Safe: {instructions_result.is_safe}")
+print(f"Status: {instructions_result.status}")
+
+# Access findings
+for finding in instructions_result.findings:
+    print(f"  - {finding.severity}: {finding.summary}")
+```
+
 #### Behavioral Code Scanning
 
 The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking.
@@ -336,6 +375,7 @@ Once running, the API server provides endpoints for:
 - **`/scan-all-prompts`** - Scan all prompts on an MCP server
 - **`/scan-resource`** - Scan a specific resource on an MCP server
 - **`/scan-all-resources`** - Scan all resources on an MCP server
+- **`/scan-instructions`** - Scan server instructions from InitializeResult
 - **`/health`** - Health check endpoint
 
 Documentation is available in [docs/api-reference.md](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md) or as interactive documentation at `http://localhost:8000/docs` when the server is running.
