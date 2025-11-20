@@ -312,23 +312,6 @@ mcp-scanner --raw instructions --server-url http://127.0.0.1:8000/mcp
 mcp-scanner instructions --server-url https://your-server.com/mcp --bearer-token "$TOKEN"
 ```
 
-**SDK Usage:**
-```python
-# Scan server instructions
-instructions_result = await scanner.scan_remote_server_instructions(
-    "http://127.0.0.1:8000/mcp",
-    analyzers=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
-)
-
-print(f"Instructions: {instructions_result.instructions}")
-print(f"Safe: {instructions_result.is_safe}")
-print(f"Status: {instructions_result.status}")
-
-# Access findings
-for finding in instructions_result.findings:
-    print(f"  - {finding.severity}: {finding.summary}")
-```
-
 #### Behavioral Code Scanning
 
 The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking.
