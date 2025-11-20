@@ -1601,7 +1601,7 @@ class Scanner:
         Args:
             server_url (str): The URL of the MCP server to scan.
             auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
-            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to self.DEFAULT_ANALYZERS (API and YARA).
+            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API, YARA, and LLM.
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
 
         Returns:
@@ -1615,9 +1615,10 @@ class Scanner:
                 "No server URL provided. Please specify a valid server URL."
             )
 
-        # Default to all analyzers for instructions
+        # Default to all analyzers including LLM for instructions
+        # Instructions benefit from semantic analysis
         if analyzers is None:
-            analyzers = self.DEFAULT_ANALYZERS
+            analyzers = [AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
 
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
