@@ -1,4 +1,4 @@
-# Copyright 2025 Cisco Systems, Inc. and its affiliates
+ # Copyright 2025 Cisco Systems, Inc. and its affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -1260,7 +1260,6 @@ async def main():
                             "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
                             "total_findings": len(func_findings),
                             "source_file": source_file,  # Include source file in output
-                            "mcp_taxonomy": func_findings[0].mcp_taxonomy if hasattr(func_findings[0], "mcp_taxonomy") else None,
                             "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
                         }
                     }
@@ -1275,6 +1274,13 @@ async def main():
                     "is_safe": True,
                     "findings": {}
                 })
+            
+            # Save output if requested
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2)
+                if args.verbose:
+                    print(f"Results saved to {args.output}")
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
