@@ -1,4 +1,4 @@
- # Copyright 2025 Cisco Systems, Inc. and its affiliates
+# Copyright 2025 Cisco Systems, Inc. and its affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -811,6 +811,55 @@ async def main():
         help="Output format (default: %(default)s)",
     )
 
+    # Stdio subcommand
+    p_stdio = subparsers.add_parser(
+        "stdio", help="Scan an MCP server via stdio (local command execution)"
+    )
+    p_stdio.add_argument(
+        "--stdio-command",
+        required=True,
+        help="Command to run the stdio-based MCP server (e.g., 'uvx')",
+    )
+    p_stdio.add_argument(
+        "--stdio-args",
+        nargs="*",
+        default=[],
+        help="Arguments passed to the stdio command (space-separated)",
+    )
+    p_stdio.add_argument(
+        "--stdio-env",
+        action="append",
+        default=[],
+        help="Environment variables for the stdio server in KEY=VALUE form; can be repeated",
+    )
+    p_stdio.add_argument(
+        "--stdio-tool",
+        help="If provided, only scan this specific tool name on the stdio server",
+    )
+
+    # Config subcommand
+    p_config = subparsers.add_parser(
+        "config", help="Scan all servers defined in a specific MCP config file"
+    )
+    p_config.add_argument(
+        "--config-path",
+        required=True,
+        help="Path to MCP config file (e.g., ~/.codeium/windsurf/mcp_config.json)",
+    )
+    p_config.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+
+    # Known-configs subcommand
+    p_known_configs = subparsers.add_parser(
+        "known-configs", help="Scan all well-known MCP client config files on this machine"
+    )
+    p_known_configs.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+
     # API key and endpoint configuration
     parser.add_argument(
         "--api-key",
@@ -1248,11 +1297,14 @@ async def main():
                         if finding.mcp_taxonomy not in mcp_taxonomies:
                             mcp_taxonomies.append(finding.mcp_taxonomy)
                 
+                # Determine if safe based on severity
+                is_safe = max_severity in ["SAFE", "LOW"]
+                
                 results.append({
                     "tool_name": func_name,  # This should match the name from decorator params or function name
                     "tool_description": f"MCP function from {display_name}",
                     "status": "completed",
-                    "is_safe": False,
+                    "is_safe": is_safe,
                     "findings": {
                         "behavioral_analyzer": {
                             "severity": max_severity,
