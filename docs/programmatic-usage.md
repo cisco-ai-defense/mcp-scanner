@@ -47,6 +47,15 @@ async def main():
     for result in resource_results:
         print(f"Resource: {result.resource_name}, Safe: {result.is_safe}, Status: {result.status}")
 
+    # Scan server instructions
+    instructions_result = await scanner.scan_remote_server_instructions(
+        "http://127.0.0.1:8000/mcp",
+        analyzers=[AnalyzerEnum.LLM]
+    )
+
+    # Print instructions result
+    print(f"Instructions: Safe: {instructions_result.is_safe}, Findings: {len(instructions_result.findings)}")
+
 # Run the scanner
 asyncio.run(main())
 ```
@@ -148,6 +157,53 @@ async def main():
     elif not result.is_safe:
         for finding in result.findings:
             print(f"  - {finding.severity}: {finding.summary}")
+
+asyncio.run(main())
+```
+
+### Scanning Server Instructions
+
+Server instructions are provided in the `InitializeResult` response and contain usage guidelines, security notes, and configuration details.
+
+```python
+import asyncio
+from mcpscanner import Config, Scanner
+from mcpscanner.core.models import AnalyzerEnum
+
+async def main():
+    config = Config(llm_provider_api_key="your_llm_api_key")
+    scanner = Scanner(config)
+
+    # Scan server instructions
+    result = await scanner.scan_remote_server_instructions(
+        "http://127.0.0.1:8000/mcp",
+        analyzers=[AnalyzerEnum.LLM]
+    )
+
+    print(f"Server: {result.server_name}")
+    print(f"Protocol Version: {result.protocol_version}")
+    print(f"Status: {result.status}")
+    
+    if result.instructions:
+        print(f"Instructions (preview): {result.instructions[:100]}...")
+    else:
+        print("No instructions provided by server")
+    
+    print(f"Safe: {result.is_safe}")
+
+    if result.status == "completed" and not result.is_safe:
+        print(f"\nSecurity Findings ({len(result.findings)}):")
+        for finding in result.findings:
+            print(f"  - {finding.severity}: {finding.summary}")
+            
+            # Access MCP Taxonomy information
+            if hasattr(finding, 'mcp_taxonomy') and finding.mcp_taxonomy:
+                taxonomy = finding.mcp_taxonomy
+                print(f"    Technique: {taxonomy.get('aitech')} - {taxonomy.get('aitech_name')}")
+                if taxonomy.get('aisubtech'):
+                    print(f"    Sub-Technique: {taxonomy.get('aisubtech')} - {taxonomy.get('aisubtech_name')}")
+    elif result.status == "skipped":
+        print("Server does not provide instructions field")
 
 asyncio.run(main())
 ```
