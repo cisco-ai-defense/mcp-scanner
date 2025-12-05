@@ -26,7 +26,8 @@ MCP Scanner addresses the critical need for security analysis in the MCP ecosyst
 4. **API-Based Classification**: Leverages Cisco AI Defense for threat detection and classification
 5. **Multiple Scan Modes**: Remote servers, local source code, stdio servers, config files, prompts, resources, instructions
 6. **Comprehensive Reporting**: Detailed findings with severity levels, threat categories, and remediation guidance
-7. 
+
+
 ## Project Structure
 
 ```
@@ -223,12 +224,6 @@ Key examples:
   - False positive analysis
   - Performance benchmarks
 
-**Evaluation Process**:
-1. Scan multiple MCP servers from repository list
-2. Classify findings as TP (true positive) or FP (false positive)
-3. Calculate precision, recall, F1 score
-4. Generate detailed CSV reports
-5. Compare results across different runs
 
 **Current Performance**: 95%+ precision on behavioral analysis
 
@@ -261,21 +256,297 @@ Comprehensive documentation covering all aspects:
 - **`.gitignore`**: Git ignore patterns
 - **`.pre-commit-config.yaml`**: Pre-commit hooks configuration
 
-### Generated/Runtime Directories
 
-- **`logs/`**: Scan result logs (gitignored)
-- **`latest_logs/`**: Latest scan results (gitignored)
-- **`cloned/`**: Cloned repositories for evaluation (gitignored)
-- **`.venv/`**: Virtual environment (gitignored)
-- **`__pycache__/`**: Python bytecode cache (gitignored)
+
+## Analyzer Deep Dive & Constraints
+
+This section provides detailed information about each analyzer's implementation, constraints, and important considerations.
+
+### Base Analyzer (`base.py`)
+
+**Purpose**: Abstract base class for all analyzers
+
+**Key Classes**:
+- **`SecurityFinding`**: Core data structure for all findings
+  - Severity levels: `HIGH`, `MEDIUM`, `LOW`, `SAFE`, `UNKNOWN`
+  - Auto-enriches with MCP Taxonomy via `ThreatMapping`
+  - Normalizes and validates all inputs
+  - Maps analyzer names to taxonomy keys: `LLM`, `YARA`, `API`, `BEHAVIORAL`
+
+**`BaseAnalyzer` Interface**:
+```python
+class BaseAnalyzer(ABC):
+    @abstractmethod
+    async def analyze(self, content: str, context: Dict[str, Any]) -> List[SecurityFinding]:
+        pass
+```
+
+**Constraints**:
+- All analyzers MUST inherit from `BaseAnalyzer`
+- All analyzers MUST implement `analyze()` method
+- `analyze()` MUST be async
+- `analyze()` MUST return `List[SecurityFinding]`
+- Empty list = no findings (safe)
+
+### Behavioral Analyzer (`behavioral/code_analyzer.py`)
+
+**File**: `mcpscanner/core/analyzers/behavioral/code_analyzer.py` (19KB)
+
+**Purpose**: Detects description-code mismatches using LLM-powered semantic analysis
+
+**How It Works**:
+1. Extracts MCP-decorated functions with docstrings via AST parsing
+2. Builds interprocedural call graph for entire codebase
+3. Extracts rich code context (dataflow, taint, constants)
+4. Sends function + context to LLM for alignment verification
+5. Maps findings to MCP taxonomy
+
+**Key Components**:
+- `BehavioralCodeAnalyzer`: Main orchestrator
+- `AlignmentOrchestrator`: LLM communication manager
+- `ContextExtractor`: Code context extraction
+- `CallGraphAnalyzer`: Cross-file call graph builder
+
+**Constraints**:
+
+1. **File Size Limits**:
+   - `MAX_FILE_SIZE_BYTES`: 1MB default (env: `MCP_SCANNER_MAX_FILE_SIZE_BYTES`)
+   - `MAX_FUNCTION_SIZE_BYTES`: 50KB default (env: `MCP_SCANNER_MAX_FUNCTION_SIZE_BYTES`)
+   - Files exceeding limits are skipped with warning
+
+2. **Context Extraction Limits** (to control prompt size):
+   - `BEHAVIORAL_MAX_OPERATIONS_PER_PARAM`: 10 operations per parameter
+   - `BEHAVIORAL_MAX_FUNCTION_CALLS`: 20 function calls tracked
+   - `BEHAVIORAL_MAX_ASSIGNMENTS`: 15 assignments tracked
+   - `BEHAVIORAL_MAX_CROSS_FILE_CALLS`: 10 cross-file calls
+   - `BEHAVIORAL_MAX_REACHABLE_FILES`: 5 reachable files
+   - `BEHAVIORAL_MAX_CONSTANTS`: 10 constants
+   - `BEHAVIORAL_MAX_STRING_LITERALS`: 15 string literals
+   - `BEHAVIORAL_MAX_REACHES_CALLS`: 10 reachability calls
+
+3. **LLM Requirements**:
+   - API key REQUIRED: `MCP_SCANNER_LLM_API_KEY`
+   - Model REQUIRED: `MCP_SCANNER_LLM_MODEL` (default: `gpt-4o`)
+   - Optional: `MCP_SCANNER_LLM_BASE_URL`, `MCP_SCANNER_LLM_API_VERSION`
+   - Timeout: 30s default (env: `MCP_SCANNER_LLM_TIMEOUT`)
+   - Max retries: 3 (env: `MCP_SCANNER_LLM_MAX_RETRIES`)
+
+4. **Directory Scanning**:
+   - Only processes `.py` files
+   - Skips `__pycache__` and hidden directories (`.`)
+   - Sorted file processing for deterministic results
+
+5. **Performance**:
+   - Each MCP function = 1 LLM API call
+   - Large codebases can take minutes to hours
+   - Cost scales with number of functions
+
+**Error Handling**:
+- Continues analysis if individual files fail
+- Logs warnings for skipped files
+- Returns empty list on catastrophic failure
+
+### API Analyzer (`api_analyzer.py`)
+
+**File**: `mcpscanner/core/analyzers/api_analyzer.py` (7KB)
+
+**Purpose**: Integrates with Cisco AI Defense API for threat detection
+
+**How It Works**:
+1. Constructs API request with content and enabled rules
+2. Sends POST request to Cisco AI Defense endpoint
+3. Parses `is_safe` and `classifications` from response
+4. Maps classifications to MCP taxonomy and creates findings
+
+**Enabled Rules** (8 threat categories):
+- Prompt Injection
+- Harassment
+- Hate Speech
+- Profanity
+- Sexual Content & Exploitation
+- Social Division & Polarization
+- Violence & Public Safety Threats
+- Code Detection
+
+**Constraints**:
+
+1. **API Key Requirement**:
+   - REQUIRED: `MCP_SCANNER_API_KEY` environment variable
+   - Passed via `X-Cisco-AI-Defense-API-Key` header
+   - No default value - must be explicitly configured
+
+2. **Endpoint Configuration**:
+   - Default: `https://us.api.inspect.aidefense.security.cisco.com/api/v1`
+   - Configurable via `MCP_SCANNER_ENDPOINT` environment variable
+   - Path: `/inspect/chat`
+
+3. **HTTP Configuration**:
+   - Timeout: 30s default (env: `MCP_SCANNER_HTTP_TIMEOUT`)
+   - Method: POST with JSON payload
+   - Content-Type: `application/json`
+
+4. **Content Constraints**:
+   - Empty/None content returns empty findings (no API call)
+   - Content size limited by API payload limits
+   - No explicit size validation in analyzer
+
+5. **Network & Rate Limits**:
+   - Requires internet connectivity
+   - Subject to Cisco AI Defense API rate limits
+   - No built-in retry logic (fails on first error)
+
+**Error Handling**:
+- Raises `httpx.HTTPError` on API failures (no retry)
+- Logs warnings for empty content
+- Does not catch or suppress exceptions
+
+**Threat Mapping**:
+- Uses `API_THREAT_MAPPING` to map classifications to MCP taxonomy
+- Generates summary with threat count and names
+- Enriches findings with severity and taxonomy
+
+### LLM Analyzer (`llm_analyzer.py`)
+
+**File**: `mcpscanner/core/analyzers/llm_analyzer.py` (24KB, 580 lines)
+
+**Purpose**: Uses LLM to analyze code/prompts for security risks
+
+**Supported Providers** (via LiteLLM):
+- OpenAI (GPT-3.5, GPT-4, GPT-4o)
+- Azure OpenAI
+- Anthropic (Claude 3 Opus/Sonnet/Haiku)
+- Google Gemini
+- AWS Bedrock (Claude via Bedrock)
+- Any LiteLLM-supported provider
+
+**How It Works**:
+1. Loads threat analysis prompt with boilerplate protection rules
+2. Generates random delimiter tags for prompt injection defense
+3. Constructs analysis prompt with tool name, description, parameters
+4. Calls LLM via LiteLLM with retry logic
+5. Parses JSON response and maps threats to MCP taxonomy
+
+**Constraints**:
+
+1. **API Key Requirements**:
+   - **Non-Bedrock**: `MCP_SCANNER_LLM_API_KEY` REQUIRED
+   - **AWS Bedrock**: `MCP_SCANNER_LLM_API_KEY` OR AWS credentials (profile/IAM/session token)
+   - No default value - must be explicitly configured
+
+2. **Model Configuration**:
+   - Model REQUIRED: `MCP_SCANNER_LLM_MODEL` (default: `gpt-4o`)
+   - Optional: `MCP_SCANNER_LLM_BASE_URL` (for custom endpoints)
+   - Optional: `MCP_SCANNER_LLM_API_VERSION` (for Azure)
+
+3. **LLM Parameters**:
+   - `DEFAULT_LLM_MAX_TOKENS`: 1000 (env: `MCP_SCANNER_DEFAULT_LLM_MAX_TOKENS`)
+   - `DEFAULT_LLM_TEMPERATURE`: 0.1 (env: `MCP_SCANNER_DEFAULT_LLM_TEMPERATURE`)
+   - `DEFAULT_LLM_TIMEOUT`: 30s (env: `MCP_SCANNER_LLM_TIMEOUT`)
+   - `LLM_MAX_RETRIES`: 3 (env: `MCP_SCANNER_LLM_MAX_RETRIES`)
+   - `LLM_RETRY_BASE_DELAY`: 1.0s (env: `MCP_SCANNER_LLM_RETRY_BASE_DELAY`)
+
+4. **Prompt Size Limits**:
+   - `PROMPT_LENGTH_THRESHOLD`: 75,000 characters (env: `MCP_SCANNER_PROMPT_LENGTH_THRESHOLD`)
+   - Prompts exceeding threshold trigger warnings
+   - Must fit within model's context window
+
+5. **Prompt Injection Defense**:
+   - Generates random 32-char hex delimiter tags
+   - Validates content doesn't contain delimiter tags
+   - If detected, creates HIGH severity finding immediately
+
+6. **AWS Bedrock Specific**:
+   - Region: `AWS_REGION` (default: `us-east-1`)
+   - Supports: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`
+
+**Error Handling**:
+- Retries up to 3 times with exponential backoff
+- Logs detailed error information
+- Returns empty list on catastrophic failure
+- Validates JSON response format
+
+**Threat Detection**:
+- Analyzes tool name, description, parameters
+- Detects: code execution, data exfiltration, injection attacks, SSRF, etc.
+- Returns severity (HIGH/MEDIUM/LOW) and threat categories
+- Maps to MCP taxonomy via `LLM_THREAT_MAPPING`
+
+### YARA Analyzer (`yara_analyzer.py`)
+
+**File**: `mcpscanner/core/analyzers/yara_analyzer.py` (8KB, 199 lines)
+
+**Purpose**: Pattern-based detection using YARA rules
+
+**How It Works**:
+1. Loads and compiles all `.yara`/`.yar` files from rules directory
+2. Matches content against compiled YARA rules
+3. Extracts metadata (description, classification, threat_type) from matches
+4. Maps threat_type to MCP taxonomy via `YARA_THREAT_MAPPING`
+5. Creates SecurityFinding for each match with severity and category
+
+**Constraints**:
+
+1. **Rules Directory**:
+   - Default: `mcpscanner/data/yara_rules/` (env: `MCP_SCANNER_YARA_RULES_DIR`)
+   - Custom: Specify via `rules_dir` parameter in constructor
+   - MUST exist and contain at least one `.yara` or `.yar` file
+   - Raises `FileNotFoundError` if missing or empty
+
+2. **Rule File Format**:
+   - Extensions: `.yara` or `.yar` (env: `MCP_SCANNER_YARA_RULES_EXT`)
+   - Must be valid YARA syntax
+   - All rules compiled together at initialization
+   - Syntax error in ANY rule = failure for ALL rules
+
+3. **Rule Metadata** (extracted from matches):
+   - `description`: Human-readable description of threat
+   - `classification`: Threat classification category
+   - `threat_type`: Maps to MCP taxonomy (REQUIRED for proper mapping)
+   - Missing metadata = "unknown" classification
+
+4. **Performance Characteristics**:
+   - Fast: No network calls, no LLM costs
+   - Deterministic: Same input = same output
+   - Synchronous: No async operations
+   - Suitable for large-scale scanning
+
+5. **Content Constraints**:
+   - Empty/None content returns empty findings (no matching)
+   - No explicit size limits
+   - Matches on string data only
+
+6. **Accuracy Limitations**:
+   - Only detects known patterns defined in rules
+   - Cannot detect novel or zero-day threats
+   - Prone to false positives if rules too broad
+   - Requires regular rule updates for new threats
+
+**Threat Mapping**:
+- Uses `YARA_THREAT_MAPPING` to map `threat_type` to MCP taxonomy
+- Includes severity (HIGH/MEDIUM/LOW) from mapping
+- Falls back to "UNKNOWN" severity if threat_type not in mapping
+
+**Error Handling**:
+- Validates rules directory exists at initialization
+- Logs all loaded rule files for debugging
+- Raises `yara.Error` on compilation failure (with details)
+- Raises exception on analysis failure (does not suppress)
+- Returns empty list for empty content (no error)
+
+**Best Practices**:
+- Include `threat_type` metadata in all rules for proper taxonomy mapping
+- Keep rules specific to minimize false positives
+- Test rules against known good/bad samples before deployment
+- Update rules regularly for emerging threat patterns
 
 ## Key Technologies
 
 - **Language**: Python 3.11+
 - **Package Manager**: uv (fast Python package manager)
 - **MCP SDK**: Model Context Protocol for server communication
-- **LLM Integration**: Azure OpenAI, OpenAI, Anthropic, Google Gemini
-- **Analysis**: AST parsing, pattern matching, semantic analysis
+- **LLM Integration**: Azure OpenAI, OpenAI, Anthropic, Google Gemini, AWS Bedrock
+- **Analysis**: AST parsing, pattern matching, semantic analysis, dataflow analysis
+- **Libraries**: LiteLLM (LLM abstraction), YARA (pattern matching), httpx (HTTP client)
 
 ## Development Setup
 
