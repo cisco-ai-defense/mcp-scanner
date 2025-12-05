@@ -26,17 +26,7 @@ MCP Scanner addresses the critical need for security analysis in the MCP ecosyst
 4. **API-Based Classification**: Leverages Cisco AI Defense for threat detection and classification
 5. **Multiple Scan Modes**: Remote servers, local source code, stdio servers, config files, prompts, resources, instructions
 6. **Comprehensive Reporting**: Detailed findings with severity levels, threat categories, and remediation guidance
-
-### Threat Categories Detected
-
-- **Code Execution**: Arbitrary code execution via eval, exec, subprocess
-- **Injection Attacks**: SQL injection, command injection, XSS
-- **Data Exfiltration**: Unauthorized data transmission to external services
-- **Arbitrary File Operations**: Unvalidated file read/write/delete
-- **Tool Poisoning**: Description-code mismatches that mislead AI agents
-- **Prompt Injection**: Malicious instructions embedded in prompts
-- **Network Access**: Unauthorized or unsolicited network requests
-
+7. 
 ## Project Structure
 
 ```
