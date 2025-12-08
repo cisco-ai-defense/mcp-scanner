@@ -116,7 +116,18 @@ class AlignmentPromptBuilder:
 **FUNCTION SIGNATURE:**
 - Parameters: {json.dumps(func_context.parameters, indent=2)}
 - Return Type: {func_context.return_type or 'Not specified'}
-
+""")
+        
+        # Add imports section
+        if func_context.imports:
+            import_parts = ["\n**IMPORTS:**\n"]
+            import_parts.append("The following libraries and modules are imported:\n")
+            for imp in func_context.imports:
+                import_parts.append(f"  {imp}\n")
+            import_parts.append("\n")
+            content_parts.append(''.join(import_parts))
+        
+        content_parts.append("""
 **DATAFLOW ANALYSIS:**
 All parameters are treated as untrusted input (MCP entry points receive external data).
 

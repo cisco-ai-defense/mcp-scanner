@@ -394,23 +394,52 @@ class ContextExtractor:
         return None
 
     def _extract_imports(self, node: ast.FunctionDef) -> List[str]:
-        """Extract all imports used in function.
+        """Extract all imports used in function, including module-level imports.
 
         Args:
             node: Function definition node
 
         Returns:
-            List of import statements
+            List of import statements (both module-level and function-level)
         """
         imports = []
-        for child in ast.walk(node):
+        
+        # First, extract module-level imports from the entire AST
+        for child in ast.walk(self.ast):
             if isinstance(child, ast.Import):
                 for alias in child.names:
-                    imports.append(f"import {alias.name}")
+                    import_stmt = f"import {alias.name}"
+                    if alias.asname:
+                        import_stmt += f" as {alias.asname}"
+                    if import_stmt not in imports:
+                        imports.append(import_stmt)
             elif isinstance(child, ast.ImportFrom):
                 module = child.module or ""
                 for alias in child.names:
-                    imports.append(f"from {module} import {alias.name}")
+                    import_stmt = f"from {module} import {alias.name}"
+                    if alias.asname:
+                        import_stmt += f" as {alias.asname}"
+                    if import_stmt not in imports:
+                        imports.append(import_stmt)
+        
+        # Then, extract function-level imports (if any)
+        for child in ast.walk(node):
+            if isinstance(child, ast.Import):
+                for alias in child.names:
+                    import_stmt = f"import {alias.name}"
+                    if alias.asname:
+                        import_stmt += f" as {alias.asname}"
+                    if import_stmt not in imports:
+                        imports.append(import_stmt)
+            elif isinstance(child, ast.ImportFrom):
+                module = child.module or ""
+                for alias in child.names:
+                    import_stmt = f"from {module} import {alias.name}"
+                    if alias.asname:
+                        import_stmt += f" as {alias.asname}"
+                    if import_stmt not in imports:
+                        imports.append(import_stmt)
+        
         return imports
 
     def _extract_function_calls(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
