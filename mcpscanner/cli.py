@@ -516,6 +516,9 @@ async def main():
   %(prog)s --tool-filter "database" --output results.json  # Filter and save results to file
   %(prog)s --analyzers llm --raw                            # LLM-only scan with raw JSON output
   %(prog)s --analyzers api,llm --hide-safe                  # API and LLM scan, hide safe results
+  %(prog)s --scan-known-configs --expand-vars auto          # Scan configs with OS-appropriate expansion
+  %(prog)s --scan-known-configs --expand-vars linux/mac         # Expand $VAR and ${VAR} only (POSIX)
+  %(prog)s --scan-known-configs --expand-vars windows       # Expand %%VAR%% only (Windows style)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -611,6 +614,18 @@ async def main():
     )
     parser.add_argument(
         "--raw", "-r", action="store_true", help="Print raw JSON output to terminal"
+    )
+    parser.add_argument(
+        "--expand-vars",
+        choices=["auto", "linux", "mac", "windows", "off"],
+        default="off",
+        help=(
+            "Control env var expansion for stdio command/args. "
+            "off: no env expansion (only ~). "
+            "linux/mac: expand $VAR and ${VAR} (POSIX). "
+            "windows: expand %VAR% (Windows style only). "
+            "auto: linux/mac on POSIX, windows on Windows."
+        ),
     )
 
     parser.add_argument(
@@ -764,7 +779,10 @@ async def main():
                 print("[warning] --stdio-arg is deprecated; use --stdio-args")
                 stdio_args.extend(args.stdio_arg)
             stdio = StdioServer(
-                command=args.stdio_command, args=stdio_args, env=env_dict or None
+                command=args.stdio_command,
+                args=stdio_args,
+                env=env_dict or None,
+                expand_vars=args.expand_vars,
             )
             if args.stdio_tool:
                 scan_result = await scanner.scan_stdio_server_tool(
@@ -782,7 +800,10 @@ async def main():
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             scan_results = await scanner.scan_mcp_config_file(
-                args.config_path, analyzers=selected_analyzers, auth=auth
+                args.config_path,
+                analyzers=selected_analyzers,
+                auth=auth,
+                expand_vars_default=args.expand_vars,
             )
             results = await results_to_json(scan_results)
 
@@ -791,7 +812,9 @@ async def main():
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             results_by_cfg = await scanner.scan_well_known_mcp_configs(
-                analyzers=selected_analyzers, auth=auth
+                analyzers=selected_analyzers,
+                auth=auth,
+                expand_vars_default=args.expand_vars,
             )
             if args.raw:
                 output = {}
@@ -942,6 +965,7 @@ async def main():
                 command=args.stdio_command,
                 args=stdio_args,
                 env=env_dict or None,
+                expand_vars=args.expand_vars,
             )
             if args.stdio_tool:
                 scan_result = await scanner.scan_stdio_server_tool(
@@ -960,13 +984,18 @@ async def main():
             if args.config_path:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                 scan_results = await scanner.scan_mcp_config_file(
-                    args.config_path, analyzers=selected_analyzers, auth=auth
+                    args.config_path,
+                    analyzers=selected_analyzers,
+                    auth=auth,
+                    expand_vars_default=args.expand_vars,
                 )
                 results = await results_to_json(scan_results)
             else:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                 results_by_cfg = await scanner.scan_well_known_mcp_configs(
-                    analyzers=selected_analyzers, auth=auth
+                    analyzers=selected_analyzers,
+                    auth=auth,
+                    expand_vars_default=args.expand_vars,
                 )
                 if args.raw:
                     output = {}
