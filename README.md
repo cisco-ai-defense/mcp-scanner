@@ -71,7 +71,7 @@ export MCP_SCANNER_ENDPOINT="https://us.api.inspect.aidefense.security.cisco.com
 
 #### LLM Configuration (for LLM analyzer)
 
-**Tested LLMs:** Claude ,  OpenAI GPT-4o and GPT-4.1
+**Tested LLMs:** Claude,OpenAI GPT-4o and GPT-4.1
 
 ```bash
 # AWS Bedrock Claude with AWS credentials (profile)
