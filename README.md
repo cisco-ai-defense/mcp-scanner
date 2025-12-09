@@ -71,7 +71,7 @@ export MCP_SCANNER_ENDPOINT="https://us.api.inspect.aidefense.security.cisco.com
 
 #### LLM Configuration (for LLM analyzer)
 
-**Tested LLMs:** OpenAI GPT-4o and GPT-4.1
+**Tested LLMs:** Claude ,  OpenAI GPT-4o and GPT-4.1
 
 ```bash
 # AWS Bedrock Claude with AWS credentials (profile)
@@ -100,6 +100,7 @@ export MCP_SCANNER_LLM_MODEL="azure/gpt-4"
 # For Extended Thinking Models (longer timeout)
 export MCP_SCANNER_LLM_TIMEOUT=300
 ```
+Note: If you are using models from Azure Foundry, set the MCP_SCANNER_LLM_BASE_URL and MCP_SCANNER_LLM_MODEL environment variables, as Microsoft has deprecated the need for MCP_SCANNER_LLM_API_VERSION.
 
 #### Using a Local LLM (No API Key Required)
 
