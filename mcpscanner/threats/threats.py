@@ -256,12 +256,12 @@ class ThreatMapping:
         # General Behavioral & Metadata Threats
         "GENERAL DESCRIPTION-CODE MISMATCH": {
             "scanner_category": "GENERAL DESCRIPTION-CODE MISMATCH",
-            "severity": "LOW",
+            "severity": "INFO",
             "aitech": "AITech-12.1",
             "aitech_name": "Tool Exploitation",
             "aisubtech": "AISubtech-12.1.2",
             "aisubtech_name": "Tool Poisoning",
-            "description": "General behavioral mismatch category that don't fit other specific categories but still show semantic or functional divergence between declared purpose (decorator description, docstring, or metadata) and actual implemented logic, indicating hidden or deceptive functionality.",
+            "description": "General behavioral mismatch category for non-security issues like missing docstrings with safe code implementation. Only receives INFO severity when there's no security implication - purely documentation quality issues.",
         },
     }
     

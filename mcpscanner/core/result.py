@@ -247,7 +247,7 @@ def process_scan_results(
     unsafe_tools = [r for r in results if not r.is_safe]
 
     # Count findings by severity
-    severity_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "SAFE": 0, "UNKNOWN": 0}
+    severity_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0, "SAFE": 0, "UNKNOWN": 0}
     threat_types = {}
 
     for result in unsafe_tools:
@@ -378,7 +378,7 @@ def get_highest_severity(severities: List[str]) -> str:
     Returns:
         str: The highest severity level.
     """
-    severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "SAFE": 1}
+    severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "SAFE": 0}
     highest = "SAFE"
     highest_value = 0
 
@@ -474,6 +474,7 @@ def format_results_as_json(
 
                 # Collect MCP Taxonomy info (use first finding's taxonomy)
                 mcp_taxonomy = None
+                threat_vuln_classification = None
                 
                 for vuln in vulns:
                     severities.append(vuln.severity)
@@ -496,6 +497,10 @@ def format_results_as_json(
                     # Collect MCP Taxonomy from first finding
                     if mcp_taxonomy is None and hasattr(vuln, "mcp_taxonomy") and vuln.mcp_taxonomy:
                         mcp_taxonomy = vuln.mcp_taxonomy
+                    
+                    # Collect threat/vulnerability classification from first finding
+                    if threat_vuln_classification is None and hasattr(vuln, "details") and vuln.details:
+                        threat_vuln_classification = vuln.details.get("threat_vulnerability_classification")
 
                 # Get the highest severity for this analyzer
                 analyzer_severity = get_highest_severity(severities)
@@ -519,6 +524,10 @@ def format_results_as_json(
                     "threat_names": list(set(threat_names)),  # Deduplicate threat names
                     "threat_summary": threat_summary,
                 }
+                
+                # Add threat/vulnerability classification if available
+                if threat_vuln_classification:
+                    analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
                 
                 # Add MCP Taxonomy if available (this replaces threat_names and threat_summary)
                 if mcp_taxonomy:

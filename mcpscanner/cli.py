@@ -138,20 +138,31 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
                 if taxonomy_key not in existing_keys:
                     mcp_taxonomies.append(finding.mcp_taxonomy)
         
+        # Get threat/vulnerability classification from first finding
+        threat_vuln_classification = None
+        if func_findings and func_findings[0].details:
+            threat_vuln_classification = func_findings[0].details.get("threat_vulnerability_classification")
+        
+        analyzer_finding = {
+            "severity": max_severity,
+            "threat_summary": func_findings[0].summary,
+            "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
+            "total_findings": len(func_findings),
+            "source_file": source_file,
+            "mcp_taxonomies": mcp_taxonomies,
+        }
+        
+        # Add threat/vulnerability classification if available
+        if threat_vuln_classification:
+            analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
+        
         results.append({
             "tool_name": func_name,
             "tool_description": f"MCP function from {display_name}",
             "status": "completed",
             "is_safe": False,
             "findings": {
-                "behavioral_analyzer": {
-                    "severity": max_severity,
-                    "threat_summary": func_findings[0].summary,
-                    "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
-                    "total_findings": len(func_findings),
-                    "source_file": source_file,
-                    "mcp_taxonomies": mcp_taxonomies,
-                }
+                "behavioral_analyzer": analyzer_finding
             }
         })
     
@@ -811,6 +822,7 @@ async def main():
         help="Output format (default: %(default)s)",
     )
 
+
     # Stdio subcommand
     p_stdio = subparsers.add_parser(
         "stdio", help="Scan an MCP server via stdio (local command execution)"
@@ -1297,8 +1309,26 @@ async def main():
                         if finding.mcp_taxonomy not in mcp_taxonomies:
                             mcp_taxonomies.append(finding.mcp_taxonomy)
                 
+                # Get threat/vulnerability classification from first finding
+                threat_vuln_classification = None
+                if func_findings and func_findings[0].details:
+                    threat_vuln_classification = func_findings[0].details.get("threat_vulnerability_classification")
+                
                 # Determine if safe based on severity
                 is_safe = max_severity in ["SAFE", "LOW"]
+                
+                analyzer_finding = {
+                    "severity": max_severity,
+                    "threat_summary": func_findings[0].summary,
+                    "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
+                    "total_findings": len(func_findings),
+                    "source_file": source_file,  # Include source file in output
+                    "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
+                }
+                
+                # Add threat/vulnerability classification if available
+                if threat_vuln_classification:
+                    analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
                 
                 results.append({
                     "tool_name": func_name,  # This should match the name from decorator params or function name
@@ -1306,14 +1336,7 @@ async def main():
                     "status": "completed",
                     "is_safe": is_safe,
                     "findings": {
-                        "behavioral_analyzer": {
-                            "severity": max_severity,
-                            "threat_summary": func_findings[0].summary,
-                            "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
-                            "total_findings": len(func_findings),
-                            "source_file": source_file,  # Include source file in output
-                            "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
-                        }
+                        "behavioral_analyzer": analyzer_finding
                     }
                 })
             
@@ -1326,6 +1349,23 @@ async def main():
                     "is_safe": True,
                     "findings": {}
                 })
+            
+            # Automatically filter out VULNERABILITY findings - only show THREATS
+            filtered_results = []
+            for result in results:
+                # Check if result has behavioral_analyzer findings with classification
+                if "findings" in result and "behavioral_analyzer" in result["findings"]:
+                    analyzer_data = result["findings"]["behavioral_analyzer"]
+                    classification = analyzer_data.get("threat_vulnerability_classification", "").upper()
+                    
+                    # Only include THREAT findings, exclude VULNERABILITY
+                    if classification == "THREAT":
+                        filtered_results.append(result)
+                # Keep results without findings (safe results)
+                elif not result.get("findings"):
+                    filtered_results.append(result)
+            
+            results = filtered_results
             
             # Save output if requested
             if args.output:

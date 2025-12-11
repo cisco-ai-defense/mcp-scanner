@@ -133,7 +133,7 @@ class AlignmentLLMClient:
                             "You are a security expert analyzing MCP tools. "
                             "You receive complete dataflow, taint analysis, and code context. "
                             "Analyze if the docstring accurately describes what the code actually does. "
-                            "Respond only with valid JSON."
+                            "Respond ONLY with valid JSON. Do not include any markdown formatting or code blocks."
                         )
                     },
                     {"role": "user", "content": prompt}
@@ -142,8 +142,12 @@ class AlignmentLLMClient:
                 "temperature": self._temperature,
                 "timeout": self._llm_timeout,
                 "api_key": self._api_key,
-                "response_format": {"type": "json_object"},  # Enable JSON mode
             }
+            
+            # Only enable JSON mode for supported models/providers
+            # Azure OpenAI with older API versions may not support this
+            if not self._model.startswith("azure/"):
+                request_params["response_format"] = {"type": "json_object"}
             
             # Add optional parameters if configured
             if self._base_url:
