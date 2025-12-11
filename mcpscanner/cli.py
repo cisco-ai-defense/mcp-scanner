@@ -14,820 +14,1640 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Report generator module for MCP Scanner SDK.
 
-This module provides comprehensive report generation and formatting capabilities
-for MCP security scan results, supporting multiple output formats and filtering options.
+#!/usr/bin/env python3
+"""
+MCP Security Scanner
+
+A comprehensive security scanning tool for Model Context Protocol (MCP) servers.
+This tool analyzes MCP tools for potential security findings using multiple
+analysis engines including API-based classification, YARA pattern matching,
+and LLM-powered threat detection.
 """
 
+import argparse
+import asyncio
 import json
-from typing import Any, Dict, List, Optional, Union
+import logging
+import os
+import sys
+import time
+import traceback
+from typing import Any, Dict, List, Optional
+from mcpscanner.utils.logging_config import get_logger
 
-from .models import OutputFormat, SeverityFilter
+from mcpscanner import Config, Scanner
+from mcpscanner.core.models import AnalyzerEnum
+from mcpscanner.core.report_generator import (
+    OutputFormat,
+    ReportGenerator,
+    SeverityFilter,
+    results_to_json,
+)
+from mcpscanner.utils.logging_config import set_verbose_logging
+from mcpscanner.core.auth import Auth
+from mcpscanner.core.mcp_models import StdioServer
+
+logger = get_logger(__name__)
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
-async def results_to_json(scan_results) -> List[Dict[str, Any]]:
-    """Convert scan results to JSON format.
+def _get_endpoint_from_env() -> str:
+    return os.environ.get("MCP_SCANNER_ENDPOINT", "")
 
-    Handles ToolScanResult, PromptScanResult, and ResourceScanResult objects.
+
+def _build_config(
+    selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None
+) -> Config:
+    api_key = os.environ.get("MCP_SCANNER_API_KEY", "")
+    llm_api_key = os.environ.get("MCP_SCANNER_LLM_API_KEY", "")
+    llm_base_url = os.environ.get("MCP_SCANNER_LLM_BASE_URL")
+    llm_api_version = os.environ.get("MCP_SCANNER_LLM_API_VERSION")
+    llm_model = os.environ.get("MCP_SCANNER_LLM_MODEL")
+    llm_timeout = os.environ.get("MCP_SCANNER_LLM_TIMEOUT")
+    endpoint_url = endpoint_url or _get_endpoint_from_env()
+
+    config_params = {
+        "api_key": api_key if AnalyzerEnum.API in selected_analyzers else "",
+        "endpoint_url": endpoint_url,
+        "llm_provider_api_key": (
+            llm_api_key if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIORAL in selected_analyzers) else ""
+        ),
+        "llm_model": llm_model if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIORAL in selected_analyzers) else "",
+    }
+
+    if llm_base_url:
+        config_params["llm_base_url"] = llm_base_url
+    if llm_api_version:
+        config_params["llm_api_version"] = llm_api_version
+    if llm_timeout:
+        config_params["llm_timeout"] = float(llm_timeout)
+
+    return Config(**config_params)
+
+
+async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
+    """Run behavioral analyzer on source code and format results.
+    
+    Args:
+        source_path: Path to Python file or directory to analyze
+        
+    Returns:
+        List of formatted result dictionaries
+    """
+    import os
+    from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+    
+    cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
+    analyzer = BehavioralCodeAnalyzer(cfg)
+    
+    # Analyze the source file
+    findings = await analyzer.analyze(
+        source_path,
+        context={"file_path": source_path}
+    )
+    
+    # Format results to match Scanner output structure
+    findings_by_function = {}
+    for finding in findings:
+        func_name = finding.details.get("function_name", "unknown") if finding.details else "unknown"
+        
+        if func_name not in findings_by_function:
+            findings_by_function[func_name] = []
+        findings_by_function[func_name].append(finding)
+    
+    # Create ToolScanResult-like structure
+    results = []
+    for func_name, func_findings in findings_by_function.items():
+        severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+        max_severity = max((f.severity for f in func_findings), 
+                         key=lambda s: severity_order.get(s, 0))
+        
+        source_file = func_findings[0].details.get("source_file", source_path) if func_findings[0].details else source_path
+        display_name = os.path.basename(source_file) if source_file != source_path else source_path
+        
+        # Collect unique MCP taxonomies from all findings
+        mcp_taxonomies = []
+        for finding in func_findings:
+            if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+                taxonomy_key = (finding.mcp_taxonomy.get("aitech"), finding.mcp_taxonomy.get("aisubtech"))
+                existing_keys = [(t.get("aitech"), t.get("aisubtech")) for t in mcp_taxonomies]
+                if taxonomy_key not in existing_keys:
+                    mcp_taxonomies.append(finding.mcp_taxonomy)
+        
+        # Get threat/vulnerability classification from first finding
+        threat_vuln_classification = None
+        if func_findings and func_findings[0].details:
+            threat_vuln_classification = func_findings[0].details.get("threat_vulnerability_classification")
+        
+        analyzer_finding = {
+            "severity": max_severity,
+            "threat_summary": func_findings[0].summary,
+            "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
+            "total_findings": len(func_findings),
+            "source_file": source_file,
+            "mcp_taxonomies": mcp_taxonomies,
+        }
+        
+        # Add threat/vulnerability classification if available
+        if threat_vuln_classification:
+            analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
+        
+        results.append({
+            "tool_name": func_name,
+            "tool_description": f"MCP function from {display_name}",
+            "status": "completed",
+            "is_safe": False,
+            "findings": {
+                "behavioral_analyzer": analyzer_finding
+            }
+        })
+    
+    if not results:
+        results = [{
+            "tool_name": "No MCP functions found",
+            "tool_description": f"No @mcp.tool() decorators found in {source_path}",
+            "status": "completed",
+            "is_safe": True,
+            "findings": {}
+        }]
+    
+    return results
+
+
+async def scan_mcp_server_direct(
+    server_url: str,
+    analyzers: List[AnalyzerEnum],
+    output_file: Optional[str] = None,
+    verbose: bool = False,
+    rules_path: Optional[str] = None,
+    endpoint_url: Optional[str] = None,
+) -> List[Any]:
+    """
+    Perform comprehensive security scanning of an MCP server using Scanner directly.
 
     Args:
-        scan_results: List of scan result objects (ToolScanResult, PromptScanResult, or ResourceScanResult)
+        server_url: URL of the MCP server to scan
+        analyzers: List of analyzers to run
+        output_file: Optional file to save the scan results
+        verbose: Whether to print verbose output
+        rules_path: Optional custom path to YARA rules directory
 
     Returns:
-        List of dictionaries containing formatted scan results
+        List of scan results
     """
-    json_results = []
-    for result in scan_results:
-        findings_by_analyzer: Dict[str, Dict[str, Any]] = {}
-        summaries_by_analyzer: Dict[str, List[str]] = {}
+    if verbose:
+        enabled_analyzers = [analyzer.value.upper() for analyzer in analyzers]
+        print(f"🔍 Scanning MCP server: {server_url}")
+        print(
+            f"   Analyzers: {', '.join(enabled_analyzers) if enabled_analyzers else 'None'}"
+        )
+        if rules_path:
+            print(f"   Custom YARA Rules: {rules_path}")
 
-        # Initialize all requested analyzers as SAFE first
-        if hasattr(result, "analyzers"):
-            for analyzer in result.analyzers:
-                analyzer_name = str(analyzer).lower()
-                if hasattr(analyzer, "value"):  # AnalyzerEnum objects
-                    analyzer_name = analyzer.value.lower()
-                analyzer_key = analyzer_name + "_analyzer"
-                findings_by_analyzer[analyzer_key] = {
-                    "severity": "SAFE",
-                    "threat_names": [],
-                    "threat_summary": "No threats detected",
-                    "total_findings": 0,
-                }
-                summaries_by_analyzer[analyzer_key] = []
+    try:
+        config = _build_config(analyzers, endpoint_url)
+        scanner = Scanner(config, rules_dir=rules_path)
 
-        # Process actual findings and update analyzer data
-        for finding in result.findings:
-            analyzer = finding.analyzer.lower() + "_analyzer"
-            if analyzer not in findings_by_analyzer:
-                findings_by_analyzer[analyzer] = {
-                    "severity": "SAFE",
-                    "threat_names": [],
-                    "threat_summary": "N/A",
-                    "total_findings": 0,
-                }
-                summaries_by_analyzer[analyzer] = []
+        # Scan all tools on the server
+        start_time = time.time()
+        results = await scanner.scan_remote_server_tools(
+            server_url, auth=None, analyzers=analyzers
+        )
+        elapsed_time = time.time() - start_time
 
-            findings_by_analyzer[analyzer]["total_findings"] += 1
-
-            # Collect summary from finding
-            if hasattr(finding, "summary") and finding.summary:
-                if finding.summary not in summaries_by_analyzer[analyzer]:
-                    summaries_by_analyzer[analyzer].append(finding.summary)
-
-            threat_type = (
-                finding.details.get("threat_type", "unknown")
-                if getattr(finding, "details", None)
-                else "unknown"
+        if verbose:
+            print(
+                f"✅ Scan completed in {elapsed_time:.2f}s - Found {len(results)} tools"
             )
-            if threat_type not in findings_by_analyzer[analyzer]["threat_names"]:
-                findings_by_analyzer[analyzer]["threat_names"].append(threat_type)
-            if finding.severity == "HIGH":
-                findings_by_analyzer[analyzer]["severity"] = "HIGH"
-            elif (
-                findings_by_analyzer[analyzer]["severity"] != "HIGH"
-                and finding.severity == "MEDIUM"
-            ):
-                findings_by_analyzer[analyzer]["severity"] = "MEDIUM"
-            elif (
-                findings_by_analyzer[analyzer]["severity"] in ["SAFE", "LOW"]
-                and finding.severity == "LOW"
-            ):
-                findings_by_analyzer[analyzer]["severity"] = "LOW"
-            
-            # Collect MCP Taxonomy from all findings
-            if "mcp_taxonomies" not in findings_by_analyzer[analyzer]:
-                findings_by_analyzer[analyzer]["mcp_taxonomies"] = []
-            
-            if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
-                # Check if this taxonomy is unique (based on aitech + aisubtech)
-                taxonomy_key = (finding.mcp_taxonomy.get("aitech"), finding.mcp_taxonomy.get("aisubtech"))
-                existing_keys = [(t.get("aitech"), t.get("aisubtech")) for t in findings_by_analyzer[analyzer]["mcp_taxonomies"]]
-                
-                if taxonomy_key not in existing_keys:
-                    findings_by_analyzer[analyzer]["mcp_taxonomies"].append(finding.mcp_taxonomy)
 
-        # Use analyzer-provided summaries for analyzers with findings
-        for analyzer, data in findings_by_analyzer.items():
-            if data["total_findings"] > 0:
-                summaries = summaries_by_analyzer.get(analyzer, [])
-                if summaries:
-                    # Use first summary as threat_summary (analyzers provide consistent summaries)
-                    data["threat_summary"] = summaries[0]
-                else:
-                    # Fallback to threat_names based summary
-                    threat_names = data["threat_names"]
-                    if len(threat_names) == 1:
-                        data["threat_summary"] = (
-                            f"Detected 1 threat: {threat_names[0].replace('_', ' ')}"
-                        )
-                    else:
-                        data["threat_summary"] = (
-                            f"Detected {len(threat_names)} threats: {', '.join([t.replace('_', ' ') for t in threat_names])}"
-                        )
+        # Normalize ScanResult objects
+        json_results = await results_to_json(results)
 
-        # Build result dict based on result type
-        result_dict = {
-            "status": result.status,
-            "is_safe": result.is_safe,
-            "findings": findings_by_analyzer,
-        }
-        
-        # Add type-specific fields
-        if hasattr(result, "tool_name"):
-            # ToolScanResult
-            result_dict["tool_name"] = result.tool_name
-            result_dict["tool_description"] = result.tool_description
-            result_dict["item_type"] = "tool"
-        elif hasattr(result, "prompt_name"):
-            # PromptScanResult
-            result_dict["prompt_name"] = result.prompt_name
-            result_dict["prompt_description"] = result.prompt_description
-            result_dict["item_type"] = "prompt"
-        elif hasattr(result, "resource_uri"):
-            # ResourceScanResult
-            result_dict["resource_uri"] = result.resource_uri
-            result_dict["resource_name"] = result.resource_name
-            result_dict["resource_mime_type"] = result.resource_mime_type
-            result_dict["item_type"] = "resource"
+        if output_file:
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(json_results, f, indent=2)
+            if verbose:
+                print(f"Results saved to {output_file}")
 
-        # Include server_source if available
-        if hasattr(result, "server_source") and result.server_source:
-            result_dict["server_source"] = result.server_source
+        return json_results
 
-        # Include server_name if available
-        if hasattr(result, "server_name") and result.server_name:
-            result_dict["server_name"] = result.server_name
-
-        json_results.append(result_dict)
-    return json_results
+    except Exception as e:
+        # Handle MCP-specific exceptions gracefully
+        if e.__class__.__name__ in ('MCPConnectionError', 'MCPAuthenticationError', 'MCPServerNotFoundError'):
+            print(f"❌ Connection Error: {e}")
+            if verbose:
+                print("💡 Troubleshooting tips:")
+                print(f"   • Make sure an MCP server is running at {server_url}")
+                print("   • Verify the URL is correct (including protocol and port)")
+                print("   • Check if the server is accessible from your network")
+            return []
+        # All other exceptions
+        print(f"❌ Error scanning server: {e}")
+        if verbose:
+            traceback.print_exc()
+        return []
 
 
-class ReportGenerator:
-    """Generates comprehensive reports from MCP scan results in various formats."""
+def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
+    """
+    Display the scan results in a readable format.
 
-    def __init__(self, scan_data: Union[Dict[str, Any], str]):
-        """Initialize the formatter with scan data.
+    Args:
+        results: Scan results from the MCP Scanner API
+        detailed: Whether to show detailed results
+    """
+    print("\n=== MCP Scanner Results ===\n")
 
-        Args:
-            scan_data: Raw scan results as dict or JSON string
-        """
-        if isinstance(scan_data, str):
-            self.data = json.loads(scan_data)
-        else:
-            self.data = scan_data
+    print(f"Server URL: {results.get('server_url', 'N/A')}")
 
-        self.server_url = self.data.get("server_url", "Unknown")
-        self.scan_results = self.data.get("scan_results", [])
-        self.requested_analyzers = self.data.get("requested_analyzers", [])
+    # Display scan results
+    scan_results = results.get("scan_results", [])
+    print(f"Tools scanned: {len(scan_results)}")
 
-        # Determine which analyzers were used by checking if any results have findings from them
-        self.analyzers_used = set()
-        for result in self.scan_results:
-            findings = result.get("findings", {})
-            for analyzer_key in findings.keys():
-                self.analyzers_used.add(analyzer_key)
+    safe_tools = [tool for tool in scan_results if tool.get("is_safe", False)]
+    unsafe_tools = [tool for tool in scan_results if not tool.get("is_safe", False)]
 
-        # Convert requested analyzer names to the format used in findings
-        self.requested_analyzer_keys = set()
-        for analyzer in self.requested_analyzers:
-            if analyzer.upper() == "YARA":
-                self.requested_analyzer_keys.add("yara_analyzer")
-            elif analyzer.upper() == "API":
-                self.requested_analyzer_keys.add("api_analyzer")
-            elif analyzer.upper() == "LLM":
-                self.requested_analyzer_keys.add("llm_analyzer")
-            elif analyzer.upper() == "BEHAVIORAL":
-                self.requested_analyzer_keys.add("behavioral_analyzer")
+    print(f"Safe tools: {len(safe_tools)}")
+    print(f"Unsafe tools: {len(unsafe_tools)}")
 
-    def format_output(
-        self,
-        format_type: OutputFormat = OutputFormat.SUMMARY,
-        tool_filter: Optional[str] = None,
-        analyzer_filter: Optional[str] = None,
-        severity_filter: SeverityFilter = SeverityFilter.ALL,
-        show_safe: bool = True,
-    ) -> str:
-        """Format the output based on specified parameters.
+    # Display unsafe tools
+    if unsafe_tools:
+        print("\n=== Unsafe Tools ===\n")
+        for i, tool in enumerate(unsafe_tools, 1):
+            print(f"{i}. {tool.get('tool_name', 'Unknown')}")
+            findings = tool.get("findings", {})
 
-        Args:
-            format_type: Type of output format
-            tool_filter: Filter by specific tool name
-            analyzer_filter: Filter by specific analyzer (api_analyzer, yara_analyzer, llm_analyzer)
-            severity_filter: Filter by severity level
-            show_safe: Whether to show safe tools
+            # Count total findings across all analyzers
+            total_findings = sum(
+                analyzer_data.get("total_findings", 0)
+                for analyzer_data in findings.values()
+                if isinstance(analyzer_data, dict)
+            )
+            print(f"   Findings: {total_findings}")
 
-        Returns:
-            Formatted output string
-        """
-        # Apply filters
-        filtered_results = self._apply_filters(
-            tool_filter, analyzer_filter, severity_filter, show_safe
-        )
-
-        # Format based on type
-        if format_type == OutputFormat.RAW:
-            return self._format_raw()
-        if format_type == OutputFormat.SUMMARY:
-            return self._format_summary(filtered_results)
-        if format_type == OutputFormat.DETAILED:
-            return self._format_detailed(filtered_results)
-        if format_type == OutputFormat.BY_TOOL:
-            return self._format_by_tool(filtered_results)
-        if format_type == OutputFormat.BY_ANALYZER:
-            return self._format_by_analyzer(filtered_results, analyzer_filter)
-        if format_type == OutputFormat.BY_SEVERITY:
-            return self._format_by_severity(filtered_results, severity_filter)
-        if format_type == OutputFormat.TABLE:
-            return self._format_table(filtered_results)
-        return self._format_summary(filtered_results)
-
-    def _apply_filters(
-        self,
-        tool_filter: Optional[str],
-        analyzer_filter: Optional[str],
-        severity_filter: SeverityFilter,
-        show_safe: bool,
-    ) -> List[Dict[str, Any]]:
-        """Apply filters to scan results."""
-        filtered = []
-
-        for result in self.scan_results:
-            # Tool name filter
-            if (
-                tool_filter
-                and tool_filter.lower() not in result.get("tool_name", "").lower()
-            ):
-                continue
-
-            # Safe filter
-            if not show_safe and result.get("is_safe", True):
-                continue
-
-            # Apply analyzer and severity filters
-            if analyzer_filter or severity_filter != SeverityFilter.ALL:
-                filtered_result = self._filter_result_findings(
-                    result, analyzer_filter, severity_filter
-                )
-                if filtered_result:
-                    filtered.append(filtered_result)
-            else:
-                filtered.append(result)
-
-        return filtered
-
-    def _filter_result_findings(
-        self,
-        result: Dict[str, Any],
-        analyzer_filter: Optional[str],
-        severity_filter: SeverityFilter,
-    ) -> Optional[Dict[str, Any]]:
-        """Filter findings within a result based on analyzer and severity."""
-        findings = result.get("findings", {})
-        filtered_findings = {}
-
-        for analyzer, analyzer_data in findings.items():
-            # Analyzer filter
-            if analyzer_filter and analyzer_filter != analyzer:
-                continue
-
-            # Severity filter
-            analyzer_severity = analyzer_data.get("severity", "SAFE")
-            if severity_filter != SeverityFilter.ALL:
-                if severity_filter.value.upper() != analyzer_severity:
-                    continue
-
-            filtered_findings[analyzer] = analyzer_data
-
-        if not filtered_findings:
-            return None
-
-        # Create filtered result
-        filtered_result = result.copy()
-        filtered_result["findings"] = filtered_findings
-        return filtered_result
-
-    def _format_raw(self) -> str:
-        """Format as raw JSON."""
-        return json.dumps(self.data, indent=2)
-
-    def _format_summary(self, results: List[Dict[str, Any]]) -> str:
-        """Format as summary view."""
-        output = ["=== MCP Scanner Results Summary ===\n"]
-
-        # Use server_source if available for config-based scans
-        if results and "server_source" in results[0] and results[0]["server_source"]:
-            scan_target = results[0]["server_source"]
-        else:
-            scan_target = self.server_url
-
-        output.append(f"Scan Target: {scan_target}")
-        output.append(f"Total tools scanned: {len(self.scan_results)}")
-
-        if not results:
-            output.append("No results match the specified filters.\n")
-            return "\n".join(output)
-
-        # Count by safety
-        safe_count = sum(1 for r in results if r.get("is_safe", True))
-        unsafe_count = len(results) - safe_count
-
-        output.append(f"Items matching filters: {len(results)}")
-        output.append(f"Safe items: {safe_count}")
-        output.append(f"Unsafe items: {unsafe_count}")
-
-        unsafe_results = [r for r in results if not r.get("is_safe", True)]
-
-        if unsafe_results:
-            output.append("\n=== Unsafe Items ===")
-            for i, result in enumerate(unsafe_results, 1):
-                item_type = result.get("item_type", "tool")
-                
-                # Get item name based on type
-                if item_type == "tool":
-                    item_name = result.get("tool_name", "Unknown")
-                elif item_type == "prompt":
-                    item_name = result.get("prompt_name", "Unknown")
-                elif item_type == "resource":
-                    item_name = result.get("resource_name", "Unknown")
-                else:
-                    item_name = "Unknown"
-                
-                findings = result.get("findings", {})
-
-                # Get the highest severity and total findings count
-                highest_severity = "SAFE"
-                total_findings = 0
-                for analyzer_data in findings.values():
-                    severity = analyzer_data.get("severity", "SAFE")
-                    if self._get_severity_order(severity) > self._get_severity_order(
-                        highest_severity
+            if detailed and findings:
+                finding_num = 1
+                for analyzer_name, analyzer_data in findings.items():
+                    if (
+                        isinstance(analyzer_data, dict)
+                        and analyzer_data.get("total_findings", 0) > 0
                     ):
-                        highest_severity = severity
-                    total_findings += analyzer_data.get("total_findings", 0)
+                        # Clean up analyzer name for display
+                        clean_analyzer_name = analyzer_name.replace(
+                            "_analyzer", ""
+                        ).upper()
 
-                # Show server name for config-based scans
-                if "server_name" in result and result["server_name"]:
-                    output.append(
-                        f"{i}. {item_name} ({item_type}) (Server: {result['server_name']}) - {highest_severity} ({total_findings} findings)"
-                    )
-                else:
-                    output.append(
-                        f"{i}. {item_name} ({item_type}) - {highest_severity} ({total_findings} findings)"
-                    )
+                        print(
+                            f"   {finding_num}. {analyzer_data.get('threat_summary', 'No summary')}"
+                        )
+                        print(
+                            f"      Severity: {analyzer_data.get('severity', 'Unknown')}"
+                        )
+                        print(f"      Analyzer: {clean_analyzer_name}")
 
-        return "\n".join(output)
+                        # Display threat types if available
+                        threat_names = analyzer_data.get("threat_names", [])
+                        if threat_names:
+                            threat_display = ", ".join(
+                                [t.replace("_", " ").title() for t in threat_names]
+                            )
+                            print(f"      Threats: {threat_display}")
+                        
+                        # Display MCP Taxonomy if available
+                        mcp_taxonomy = analyzer_data.get("mcp_taxonomy")
+                        if mcp_taxonomy:
+                            aitech = mcp_taxonomy.get("aitech")
+                            aitech_name = mcp_taxonomy.get("aitech_name")
+                            aisubtech = mcp_taxonomy.get("aisubtech")
+                            aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                            description = mcp_taxonomy.get("description")
+                            
+                            if aitech:
+                                print(f"      Technique: {aitech} - {aitech_name}")
+                            if aisubtech:
+                                print(f"      Sub-Technique: {aisubtech} - {aisubtech_name}")
+                            if description:
+                                print(f"      Description: {description}")
 
-    def _format_detailed(self, results: List[Dict[str, Any]]) -> str:
-        """Format as detailed view."""
-        output = ["=== MCP Scanner Detailed Results ===\n"]
+                        print()
+                        finding_num += 1
+            print()
 
-        # Use server_source if available for config-based scans
-        if results and "server_source" in results[0] and results[0]["server_source"]:
-            scan_target = results[0]["server_source"]
+
+def display_prompt_results_table(results: List[Dict[str, Any]], server_url: str) -> None:
+    """Display prompt scan results in table format."""
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        print("⚠️  tabulate package not installed. Install with: pip install tabulate")
+        print("Falling back to summary format...\n")
+        display_prompt_results(results, server_url, detailed=False)
+        return
+
+    print("\n=== MCP Prompt Scanner Results (Table) ===\n")
+    print(f"Server URL: {server_url}\n")
+
+    # Prepare table data
+    table_data = []
+    for result in results:
+        status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        prompt_name = result.get("prompt_name", "Unknown")
+        desc = result.get("prompt_description", "")
+        desc_short = desc[:40] + "..." if len(desc) > 40 else desc
+        findings_count = len(result.get("findings", []))
+        status = result.get("status", "unknown")
+
+        table_data.append([
+            status_icon,
+            prompt_name,
+            desc_short,
+            findings_count,
+            status
+        ])
+
+    headers = ["Status", "Prompt Name", "Description", "Findings", "Scan Status"]
+    print(tabulate(table_data, headers=headers, tablefmt="grid"))
+
+    # Summary
+    safe = sum(1 for r in results if r.get("is_safe", False))
+    unsafe = sum(1 for r in results if not r.get("is_safe", False))
+    print(f"\n📊 Summary: {len(results)} total | {safe} safe | {unsafe} unsafe")
+
+
+def display_resource_results_table(results: List[Dict[str, Any]], server_url: str) -> None:
+    """Display resource scan results in table format."""
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        print("⚠️  tabulate package not installed. Install with: pip install tabulate")
+        print("Falling back to summary format...\n")
+        display_resource_results(results, server_url, detailed=False)
+        return
+
+    print("\n=== MCP Resource Scanner Results (Table) ===\n")
+    print(f"Server URL: {server_url}\n")
+
+    # Prepare table data
+    table_data = []
+    for result in results:
+        status = result.get("status", "unknown")
+
+        if status == "completed":
+            status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        elif status == "skipped":
+            status_icon = "⏭️"
         else:
-            scan_target = self.server_url
+            status_icon = "❌"
 
-        output.append(f"Scan Target: {scan_target}\n")
+        resource_name = result.get("resource_name", "Unknown")
+        uri = result.get("resource_uri", "N/A")
+        uri_short = uri[:40] + "..." if len(uri) > 40 else uri
+        mime_type = result.get("resource_mime_type", "unknown")
+        findings_count = len(result.get("findings", [])) if status == "completed" else "-"
 
-        if not results:
-            output.append("No results match the specified filters.\n")
-            return "\n".join(output)
+        table_data.append([
+            status_icon,
+            resource_name,
+            uri_short,
+            mime_type,
+            findings_count,
+            status
+        ])
 
-        for i, result in enumerate(results, 1):
-            item_type = result.get("item_type", "tool")
-            status = result.get("status", "Unknown")
-            is_safe = result.get("is_safe", True)
-            findings = result.get("findings", {})
+    headers = ["Status", "Resource Name", "URI", "MIME Type", "Findings", "Scan Status"]
+    print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
-            # Get item name and description based on type
-            if item_type == "tool":
-                item_name = result.get("tool_name", "Unknown")
-                item_label = "Tool"
-            elif item_type == "prompt":
-                item_name = result.get("prompt_name", "Unknown")
-                item_label = "Prompt"
-            elif item_type == "resource":
-                item_name = result.get("resource_name", "Unknown")
-                item_label = "Resource"
-            else:
-                item_name = "Unknown"
-                item_label = "Item"
+    # Summary
+    completed = [r for r in results if r.get("status") == "completed"]
+    skipped = [r for r in results if r.get("status") == "skipped"]
+    failed = [r for r in results if r.get("status") == "failed"]
+    safe = sum(1 for r in completed if r.get("is_safe", False))
+    unsafe = sum(1 for r in completed if not r.get("is_safe", False))
 
-            # Show server name for config-based scans
-            if "server_name" in result and result["server_name"]:
-                output.append(
-                    f"{item_label} {i}: {item_name} (Server: {result['server_name']})"
+    print(f"\n📊 Summary: {len(results)} total | {len(completed)} scanned | {len(skipped)} skipped | {len(failed)} failed")
+    if completed:
+        print(f"   Security: {safe} safe | {unsafe} unsafe")
+
+
+def display_prompt_results(results: List[Dict[str, Any]], server_url: str, detailed: bool = False) -> None:
+    """
+    Display prompt scan results in a readable format.
+
+    Args:
+        results: List of prompt scan results
+        server_url: The server URL that was scanned
+        detailed: Whether to show detailed results
+    """
+    print("\n=== MCP Prompt Scanner Results ===\n")
+    print(f"Server URL: {server_url}")
+    print(f"Prompts scanned: {len(results)}")
+
+    safe_prompts = [p for p in results if p.get("is_safe", False)]
+    unsafe_prompts = [p for p in results if not p.get("is_safe", False)]
+
+    print(f"Safe prompts: {len(safe_prompts)}")
+    print(f"Unsafe prompts: {len(unsafe_prompts)}")
+
+    # Display unsafe prompts
+    if unsafe_prompts:
+        print("\n=== Unsafe Prompts ===\n")
+        for i, prompt in enumerate(unsafe_prompts, 1):
+            print(f"{i}. {prompt.get('prompt_name', 'Unknown')}")
+            if prompt.get('prompt_description'):
+                desc = prompt['prompt_description']
+                print(f"   Description: {desc[:80]}{'...' if len(desc) > 80 else ''}")
+
+            findings = prompt.get("findings", [])
+            print(f"   Findings: {len(findings)}")
+
+            if detailed and findings:
+                for j, finding in enumerate(findings, 1):
+                    print(f"   {j}. {finding.get('summary', 'No summary')}")
+                    print(f"      Severity: {finding.get('severity', 'Unknown')}")
+                    print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
+
+                    details = finding.get("details", {})
+                    if details.get("primary_threats"):
+                        threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
+                        print(f"      Threats: {threats}")
+                    
+                    mcp_taxonomy = finding.get("mcp_taxonomy")
+                    if mcp_taxonomy:
+                        aitech = mcp_taxonomy.get("aitech")
+                        aitech_name = mcp_taxonomy.get("aitech_name")
+                        aisubtech = mcp_taxonomy.get("aisubtech")
+                        aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                        description = mcp_taxonomy.get("description")
+                        
+                        if aitech:
+                            print(f"      Technique: {aitech} - {aitech_name}")
+                        if aisubtech:
+                            print(f"      Sub-Technique: {aisubtech} - {aisubtech_name}")
+                        if description:
+                            print(f"      Description: {description}")
+                    print()
+            print()
+
+    # Display safe prompts if detailed
+    if detailed and safe_prompts:
+        print("\n=== Safe Prompts ===\n")
+        for i, prompt in enumerate(safe_prompts, 1):
+            print(f"{i}. {prompt.get('prompt_name', 'Unknown')}")
+            if prompt.get('prompt_description'):
+                desc = prompt['prompt_description']
+                print(f"   Description: {desc[:80]}{'...' if len(desc) > 80 else ''}")
+            print()
+
+
+def display_resource_results(results: List[Dict[str, Any]], server_url: str, detailed: bool = False) -> None:
+    """
+    Display resource scan results in a readable format.
+
+    Args:
+        results: List of resource scan results
+        server_url: The server URL that was scanned
+        detailed: Whether to show detailed results
+    """
+    print("\n=== MCP Resource Scanner Results ===\n")
+    print(f"Server URL: {server_url}")
+    print(f"Resources found: {len(results)}")
+
+    completed = [r for r in results if r.get("status") == "completed"]
+    skipped = [r for r in results if r.get("status") == "skipped"]
+    failed = [r for r in results if r.get("status") == "failed"]
+
+    print(f"Scanned: {len(completed)}")
+    print(f"Skipped: {len(skipped)}")
+    print(f"Failed: {len(failed)}")
+
+    if completed:
+        safe_resources = [r for r in completed if r.get("is_safe", False)]
+        unsafe_resources = [r for r in completed if not r.get("is_safe", False)]
+
+        print(f"Safe resources: {len(safe_resources)}")
+        print(f"Unsafe resources: {len(unsafe_resources)}")
+
+        # Display unsafe resources
+        if unsafe_resources:
+            print("\n=== Unsafe Resources ===\n")
+            for i, resource in enumerate(unsafe_resources, 1):
+                print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+                print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+                print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+
+                findings = resource.get("findings", [])
+                print(f"   Findings: {len(findings)}")
+
+                if detailed and findings:
+                    for j, finding in enumerate(findings, 1):
+                        print(f"   {j}. {finding.get('summary', 'No summary')}")
+                        print(f"      Severity: {finding.get('severity', 'Unknown')}")
+                        print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
+
+                        details = finding.get("details", {})
+                        if details.get("primary_threats"):
+                            threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
+                            print(f"      Threats: {threats}")
+                        
+                        # Display MCP Taxonomy if available
+                        mcp_taxonomy = finding.get("mcp_taxonomy")
+                        if mcp_taxonomy:
+                            aitech = mcp_taxonomy.get("aitech")
+                            aitech_name = mcp_taxonomy.get("aitech_name")
+                            aisubtech = mcp_taxonomy.get("aisubtech")
+                            aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                            description = mcp_taxonomy.get("description")
+                            
+                            if aitech:
+                                print(f"      Technique: {aitech} - {aitech_name}")
+                            if aisubtech:
+                                print(f"      Sub-Technique: {aisubtech} - {aisubtech_name}")
+                            if description:
+                                print(f"      Description: {description}")
+                        print()
+                print()
+
+        # Display safe resources if detailed
+        if detailed and safe_resources:
+            print("\n=== Safe Resources ===\n")
+            for i, resource in enumerate(safe_resources, 1):
+                print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+                print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+                print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+                print()
+
+    # Display skipped resources if any
+    if skipped and detailed:
+        print("\n=== Skipped Resources ===\n")
+        for i, resource in enumerate(skipped, 1):
+            print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+            print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+            print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+            print()
+
+
+def display_instructions_results_table(results: List[Dict[str, Any]], server_url: str) -> None:
+    """Display instructions scan results in table format."""
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        print("⚠️  tabulate package not installed. Install with: pip install tabulate")
+        print("Falling back to summary format...\n")
+        display_instructions_results(results, server_url, detailed=False)
+        return
+
+    print("\n=== MCP Instructions Scanner Results (Table) ===\n")
+    print(f"Server URL: {server_url}\n")
+
+    # Prepare table data
+    table_data = []
+    for result in results:
+        status = result.get("status", "unknown")
+        status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        server_name = result.get("server_name", "Unknown")
+        protocol_version = result.get("protocol_version", "N/A")
+        findings_count = len(result.get("findings", []))
+        instructions_preview = result.get("instructions", "")[:50] + "..." if len(result.get("instructions", "")) > 50 else result.get("instructions", "")
+
+        table_data.append([
+            status_icon,
+            server_name,
+            protocol_version,
+            instructions_preview,
+            findings_count,
+            status
+        ])
+
+    headers = ["Status", "Server Name", "Protocol", "Instructions Preview", "Findings", "Scan Status"]
+    print(tabulate(table_data, headers=headers, tablefmt="grid"))
+
+    # Summary
+    safe = sum(1 for r in results if r.get("is_safe", False))
+    unsafe = sum(1 for r in results if not r.get("is_safe", False))
+    print(f"\n📊 Summary: {len(results)} scanned | {safe} safe | {unsafe} unsafe")
+
+
+def display_instructions_results(results: List[Dict[str, Any]], server_url: str, detailed: bool = False) -> None:
+    """Display instructions scan results in a readable format.
+
+    Args:
+        results: List of instructions scan results
+        server_url: The server URL that was scanned
+        detailed: Whether to show detailed results
+    """
+    print("\n=== MCP Instructions Scanner Results ===\n")
+    print(f"Server URL: {server_url}")
+    print(f"Instructions scanned: {len(results)}")
+
+    safe_instructions = [i for i in results if i.get("is_safe", False)]
+    unsafe_instructions = [i for i in results if not i.get("is_safe", False)]
+
+    print(f"Safe: {len(safe_instructions)}")
+    print(f"Unsafe: {len(unsafe_instructions)}")
+
+    # Display unsafe instructions
+    if unsafe_instructions:
+        print("\n=== Unsafe Instructions ===\n")
+        for i, instr in enumerate(unsafe_instructions, 1):
+            print(f"{i}. Server: {instr.get('server_name', 'Unknown')}")
+            print(f"   Protocol: {instr.get('protocol_version', 'N/A')}")
+            instructions_text = instr.get('instructions', '')
+            if instructions_text:
+                preview = instructions_text[:100] + "..." if len(instructions_text) > 100 else instructions_text
+                print(f"   Instructions: {preview}")
+
+            findings = instr.get("findings", [])
+            print(f"   Findings: {len(findings)}")
+
+            if detailed and findings:
+                for j, finding in enumerate(findings, 1):
+                    print(f"   {j}. {finding.get('summary', 'No summary')}")
+                    print(f"      Severity: {finding.get('severity', 'Unknown')}")
+                    print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
+
+                    details = finding.get("details", {})
+                    if details.get("primary_threats"):
+                        threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
+                        print(f"      Threats: {threats}")
+                    
+                    mcp_taxonomy = finding.get("mcp_taxonomy")
+                    if mcp_taxonomy:
+                        aitech = mcp_taxonomy.get("aitech")
+                        aitech_name = mcp_taxonomy.get("aitech_name")
+                        aisubtech = mcp_taxonomy.get("aisubtech")
+                        aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                        description = mcp_taxonomy.get("description")
+                        
+                        if aitech:
+                            print(f"      Technique: {aitech} - {aitech_name}")
+                        if aisubtech:
+                            print(f"      Sub-Technique: {aisubtech} - {aisubtech_name}")
+                        if description:
+                            print(f"      Description: {description}")
+                    print()
+            print()
+
+    # Display safe instructions if detailed
+    if detailed and safe_instructions:
+        print("\n=== Safe Instructions ===\n")
+        for i, instr in enumerate(safe_instructions, 1):
+            print(f"{i}. Server: {instr.get('server_name', 'Unknown')}")
+            print(f"   Protocol: {instr.get('protocol_version', 'N/A')}")
+            instructions_text = instr.get('instructions', '')
+            if instructions_text:
+                preview = instructions_text[:100] + "..." if len(instructions_text) > 100 else instructions_text
+                print(f"   Instructions: {preview}")
+            print()
+
+
+async def main():
+    """Main entry point for the script."""
+    parser = argparse.ArgumentParser(
+        description="MCP Security Scanner - Comprehensive security analysis for MCP servers",
+        epilog="""Examples:
+  %(prog)s                                                    # Basic security scan with summary (all analyzers)
+  %(prog)s --api-key YOUR_API_KEY --endpoint-url <your-endpoint> # Scan with an endpoint
+  %(prog)s --format detailed --api-key YOUR_API_KEY         # Detailed security findings report with API
+  %(prog)s --format by_analyzer --llm-api-key YOUR_LLM_KEY  # Group findings by analysis engine with LLM
+  %(prog)s --format table --analyzers yara                  # YARA-only scanning with table format
+  %(prog)s --analyzers api,yara --severity-filter high      # API and YARA analysis, high severity only
+  %(prog)s --analyzer-filter llm_analyzer --stats           # Show only LLM analysis with statistics
+  %(prog)s --tool-filter "database" --output results.json  # Filter and save results to file
+  %(prog)s --analyzers llm --raw                            # LLM-only scan with raw JSON output
+  %(prog)s --analyzers api,llm --hide-safe                  # API and LLM scan, hide safe results
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Subcommands for scan modes (remote, stdio, config, known-configs, prompts, resources, instructions)
+    subparsers = parser.add_subparsers(dest="cmd")
+
+    p_remote = subparsers.add_parser(
+        "remote", help="Scan a remote MCP server (SSE or streamable HTTP)"
+    )
+    p_remote.add_argument(
+        "--server-url",
+        required=True,
+        help="URL of the MCP server to scan",
+    )
+    p_remote.add_argument(
+        "--bearer-token",
+        help="Bearer token to use for remote MCP server authentication (Authorization: Bearer <token>)",
+    )
+
+    # Prompts subcommand
+    p_prompts = subparsers.add_parser(
+        "prompts", help="Scan prompts on an MCP server"
+    )
+    p_prompts.add_argument(
+        "--server-url",
+        required=True,
+        help="URL of the MCP server to scan",
+    )
+    p_prompts.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+    p_prompts.add_argument(
+        "--prompt-name",
+        help="Scan a specific prompt by name (if not provided, scans all prompts)",
+    )
+
+    # Resources subcommand
+    p_resources = subparsers.add_parser(
+        "resources", help="Scan resources on an MCP server"
+    )
+    p_resources.add_argument(
+        "--server-url",
+        required=True,
+        help="URL of the MCP server to scan",
+    )
+    p_resources.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+    p_resources.add_argument(
+        "--resource-uri",
+        help="Scan a specific resource by URI (if not provided, scans all resources)",
+    )
+    p_resources.add_argument(
+        "--mime-types",
+        default="text/plain,text/html",
+        help="Comma-separated list of allowed MIME types (default: %(default)s)",
+    )
+
+    # Instructions subcommand
+    p_instructions = subparsers.add_parser(
+        "instructions", help="Scan server instructions on an MCP server"
+    )
+    p_instructions.add_argument(
+        "--server-url",
+        required=True,
+        help="URL of the MCP server to scan",
+    )
+    p_instructions.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+
+    # Behavioral subcommand - scan local source code
+    p_behavioral = subparsers.add_parser(
+        "behavioral", help="Scan MCP server source code for docstring/behavior mismatches"
+    )
+    p_behavioral.add_argument(
+        "source_path",
+        help="Path to MCP server source code file or directory",
+    )
+    p_behavioral.add_argument(
+        "--output", "-o",
+        help="Save scan results to a file",
+    )
+    p_behavioral.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_behavioral.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_behavioral.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_behavioral.add_argument(
+        "--format",
+        choices=["raw", "summary", "detailed", "by_tool", "by_analyzer", "by_severity", "table"],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+
+
+    # Stdio subcommand
+    p_stdio = subparsers.add_parser(
+        "stdio", help="Scan an MCP server via stdio (local command execution)"
+    )
+    p_stdio.add_argument(
+        "--stdio-command",
+        required=True,
+        help="Command to run the stdio-based MCP server (e.g., 'uvx')",
+    )
+    p_stdio.add_argument(
+        "--stdio-args",
+        nargs="*",
+        default=[],
+        help="Arguments passed to the stdio command (space-separated)",
+    )
+    p_stdio.add_argument(
+        "--stdio-env",
+        action="append",
+        default=[],
+        help="Environment variables for the stdio server in KEY=VALUE form; can be repeated",
+    )
+    p_stdio.add_argument(
+        "--stdio-tool",
+        help="If provided, only scan this specific tool name on the stdio server",
+    )
+
+    # Config subcommand
+    p_config = subparsers.add_parser(
+        "config", help="Scan all servers defined in a specific MCP config file"
+    )
+    p_config.add_argument(
+        "--config-path",
+        required=True,
+        help="Path to MCP config file (e.g., ~/.codeium/windsurf/mcp_config.json)",
+    )
+    p_config.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+
+    # Known-configs subcommand
+    p_known_configs = subparsers.add_parser(
+        "known-configs", help="Scan all well-known MCP client config files on this machine"
+    )
+    p_known_configs.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+
+    # API key and endpoint configuration
+    parser.add_argument(
+        "--api-key",
+        help="Cisco AI Defense API key (overrides MCP_SCANNER_API_KEY environment variable)",
+    )
+    parser.add_argument(
+        "--endpoint-url",
+        help="Cisco AI Defense endpoint URL (overrides MCP_SCANNER_ENDPOINT environment variable)",
+    )
+    parser.add_argument(
+        "--llm-api-key",
+        help="LLM provider API key for LLM analysis (overrides environment variable)",
+    )
+    parser.add_argument(
+        "--llm-timeout",
+        type=int,
+        help="Timeout in seconds for LLM API calls (overrides MCP_SCANNER_LLM_TIMEOUT environment variable)",
+    )
+
+    parser.add_argument(
+        "--analyzers",
+        default="api,yara,llm",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral (default: %(default)s)",
+    )
+
+    parser.add_argument("--output", "-o", help="Save scan results to a file")
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    parser.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    parser.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output to terminal"
+    )
+
+    parser.add_argument(
+        "--server-url",
+        default="https://mcp.deepwiki.com/mcp",
+        help="URL of the MCP server to scan (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--scan-known-configs",
+        action="store_true",
+        help="Scan all well-known MCP client config files on this machine (windsurf, cursor, claude, vscode)",
+    )
+    parser.add_argument(
+        "--config-path",
+        help="Scan all servers defined in a specific MCP config file (e.g., ~/.codeium/windsurf/mcp_config.json)",
+    )
+    parser.add_argument(
+        "--stdio-command",
+        help="Run a stdio-based MCP server using the given command (e.g., 'uvx')",
+    )
+    parser.add_argument(
+        "--stdio-args",
+        nargs="*",
+        default=[],
+        help="Arguments passed to the stdio command (space-separated)",
+    )
+    parser.add_argument(
+        "--stdio-arg",
+        action="append",
+        help="[Deprecated] Repeatable single arg; use --stdio-args instead",
+    )
+    parser.add_argument(
+        "--stdio-env",
+        action="append",
+        default=[],
+        help="Environment variables for the stdio server in KEY=VALUE form; can be repeated",
+    )
+    parser.add_argument(
+        "--stdio-tool",
+        help="If provided, only scan this specific tool name on the stdio server",
+    )
+
+    # Back-compat bearer
+    parser.add_argument(
+        "--bearer-token",
+        help="Bearer token to use for remote MCP server authentication (Authorization: Bearer <token>)",
+    )
+
+    parser.add_argument(
+        "--format",
+        choices=[
+            "raw",
+            "summary",
+            "detailed",
+            "by_tool",
+            "by_analyzer",
+            "by_severity",
+            "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--tool-filter", help="Filter results by tool name (partial match)"
+    )
+    parser.add_argument(
+        "--analyzer-filter",
+        choices=["api_analyzer", "yara_analyzer", "llm_analyzer", "behavioral_analyzer"],
+        help="Filter results by specific analyzer",
+    )
+    parser.add_argument(
+        "--severity-filter",
+        choices=["all", "high", "unknown", "medium", "low", "safe"],
+        default="all",
+        help="Filter results by severity level (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--hide-safe", action="store_true", help="Hide safe tools from output"
+    )
+    parser.add_argument(
+        "--stats", action="store_true", help="Show statistics about scan results"
+    )
+    parser.add_argument(
+        "--rules-path",
+        help="Path to directory containing custom YARA rules",
+    )
+    parser.add_argument(
+        "--source-path",
+        help="Path to MCP server source code file or directory (required for behavioral analyzer)",
+    )
+
+    args = parser.parse_args()
+
+    # Parse analyzers argument into AnalyzerEnum list
+    analyzer_names = [a.strip().lower() for a in args.analyzers.split(",")]
+    valid_analyzer_names = {e.value for e in AnalyzerEnum}
+
+    # Validate analyzer names
+    invalid_analyzers = set(analyzer_names) - valid_analyzer_names
+    if invalid_analyzers:
+        parser.error(
+            f"Invalid analyzers: {', '.join(invalid_analyzers)}. Valid options: {', '.join(valid_analyzer_names)}"
+        )
+
+    # Convert to AnalyzerEnum list
+    selected_analyzers = [AnalyzerEnum(name) for name in analyzer_names]
+
+    # Validate behavioral analyzer requirements
+    if AnalyzerEnum.BEHAVIORAL in selected_analyzers:
+        if not args.source_path and not (hasattr(args, 'cmd') and args.cmd == 'behavioral'):
+            parser.error(
+                "Behavioral analyzer requires --source-path argument. "
+                "Usage: mcp-scanner --source-path FILE --analyzers behavioral"
+            )
+
+    if args.verbose:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            stream=sys.stdout,
+        )
+        logging.getLogger("mcpscanner").setLevel(logging.DEBUG)
+        set_verbose_logging(True)
+        logger.info("Verbose output enabled - detailed analyzer logs will be shown")
+    else:
+        logging.basicConfig(
+            level=logging.WARNING,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            stream=sys.stdout,
+        )
+        logging.getLogger("mcpscanner").setLevel(logging.WARNING)
+        set_verbose_logging(False)
+
+    if args.api_key:
+        os.environ["MCP_SCANNER_API_KEY"] = args.api_key
+    if args.endpoint_url:
+        os.environ["MCP_SCANNER_ENDPOINT"] = args.endpoint_url
+    if args.llm_api_key:
+        os.environ["MCP_SCANNER_LLM_API_KEY"] = args.llm_api_key
+    if args.llm_timeout:
+        os.environ["MCP_SCANNER_LLM_TIMEOUT"] = str(args.llm_timeout)
+
+    try:
+        if args.cmd == "remote":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            results_raw = await scanner.scan_remote_server_tools(
+                args.server_url, auth=auth, analyzers=selected_analyzers
+            )
+            results = await results_to_json(results_raw)
+
+        elif args.cmd == "stdio":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            env_dict = {}
+            for item in args.stdio_env or []:
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    env_dict[k] = v
+            stdio_args = list(args.stdio_args or [])
+            if getattr(args, "stdio_arg", None):
+                print("[warning] --stdio-arg is deprecated; use --stdio-args")
+                stdio_args.extend(args.stdio_arg)
+            stdio = StdioServer(
+                command=args.stdio_command, args=stdio_args, env=env_dict or None
+            )
+            if args.stdio_tool:
+                scan_result = await scanner.scan_stdio_server_tool(
+                    stdio, args.stdio_tool, analyzers=selected_analyzers
                 )
+                results = await results_to_json([scan_result])
             else:
-                output.append(f"{item_label} {i}: {item_name}")
-            
-            # Add resource-specific info
-            if item_type == "resource" and "resource_uri" in result:
-                output.append(f"URI: {result['resource_uri']}")
-                if "resource_mime_type" in result:
-                    output.append(f"MIME Type: {result['resource_mime_type']}")
-            
-            output.append(f"Status: {status}")
-            output.append(f"Safe: {'Yes' if is_safe else 'No'}")
-
-            if findings:
-                output.append("Analyzer Results:")
-                for analyzer, data in findings.items():
-                    severity = data.get("severity", "SAFE")
-                    threat_names = data.get("threat_names", [])
-                    threat_summary = data.get("threat_summary", "N/A")
-                    total_findings = data.get("total_findings", 0)
-                    mcp_taxonomy = data.get("mcp_taxonomy")
-
-                    output.append(f"  • {analyzer}:")
-                    output.append(f"    - Severity: {severity}")
-                    
-                    # Add threat/vulnerability classification if available
-                    threat_vuln_class = data.get("threat_vulnerability_classification")
-                    if threat_vuln_class:
-                        output.append(f"    - Classification: {threat_vuln_class}")
-                    
-                    output.append(f"    - Threat Summary: {threat_summary}")
-                    output.append(
-                        f"    - Threat Names: {', '.join(threat_names) if threat_names else 'None'}"
-                    )
-                    output.append(f"    - Total Findings: {total_findings}")
-                    
-                    # Add MCP Taxonomy details if available
-                    mcp_taxonomies = data.get("mcp_taxonomies", [])
-                    if mcp_taxonomies and total_findings > 0:
-                        if len(mcp_taxonomies) == 1:
-                            output.append(f"    - MCP Taxonomy:")
-                            taxonomy = mcp_taxonomies[0]
-                            if taxonomy.get("aitech"):
-                                output.append(f"      • AITech: {taxonomy['aitech']}")
-                            if taxonomy.get("aitech_name"):
-                                output.append(f"      • AITech Name: {taxonomy['aitech_name']}")
-                            if taxonomy.get("aisubtech"):
-                                output.append(f"      • AISubtech: {taxonomy['aisubtech']}")
-                            if taxonomy.get("aisubtech_name"):
-                                output.append(f"      • AISubtech Name: {taxonomy['aisubtech_name']}")
-                            if taxonomy.get("description"):
-                                # Wrap long descriptions
-                                desc = taxonomy['description']
-                                if len(desc) > 80:
-                                    output.append(f"      • Description: {desc[:80]}...")
-                                else:
-                                    output.append(f"      • Description: {desc}")
-                        else:
-                            # Multiple taxonomies - show them numbered
-                            output.append(f"    - MCP Taxonomies ({len(mcp_taxonomies)} unique threats):")
-                            for idx, taxonomy in enumerate(mcp_taxonomies, 1):
-                                output.append(f"      [{idx}] {taxonomy.get('aitech_name', 'Unknown')}")
-                                if taxonomy.get("aitech"):
-                                    output.append(f"          • AITech: {taxonomy['aitech']}")
-                                if taxonomy.get("aisubtech"):
-                                    output.append(f"          • AISubtech: {taxonomy['aisubtech']}")
-                                if taxonomy.get("aisubtech_name"):
-                                    output.append(f"          • AISubtech Name: {taxonomy['aisubtech_name']}")
-                                if taxonomy.get("description"):
-                                    desc = taxonomy['description']
-                                    if len(desc) > 80:
-                                        output.append(f"          • Description: {desc[:80]}...")
-                                    else:
-                                        output.append(f"          • Description: {desc}")
-            else:
-                output.append("No findings.")
-
-            output.append("")  # Empty line between tools
-
-        return "\n".join(output)
-
-    def _format_by_tool(self, results: List[Dict[str, Any]]) -> str:
-        """Format grouped by tool."""
-        output = ["=== Results by Tool ===\n"]
-        output.append(f"Scan Target: {self.server_url}\n")
-
-        if not results:
-            output.append("No results match the specified filters.\n")
-            return "\n".join(output)
-
-        for result in results:
-            tool_name = result.get("tool_name", "Unknown")
-            is_safe = result.get("is_safe", True)
-            findings = result.get("findings", {})
-
-            # Get summary info
-            total_findings = sum(f.get("total_findings", 0) for f in findings.values())
-            severities = [f.get("severity", "SAFE") for f in findings.values()]
-            highest_severity = self._get_highest_severity(severities)
-
-            # Use colored emojis based on severity
-            severity_emojis = {
-                "HIGH": "🔴",
-                "UNKNOWN": "🔴",
-                "MEDIUM": "🟠",
-                "LOW": "🟡",
-                "SAFE": "🟢",
-            }
-            severity_icon = severity_emojis.get(highest_severity, "🟢")
-            output.append(f"{severity_icon} {tool_name} ({highest_severity})")
-
-            if total_findings > 0:
-                output.append(f"   Total findings: {total_findings}")
-                for analyzer, data in findings.items():
-                    if data.get("total_findings", 0) > 0:
-                        threat_summary = data.get("threat_summary", "N/A")
-                        output.append(f"   {analyzer}: {threat_summary}")
-            else:
-                output.append("   No security issues detected")
-
-            output.append("")
-
-        return "\n".join(output)
-
-    def _format_by_analyzer(
-        self, results: List[Dict[str, Any]], analyzer_filter: Optional[str] = None
-    ) -> str:
-        """Format grouped by analyzer."""
-        output = ["=== Results by Analyzer ===\n"]
-        output.append(f"Scan Target: {self.server_url}\n")
-
-        if not results:
-            output.append("No results match the specified filters.\n")
-            return "\n".join(output)
-
-        # Group by analyzer
-        analyzer_results = {}
-        for result in results:
-            findings = result.get("findings", {})
-            for analyzer, data in findings.items():
-                if analyzer_filter and analyzer_filter != analyzer:
-                    continue
-
-                if analyzer not in analyzer_results:
-                    analyzer_results[analyzer] = []
-
-                analyzer_results[analyzer].append(
-                    {"tool_name": result.get("tool_name", "Unknown"), "data": data}
+                scan_results = await scanner.scan_stdio_server_tools(
+                    stdio, analyzers=selected_analyzers
                 )
+                results = await results_to_json(scan_results)
 
-        for analyzer, tools in analyzer_results.items():
-            output.append(f"🔍 {analyzer.upper().replace('_', ' ')}")
-            output.append(f"Tools analyzed: {len(tools)}")
+        elif args.cmd == "config":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            scan_results = await scanner.scan_mcp_config_file(
+                args.config_path, analyzers=selected_analyzers, auth=auth
+            )
+            results = await results_to_json(scan_results)
 
-            # Count by severity
-            severity_counts = {}
-            for tool in tools:
-                severity = tool["data"].get("severity", "SAFE")
-                severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        elif args.cmd == "known-configs":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            results_by_cfg = await scanner.scan_well_known_mcp_configs(
+                analyzers=selected_analyzers, auth=auth
+            )
+            if args.raw:
+                output = {}
+                for cfg_path, scan_results in results_by_cfg.items():
+                    output[cfg_path] = await results_to_json(scan_results)
+                print(json.dumps(output, indent=2))
+                return
+            flattened = []
+            for scan_results in results_by_cfg.values():
+                flattened.extend(scan_results)
+            results = await results_to_json(flattened)
 
-            output.append(f"Severity breakdown: {dict(severity_counts)}")
+        elif args.cmd == "prompts":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
 
-            # Show tools with findings
-            tools_with_findings = [
-                t for t in tools if t["data"].get("total_findings", 0) > 0
-            ]
-            if tools_with_findings:
-                output.append("Tools with findings:")
-                for tool in tools_with_findings:
-                    tool_name = tool["tool_name"]
-                    data = tool["data"]
-                    severity = data.get("severity", "SAFE")
-                    threat_summary = data.get("threat_summary", "N/A")
-                    output.append(f"  • {tool_name} ({severity}): {threat_summary}")
-
-            output.append("")
-
-        return "\n".join(output)
-
-    def _format_by_severity(
-        self, results: List[Dict[str, Any]], severity_filter: SeverityFilter
-    ) -> str:
-        """Format grouped by severity."""
-        output = ["=== Results by Severity ===\n"]
-        output.append(f"Scan Target: {self.server_url}\n")
-
-        if not results:
-            output.append("No results match the specified filters.\n")
-            return "\n".join(output)
-
-        # Group by severity
-        severity_groups = {}
-        for result in results:
-            findings = result.get("findings", {})
-            for analyzer, data in findings.items():
-                severity = data.get("severity", "SAFE")
-
-                if (
-                    severity_filter != SeverityFilter.ALL
-                    and severity_filter.value.upper() != severity
-                ):
-                    continue
-
-                if severity not in severity_groups:
-                    severity_groups[severity] = []
-
-                severity_groups[severity].append(
+            if args.prompt_name:
+                # Scan specific prompt
+                result = await scanner.scan_remote_server_prompt(
+                    server_url=args.server_url,
+                    prompt_name=args.prompt_name,
+                    auth=auth,
+                    analyzers=selected_analyzers,
+                )
+                # Convert PromptScanResult to dict format
+                results = [{
+                    "prompt_name": result.prompt_name,
+                    "prompt_description": result.prompt_description,
+                    "status": result.status,
+                    "is_safe": result.is_safe,
+                    "findings": [
+                        {
+                            "severity": f.severity,
+                            "summary": f.summary,
+                            "analyzer": f.analyzer,
+                            "details": f.details,
+                            "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
+                        }
+                        for f in result.findings
+                    ],
+                }]
+            else:
+                # Scan all prompts
+                prompt_results = await scanner.scan_remote_server_prompts(
+                    server_url=args.server_url,
+                    auth=auth,
+                    analyzers=selected_analyzers,
+                )
+                results = [
                     {
-                        "tool_name": result.get("tool_name", "Unknown"),
-                        "analyzer": analyzer,
-                        "data": data,
+                        "prompt_name": r.prompt_name,
+                        "prompt_description": r.prompt_description,
+                        "status": r.status,
+                        "is_safe": r.is_safe,
+                        "findings": [
+                            {
+                                "severity": f.severity,
+                                "summary": f.summary,
+                                "analyzer": f.analyzer,
+                                "details": f.details,
+                                "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
+                            }
+                            for f in r.findings
+                        ],
                     }
+                    for r in prompt_results
+                ]
+
+        elif args.cmd == "resources":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+
+            # Parse MIME types
+            allowed_mime_types = [m.strip() for m in args.mime_types.split(",")]
+
+            if args.resource_uri:
+                # Scan specific resource
+                result = await scanner.scan_remote_server_resource(
+                    server_url=args.server_url,
+                    resource_uri=args.resource_uri,
+                    auth=auth,
+                    analyzers=selected_analyzers,
+                    allowed_mime_types=allowed_mime_types,
                 )
-
-        # Sort by severity priority
-        severity_order = ["HIGH", "UNKNOWN", "MEDIUM", "LOW", "SAFE"]
-        severity_emojis = {
-            "HIGH": "🔴",
-            "UNKNOWN": "🔴",
-            "MEDIUM": "🟠",
-            "LOW": "🟡",
-            "SAFE": "🟢",
-        }
-
-        for severity in severity_order:
-            if severity not in severity_groups:
-                continue
-
-            items = severity_groups[severity]
-            emoji = severity_emojis.get(severity, "🔴")
-            output.append(f"{emoji} {severity} SEVERITY ({len(items)} items)")
-
-            for item in items:
-                tool_name = item["tool_name"]
-                analyzer = item["analyzer"]
-                threat_summary = item["data"].get("threat_summary", "N/A")
-                output.append(f"  • {tool_name} [{analyzer}]: {threat_summary}")
-
-            output.append("")
-
-        return "\n".join(output)
-
-    def _format_table(self, results: List[Dict[str, Any]]) -> str:
-        """Format as table view."""
-        output = ["=== MCP Scanner Results Table ===\n"]
-
-        if not results:
-            output.append("No results match the specified filters.\n")
-            return "\n".join(output)
-
-        # Check if this is a config-based scan (has server_source)
-        has_config_results = any(
-            "server_source" in result and result["server_source"] for result in results
-        )
-        
-        # Check if this is a behavioral scan
-        is_behavioral = any(
-            "behavioral_analyzer" in result.get("findings", {}) for result in results
-        )
-
-        if has_config_results:
-            # Table header with Target Server column for config-based scans
-            header = f"{'Scan Target':<20} {'Target Server':<20} {'Tool Name':<18} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
-        elif is_behavioral:
-            # Behavioral scan: show only BEHAVIORAL column
-            header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'BEHAVIORAL':<15} {'Severity':<10}"
-        else:
-            # Table header without Target Server column for direct server scans
-            header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
-
-        output.append(header)
-        output.append("—" * (len(header) + 10))
-
-        for result in results:
-            # Use server_source if available, otherwise fall back to server_url
-            if "server_source" in result and result["server_source"]:
-                scan_target_source = result["server_source"]
+                # Convert ResourceScanResult to dict format
+                results = [{
+                    "resource_uri": str(result.resource_uri),
+                    "resource_name": result.resource_name,
+                    "resource_mime_type": result.resource_mime_type,
+                    "status": result.status,
+                    "is_safe": result.is_safe if result.status == "completed" else None,
+                    "findings": [
+                        {
+                            "severity": f.severity,
+                            "summary": f.summary,
+                            "analyzer": f.analyzer,
+                            "details": f.details,
+                            "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
+                        }
+                        for f in result.findings
+                    ],
+                }]
             else:
-                scan_target_source = self.server_url
+                # Scan all resources
+                resource_results = await scanner.scan_remote_server_resources(
+                    server_url=args.server_url,
+                    auth=auth,
+                    analyzers=selected_analyzers,
+                    allowed_mime_types=allowed_mime_types,
+                )
+                results = [
+                    {
+                        "resource_uri": str(r.resource_uri),
+                        "resource_name": r.resource_name,
+                        "resource_mime_type": r.resource_mime_type,
+                        "status": r.status,
+                        "is_safe": r.is_safe if r.status == "completed" else None,
+                        "findings": [
+                            {
+                                "severity": f.severity,
+                                "summary": f.summary,
+                                "analyzer": f.analyzer,
+                                "details": f.details,
+                                "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
+                            }
+                            for f in r.findings
+                        ],
+                    }
+                    for r in resource_results
+                ]
+
+        elif args.cmd == "instructions":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+
+            # Scan server instructions
+            result = await scanner.scan_remote_server_instructions(
+                server_url=args.server_url,
+                auth=auth,
+                analyzers=selected_analyzers,
+            )
+            # Convert InstructionsScanResult to dict format
+            results = [{
+                "instructions": result.instructions,
+                "server_name": result.server_name,
+                "protocol_version": result.protocol_version,
+                "status": result.status,
+                "is_safe": result.is_safe,
+                "findings": [
+                    {
+                        "severity": f.severity,
+                        "summary": f.summary,
+                        "analyzer": f.analyzer,
+                        "details": f.details,
+                        "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
+                    }
+                    for f in result.findings
+                ],
+            }]
+
+        elif args.cmd == "behavioral":
+            # Behavioral analyzer - scan local source code  
+            # This follows the same pattern as other analyzers but operates on source files
+            cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
             
-            # For behavioral scans, extract just the filename
-            if is_behavioral and "behavioral:" in scan_target_source:
-                # Extract filename from "behavioral:/path/to/file.py"
+            from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+            analyzer = BehavioralCodeAnalyzer(cfg)
+            
+            source_path = args.source_path
+            
+            # Analyze the source file
+            findings = await analyzer.analyze(
+                source_path,
+                context={"file_path": source_path}
+            )
+            
+            # Format results to match Scanner output structure
+            # Group findings by function to create tool-like results
+            findings_by_function = {}
+            for finding in findings:
+                # Extract function name from details (not summary!)
+                func_name = finding.details.get("function_name", "unknown") if finding.details else "unknown"
+                
+                if func_name not in findings_by_function:
+                    findings_by_function[func_name] = []
+                findings_by_function[func_name].append(finding)
+            
+            # Create ToolScanResult-like structure for each function
+            results = []
+            for func_name, func_findings in findings_by_function.items():
+                # Get highest severity
+                severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+                max_severity = max((f.severity for f in func_findings), 
+                                 key=lambda s: severity_order.get(s, 0))
+                
+                # Get source file from findings (for directory scans)
+                source_file = func_findings[0].details.get("source_file", source_path) if func_findings[0].details else source_path
                 import os
-                full_path = scan_target_source.replace("behavioral:", "")
-                scan_target_source = os.path.basename(full_path)
-            else:
-                # Truncate for non-behavioral scans
-                scan_target_source = scan_target_source[:28] if not has_config_results else scan_target_source[:18]
+                display_name = os.path.basename(source_file) if source_file != source_path else source_path
+                
+                # Collect all taxonomies from findings
+                mcp_taxonomies = []
+                for finding in func_findings:
+                    if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+                        if finding.mcp_taxonomy not in mcp_taxonomies:
+                            mcp_taxonomies.append(finding.mcp_taxonomy)
+                
+                # Get threat/vulnerability classification from first finding
+                threat_vuln_classification = None
+                if func_findings and func_findings[0].details:
+                    threat_vuln_classification = func_findings[0].details.get("threat_vulnerability_classification")
+                
+                # Determine if safe based on severity
+                is_safe = max_severity in ["SAFE", "LOW"]
+                
+                analyzer_finding = {
+                    "severity": max_severity,
+                    "threat_summary": func_findings[0].summary,
+                    "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
+                    "total_findings": len(func_findings),
+                    "source_file": source_file,  # Include source file in output
+                    "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
+                }
+                
+                # Add threat/vulnerability classification if available
+                if threat_vuln_classification:
+                    analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
+                
+                results.append({
+                    "tool_name": func_name,  # This should match the name from decorator params or function name
+                    "tool_description": f"MCP function from {display_name}",
+                    "status": "completed",
+                    "is_safe": is_safe,
+                    "findings": {
+                        "behavioral_analyzer": analyzer_finding
+                    }
+                })
+            
+            # If no findings, all functions are safe
+            if not results:
+                results.append({
+                    "tool_name": source_path,
+                    "tool_description": "MCP server source code",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {}
+                })
+            
+            # Automatically filter out VULNERABILITY findings - only show THREATS
+            filtered_results = []
+            for result in results:
+                # Check if result has behavioral_analyzer findings with classification
+                if "findings" in result and "behavioral_analyzer" in result["findings"]:
+                    analyzer_data = result["findings"]["behavioral_analyzer"]
+                    classification = analyzer_data.get("threat_vulnerability_classification", "").upper()
+                    
+                    # Only include THREAT findings, exclude VULNERABILITY
+                    if classification == "THREAT":
+                        filtered_results.append(result)
+                # Keep results without findings (safe results)
+                elif not result.get("findings"):
+                    filtered_results.append(result)
+            
+            results = filtered_results
+            
+            # Save output if requested
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2)
+                if args.verbose:
+                    print(f"Results saved to {args.output}")
 
-            if has_config_results:
-                # Config-based scan: show target server
-                if "server_name" in result and result["server_name"]:
-                    target_server = result["server_name"][:18]
+        # Backward compatibility path (no subcommand used)
+        elif args.stdio_command:
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            env_dict = {}
+            for item in args.stdio_env or []:
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    env_dict[k] = v
+            stdio_args = list(args.stdio_args or [])
+            if args.stdio_arg:
+                print("[warning] --stdio-arg is deprecated; use --stdio-args")
+                stdio_args.extend(args.stdio_arg)
+            stdio = StdioServer(
+                command=args.stdio_command,
+                args=stdio_args,
+                env=env_dict or None,
+            )
+            if args.stdio_tool:
+                scan_result = await scanner.scan_stdio_server_tool(
+                    stdio, args.stdio_tool, analyzers=selected_analyzers
+                )
+                results = await results_to_json([scan_result])
+            else:
+                scan_results = await scanner.scan_stdio_server_tools(
+                    stdio, analyzers=selected_analyzers
+                )
+                results = await results_to_json(scan_results)
+
+        elif args.scan_known_configs or args.config_path:
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            if args.config_path:
+                auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+                scan_results = await scanner.scan_mcp_config_file(
+                    args.config_path, analyzers=selected_analyzers, auth=auth
+                )
+                results = await results_to_json(scan_results)
+            else:
+                auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+                results_by_cfg = await scanner.scan_well_known_mcp_configs(
+                    analyzers=selected_analyzers, auth=auth
+                )
+                if args.raw:
+                    output = {}
+                    for cfg_path, scan_results in results_by_cfg.items():
+                        output[cfg_path] = await results_to_json(scan_results)
+                    print(json.dumps(output, indent=2))
+                    return
+                flattened = []
+                for cfg_path, scan_results in results_by_cfg.items():
+                    # Add config path and server info to each result
+                    for result in scan_results:
+                        # Extract server name from config path for display
+                        config_name = (
+                            cfg_path.split("/")[-1] if "/" in cfg_path else cfg_path
+                        )
+                        result.server_source = f"{config_name}"
+                    flattened.extend(scan_results)
+                results = await results_to_json(flattened)
+
+        else:
+            # Check if behavioral analyzer with source path
+            if AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
+                # Run behavioral analyzer on source code
+                results = await _run_behavioral_analyzer_on_source(args.source_path)
+            else:
+                # Run the security scan against a server URL
+                if args.bearer_token:
+                    cfg = _build_config(selected_analyzers)
+                    scanner = Scanner(cfg, rules_dir=args.rules_path)
+                    results_raw = await scanner.scan_remote_server_tools(
+                        args.server_url,
+                        auth=Auth.bearer(args.bearer_token),
+                        analyzers=selected_analyzers,
+                    )
+                    results = await results_to_json(results_raw)
                 else:
-                    target_server = "unknown"
-                tool_name = result.get("tool_name", "Unknown")[:16]
+                    cfg = _build_config(selected_analyzers, endpoint_url=args.endpoint_url)
+                    scanner = Scanner(cfg, rules_dir=args.rules_path)
+                    auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+                    results_raw = await scanner.scan_remote_server_tools(
+                        args.server_url, auth=auth, analyzers=selected_analyzers
+                    )
+                    results = await results_to_json(results_raw)
+
+    except Exception as e:
+        print(f"Error during scanning: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Display the results using the new report generator
+    if not args.raw and not args.detailed:
+        # Choose an appropriate label for display based on scanning mode
+        server_label = args.server_url
+        if hasattr(args, "cmd") and args.cmd == "stdio":
+            label_args = []
+            if getattr(args, "stdio_arg", None):
+                label_args.extend(args.stdio_arg)
+            if getattr(args, "stdio_args", None):
+                label_args.extend(args.stdio_args)
+            server_label = f"stdio:{args.stdio_command} {' '.join(label_args)}".strip()
+        elif hasattr(args, "cmd") and args.cmd == "config":
+            server_label = args.config_path
+        elif hasattr(args, "cmd") and args.cmd == "known-configs":
+            server_label = "well-known-configs"
+        elif hasattr(args, "cmd") and args.cmd == "prompts":
+            server_label = args.server_url
+        elif hasattr(args, "cmd") and args.cmd == "resources":
+            server_label = args.server_url
+        elif hasattr(args, "cmd") and args.cmd == "behavioral":
+            server_label = f"behavioral:{args.source_path}"
+        elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
+            server_label = f"behavioral:{args.source_path}"
+        elif args.stdio_command:
+            label_args = []
+            if getattr(args, "stdio_arg", None):
+                label_args.extend(args.stdio_arg)
+            if getattr(args, "stdio_args", None):
+                label_args.extend(args.stdio_args)
+            server_label = f"stdio:{args.stdio_command} {' '.join(label_args)}".strip()
+        elif args.config_path:
+            server_label = args.config_path
+        elif args.scan_known_configs:
+            server_label = "well-known-configs"
+
+        # Handle prompts, resources, and instructions differently
+        if hasattr(args, "cmd") and args.cmd == "prompts":
+            if args.format == "table":
+                display_prompt_results_table(results, server_label)
             else:
-                # Direct server scan: no target server column
-                tool_name = result.get("tool_name", "Unknown")[:18]
-            status = "SAFE" if result.get("is_safe", True) else "UNSAFE"
-            findings = result.get("findings", {})
-
-            # Get severity for each analyzer
-            # Show SAFE only if analyzer was requested AND we have scan results (meaning it ran successfully)
-            # Show N/A if analyzer wasn't requested OR if it was requested but failed to run
-            def get_analyzer_status(analyzer_key):
-                if analyzer_key in findings:
-                    return findings[analyzer_key].get("severity", "SAFE")
-                elif (
-                    analyzer_key in self.requested_analyzer_keys
-                    and self.scan_results
-                    and result.get("is_safe", True)
-                ):
-                    # Analyzer was requested and we have results, so it ran successfully and found tools safe
-                    return "SAFE"
-                else:
-                    return "N/A"
-
-            # Get overall severity with colored emoji
-            severity_emojis = {
-                "HIGH": "🔴",
-                "UNKNOWN": "🔴",
-                "MEDIUM": "🟠",
-                "LOW": "🟡",
-                "SAFE": "🟢",
-            }
-
-            if findings:
-                severities = [f.get("severity", "SAFE") for f in findings.values()]
-                severity_text = self._get_highest_severity(severities)
-                severity_emoji = severity_emojis.get(severity_text, "🟢")
-                overall_severity = f"{severity_emoji} {severity_text}"[:8]
+                display_prompt_results(results, server_label, detailed=False)
+            return
+        elif hasattr(args, "cmd") and args.cmd == "resources":
+            if args.format == "table":
+                display_resource_results_table(results, server_label)
             else:
-                severity_emoji = severity_emojis.get(status, "🟢")
-                overall_severity = f"{severity_emoji} {status}"[:8]
-
-            if is_behavioral:
-                # Behavioral scan: show only behavioral analyzer status
-                behavioral_severity = get_analyzer_status("behavioral_analyzer")[:13]
-                row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {behavioral_severity:<15} {overall_severity:<10}"
-            elif has_config_results:
-                api_severity = get_analyzer_status("api_analyzer")[:6]
-                yara_severity = get_analyzer_status("yara_analyzer")[:6]
-                llm_severity = get_analyzer_status("llm_analyzer")[:6]
-                row = f"{scan_target_source:<20} {target_server:<20} {tool_name:<18} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
+                display_resource_results(results, server_label, detailed=False)
+            return
+        elif hasattr(args, "cmd") and args.cmd == "instructions":
+            if args.format == "table":
+                display_instructions_results_table(results, server_label)
             else:
-                api_severity = get_analyzer_status("api_analyzer")[:6]
-                yara_severity = get_analyzer_status("yara_analyzer")[:6]
-                llm_severity = get_analyzer_status("llm_analyzer")[:6]
-                row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
-            output.append(row)
+                display_instructions_results(results, server_label, detailed=False)
+            return
 
-        return "\n".join(output)
-
-    def _get_highest_severity(self, severities: List[str]) -> str:
-        """Get the highest severity from a list."""
-        severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "SAFE": 1}
-        highest = "SAFE"
-        highest_value = 0
-
-        for severity in severities:
-            value = severity_order.get(severity.upper(), 0)
-            if value > highest_value:
-                highest_value = value
-                highest = severity.upper()
-
-        return highest
-
-    def _get_severity_order(self, severity: str) -> int:
-        """Get the numeric order value for a severity level."""
-        severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "SAFE": 1}
-        return severity_order.get(severity.upper(), 0)
-
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get statistics about the scan results."""
-        stats = {
-            "total_tools": len(self.scan_results),
-            "safe_tools": 0,
-            "unsafe_tools": 0,
-            "severity_counts": {
-                "HIGH": 0,
-                "UNKNOWN": 0,
-                "MEDIUM": 0,
-                "LOW": 0,
-                "SAFE": 0,
-            },
-            "analyzer_stats": {
-                "api_analyzer": {"total": 0, "with_findings": 0},
-                "yara_analyzer": {"total": 0, "with_findings": 0},
-                "llm_analyzer": {"total": 0, "with_findings": 0},
-            },
+        results_dict = {
+            "server_url": server_label,
+            "scan_results": results,
+            "requested_analyzers": selected_analyzers,
         }
+        formatter = ReportGenerator(results_dict)
 
-        for result in self.scan_results:
-            if result.get("is_safe", True):
-                stats["safe_tools"] += 1
-            else:
-                stats["unsafe_tools"] += 1
+        if args.stats:
+            stats = formatter.get_statistics()
+            print("=== Scan Statistics ===")
+            print(f"Total tools: {stats['total_tools']}")
+            print(f"Safe tools: {stats['safe_tools']}")
+            print(f"Unsafe tools: {stats['unsafe_tools']}")
+            print(f"Severity breakdown: {stats['severity_counts']}")
+            print(f"Analyzer stats: {stats['analyzer_stats']}")
+            print()
 
-            findings = result.get("findings", {})
-            for analyzer, data in findings.items():
-                if analyzer in stats["analyzer_stats"]:
-                    stats["analyzer_stats"][analyzer]["total"] += 1
-                    if data.get("total_findings", 0) > 0:
-                        stats["analyzer_stats"][analyzer]["with_findings"] += 1
+        # Determine output format
+        if args.format == "raw":
+            output_format = OutputFormat.RAW
+        elif args.format == "summary":
+            output_format = OutputFormat.SUMMARY
+        elif args.format == "detailed":
+            output_format = OutputFormat.DETAILED
+        elif args.format == "by_tool":
+            output_format = OutputFormat.BY_TOOL
+        elif args.format == "by_analyzer":
+            output_format = OutputFormat.BY_ANALYZER
+        elif args.format == "by_severity":
+            output_format = OutputFormat.BY_SEVERITY
+        elif args.format == "table":
+            output_format = OutputFormat.TABLE
+        else:
+            output_format = OutputFormat.SUMMARY
 
-                severity = data.get("severity", "SAFE")
-                if severity in stats["severity_counts"]:
-                    stats["severity_counts"][severity] += 1
+        # Determine severity filter
+        if args.severity_filter == "all":
+            severity_filter = SeverityFilter.ALL
+        elif args.severity_filter == "high":
+            severity_filter = SeverityFilter.HIGH
+        elif args.severity_filter == "unknown":
+            severity_filter = SeverityFilter.UNKNOWN
+        elif args.severity_filter == "medium":
+            severity_filter = SeverityFilter.MEDIUM
+        elif args.severity_filter == "low":
+            severity_filter = SeverityFilter.LOW
+        elif args.severity_filter == "safe":
+            severity_filter = SeverityFilter.SAFE
+        else:
+            severity_filter = SeverityFilter.ALL
 
-        return stats
+        # Generate and display report
+        formatted_output = formatter.format_output(
+            format_type=output_format,
+            tool_filter=args.tool_filter,
+            analyzer_filter=args.analyzer_filter,
+            severity_filter=severity_filter,
+            show_safe=not args.hide_safe,
+        )
+        print(formatted_output)
+
+    elif args.raw:
+        print(json.dumps(results, indent=2))
+    else:
+        # Choose an appropriate label for display based on scanning mode
+        server_label = args.server_url
+        if args.stdio_command:
+            label_args = []
+            if args.stdio_arg:
+                label_args.extend(args.stdio_arg)
+            if args.stdio_args:
+                label_args.extend(args.stdio_args)
+            server_label = f"stdio:{args.stdio_command} {' '.join(label_args)}".strip()
+        elif args.config_path:
+            server_label = args.config_path
+        elif args.scan_known_configs:
+            server_label = "well-known-configs"
+
+        # Handle prompts, resources, and instructions with detailed view
+        if hasattr(args, "cmd") and args.cmd == "prompts":
+            display_prompt_results(results, server_label, detailed=args.detailed)
+        elif hasattr(args, "cmd") and args.cmd == "resources":
+            display_resource_results(results, server_label, detailed=args.detailed)
+        elif hasattr(args, "cmd") and args.cmd == "instructions":
+            display_instructions_results(results, server_label, detailed=args.detailed)
+        else:
+            results_dict = {"server_url": server_label, "scan_results": results}
+            display_results(results_dict, detailed=args.detailed)
+
+
+def cli_entry_point():
+    """Entry point for the mcp-scanner CLI command."""
+    import sys
+    import logging
+    import warnings
+
+    # Suppress warnings from MCP library cleanup issues
+    warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*never awaited.*")
+    warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*async.*generator.*")
+
+    # Suppress asyncio shutdown errors from MCP library cleanup bugs
+    def custom_exception_handler(loop, context):
+        exception = context.get("exception")
+        message = context.get("message", "")
+
+        # Suppress RuntimeError from MCP library task cleanup
+        if isinstance(exception, RuntimeError) and "cancel scope" in str(exception):
+            return
+        # Suppress task destroyed warnings
+        if "Task was destroyed but it is pending" in message:
+            return
+        # Suppress other MCP library cleanup errors
+        if "streamablehttp_client" in message or "async_generator" in message:
+            return
+        # For other exceptions, use default handling
+        loop.default_exception_handler(context)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.set_exception_handler(custom_exception_handler)
+
+    try:
+        loop.run_until_complete(main())
+    finally:
+        # Suppress warnings during loop close
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            loop.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
