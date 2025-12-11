@@ -356,6 +356,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     "security_implications": analysis.get("security_implications"),
                     "confidence": analysis.get("confidence"),
                     "dataflow_evidence": analysis.get("dataflow_evidence"),
+                    # Include threat/vulnerability classification from second alignment layer
+                    "threat_vulnerability_classification": analysis.get("threat_vulnerability_classification"),
                     # Include MCP Taxonomy in details for easy access in reports
                     "aitech": threat_info["aitech"],
                     "aitech_name": threat_info["aitech_name"],
