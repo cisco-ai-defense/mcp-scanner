@@ -64,7 +64,7 @@ class TestThreatMapper:
         """Test that threats have valid severity levels."""
         from mcpscanner.threats.threats import ThreatMapping
         
-        valid_severities = ["HIGH", "MEDIUM", "LOW"]
+        valid_severities = ["HIGH", "MEDIUM", "LOW", "INFO"]
         behavioral_threats = ThreatMapping.BEHAVIORAL_THREATS
         
         for threat_name, threat_data in behavioral_threats.items():
