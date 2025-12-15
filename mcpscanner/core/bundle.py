@@ -42,7 +42,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ServerType(str, Enum):
@@ -70,104 +70,96 @@ class UserConfigType(str, Enum):
 
 class Author(BaseModel):
     """Author information."""
+    model_config = ConfigDict(extra="forbid")
+    
     name: str
     email: Optional[str] = None
     url: Optional[str] = None
 
-    class Config:
-        extra = "forbid"
-
 
 class Repository(BaseModel):
     """Repository information."""
+    model_config = ConfigDict(extra="forbid")
+    
     type: str
     url: str
-
-    class Config:
-        extra = "forbid"
 
 
 class Icon(BaseModel):
     """Icon definition with size and optional theme."""
+    model_config = ConfigDict(extra="forbid")
+    
     src: str
     size: str = Field(..., pattern=r"^\d+x\d+$")
     theme: Optional[str] = None
 
-    class Config:
-        extra = "forbid"
-
 
 class Localization(BaseModel):
     """Localization configuration."""
+    model_config = ConfigDict(extra="forbid")
+    
     resources: str = Field(..., pattern=r"\$\{locale\}")
     default_locale: str = Field(..., pattern=r"^[A-Za-z0-9]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
-
-    class Config:
-        extra = "forbid"
 
 
 class MCPConfig(BaseModel):
     """MCP server configuration for stdio execution."""
+    model_config = ConfigDict(extra="forbid")
+    
     command: str
     args: List[str] = Field(default_factory=list)
     env: Dict[str, str] = Field(default_factory=dict)
     platform_overrides: Optional[Dict[str, Any]] = None
 
-    class Config:
-        extra = "forbid"
-
 
 class Server(BaseModel):
     """Server configuration."""
+    model_config = ConfigDict(extra="forbid")
+    
     type: ServerType
     entry_point: str
     mcp_config: MCPConfig
 
-    class Config:
-        extra = "forbid"
-
 
 class Tool(BaseModel):
     """Tool definition."""
+    model_config = ConfigDict(extra="forbid")
+    
     name: str
     description: Optional[str] = None
-
-    class Config:
-        extra = "forbid"
 
 
 class Prompt(BaseModel):
     """Prompt definition."""
+    model_config = ConfigDict(extra="forbid")
+    
     name: str
     text: str
     description: Optional[str] = None
     arguments: List[str] = Field(default_factory=list)
 
-    class Config:
-        extra = "forbid"
-
 
 class Runtimes(BaseModel):
     """Runtime version requirements."""
+    model_config = ConfigDict(extra="forbid")
+    
     python: Optional[str] = None
     node: Optional[str] = None
-
-    class Config:
-        extra = "forbid"
 
 
 class Compatibility(BaseModel):
     """Compatibility requirements."""
+    model_config = ConfigDict(extra="forbid")
+    
     claude_desktop: Optional[str] = None
     platforms: List[Platform] = Field(default_factory=list)
     runtimes: Optional[Runtimes] = None
 
-    class Config:
-        extra = "forbid"
-
 
 class UserConfigField(BaseModel):
     """User configuration field definition."""
+    model_config = ConfigDict(extra="forbid")
+    
     type: UserConfigType
     title: str
     description: str
@@ -177,9 +169,6 @@ class UserConfigField(BaseModel):
     sensitive: Optional[bool] = None
     min: Optional[float] = None
     max: Optional[float] = None
-
-    class Config:
-        extra = "forbid"
 
 
 class BundleManifest(BaseModel):
@@ -199,7 +188,7 @@ class BundleManifest(BaseModel):
     # Schema and version
     schema_: Optional[str] = Field(None, alias="$schema")
     dxt_version: Optional[str] = Field(None, description="Deprecated: Use manifest_version")
-    manifest_version: Optional[str] = Field(None, const="0.3")
+    manifest_version: Optional[Literal["0.3"]] = None
     
     # Display information
     display_name: Optional[str] = Field(None, description="Human-readable name")
@@ -239,16 +228,7 @@ class BundleManifest(BaseModel):
     # Extension metadata
     _meta: Optional[Dict[str, Dict[str, Any]]] = Field(None, alias="_meta")
 
-    class Config:
-        extra = "forbid"
-        populate_by_name = True
-
-    @validator('version')
-    def validate_version(cls, v):
-        parts = v.replace('-', '.').replace('+', '.').split('.')
-        if len(parts) < 1:
-            raise ValueError("Invalid version format")
-        return v
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
     
     @property
     def entry_point(self) -> str:
