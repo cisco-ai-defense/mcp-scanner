@@ -138,20 +138,31 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
                 if taxonomy_key not in existing_keys:
                     mcp_taxonomies.append(finding.mcp_taxonomy)
         
+        # Get threat/vulnerability classification from first finding
+        threat_vuln_classification = None
+        if func_findings and func_findings[0].details:
+            threat_vuln_classification = func_findings[0].details.get("threat_vulnerability_classification")
+        
+        analyzer_finding = {
+            "severity": max_severity,
+            "threat_summary": func_findings[0].summary,
+            "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
+            "total_findings": len(func_findings),
+            "source_file": source_file,
+            "mcp_taxonomies": mcp_taxonomies,
+        }
+        
+        # Add threat/vulnerability classification if available
+        if threat_vuln_classification:
+            analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
+        
         results.append({
             "tool_name": func_name,
             "tool_description": f"MCP function from {display_name}",
             "status": "completed",
             "is_safe": False,
             "findings": {
-                "behavioral_analyzer": {
-                    "severity": max_severity,
-                    "threat_summary": func_findings[0].summary,
-                    "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
-                    "total_findings": len(func_findings),
-                    "source_file": source_file,
-                    "mcp_taxonomies": mcp_taxonomies,
-                }
+                "behavioral_analyzer": analyzer_finding
             }
         })
     
@@ -811,6 +822,38 @@ async def main():
         help="Output format (default: %(default)s)",
     )
 
+    # Bundle subcommand - scan MCP server bundles (.mcpb files)
+    p_bundle = subparsers.add_parser(
+        "bundle", help="Scan an MCP server bundle (.mcpb file)"
+    )
+    p_bundle.add_argument(
+        "bundle_path",
+        help="Path to the .mcpb bundle file",
+    )
+    p_bundle.add_argument(
+        "--output", "-o",
+        help="Save scan results to a file",
+    )
+    p_bundle.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_bundle.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_bundle.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_bundle.add_argument(
+        "--format",
+        choices=["raw", "summary", "detailed", "by_tool", "by_analyzer", "by_severity", "table"],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+    p_bundle.add_argument(
+        "--show-manifest", action="store_true",
+        help="Display bundle manifest information before scanning",
+    )
+
     # Stdio subcommand
     p_stdio = subparsers.add_parser(
         "stdio", help="Scan an MCP server via stdio (local command execution)"
@@ -1297,8 +1340,26 @@ async def main():
                         if finding.mcp_taxonomy not in mcp_taxonomies:
                             mcp_taxonomies.append(finding.mcp_taxonomy)
                 
+                # Get threat/vulnerability classification from first finding
+                threat_vuln_classification = None
+                if func_findings and func_findings[0].details:
+                    threat_vuln_classification = func_findings[0].details.get("threat_vulnerability_classification")
+                
                 # Determine if safe based on severity
                 is_safe = max_severity in ["SAFE", "LOW"]
+                
+                analyzer_finding = {
+                    "severity": max_severity,
+                    "threat_summary": func_findings[0].summary,
+                    "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
+                    "total_findings": len(func_findings),
+                    "source_file": source_file,  # Include source file in output
+                    "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
+                }
+                
+                # Add threat/vulnerability classification if available
+                if threat_vuln_classification:
+                    analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
                 
                 results.append({
                     "tool_name": func_name,  # This should match the name from decorator params or function name
@@ -1306,14 +1367,7 @@ async def main():
                     "status": "completed",
                     "is_safe": is_safe,
                     "findings": {
-                        "behavioral_analyzer": {
-                            "severity": max_severity,
-                            "threat_summary": func_findings[0].summary,
-                            "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
-                            "total_findings": len(func_findings),
-                            "source_file": source_file,  # Include source file in output
-                            "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
-                        }
+                        "behavioral_analyzer": analyzer_finding
                     }
                 })
             
@@ -1327,12 +1381,177 @@ async def main():
                     "findings": {}
                 })
             
+            # Automatically filter out VULNERABILITY findings - only show THREATS
+            filtered_results = []
+            for result in results:
+                # Check if result has behavioral_analyzer findings with classification
+                if "findings" in result and "behavioral_analyzer" in result["findings"]:
+                    analyzer_data = result["findings"]["behavioral_analyzer"]
+                    classification = analyzer_data.get("threat_vulnerability_classification", "").upper()
+                    
+                    # Only include THREAT findings, exclude VULNERABILITY
+                    if classification == "THREAT":
+                        filtered_results.append(result)
+                # Keep results without findings (safe results)
+                elif not result.get("findings"):
+                    filtered_results.append(result)
+            
+            results = filtered_results
+            
             # Save output if requested
             if args.output:
                 with open(args.output, "w", encoding="utf-8") as f:
                     json.dump(results, f, indent=2)
                 if args.verbose:
                     print(f"Results saved to {args.output}")
+
+        elif args.cmd == "bundle":
+            # Bundle analyzer - scan MCP server bundles (.mcpb files)
+            from mcpscanner.core.bundle import MCPBundleLoader, BundleError, BundleValidationError
+            from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+            
+            bundle_path = args.bundle_path
+            
+            try:
+                with MCPBundleLoader(bundle_path) as bundle:
+                    bundle_info = bundle.info
+                    
+                    # Show manifest if requested
+                    if args.show_manifest:
+                        print("=" * 60)
+                        display_name = bundle_info.manifest.display_name or bundle_info.name
+                        print(f"Bundle: {display_name} v{bundle_info.version}")
+                        print("=" * 60)
+                        if bundle_info.manifest.description:
+                            print(f"Description: {bundle_info.manifest.description}")
+                        if bundle_info.manifest.author:
+                            print(f"Author: {bundle_info.manifest.author.name}")
+                        print(f"Server Type: {bundle_info.manifest.server_type.value}")
+                        print(f"Entry Point: {bundle_info.manifest.entry_point}")
+                        print(f"Python Files: {len(bundle_info.python_files)}")
+                        if bundle_info.manifest.tools:
+                            print(f"Declared Tools: {', '.join(bundle_info.manifest.tool_names)}")
+                        if bundle_info.manifest.compatibility and bundle_info.manifest.compatibility.platforms:
+                            platforms = [p.value for p in bundle_info.manifest.compatibility.platforms]
+                            print(f"Platforms: {', '.join(platforms)}")
+                        print("=" * 60)
+                        print()
+                    
+                    # Run behavioral analysis on ALL Python files in the bundle
+                    cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
+                    analyzer = BehavioralCodeAnalyzer(cfg)
+                    
+                    # Get all Python files from the bundle (server/, lib/, etc.)
+                    all_python_files = bundle.get_all_python_files()
+                    
+                    # Analyze each Python file
+                    all_findings = []
+                    for py_file in all_python_files:
+                        py_path = str(py_file)
+                        file_findings = await analyzer.analyze(
+                            py_path,
+                            context={"file_path": py_path, "bundle_name": bundle_info.name}
+                        )
+                        all_findings.extend(file_findings)
+                    
+                    findings = all_findings
+                    
+                    # Format results (same pattern as behavioral command)
+                    findings_by_function = {}
+                    for finding in findings:
+                        func_name = finding.details.get("function_name", "unknown") if finding.details else "unknown"
+                        if func_name not in findings_by_function:
+                            findings_by_function[func_name] = []
+                        findings_by_function[func_name].append(finding)
+                    
+                    results = []
+                    for func_name, func_findings in findings_by_function.items():
+                        severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+                        max_severity = max((f.severity for f in func_findings), 
+                                         key=lambda s: severity_order.get(s, 0))
+                        
+                        source_file = func_findings[0].details.get("source_file", source_path) if func_findings[0].details else source_path
+                        display_name = os.path.basename(source_file)
+                        
+                        mcp_taxonomies = []
+                        for finding in func_findings:
+                            if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+                                if finding.mcp_taxonomy not in mcp_taxonomies:
+                                    mcp_taxonomies.append(finding.mcp_taxonomy)
+                        
+                        threat_vuln_classification = None
+                        if func_findings and func_findings[0].details:
+                            threat_vuln_classification = func_findings[0].details.get("threat_vulnerability_classification")
+                        
+                        is_safe = max_severity in ["SAFE", "LOW"]
+                        
+                        analyzer_finding = {
+                            "severity": max_severity,
+                            "threat_summary": func_findings[0].summary,
+                            "threat_names": list(set([f.threat_category for f in func_findings])),
+                            "total_findings": len(func_findings),
+                            "source_file": source_file,
+                            "mcp_taxonomies": mcp_taxonomies,
+                        }
+                        
+                        if threat_vuln_classification:
+                            analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
+                        
+                        results.append({
+                            "tool_name": func_name,
+                            "tool_description": f"MCP function from bundle {bundle_info.name}",
+                            "status": "completed",
+                            "is_safe": is_safe,
+                            "bundle_info": {
+                                "name": bundle_info.name,
+                                "version": bundle_info.version,
+                                "entry_point": bundle_info.manifest.entry_point,
+                            },
+                            "findings": {
+                                "behavioral_analyzer": analyzer_finding
+                            }
+                        })
+                    
+                    if not results:
+                        results.append({
+                            "tool_name": bundle_info.name,
+                            "tool_description": f"MCP server bundle v{bundle_info.version}",
+                            "status": "completed",
+                            "is_safe": True,
+                            "bundle_info": {
+                                "name": bundle_info.name,
+                                "version": bundle_info.version,
+                                "entry_point": bundle_info.manifest.entry_point,
+                            },
+                            "findings": {}
+                        })
+                    
+                    # Filter to only show THREAT findings
+                    filtered_results = []
+                    for result in results:
+                        if "findings" in result and "behavioral_analyzer" in result["findings"]:
+                            analyzer_data = result["findings"]["behavioral_analyzer"]
+                            classification = analyzer_data.get("threat_vulnerability_classification", "").upper()
+                            if classification == "THREAT":
+                                filtered_results.append(result)
+                        elif not result.get("findings"):
+                            filtered_results.append(result)
+                    
+                    results = filtered_results
+                    
+                    # Save output if requested
+                    if args.output:
+                        with open(args.output, "w", encoding="utf-8") as f:
+                            json.dump(results, f, indent=2)
+                        if args.verbose:
+                            print(f"Results saved to {args.output}")
+                            
+            except BundleValidationError as e:
+                print(f"Bundle validation error: {e}", file=sys.stderr)
+                sys.exit(1)
+            except BundleError as e:
+                print(f"Bundle error: {e}", file=sys.stderr)
+                sys.exit(1)
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
@@ -1445,6 +1664,8 @@ async def main():
             server_label = args.server_url
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "bundle":
+            server_label = f"bundle:{args.bundle_path}"
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
             server_label = f"behavioral:{args.source_path}"
         elif args.stdio_command:
