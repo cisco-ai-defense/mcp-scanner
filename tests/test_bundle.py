@@ -308,7 +308,7 @@ class TestConvenienceFunctions:
             temp_path = f.name
         
         try:
-            manifest = {"name": "convenience-test", "version": "1.0.0"}
+            manifest = create_valid_manifest(name="convenience-test", version="1.0.0")
             
             with zipfile.ZipFile(temp_path, 'w') as zf:
                 zf.writestr("manifest.json", json.dumps(manifest))
@@ -328,7 +328,7 @@ class TestConvenienceFunctions:
             temp_path = f.name
         
         try:
-            manifest = {"name": "validate-test", "version": "3.0.0"}
+            manifest = create_valid_manifest(name="validate-test", version="3.0.0")
             
             with zipfile.ZipFile(temp_path, 'w') as zf:
                 zf.writestr("manifest.json", json.dumps(manifest))
