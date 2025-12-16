@@ -225,8 +225,8 @@ class BundleManifest(BaseModel):
     # User configuration
     user_config: Dict[str, UserConfigField] = Field(default_factory=dict)
     
-    # Extension metadata
-    _meta: Optional[Dict[str, Dict[str, Any]]] = Field(None, alias="_meta")
+    # Extension metadata (uses alias for JSON field "_meta")
+    meta_data: Optional[Dict[str, Dict[str, Any]]] = Field(None, alias="_meta")
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     
