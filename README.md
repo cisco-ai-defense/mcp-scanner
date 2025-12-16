@@ -195,6 +195,7 @@ asyncio.run(main())
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`.
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
 - **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
+- **bundle**: scan an MCP server bundle (.mcpb file) for security threats using behavioral analysis
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
 
@@ -268,6 +269,35 @@ mcp-scanner --analyzers llm prompts --server-url http://127.0.0.1:8000/mcp --pro
 
 # Get raw JSON output
 mcp-scanner --analyzers llm --raw prompts --server-url http://127.0.0.1:8000/mcp
+```
+
+#### Scan MCP Server Bundles (.mcpb)
+
+MCP server bundles are ZIP-based packages containing a complete MCP server implementation with a DXT manifest. The scanner extracts the bundle to a temporary directory, runs behavioral analysis on all Python files, and automatically cleans up.
+
+```bash
+# Scan an MCP server bundle
+mcp-scanner bundle server.mcpb
+
+# Show manifest information before scanning
+mcp-scanner bundle server.mcpb --show-manifest
+
+# Get raw JSON output
+mcp-scanner --raw bundle server.mcpb
+
+# Save results to file
+mcp-scanner bundle server.mcpb --output results.json
+```
+
+**Bundle Structure:**
+```
+bundle.mcpb (ZIP file)
+├── manifest.json         # Required: DXT manifest (schema v0.3)
+├── server/               # Server files
+│   ├── main.py           # Main entry point
+│   └── utils.py          # Additional modules
+├── lib/                  # Bundled Python packages
+└── icon.png              # Optional: Bundle icon
 ```
 
 #### Scan Resources
