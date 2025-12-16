@@ -81,8 +81,8 @@ class AnalysisContext(BaseModel):
         return v
 
 
-class VulnerabilityDetails(BaseModel):
-    """Detailed information about a vulnerability."""
+class SecurityFindingDetails(BaseModel):
+    """Detailed information about a security finding."""
 
     risk_score: Optional[float] = Field(
         None, ge=0, le=100, description="Risk score from 0-100"
@@ -96,7 +96,7 @@ class VulnerabilityDetails(BaseModel):
         default_factory=list, description="Reference URLs or documentation"
     )
     affected_components: List[str] = Field(
-        default_factory=list, description="Components affected by vulnerability"
+        default_factory=list, description="Components affected by security finding"
     )
 
     @field_validator("risk_score")
@@ -192,8 +192,8 @@ class AnalyzerResult(BaseModel):
     """Result from an individual analyzer."""
 
     analyzer_name: str = Field(..., description="Name of the analyzer")
-    vulnerabilities_found: int = Field(
-        0, ge=0, description="Number of vulnerabilities found"
+    findings_found: int = Field(
+        0, ge=0, description="Number of security findings found"
     )
     execution_time_ms: float = Field(
         0, ge=0, description="Execution time in milliseconds"
@@ -218,17 +218,17 @@ class ScanSummary(BaseModel):
     total_tools_scanned: int = Field(
         0, ge=0, description="Total number of tools scanned"
     )
-    total_vulnerabilities: int = Field(
-        0, ge=0, description="Total vulnerabilities found"
+    total_findings: int = Field(
+        0, ge=0, description="Total security findings found"
     )
     high_severity_count: int = Field(
-        0, ge=0, description="Number of high severity vulnerabilities"
+        0, ge=0, description="Number of high severity security findings"
     )
     medium_severity_count: int = Field(
-        0, ge=0, description="Number of medium severity vulnerabilities"
+        0, ge=0, description="Number of medium severity security findings"
     )
     low_severity_count: int = Field(
-        0, ge=0, description="Number of low severity vulnerabilities"
+        0, ge=0, description="Number of low severity security findings"
     )
     scan_duration_ms: float = Field(
         0, ge=0, description="Total scan duration in milliseconds"

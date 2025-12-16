@@ -84,9 +84,9 @@ def greet_user(name: str, style: str = "friendly") -> str:
 
 @mcp.prompt()
 def analyze_code(language: str, focus: str = "security") -> str:
-    """Generate a prompt to analyze code for security vulnerabilities and best practices"""
+    """Generate a prompt to analyze code for security findings and best practices"""
     prompt_text = f"Please analyze the following {language} code with focus on {focus}. "
-    prompt_text += "Identify any issues, vulnerabilities, or improvements."
+    prompt_text += "Identify any issues, security findings, or improvements."
     return prompt_text
 
 

@@ -68,9 +68,9 @@ async def oauth_scanning_example():
             print(f"Safe: {result.is_safe}")
 
             if not result.is_safe:
-                print("Vulnerabilities found:")
-                for vuln in result.vulnerabilities:
-                    print(f"  - {vuln.severity} ({vuln.analyzer}): {vuln.summary}")
+                print("Security findings found:")
+                for finding in result.findings:
+                    print(f"  - {finding.severity} ({finding.analyzer}): {finding.summary}")
 
     except Exception as e:
         print(f"Error during OAuth scanning: {e}")

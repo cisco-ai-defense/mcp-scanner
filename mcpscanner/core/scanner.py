@@ -25,6 +25,9 @@ import logging as stdlib_logging
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Callable
 import httpx
+import os
+import shlex
+import shutil
 
 # MCP client imports
 from mcp.client.session import ClientSession
@@ -42,6 +45,14 @@ except ImportError:  # pragma: no cover - fallback for environments without mcp 
 
 from ..config.config import Config
 from ..utils.logging_config import get_logger
+from ..utils.command_utils import (
+    build_env_for_expansion,
+    decide_windows_semantics,
+    expand_text,
+    normalize_and_expand_command_args,
+    split_embedded_args,
+    resolve_executable_path,
+)
 from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
@@ -62,7 +73,6 @@ from ..config.config_parser import MCPConfigScanner
 from .result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
-
 
 logger = get_logger(__name__)
 
@@ -104,8 +114,11 @@ class Scanner:
         self._config = config
         self._api_analyzer = ApiAnalyzer(config) if config.api_key else None
         self._yara_analyzer = YaraAnalyzer(rules_dir=rules_dir)
+
+        # LLM analyzer can be used with either API key or Bedrock (AWS credentials)
+        is_bedrock = config.llm_model and "bedrock/" in config.llm_model
         self._llm_analyzer = (
-            LLMAnalyzer(config) if config.llm_provider_api_key else None
+            LLMAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
         )
         self._custom_analyzers = custom_analyzers or []
 
@@ -148,7 +161,7 @@ class Scanner:
 
         if AnalyzerEnum.LLM in requested_analyzers and not self._llm_analyzer:
             missing_requirements.append(
-                "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
+                "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured (or AWS credentials for Bedrock models)"
             )
 
         # YARA analyzer should always be available since it doesn't require API keys
@@ -864,10 +877,40 @@ class Scanner:
         try:
             logger.debug(f"Creating stdio client for command: {server_config.command}")
 
+            # Normalize and validate command/args to avoid FileNotFoundError ([Errno 2])
+            # Expansion mode comes from StdioServer config; default is 'off'
+            expand_mode = (server_config.expand_vars or "off").lower()
+            logger.debug(f"expand_mode='{expand_mode}' for command: {server_config.command}")
+            env_for_expansion = build_env_for_expansion(server_config.env)
+            windows_semantics = decide_windows_semantics(expand_mode)
+
+            expanded_command, expanded_args = normalize_and_expand_command_args(
+                server_config.command or "", server_config.args or [], env_for_expansion, expand_mode
+            )
+            cmd_command, cmd_args = split_embedded_args(
+                expanded_command, expanded_args, windows_semantics
+            )
+            resolved_exe = resolve_executable_path(cmd_command)
+            if not resolved_exe or not os.path.exists(resolved_exe):
+                # Provide a clear, actionable message and fail fast for this server only
+                msg = (
+                    f"No such file or command: '{server_config.command}'. "
+                    f"Resolved path: '{resolved_exe or 'N/A'}'. "
+                    f"Tip: use absolute paths or ensure the binary is on PATH."
+                )
+                logger.warning(msg)
+                raise MCPConnectionError(
+                    f"Unable to connect to stdio MCP server with command {server_config.command}. "
+                    f"Please verify the command is correct and executable."
+                )
+
+            # 5) Build parameters with normalized command/args
+            # Merge parent process env with server-specific env (server config takes precedence)
+            merged_env = {**os.environ, **(server_config.env or {})}
             server_params = StdioServerParameters(
-                command=server_config.command,
-                args=server_config.args,
-                env=server_config.env,
+                command=resolved_exe,
+                args=cmd_args,
+                env=merged_env,
             )
 
             # Create client context and session with proper error handling
@@ -1093,6 +1136,7 @@ class Scanner:
         self,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
+        expand_vars_default: Optional[str] = None,
     ) -> Dict[str, List[ToolScanResult]]:
         """Scan all well-known MCP configuration files and their servers.
 
@@ -1124,6 +1168,13 @@ class Scanner:
 
                 try:
                     if isinstance(server_config, StdioServer):
+                        # Apply default expand mode if not provided by config
+                        if expand_vars_default and not server_config.expand_vars:
+                            logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
+                            server_config.expand_vars = expand_vars_default
+                        else:
+                            logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
+                            
                         # Scan stdio server with timeout and error recovery
                         try:
                             results = await self.scan_stdio_server_tools(
@@ -1186,6 +1237,7 @@ class Scanner:
         config_path: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
+        expand_vars_default: Optional[str] = None,
     ) -> List[ToolScanResult]:
         """Scan all servers in a specific MCP configuration file.
 
@@ -1217,6 +1269,13 @@ class Scanner:
 
             try:
                 if isinstance(server_config, StdioServer):
+                    # Apply default expand mode if not provided by config
+                    if expand_vars_default and not server_config.expand_vars:
+                        logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
+                        server_config.expand_vars = expand_vars_default
+                    else:
+                        logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
+                        
                     # Scan stdio server with timeout and error recovery
                     try:
                         results = await self.scan_stdio_server_tools(

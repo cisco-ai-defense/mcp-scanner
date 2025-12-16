@@ -40,6 +40,7 @@ class StdioServer(BaseModel):
     command: str
     args: List[str] = Field(default_factory=list)
     env: Optional[Dict[str, str]] = None
+    expand_vars: Optional[str] = None
     type: str = "stdio"
 
 
