@@ -86,19 +86,23 @@ class ApiAnalyzer(BaseAnalyzer):
             "X-Cisco-AI-Defense-API-Key": self._config.api_key,
         }
 
-    def _get_payload(self, content: str) -> Dict[str, Any]:
+    def _get_payload(self, content: str, include_rules: bool = True) -> Dict[str, Any]:
         """Get the payload for the API request.
 
         Args:
             content (str): The content to analyze.
+            include_rules (bool): Whether to include enabled_rules in the config.
+                Set to False if the API key has pre-configured rules.
 
         Returns:
             Dict[str, Any]: The payload for the API request.
         """
-        return {
+        payload = {
             "messages": [{"role": "user", "content": content}],
-            "config": {"enabled_rules": enabled_rules},
         }
+        if include_rules:
+            payload["config"] = {"enabled_rules": enabled_rules}
+        return payload
 
     async def analyze(
         self, content: str, context: Optional[Dict[str, Any]] = None
@@ -124,16 +128,36 @@ class ApiAnalyzer(BaseAnalyzer):
             return findings
 
         api_url = self._config.get_api_url(self._INSPECT_ENDPOINT)
-        payload = self._get_payload(content)
         headers = self._get_headers()
+        
+        # Try with rules first, then without if API key has pre-configured rules
+        include_rules = True
         try:
             async with httpx.AsyncClient() as client:
+                payload = self._get_payload(content, include_rules=include_rules)
                 response = await client.post(
                     api_url,
                     headers=headers,
                     json=payload,
                     timeout=self._DEFAULT_TIMEOUT,
                 )
+                
+                # Check for pre-configured rules error and retry without rules
+                if response.status_code == 400:
+                    try:
+                        error_json = response.json()
+                        error_msg = error_json.get("message", "")
+                        if "already has rules configured" in error_msg:
+                            self.logger.debug("API key has pre-configured rules, retrying without enabled_rules")
+                            payload = self._get_payload(content, include_rules=False)
+                            response = await client.post(
+                                api_url,
+                                headers=headers,
+                                json=payload,
+                                timeout=self._DEFAULT_TIMEOUT,
+                            )
+                    except Exception:
+                        pass  # If we can't parse the error, let the original error propagate
 
             response.raise_for_status()
             response_json = response.json()
@@ -185,3 +209,4 @@ class ApiAnalyzer(BaseAnalyzer):
             raise
 
         return findings
+
