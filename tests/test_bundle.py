@@ -353,7 +353,7 @@ class TestBundleWithOptionalFiles:
             temp_path = f.name
         
         try:
-            manifest = {"name": "req-test", "version": "1.0.0"}
+            manifest = create_valid_manifest(name="req-test", version="1.0.0")
             requirements = "mcp>=1.0.0\npydantic>=2.0\n"
             
             with zipfile.ZipFile(temp_path, 'w') as zf:
@@ -377,7 +377,7 @@ class TestBundleWithOptionalFiles:
             temp_path = f.name
         
         try:
-            manifest = {"name": "lib-test", "version": "1.0.0"}
+            manifest = create_valid_manifest(name="lib-test", version="1.0.0")
             
             with zipfile.ZipFile(temp_path, 'w') as zf:
                 zf.writestr("manifest.json", json.dumps(manifest))
@@ -401,7 +401,7 @@ class TestBundleWithOptionalFiles:
             temp_path = f.name
         
         try:
-            manifest = {"name": "icon-test", "version": "1.0.0"}
+            manifest = create_valid_manifest(name="icon-test", version="1.0.0")
             # Minimal PNG header (not a real image, just for testing)
             fake_png = b'\x89PNG\r\n\x1a\n'
             
