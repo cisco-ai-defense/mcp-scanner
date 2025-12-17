@@ -107,6 +107,24 @@ class ThreatMapping:
             "aisubtech_name": "Unauthorized or Unsolicited System Access",
             "description": "Manipulating or accessing underlying system resources without authorization, leading to unsolicited modification or deletion of files, registries, or permissions through model-driven or agent-executed commands system.",
         },
+        "DATA EXFILTRATION": {
+            "scanner_category": "SECURITY VIOLATION",
+            "severity": "HIGH",
+            "aitech": "AITech-8.2",
+            "aitech_name": "Data Exfiltration / Exposure",
+            "aisubtech": "AISubtech-8.2.3",
+            "aisubtech_name": "Data Exfiltration via Agent Tooling",
+            "description": "Tools that send data to external servers, upload files to remote endpoints, or exfiltrate sensitive information to unauthorized third parties through hidden or undisclosed functionality.",
+        },
+        "TOOL POISONING": {
+            "scanner_category": "SUSPICIOUS CODE EXECUTION",
+            "severity": "HIGH",
+            "aitech": "AITech-12.1",
+            "aitech_name": "Tool Exploitation",
+            "aisubtech": "AISubtech-12.1.2",
+            "aisubtech_name": "Tool Poisoning",
+            "description": "Corrupting, modifying, or degrading the functionality, outputs, or behavior of tools used by agents through data poisoning, configuration tampering, or behavioral manipulation, causing deceptive or malicious outputs, privilege escalation, or propagation of altered data.",
+        },
     }
     
     # AI Defense API Analyzer Threats
