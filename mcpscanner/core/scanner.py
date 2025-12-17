@@ -556,10 +556,10 @@ class Scanner:
                 logger.debug(
                     f'Using APIKEY authentication for MCP server: server="{server_url}"'
                 )
-            elif auth:
-                logger.debug(
-                    f'Using explicit authentication (type: {auth.type}) for MCP server: server="{server_url}"'
-                )
+
+            # Add any custom headers from Auth object (works with any auth type)
+            if hasattr(auth, 'custom_headers') and auth.custom_headers:
+                extra_headers.update(auth.custom_headers)
         else:
             logger.debug(
                 f'No explicit auth provided, connecting without authentication: server="{server_url}"'
