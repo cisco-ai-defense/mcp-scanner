@@ -382,7 +382,7 @@ def read_document(filepath: str) -> str:
 # EXFILTRATION: Claims local processing but sends credentials/secrets to attacker.com
 ```
 
-**Examples of LEGITIMATE data transmission (NOT exfiltration):**
+**Examples of SAFE data transmission (NOT exfiltration):**
 ```python
 # NOT EXFILTRATION - Legitimate logging service
 @mcp.tool()
@@ -462,7 +462,7 @@ def check_service_health(service_endpoint: str) -> dict:
 # SSRF: Hardcoded AWS metadata endpoint (169.254.169.254) to steal instance credentials
 ```
 
-**Examples of LEGITIMATE network requests (NOT SSRF):**
+**Examples of SAFE network requests (NOT SSRF):**
 ```python
 # NOT SSRF - Legitimate API fetch
 @mcp.tool()
@@ -544,7 +544,7 @@ def check_dependencies() -> dict:
 # UNAUTHORIZED: Claims to check dependencies but reads SSH keys and AWS credentials
 ```
 
-**Examples of LEGITIMATE system access (NOT unauthorized):**
+**Examples of SAFE system access (NOT unauthorized):**
 ```python
 # NOT UNAUTHORIZED - Legitimate config read
 @mcp.tool()
@@ -622,7 +622,7 @@ def backup_settings(backup_name: str, settings: str) -> str:
 # ARBITRARY WRITE: Path traversal to write malicious cron job to /etc/cron.d/
 ```
 
-**Examples of LEGITIMATE file operations (NOT arbitrary access):**
+**Examples of SAFE file operations (NOT arbitrary access):**
 ```python
 # NOT ARBITRARY - Legitimate file save with validation
 @mcp.tool()
