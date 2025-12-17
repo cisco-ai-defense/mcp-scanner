@@ -188,12 +188,12 @@ asyncio.run(main())
 
 #### Subcommands Overview
 
-- **remote**: scan a remote MCP server (SSE or streamable HTTP). Supports `--server-url`, optional `--bearer-token`.
+- **remote**: scan a remote MCP server (SSE or streamable HTTP). Supports `--server-url`, optional `--bearer-token`, `--header`.
 - **stdio**: launch and scan a stdio MCP server. Requires `--stdio-command`; accepts `--stdio-args`, `--stdio-env`, optional `--stdio-tool`.
 - **config**: scan servers from a specific MCP config file. Requires `--config-path`; optional `--bearer-token`.
 - **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
-- **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`.
-- **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`.
+- **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`, `--header`.
+- **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
 
@@ -249,6 +249,21 @@ mcp-scanner --analyzers yara --detailed known-configs --bearer-token "$TOKEN"
 mcp-scanner --analyzers yara --format by_tool \
   config --config-path "$HOME/.codeium/windsurf/mcp_config.json" --bearer-token "$TOKEN"
 ```
+
+#### Use custom HTTP headers (e.g., MCP Gateway dual-token auth)
+
+```bash
+# Single custom header
+mcp-scanner --analyzers yara remote --server-url https://your-mcp-server/mcp \
+  --header "X-API-Key: your-api-key"
+
+# Multiple custom headers (MCP Gateway dual-token authentication)
+mcp-scanner --analyzers yara remote --server-url https://gateway.example.com/mcp \
+  --header "Authorization: Bearer ingress-token" \
+  --header "X-Egress-Auth: Bearer egress-token"
+```
+
+> **Note:** Avoid specifying the same header via both `--bearer-token` and `--header`. If you use both `--bearer-token` and `--header "Authorization: Bearer <token>"`, the custom header value will be used (custom headers are applied last and override any duplicates).
 
 #### Scan Prompts
 
