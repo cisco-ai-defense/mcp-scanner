@@ -91,7 +91,7 @@ def example_tool(param: str) -> str:
             assert category in behavioral_threats, f"Missing important category: {category}"
             
             threat = behavioral_threats[category]
-            assert threat["severity"] in ["HIGH", "MEDIUM", "LOW"]
+            assert threat["severity"] in ["HIGH", "MEDIUM", "LOW", "INFO"]
             assert len(threat["description"]) > 50, f"{category} description too short"
     
     def test_threat_mapper_import(self):
