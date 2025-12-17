@@ -14,22 +14,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Analyzers package for MCP Scanner SDK.
+"""MCP Supply Chain Analysis Engine.
 
-This package contains different analyzers for scanning MCP tools.
+Complete analysis engine for MCP tools including:
+- AST-based code analysis
+- Pattern matching with metavariables
+- Dataflow analysis
+- Taint tracking
+- Constant propagation
+- LLM-based semantic analysis
 """
 
-from .api_analyzer import ApiAnalyzer
-from .base import BaseAnalyzer, SecurityFinding
-from .behavioural_analyzer import BehaviouralAnalyzer
-from .llm_analyzer import LLMAnalyzer
-from .yara_analyzer import YaraAnalyzer
+__version__ = "1.0.0"
 
-__all__ = [
-    "BaseAnalyzer",
-    "SecurityFinding",
-    "ApiAnalyzer",
-    "YaraAnalyzer",
-    "LLMAnalyzer",
-    "BehaviouralAnalyzer",
-]
+__all__ = ["__version__"]
