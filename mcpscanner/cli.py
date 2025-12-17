@@ -59,6 +59,62 @@ def _get_endpoint_from_env() -> str:
     return os.environ.get("MCP_SCANNER_ENDPOINT", "")
 
 
+def _parse_custom_headers(header_list: Optional[List[str]]) -> Dict[str, str]:
+    """Parse custom headers from CLI arguments.
+
+    Args:
+        header_list: List of header strings in 'Name: Value' format.
+
+    Returns:
+        Dictionary of header name to value mappings.
+
+    Raises:
+        ValueError: If a header string is not in valid format.
+    """
+    if not header_list:
+        return {}
+
+    headers = {}
+    for header_str in header_list:
+        if ':' not in header_str:
+            raise ValueError(
+                f"Invalid header format: '{header_str}'. Use 'Name: Value' format."
+            )
+        # Split on first colon only to handle values containing colons (e.g., URLs)
+        name, value = header_str.split(':', 1)
+        headers[name.strip()] = value.strip()
+    return headers
+
+
+def _create_auth_with_headers(
+    bearer_token: Optional[str],
+    custom_headers: Dict[str, str],
+) -> Optional[Auth]:
+    """Create Auth object with bearer token and/or custom headers.
+
+    Args:
+        bearer_token: Optional bearer token for authentication.
+        custom_headers: Dictionary of custom headers.
+
+    Returns:
+        Auth object if any authentication is configured, None otherwise.
+    """
+    if not bearer_token and not custom_headers:
+        return None
+
+    if bearer_token and custom_headers:
+        # Both bearer token and custom headers
+        auth = Auth.bearer(bearer_token)
+        auth.custom_headers = custom_headers
+        return auth
+    elif bearer_token:
+        # Only bearer token
+        return Auth.bearer(bearer_token)
+    else:
+        # Only custom headers
+        return Auth.custom(custom_headers)
+
+
 def _build_config(
     selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None
 ) -> Config:
@@ -538,6 +594,13 @@ async def main():
         "--bearer-token",
         help="Bearer token to use for remote MCP server authentication (Authorization: Bearer <token>)",
     )
+    p_remote.add_argument(
+        "--header",
+        action="append",
+        dest="custom_headers",
+        metavar="NAME:VALUE",
+        help="Custom HTTP header in format 'Name: Value'. Can be specified multiple times.",
+    )
 
     # Prompts subcommand
     p_prompts = subparsers.add_parser(
@@ -551,6 +614,13 @@ async def main():
     p_prompts.add_argument(
         "--bearer-token",
         help="Bearer token for authentication",
+    )
+    p_prompts.add_argument(
+        "--header",
+        action="append",
+        dest="custom_headers",
+        metavar="NAME:VALUE",
+        help="Custom HTTP header in format 'Name: Value'. Can be specified multiple times.",
     )
     p_prompts.add_argument(
         "--prompt-name",
@@ -569,6 +639,13 @@ async def main():
     p_resources.add_argument(
         "--bearer-token",
         help="Bearer token for authentication",
+    )
+    p_resources.add_argument(
+        "--header",
+        action="append",
+        dest="custom_headers",
+        metavar="NAME:VALUE",
+        help="Custom HTTP header in format 'Name: Value'. Can be specified multiple times.",
     )
     p_resources.add_argument(
         "--resource-uri",
@@ -760,7 +837,9 @@ async def main():
         if args.cmd == "remote":
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
-            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            # Parse custom headers and create auth
+            custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
+            auth = _create_auth_with_headers(args.bearer_token, custom_headers)
             results_raw = await scanner.scan_remote_server_tools(
                 args.server_url, auth=auth, analyzers=selected_analyzers
             )
@@ -830,7 +909,9 @@ async def main():
         elif args.cmd == "prompts":
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
-            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            # Parse custom headers and create auth
+            custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
+            auth = _create_auth_with_headers(args.bearer_token, custom_headers)
 
             if args.prompt_name:
                 # Scan specific prompt
@@ -887,7 +968,9 @@ async def main():
         elif args.cmd == "resources":
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
-            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            # Parse custom headers and create auth
+            custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
+            auth = _create_auth_with_headers(args.bearer_token, custom_headers)
 
             # Parse MIME types
             allowed_mime_types = [m.strip() for m in args.mime_types.split(",")]

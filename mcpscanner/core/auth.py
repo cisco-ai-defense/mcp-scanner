@@ -22,7 +22,7 @@ including token storage and OAuth client provider setup.
 
 import asyncio
 from enum import Enum
-from typing import Optional, List, Callable, Tuple
+from typing import Optional, List, Callable, Tuple, Dict
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -52,6 +52,7 @@ class APIAuthConfig(BaseModel):
     bearer_token: Optional[str] = None
     api_key: Optional[str] = None
     api_key_header: Optional[str] = None
+    custom_headers: Optional[Dict[str, str]] = None
 
 
 class Auth:
@@ -79,7 +80,8 @@ class Auth:
         callback_handler: Optional[Callable[[], Tuple[str, Optional[str]]]] = None,
         bearer_token: Optional[str] = None,
         api_key : Optional[str] = None,
-        api_key_header : Optional[str] = None
+        api_key_header : Optional[str] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
     ):
         """Initialize Auth configuration.
 
@@ -94,6 +96,7 @@ class Auth:
             redirect_handler (Optional[Callable]): Custom redirect handler.
             callback_handler (Optional[Callable]): Custom callback handler.
             bearer_token (Optional[str]): Bearer token for Bearer authentication.
+            custom_headers (Optional[Dict[str, str]]): Custom HTTP headers to send with requests.
         """
         self.enabled = enabled
         self.type = auth_type
@@ -107,6 +110,7 @@ class Auth:
         self.bearer_token = bearer_token
         self.api_key = api_key
         self.api_key_header = api_key_header
+        self.custom_headers = custom_headers or {}
 
     def __bool__(self) -> bool:
         """Return True if authentication is enabled."""
@@ -197,6 +201,22 @@ class Auth:
     def is_bearer(self) -> bool:
         """Check if this is Bearer authentication."""
         return self.enabled and self.type == AuthType.BEARER
+
+    @classmethod
+    def custom(cls, headers: Dict[str, str]) -> "Auth":
+        """Create custom header authentication configuration.
+
+        Args:
+            headers (Dict[str, str]): Dictionary of custom headers to send.
+
+        Returns:
+            Auth: Configured custom header authentication instance.
+        """
+        return cls(
+            enabled=True,
+            auth_type=AuthType.NONE,
+            custom_headers=headers,
+        )
 
 
 class InMemoryTokenStorage(TokenStorage):
