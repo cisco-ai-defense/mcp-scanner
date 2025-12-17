@@ -52,6 +52,15 @@ rule credential_harvesting{
         //// All file/directory-based credential patterns
         ////////////////////////////////////////////////
 
+        // Targeting sensitive file patterns
+        $sensitive_file_patterns = /\b(\*\.env|\*\.pem|\*\.key|\*credentials\*|\*secrets?\*|\*passwords?\*|\*tokens?\*|\*private[_-]?keys?\*)\b/i
+        
+        // Environment variable exfiltration
+        $env_exfil = /\b(environment|env)\s+(variables?|vars?)?\s*(collect|gather|send|upload|transmit|dump|extract)/i
+        
+        // Source code exfiltration
+        $source_exfil = /\b(source\s+code|codebase|repository|repo)\s*(upload|send|transmit|copy|sync|backup)\s+(to\s+)?(external|remote)/i
+
         // Credential directory paths
         $credential_directories = /[\/\\]\.(ssh|aws|kube)[\/\\]/
         
@@ -90,6 +99,9 @@ rule credential_harvesting{
         
         // Content-based credential patterns with suspicious actions
         (($key_certificate_content or $ai_model_credential_names or $env_secret_vars or $database_credentials or $env_access_methods) and ($transfer_actions or $file_system_operations or $access_actions_words) and not $generic_config_ops) or
+        
+        // Sensitive data targeting patterns
+        (($sensitive_file_patterns or $env_exfil or $source_exfil) and ($transfer_actions or $file_system_operations or $access_actions_words) and not $generic_config_ops) or
 
         // Exfiltration attempts
         ($leak_param and not $generic_config_ops) or

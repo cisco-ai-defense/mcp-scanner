@@ -65,65 +65,84 @@ rule data_exfiltration{
         $file_exfil = /\b(all\s+files?|every\s+file|file\s+contents?|directory\s+contents?)\s+(matching|in|from)?\s*(upload|send|transmit|copy|sync|backup)\s+(to\s+)?(external|remote|server|cloud)/i
         
         ////////////////////////////////////////////////
-        // Sensitive data targeting
+        // Negated patterns to reduce false positives
         ////////////////////////////////////////////////
         
-        // Targeting sensitive file patterns
-        $sensitive_file_patterns = /\b(\*\.env|\*\.pem|\*\.key|\*credentials\*|\*secrets?\*|\*passwords?\*|\*tokens?\*|\*private[_-]?keys?\*)\b/i
+        // Template/example indicators
+        $template_indicators = /(\bYOUR_API_KEY|\bREPLACE_WITH|\bINSERT_KEY|\.example|\.sample|\.template)/
         
-        // Environment variable exfiltration
-        $env_exfil = /\b(environment|env)\s+(variables?|vars?)?\s*(collect|gather|send|upload|transmit|dump|extract)/i
+        // Generic configuration operations
+        $generic_config_ops = /(get_env|set_env|read_config|write_config|config_file|settings_file|env_file)/
         
-        // Source code exfiltration
-        $source_exfil = /\b(source\s+code|codebase|repository|repo)\s*(upload|send|transmit|copy|sync|backup)\s+(to\s+)?(external|remote)/i
-        
+        // Legitimate backup services
+        $legitimate_backup = /\b(backup\s+(tool|service|utility)|legitimate\s+(backup|sync)|authorized\s+(upload|sync)|official\s+(cloud|storage))\b/i
+
     condition:
-        // External upload patterns
-        $upload_external or
-        
-        // Suspicious domains
-        $suspicious_domains or
-        
-        // External endpoints
-        $external_endpoints or
-        
-        // Remote collection
-        $remote_collection or
-        
-        // Hidden transfer
-        $hidden_transfer or
-        
-        // Hide from user
-        $hide_from_user or
-        
-        // Clipboard exfiltration
-        $clipboard_exfil or
-        
-        // Conversation exfiltration
-        $conversation_exfil or
-        
-        // Sends conversation
-        $sends_conversation or
-        
-        // External logging endpoint
-        $external_logging or
-        
-        // Screen exfiltration
-        $screen_exfil or
-        
-        // Keylogging
-        $keylog_patterns or
-        
-        // File exfiltration
-        $file_exfil or
-        
-        // Sensitive file targeting
-        $sensitive_file_patterns or
-        
-        // Environment exfiltration
-        $env_exfil or
-        
-        // Source code exfiltration
-        $source_exfil
+        (
+            // External upload patterns
+            $upload_external or
+            
+            // Suspicious domains
+            $suspicious_domains or
+            
+            // External endpoints
+            $external_endpoints or
+            
+            // Remote collection
+            $remote_collection or
+            
+            // Hidden transfer
+            $hidden_transfer or
+            
+            // Hide from user
+            $hide_from_user or
+            
+            // Clipboard exfiltration
+            $clipboard_exfil or
+            
+            // Conversation exfiltration
+            $conversation_exfil or
+            
+            // Sends conversation
+            $sends_conversation or
+            
+            // External logging endpoint
+            $external_logging or
+            
+            // Screen exfiltration
+            $screen_exfil or
+            
+            // Keylogging
+            $keylog_patterns or
+            
+            // File exfiltration
+            $file_exfil
+        )
+        and not $template_indicators
+        and not $generic_config_ops
+        and not $legitimate_backup
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
