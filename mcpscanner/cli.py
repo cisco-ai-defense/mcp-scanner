@@ -59,6 +59,62 @@ def _get_endpoint_from_env() -> str:
     return os.environ.get("MCP_SCANNER_ENDPOINT", "")
 
 
+def _parse_custom_headers(header_list: Optional[List[str]]) -> Dict[str, str]:
+    """Parse custom headers from CLI arguments.
+
+    Args:
+        header_list: List of header strings in 'Name: Value' format.
+
+    Returns:
+        Dictionary of header name to value mappings.
+
+    Raises:
+        ValueError: If a header string is not in valid format.
+    """
+    if not header_list:
+        return {}
+
+    headers = {}
+    for header_str in header_list:
+        if ':' not in header_str:
+            raise ValueError(
+                f"Invalid header format: '{header_str}'. Use 'Name: Value' format."
+            )
+        # Split on first colon only to handle values containing colons (e.g., URLs)
+        name, value = header_str.split(':', 1)
+        headers[name.strip()] = value.strip()
+    return headers
+
+
+def _create_auth_with_headers(
+    bearer_token: Optional[str],
+    custom_headers: Dict[str, str],
+) -> Optional[Auth]:
+    """Create Auth object with bearer token and/or custom headers.
+
+    Args:
+        bearer_token: Optional bearer token for authentication.
+        custom_headers: Dictionary of custom headers.
+
+    Returns:
+        Auth object if any authentication is configured, None otherwise.
+    """
+    if not bearer_token and not custom_headers:
+        return None
+
+    if bearer_token and custom_headers:
+        # Both bearer token and custom headers
+        auth = Auth.bearer(bearer_token)
+        auth.custom_headers = custom_headers
+        return auth
+    elif bearer_token:
+        # Only bearer token
+        return Auth.bearer(bearer_token)
+    else:
+        # Only custom headers
+        return Auth.custom(custom_headers)
+
+
 def _build_config(
     selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None
 ) -> Config:
@@ -719,6 +775,9 @@ async def main():
   %(prog)s --tool-filter "database" --output results.json  # Filter and save results to file
   %(prog)s --analyzers llm --raw                            # LLM-only scan with raw JSON output
   %(prog)s --analyzers api,llm --hide-safe                  # API and LLM scan, hide safe results
+  %(prog)s --scan-known-configs --expand-vars auto          # Scan configs with OS-appropriate expansion
+  %(prog)s --scan-known-configs --expand-vars linux/mac         # Expand $VAR and ${VAR} only (POSIX)
+  %(prog)s --scan-known-configs --expand-vars windows       # Expand %%VAR%% only (Windows style)
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -738,6 +797,13 @@ async def main():
         "--bearer-token",
         help="Bearer token to use for remote MCP server authentication (Authorization: Bearer <token>)",
     )
+    p_remote.add_argument(
+        "--header",
+        action="append",
+        dest="custom_headers",
+        metavar="NAME:VALUE",
+        help="Custom HTTP header in format 'Name: Value'. Can be specified multiple times.",
+    )
 
     # Prompts subcommand
     p_prompts = subparsers.add_parser(
@@ -751,6 +817,13 @@ async def main():
     p_prompts.add_argument(
         "--bearer-token",
         help="Bearer token for authentication",
+    )
+    p_prompts.add_argument(
+        "--header",
+        action="append",
+        dest="custom_headers",
+        metavar="NAME:VALUE",
+        help="Custom HTTP header in format 'Name: Value'. Can be specified multiple times.",
     )
     p_prompts.add_argument(
         "--prompt-name",
@@ -769,6 +842,13 @@ async def main():
     p_resources.add_argument(
         "--bearer-token",
         help="Bearer token for authentication",
+    )
+    p_resources.add_argument(
+        "--header",
+        action="append",
+        dest="custom_headers",
+        metavar="NAME:VALUE",
+        help="Custom HTTP header in format 'Name: Value'. Can be specified multiple times.",
     )
     p_resources.add_argument(
         "--resource-uri",
@@ -906,6 +986,18 @@ async def main():
     )
     parser.add_argument(
         "--raw", "-r", action="store_true", help="Print raw JSON output to terminal"
+    )
+    parser.add_argument(
+        "--expand-vars",
+        choices=["auto", "linux", "mac", "windows", "off"],
+        default="off",
+        help=(
+            "Control env var expansion for stdio command/args. "
+            "off: no env expansion (only ~). "
+            "linux/mac: expand $VAR and ${VAR} (POSIX). "
+            "windows: expand %VAR% (Windows style only). "
+            "auto: linux/mac on POSIX, windows on Windows."
+        ),
     )
 
     parser.add_argument(
@@ -1052,7 +1144,9 @@ async def main():
         if args.cmd == "remote":
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
-            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            # Parse custom headers and create auth
+            custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
+            auth = _create_auth_with_headers(args.bearer_token, custom_headers)
             results_raw = await scanner.scan_remote_server_tools(
                 args.server_url, auth=auth, analyzers=selected_analyzers
             )
@@ -1071,7 +1165,10 @@ async def main():
                 print("[warning] --stdio-arg is deprecated; use --stdio-args")
                 stdio_args.extend(args.stdio_arg)
             stdio = StdioServer(
-                command=args.stdio_command, args=stdio_args, env=env_dict or None
+                command=args.stdio_command,
+                args=stdio_args,
+                env=env_dict or None,
+                expand_vars=args.expand_vars,
             )
             if args.stdio_tool:
                 scan_result = await scanner.scan_stdio_server_tool(
@@ -1089,7 +1186,10 @@ async def main():
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             scan_results = await scanner.scan_mcp_config_file(
-                args.config_path, analyzers=selected_analyzers, auth=auth
+                args.config_path,
+                analyzers=selected_analyzers,
+                auth=auth,
+                expand_vars_default=args.expand_vars,
             )
             results = await results_to_json(scan_results)
 
@@ -1098,7 +1198,9 @@ async def main():
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             results_by_cfg = await scanner.scan_well_known_mcp_configs(
-                analyzers=selected_analyzers, auth=auth
+                analyzers=selected_analyzers,
+                auth=auth,
+                expand_vars_default=args.expand_vars,
             )
             if args.raw:
                 output = {}
@@ -1114,7 +1216,9 @@ async def main():
         elif args.cmd == "prompts":
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
-            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            # Parse custom headers and create auth
+            custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
+            auth = _create_auth_with_headers(args.bearer_token, custom_headers)
 
             if args.prompt_name:
                 # Scan specific prompt
@@ -1171,7 +1275,9 @@ async def main():
         elif args.cmd == "resources":
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
-            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+            # Parse custom headers and create auth
+            custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
+            auth = _create_auth_with_headers(args.bearer_token, custom_headers)
 
             # Parse MIME types
             allowed_mime_types = [m.strip() for m in args.mime_types.split(",")]
@@ -1391,6 +1497,7 @@ async def main():
                 command=args.stdio_command,
                 args=stdio_args,
                 env=env_dict or None,
+                expand_vars=args.expand_vars,
             )
             if args.stdio_tool:
                 scan_result = await scanner.scan_stdio_server_tool(
@@ -1409,13 +1516,18 @@ async def main():
             if args.config_path:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                 scan_results = await scanner.scan_mcp_config_file(
-                    args.config_path, analyzers=selected_analyzers, auth=auth
+                    args.config_path,
+                    analyzers=selected_analyzers,
+                    auth=auth,
+                    expand_vars_default=args.expand_vars,
                 )
                 results = await results_to_json(scan_results)
             else:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                 results_by_cfg = await scanner.scan_well_known_mcp_configs(
-                    analyzers=selected_analyzers, auth=auth
+                    analyzers=selected_analyzers,
+                    auth=auth,
+                    expand_vars_default=args.expand_vars,
                 )
                 if args.raw:
                     output = {}

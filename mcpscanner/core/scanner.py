@@ -45,6 +45,14 @@ except ImportError:  # pragma: no cover - fallback for environments without mcp 
 
 from ..config.config import Config
 from ..utils.logging_config import get_logger
+from ..utils.command_utils import (
+    build_env_for_expansion,
+    decide_windows_semantics,
+    expand_text,
+    normalize_and_expand_command_args,
+    split_embedded_args,
+    resolve_executable_path,
+)
 from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
@@ -66,7 +74,6 @@ from ..config.config_parser import MCPConfigScanner
 from .result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
-
 
 logger = get_logger(__name__)
 
@@ -665,10 +672,10 @@ class Scanner:
                 logger.debug(
                     f'Using APIKEY authentication for MCP server: server="{server_url}"'
                 )
-            elif auth:
-                logger.debug(
-                    f'Using explicit authentication (type: {auth.type}) for MCP server: server="{server_url}"'
-                )
+
+            # Add any custom headers from Auth object (works with any auth type)
+            if hasattr(auth, 'custom_headers') and auth.custom_headers:
+                extra_headers.update(auth.custom_headers)
         else:
             logger.debug(
                 f'No explicit auth provided, connecting without authentication: server="{server_url}"'
@@ -989,31 +996,19 @@ class Scanner:
             logger.debug(f"Creating stdio client for command: {server_config.command}")
 
             # Normalize and validate command/args to avoid FileNotFoundError ([Errno 2])
-            # 1) Expand ~ and environment variables (merge server_config.env into expansion context)
-            raw_command = server_config.command or ""
-            env_for_expansion = {**os.environ, **(server_config.env or {})}
-            expanded_command = os.path.expanduser(raw_command).strip()
-            # Manually expand vars using the merged env
-            for key, val in env_for_expansion.items():
-                expanded_command = expanded_command.replace(f"${key}", val).replace(f"${{{key}}}", val)
+            # Expansion mode comes from StdioServer config; default is 'off'
+            expand_mode = (server_config.expand_vars or "off").lower()
+            logger.debug(f"expand_mode='{expand_mode}' for command: {server_config.command}")
+            env_for_expansion = build_env_for_expansion(server_config.env)
+            windows_semantics = decide_windows_semantics(expand_mode)
 
-            # 2) Expand ~ and env vars in args too
-            cmd_args = []
-            for arg in (server_config.args or []):
-                expanded_arg = os.path.expanduser(arg)
-                for key, val in env_for_expansion.items():
-                    expanded_arg = expanded_arg.replace(f"${key}", val).replace(f"${{{key}}}", val)
-                cmd_args.append(expanded_arg)
-
-            # 3) If args not provided and command embeds args, split them
-            cmd_command = expanded_command
-            if not cmd_args and (" " in expanded_command or "\t" in expanded_command):
-                parts = shlex.split(expanded_command)
-                if parts:
-                    cmd_command, cmd_args = parts[0], parts[1:]
-
-            # 4) Resolve executable path (absolute or via PATH)
-            resolved_exe = cmd_command if os.path.isabs(cmd_command) else shutil.which(cmd_command or "")
+            expanded_command, expanded_args = normalize_and_expand_command_args(
+                server_config.command or "", server_config.args or [], env_for_expansion, expand_mode
+            )
+            cmd_command, cmd_args = split_embedded_args(
+                expanded_command, expanded_args, windows_semantics
+            )
+            resolved_exe = resolve_executable_path(cmd_command)
             if not resolved_exe or not os.path.exists(resolved_exe):
                 # Provide a clear, actionable message and fail fast for this server only
                 msg = (
@@ -1259,6 +1254,7 @@ class Scanner:
         self,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
+        expand_vars_default: Optional[str] = None,
     ) -> Dict[str, List[ToolScanResult]]:
         """Scan all well-known MCP configuration files and their servers.
 
@@ -1290,6 +1286,13 @@ class Scanner:
 
                 try:
                     if isinstance(server_config, StdioServer):
+                        # Apply default expand mode if not provided by config
+                        if expand_vars_default and not server_config.expand_vars:
+                            logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
+                            server_config.expand_vars = expand_vars_default
+                        else:
+                            logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
+                            
                         # Scan stdio server with timeout and error recovery
                         try:
                             results = await self.scan_stdio_server_tools(
@@ -1352,6 +1355,7 @@ class Scanner:
         config_path: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
+        expand_vars_default: Optional[str] = None,
     ) -> List[ToolScanResult]:
         """Scan all servers in a specific MCP configuration file.
 
@@ -1383,6 +1387,13 @@ class Scanner:
 
             try:
                 if isinstance(server_config, StdioServer):
+                    # Apply default expand mode if not provided by config
+                    if expand_vars_default and not server_config.expand_vars:
+                        logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
+                        server_config.expand_vars = expand_vars_default
+                    else:
+                        logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
+                        
                     # Scan stdio server with timeout and error recovery
                     try:
                         results = await self.scan_stdio_server_tools(
