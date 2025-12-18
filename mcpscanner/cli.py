@@ -130,9 +130,9 @@ def _build_config(
         "api_key": api_key if AnalyzerEnum.API in selected_analyzers else "",
         "endpoint_url": endpoint_url,
         "llm_provider_api_key": (
-            llm_api_key if AnalyzerEnum.LLM in selected_analyzers else ""
+            llm_api_key if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIORAL in selected_analyzers) else ""
         ),
-        "llm_model": llm_model if AnalyzerEnum.LLM in selected_analyzers else "",
+        "llm_model": llm_model if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIORAL in selected_analyzers) else "",
     }
 
     if llm_base_url:
@@ -143,6 +143,95 @@ def _build_config(
         config_params["llm_timeout"] = float(llm_timeout)
 
     return Config(**config_params)
+
+
+async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
+    """Run behavioral analyzer on source code and format results.
+    
+    Args:
+        source_path: Path to Python file or directory to analyze
+        
+    Returns:
+        List of formatted result dictionaries
+    """
+    import os
+    from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+    
+    cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
+    analyzer = BehavioralCodeAnalyzer(cfg)
+    
+    # Analyze the source file
+    findings = await analyzer.analyze(
+        source_path,
+        context={"file_path": source_path}
+    )
+    
+    # Format results to match Scanner output structure
+    findings_by_function = {}
+    for finding in findings:
+        func_name = finding.details.get("function_name", "unknown") if finding.details else "unknown"
+        
+        if func_name not in findings_by_function:
+            findings_by_function[func_name] = []
+        findings_by_function[func_name].append(finding)
+    
+    # Create ToolScanResult-like structure
+    results = []
+    for func_name, func_findings in findings_by_function.items():
+        severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+        max_severity = max((f.severity for f in func_findings), 
+                         key=lambda s: severity_order.get(s, 0))
+        
+        source_file = func_findings[0].details.get("source_file", source_path) if func_findings[0].details else source_path
+        display_name = os.path.basename(source_file) if source_file != source_path else source_path
+        
+        # Collect unique MCP taxonomies from all findings
+        mcp_taxonomies = []
+        for finding in func_findings:
+            if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+                taxonomy_key = (finding.mcp_taxonomy.get("aitech"), finding.mcp_taxonomy.get("aisubtech"))
+                existing_keys = [(t.get("aitech"), t.get("aisubtech")) for t in mcp_taxonomies]
+                if taxonomy_key not in existing_keys:
+                    mcp_taxonomies.append(finding.mcp_taxonomy)
+        
+        # Get threat/vulnerability classification from first finding
+        threat_vuln_classification = None
+        if func_findings and func_findings[0].details:
+            threat_vuln_classification = func_findings[0].details.get("threat_vulnerability_classification")
+        
+        analyzer_finding = {
+            "severity": max_severity,
+            "threat_summary": func_findings[0].summary,
+            "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
+            "total_findings": len(func_findings),
+            "source_file": source_file,
+            "mcp_taxonomies": mcp_taxonomies,
+        }
+        
+        # Add threat/vulnerability classification if available
+        if threat_vuln_classification:
+            analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
+        
+        results.append({
+            "tool_name": func_name,
+            "tool_description": f"MCP function from {display_name}",
+            "status": "completed",
+            "is_safe": False,
+            "findings": {
+                "behavioral_analyzer": analyzer_finding
+            }
+        })
+    
+    if not results:
+        results = [{
+            "tool_name": "No MCP functions found",
+            "tool_description": f"No @mcp.tool() decorators found in {source_path}",
+            "status": "completed",
+            "is_safe": True,
+            "findings": {}
+        }]
+    
+    return results
 
 
 async def scan_mcp_server_direct(
@@ -557,6 +646,120 @@ def display_resource_results(results: List[Dict[str, Any]], server_url: str, det
             print()
 
 
+def display_instructions_results_table(results: List[Dict[str, Any]], server_url: str) -> None:
+    """Display instructions scan results in table format."""
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        print("⚠️  tabulate package not installed. Install with: pip install tabulate")
+        print("Falling back to summary format...\n")
+        display_instructions_results(results, server_url, detailed=False)
+        return
+
+    print("\n=== MCP Instructions Scanner Results (Table) ===\n")
+    print(f"Server URL: {server_url}\n")
+
+    # Prepare table data
+    table_data = []
+    for result in results:
+        status = result.get("status", "unknown")
+        status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        server_name = result.get("server_name", "Unknown")
+        protocol_version = result.get("protocol_version", "N/A")
+        findings_count = len(result.get("findings", []))
+        instructions_preview = result.get("instructions", "")[:50] + "..." if len(result.get("instructions", "")) > 50 else result.get("instructions", "")
+
+        table_data.append([
+            status_icon,
+            server_name,
+            protocol_version,
+            instructions_preview,
+            findings_count,
+            status
+        ])
+
+    headers = ["Status", "Server Name", "Protocol", "Instructions Preview", "Findings", "Scan Status"]
+    print(tabulate(table_data, headers=headers, tablefmt="grid"))
+
+    # Summary
+    safe = sum(1 for r in results if r.get("is_safe", False))
+    unsafe = sum(1 for r in results if not r.get("is_safe", False))
+    print(f"\n📊 Summary: {len(results)} scanned | {safe} safe | {unsafe} unsafe")
+
+
+def display_instructions_results(results: List[Dict[str, Any]], server_url: str, detailed: bool = False) -> None:
+    """Display instructions scan results in a readable format.
+
+    Args:
+        results: List of instructions scan results
+        server_url: The server URL that was scanned
+        detailed: Whether to show detailed results
+    """
+    print("\n=== MCP Instructions Scanner Results ===\n")
+    print(f"Server URL: {server_url}")
+    print(f"Instructions scanned: {len(results)}")
+
+    safe_instructions = [i for i in results if i.get("is_safe", False)]
+    unsafe_instructions = [i for i in results if not i.get("is_safe", False)]
+
+    print(f"Safe: {len(safe_instructions)}")
+    print(f"Unsafe: {len(unsafe_instructions)}")
+
+    # Display unsafe instructions
+    if unsafe_instructions:
+        print("\n=== Unsafe Instructions ===\n")
+        for i, instr in enumerate(unsafe_instructions, 1):
+            print(f"{i}. Server: {instr.get('server_name', 'Unknown')}")
+            print(f"   Protocol: {instr.get('protocol_version', 'N/A')}")
+            instructions_text = instr.get('instructions', '')
+            if instructions_text:
+                preview = instructions_text[:100] + "..." if len(instructions_text) > 100 else instructions_text
+                print(f"   Instructions: {preview}")
+
+            findings = instr.get("findings", [])
+            print(f"   Findings: {len(findings)}")
+
+            if detailed and findings:
+                for j, finding in enumerate(findings, 1):
+                    print(f"   {j}. {finding.get('summary', 'No summary')}")
+                    print(f"      Severity: {finding.get('severity', 'Unknown')}")
+                    print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
+
+                    details = finding.get("details", {})
+                    if details.get("primary_threats"):
+                        threats = ", ".join([t.replace("_", " ").title() for t in details["primary_threats"]])
+                        print(f"      Threats: {threats}")
+                    
+                    mcp_taxonomy = finding.get("mcp_taxonomy")
+                    if mcp_taxonomy:
+                        aitech = mcp_taxonomy.get("aitech")
+                        aitech_name = mcp_taxonomy.get("aitech_name")
+                        aisubtech = mcp_taxonomy.get("aisubtech")
+                        aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                        description = mcp_taxonomy.get("description")
+                        
+                        if aitech:
+                            print(f"      Technique: {aitech} - {aitech_name}")
+                        if aisubtech:
+                            print(f"      Sub-Technique: {aisubtech} - {aisubtech_name}")
+                        if description:
+                            print(f"      Description: {description}")
+                    print()
+            print()
+
+    # Display safe instructions if detailed
+    if detailed and safe_instructions:
+        print("\n=== Safe Instructions ===\n")
+        for i, instr in enumerate(safe_instructions, 1):
+            print(f"{i}. Server: {instr.get('server_name', 'Unknown')}")
+            print(f"   Protocol: {instr.get('protocol_version', 'N/A')}")
+            instructions_text = instr.get('instructions', '')
+            if instructions_text:
+                preview = instructions_text[:100] + "..." if len(instructions_text) > 100 else instructions_text
+                print(f"   Instructions: {preview}")
+            print()
+
+
 async def main():
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(
@@ -579,7 +782,7 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Subcommands for scan modes (remote, stdio, config, known-configs, prompts, resources)
+    # Subcommands for scan modes (remote, stdio, config, known-configs, prompts, resources, instructions)
     subparsers = parser.add_subparsers(dest="cmd")
 
     p_remote = subparsers.add_parser(
@@ -657,6 +860,98 @@ async def main():
         help="Comma-separated list of allowed MIME types (default: %(default)s)",
     )
 
+    # Instructions subcommand
+    p_instructions = subparsers.add_parser(
+        "instructions", help="Scan server instructions on an MCP server"
+    )
+    p_instructions.add_argument(
+        "--server-url",
+        required=True,
+        help="URL of the MCP server to scan",
+    )
+    p_instructions.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+
+    # Behavioral subcommand - scan local source code
+    p_behavioral = subparsers.add_parser(
+        "behavioral", help="Scan MCP server source code for docstring/behavior mismatches"
+    )
+    p_behavioral.add_argument(
+        "source_path",
+        help="Path to MCP server source code file or directory",
+    )
+    p_behavioral.add_argument(
+        "--output", "-o",
+        help="Save scan results to a file",
+    )
+    p_behavioral.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_behavioral.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_behavioral.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_behavioral.add_argument(
+        "--format",
+        choices=["raw", "summary", "detailed", "by_tool", "by_analyzer", "by_severity", "table"],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+
+
+    # Stdio subcommand
+    p_stdio = subparsers.add_parser(
+        "stdio", help="Scan an MCP server via stdio (local command execution)"
+    )
+    p_stdio.add_argument(
+        "--stdio-command",
+        required=True,
+        help="Command to run the stdio-based MCP server (e.g., 'uvx')",
+    )
+    p_stdio.add_argument(
+        "--stdio-args",
+        nargs="*",
+        default=[],
+        help="Arguments passed to the stdio command (space-separated)",
+    )
+    p_stdio.add_argument(
+        "--stdio-env",
+        action="append",
+        default=[],
+        help="Environment variables for the stdio server in KEY=VALUE form; can be repeated",
+    )
+    p_stdio.add_argument(
+        "--stdio-tool",
+        help="If provided, only scan this specific tool name on the stdio server",
+    )
+
+    # Config subcommand
+    p_config = subparsers.add_parser(
+        "config", help="Scan all servers defined in a specific MCP config file"
+    )
+    p_config.add_argument(
+        "--config-path",
+        required=True,
+        help="Path to MCP config file (e.g., ~/.codeium/windsurf/mcp_config.json)",
+    )
+    p_config.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+
+    # Known-configs subcommand
+    p_known_configs = subparsers.add_parser(
+        "known-configs", help="Scan all well-known MCP client config files on this machine"
+    )
+    p_known_configs.add_argument(
+        "--bearer-token",
+        help="Bearer token for authentication",
+    )
+
     # API key and endpoint configuration
     parser.add_argument(
         "--api-key",
@@ -679,7 +974,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral (default: %(default)s)",
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
@@ -770,7 +1065,7 @@ async def main():
     )
     parser.add_argument(
         "--analyzer-filter",
-        choices=["api_analyzer", "yara_analyzer", "llm_analyzer"],
+        choices=["api_analyzer", "yara_analyzer", "llm_analyzer", "behavioral_analyzer"],
         help="Filter results by specific analyzer",
     )
     parser.add_argument(
@@ -789,6 +1084,10 @@ async def main():
         "--rules-path",
         help="Path to directory containing custom YARA rules",
     )
+    parser.add_argument(
+        "--source-path",
+        help="Path to MCP server source code file or directory (required for behavioral analyzer)",
+    )
 
     args = parser.parse_args()
 
@@ -805,6 +1104,14 @@ async def main():
 
     # Convert to AnalyzerEnum list
     selected_analyzers = [AnalyzerEnum(name) for name in analyzer_names]
+
+    # Validate behavioral analyzer requirements
+    if AnalyzerEnum.BEHAVIORAL in selected_analyzers:
+        if not args.source_path and not (hasattr(args, 'cmd') and args.cmd == 'behavioral'):
+            parser.error(
+                "Behavioral analyzer requires --source-path argument. "
+                "Usage: mcp-scanner --source-path FILE --analyzers behavioral"
+            )
 
     if args.verbose:
         logging.basicConfig(
@@ -1031,6 +1338,148 @@ async def main():
                     for r in resource_results
                 ]
 
+        elif args.cmd == "instructions":
+            cfg = _build_config(selected_analyzers)
+            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+
+            # Scan server instructions
+            result = await scanner.scan_remote_server_instructions(
+                server_url=args.server_url,
+                auth=auth,
+                analyzers=selected_analyzers,
+            )
+            # Convert InstructionsScanResult to dict format
+            results = [{
+                "instructions": result.instructions,
+                "server_name": result.server_name,
+                "protocol_version": result.protocol_version,
+                "status": result.status,
+                "is_safe": result.is_safe,
+                "findings": [
+                    {
+                        "severity": f.severity,
+                        "summary": f.summary,
+                        "analyzer": f.analyzer,
+                        "details": f.details,
+                        "mcp_taxonomy": f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None,
+                    }
+                    for f in result.findings
+                ],
+            }]
+
+        elif args.cmd == "behavioral":
+            # Behavioral analyzer - scan local source code  
+            # This follows the same pattern as other analyzers but operates on source files
+            cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
+            
+            from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+            analyzer = BehavioralCodeAnalyzer(cfg)
+            
+            source_path = args.source_path
+            
+            # Analyze the source file
+            findings = await analyzer.analyze(
+                source_path,
+                context={"file_path": source_path}
+            )
+            
+            # Format results to match Scanner output structure
+            # Group findings by function to create tool-like results
+            findings_by_function = {}
+            for finding in findings:
+                # Extract function name from details (not summary!)
+                func_name = finding.details.get("function_name", "unknown") if finding.details else "unknown"
+                
+                if func_name not in findings_by_function:
+                    findings_by_function[func_name] = []
+                findings_by_function[func_name].append(finding)
+            
+            # Create ToolScanResult-like structure for each function
+            results = []
+            for func_name, func_findings in findings_by_function.items():
+                # Get highest severity
+                severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+                max_severity = max((f.severity for f in func_findings), 
+                                 key=lambda s: severity_order.get(s, 0))
+                
+                # Get source file from findings (for directory scans)
+                source_file = func_findings[0].details.get("source_file", source_path) if func_findings[0].details else source_path
+                import os
+                display_name = os.path.basename(source_file) if source_file != source_path else source_path
+                
+                # Collect all taxonomies from findings
+                mcp_taxonomies = []
+                for finding in func_findings:
+                    if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+                        if finding.mcp_taxonomy not in mcp_taxonomies:
+                            mcp_taxonomies.append(finding.mcp_taxonomy)
+                
+                # Get threat/vulnerability classification from first finding
+                threat_vuln_classification = None
+                if func_findings and func_findings[0].details:
+                    threat_vuln_classification = func_findings[0].details.get("threat_vulnerability_classification")
+                
+                # Determine if safe based on severity
+                is_safe = max_severity in ["SAFE", "LOW"]
+                
+                analyzer_finding = {
+                    "severity": max_severity,
+                    "threat_summary": func_findings[0].summary,
+                    "threat_names": list(set([f.threat_category for f in func_findings])),  # Deduplicate
+                    "total_findings": len(func_findings),
+                    "source_file": source_file,  # Include source file in output
+                    "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
+                }
+                
+                # Add threat/vulnerability classification if available
+                if threat_vuln_classification:
+                    analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
+                
+                results.append({
+                    "tool_name": func_name,  # This should match the name from decorator params or function name
+                    "tool_description": f"MCP function from {display_name}",
+                    "status": "completed",
+                    "is_safe": is_safe,
+                    "findings": {
+                        "behavioral_analyzer": analyzer_finding
+                    }
+                })
+            
+            # If no findings, all functions are safe
+            if not results:
+                results.append({
+                    "tool_name": source_path,
+                    "tool_description": "MCP server source code",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {}
+                })
+            
+            # Automatically filter out VULNERABILITY findings - only show THREATS
+            filtered_results = []
+            for result in results:
+                # Check if result has behavioral_analyzer findings with classification
+                if "findings" in result and "behavioral_analyzer" in result["findings"]:
+                    analyzer_data = result["findings"]["behavioral_analyzer"]
+                    classification = analyzer_data.get("threat_vulnerability_classification", "").upper()
+                    
+                    # Only include THREAT findings, exclude VULNERABILITY
+                    if classification == "THREAT":
+                        filtered_results.append(result)
+                # Keep results without findings (safe results)
+                elif not result.get("findings"):
+                    filtered_results.append(result)
+            
+            results = filtered_results
+            
+            # Save output if requested
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2)
+                if args.verbose:
+                    print(f"Results saved to {args.output}")
+
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
             cfg = _build_config(selected_analyzers)
@@ -1099,26 +1548,29 @@ async def main():
                 results = await results_to_json(flattened)
 
         else:
-            # Run the security scan against a server URL
-            if args.bearer_token:
-                cfg = _build_config(selected_analyzers)
-                scanner = Scanner(cfg, rules_dir=args.rules_path)
-                results_raw = await scanner.scan_remote_server_tools(
-                    args.server_url,
-                    auth=Auth.bearer(args.bearer_token),
-                    analyzers=selected_analyzers,
-                )
-                results = await results_to_json(results_raw)
+            # Check if behavioral analyzer with source path
+            if AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
+                # Run behavioral analyzer on source code
+                results = await _run_behavioral_analyzer_on_source(args.source_path)
             else:
-                # Fallback path (from `main` branch)
-                results = await scan_mcp_server_direct(
-                    server_url=args.server_url,
-                    analyzers=selected_analyzers,
-                    output_file=args.output,
-                    verbose=args.verbose,
-                    rules_path=args.rules_path,
-                    endpoint_url=args.endpoint_url,
-                )
+                # Run the security scan against a server URL
+                if args.bearer_token:
+                    cfg = _build_config(selected_analyzers)
+                    scanner = Scanner(cfg, rules_dir=args.rules_path)
+                    results_raw = await scanner.scan_remote_server_tools(
+                        args.server_url,
+                        auth=Auth.bearer(args.bearer_token),
+                        analyzers=selected_analyzers,
+                    )
+                    results = await results_to_json(results_raw)
+                else:
+                    cfg = _build_config(selected_analyzers, endpoint_url=args.endpoint_url)
+                    scanner = Scanner(cfg, rules_dir=args.rules_path)
+                    auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
+                    results_raw = await scanner.scan_remote_server_tools(
+                        args.server_url, auth=auth, analyzers=selected_analyzers
+                    )
+                    results = await results_to_json(results_raw)
 
     except Exception as e:
         print(f"Error during scanning: {e}", file=sys.stderr)
@@ -1143,6 +1595,10 @@ async def main():
             server_label = args.server_url
         elif hasattr(args, "cmd") and args.cmd == "resources":
             server_label = args.server_url
+        elif hasattr(args, "cmd") and args.cmd == "behavioral":
+            server_label = f"behavioral:{args.source_path}"
+        elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
+            server_label = f"behavioral:{args.source_path}"
         elif args.stdio_command:
             label_args = []
             if getattr(args, "stdio_arg", None):
@@ -1155,7 +1611,7 @@ async def main():
         elif args.scan_known_configs:
             server_label = "well-known-configs"
 
-        # Handle prompts and resources differently
+        # Handle prompts, resources, and instructions differently
         if hasattr(args, "cmd") and args.cmd == "prompts":
             if args.format == "table":
                 display_prompt_results_table(results, server_label)
@@ -1167,6 +1623,12 @@ async def main():
                 display_resource_results_table(results, server_label)
             else:
                 display_resource_results(results, server_label, detailed=False)
+            return
+        elif hasattr(args, "cmd") and args.cmd == "instructions":
+            if args.format == "table":
+                display_instructions_results_table(results, server_label)
+            else:
+                display_instructions_results(results, server_label, detailed=False)
             return
 
         results_dict = {
@@ -1247,11 +1709,13 @@ async def main():
         elif args.scan_known_configs:
             server_label = "well-known-configs"
 
-        # Handle prompts and resources with detailed view
+        # Handle prompts, resources, and instructions with detailed view
         if hasattr(args, "cmd") and args.cmd == "prompts":
             display_prompt_results(results, server_label, detailed=args.detailed)
         elif hasattr(args, "cmd") and args.cmd == "resources":
             display_resource_results(results, server_label, detailed=args.detailed)
+        elif hasattr(args, "cmd") and args.cmd == "instructions":
+            display_instructions_results(results, server_label, detailed=args.detailed)
         else:
             results_dict = {"server_url": server_label, "scan_results": results}
             display_results(results_dict, detailed=args.detailed)

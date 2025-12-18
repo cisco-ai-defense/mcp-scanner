@@ -56,6 +56,7 @@ class AnalyzerEnum(str, Enum):
     API = "api"
     YARA = "yara"
     LLM = "llm"
+    BEHAVIORAL = "behavioral"
 
 
 class AnalysisContext(BaseModel):
@@ -302,6 +303,12 @@ class SpecificResourceScanRequest(APIScanRequest):
 
     resource_uri: str
     allowed_mime_types: Optional[List[str]] = ["text/plain", "text/html"]
+
+
+class SpecificInstructionsScanRequest(APIScanRequest):
+    """Request for scanning server instructions via API."""
+
+    pass  # No additional fields needed - scans the server's instructions field
 
 
 class AnalyzerFinding(BaseModel):
