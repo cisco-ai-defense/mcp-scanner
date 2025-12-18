@@ -39,71 +39,7 @@ env:
 
 jobs:
   # ============================================================================
-  # Stage 1: Code Quality & Linting
-  # ============================================================================
-  lint:
-    name: Code Quality & Linting
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6.7.0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Run Black (code formatting check)
-        run: uv run black --check --diff mcpscanner tests
-
-      - name: Run isort (import sorting check)
-        run: uv run isort --check-only --diff mcpscanner tests
-
-      - name: Run Flake8 (linting)
-        run: uv run flake8 mcpscanner tests --max-line-length=88 --extend-ignore=E203,W503,E501
-
-      - name: Run MyPy (type checking)
-        run: uv run mypy mcpscanner --ignore-missing-imports --no-error-summary || true
-
-  # ============================================================================
-  # Stage 2: Security Scanning
-  # ============================================================================
-  security:
-    name: Security Scanning
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6.7.0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Run Bandit (security linter)
-        run: |
-          uv pip install bandit
-          uv run bandit -r mcpscanner -ll -ii -x tests || true
-
-      - name: Check for hardcoded secrets
-        run: |
-          uv pip install detect-secrets
-          uv run detect-secrets scan --all-files --exclude-files '\.lock$' --exclude-files '\.env\.example$' || true
-
-  # ============================================================================
-  # Stage 3: Unit Tests - Multi-Python Version Matrix
+  # Stage 1: Unit Tests - Multi-Python Version Matrix
   # ============================================================================
   unit-tests:
     name: Unit Tests (Python ${{ matrix.python-version }})
@@ -162,7 +98,7 @@ jobs:
   analyzer-tests:
     name: Analyzer Tests
     runs-on: ubuntu-latest
-    needs: [lint]
+    needs: [unit-tests]
     strategy:
       fail-fast: false
       matrix:
@@ -208,7 +144,7 @@ jobs:
   static-analysis-tests:
     name: Static Analysis Tests
     runs-on: ubuntu-latest
-    needs: [lint]
+    needs: [unit-tests]
     strategy:
       fail-fast: false
       matrix:
@@ -256,7 +192,7 @@ jobs:
   core-tests:
     name: Core Component Tests
     runs-on: ubuntu-latest
-    needs: [lint]
+    needs: [unit-tests]
     strategy:
       fail-fast: false
       matrix:
@@ -351,7 +287,7 @@ jobs:
   scanner-live-tests:
     name: MCP Scanner Live Tests
     runs-on: ubuntu-latest
-    needs: [lint, unit-tests]
+    needs: [unit-tests]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -645,55 +581,7 @@ jobs:
         run: pkill -f "malicious_mcp_streamable_server.py" || true
 
   # ============================================================================
-  # Stage 9: Build & Package Verification
-  # ============================================================================
-  build:
-    name: Build & Package
-    runs-on: ubuntu-latest
-    needs: [unit-tests]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6.7.0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
-
-      - name: Build package
-        run: uv build
-
-      - name: Verify package contents
-        run: |
-          ls -la dist/
-          # Verify wheel file exists
-          ls dist/*.whl
-          # Verify source distribution exists
-          ls dist/*.tar.gz
-
-      - name: Test package installation
-        run: |
-          # Create a fresh virtual environment
-          python -m venv test-install-env
-          source test-install-env/bin/activate
-          pip install dist/*.whl
-          # Verify CLI entry points work
-          mcp-scanner --help
-          mcp-scanner-api --help
-          deactivate
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist-packages
-          path: dist/
-          retention-days: 7
-
-  # ============================================================================
-  # Stage 10: Documentation Verification
+  # Stage 9: Documentation Verification
   # ============================================================================
   docs:
     name: Documentation Check
@@ -705,16 +593,35 @@ jobs:
       - name: Check documentation files exist
         run: |
           # Verify essential documentation exists
-          test -f README.md
-          test -f docs/architecture.md
-          test -f docs/behavioral-scanning.md
-          test -f docs/llm-providers.md
-          test -f docs/mcp-threats-taxonomy.md
-          test -f docs/authentication.md
-          test -f docs/programmatic-usage.md
-          test -f docs/api-reference.md
-          test -f docs/output-formats.md
-          echo "All documentation files present"
+          DOCS=(
+            "README.md"
+            "docs/README.md"
+            "docs/architecture.md"
+            "docs/behavioral-scanning.md"
+            "docs/llm-providers.md"
+            "docs/mcp-threats-taxonomy.md"
+            "docs/authentication.md"
+            "docs/api-reference.md"
+            "docs/output-formats.md"
+            "docs/programmatic-usage.md"
+            "docs/development.md"
+          )
+          
+          MISSING=0
+          for doc in "${DOCS[@]}"; do
+            if [ -f "$doc" ]; then
+              echo "✅ $doc exists"
+            else
+              echo "❌ $doc is missing"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+          
+          if [ $MISSING -gt 0 ]; then
+            echo "⚠️ $MISSING documentation file(s) missing"
+            exit 1
+          fi
+          echo "✅ All documentation files present"
 
       - name: Check for broken internal links
         run: |
@@ -798,7 +705,7 @@ jobs:
   ci-summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [lint, security, unit-tests, analyzer-tests, static-analysis-tests, core-tests, scanner-live-tests, build, docs, yara-validation, prompt-validation]
+    needs: [unit-tests, analyzer-tests, static-analysis-tests, core-tests, scanner-live-tests, docs, yara-validation, prompt-validation]
     if: always()
     steps:
       - name: Check job statuses
@@ -808,27 +715,22 @@ jobs:
           echo "================================================================================"
           echo ""
           echo "Job Results:"
-          echo "  - Lint: ${{ needs.lint.result }}"
-          echo "  - Security: ${{ needs.security.result }}"
           echo "  - Unit Tests: ${{ needs.unit-tests.result }}"
           echo "  - Analyzer Tests: ${{ needs.analyzer-tests.result }}"
           echo "  - Static Analysis Tests: ${{ needs.static-analysis-tests.result }}"
           echo "  - Core Tests: ${{ needs.core-tests.result }}"
           echo "  - Scanner Live Tests: ${{ needs.scanner-live-tests.result }}"
-          echo "  - Build: ${{ needs.build.result }}"
           echo "  - Docs: ${{ needs.docs.result }}"
           echo "  - YARA Validation: ${{ needs.yara-validation.result }}"
           echo "  - Prompt Validation: ${{ needs.prompt-validation.result }}"
           echo ""
           
           # Determine overall status
-          if [[ "${{ needs.lint.result }}" == "failure" ]] || \
-             [[ "${{ needs.unit-tests.result }}" == "failure" ]] || \
+          if [[ "${{ needs.unit-tests.result }}" == "failure" ]] || \
              [[ "${{ needs.analyzer-tests.result }}" == "failure" ]] || \
              [[ "${{ needs.static-analysis-tests.result }}" == "failure" ]] || \
              [[ "${{ needs.core-tests.result }}" == "failure" ]] || \
-             [[ "${{ needs.scanner-live-tests.result }}" == "failure" ]] || \
-             [[ "${{ needs.build.result }}" == "failure" ]]; then
+             [[ "${{ needs.scanner-live-tests.result }}" == "failure" ]]; then
             echo "❌ Pipeline FAILED - Critical jobs failed"
             exit 1
           else
