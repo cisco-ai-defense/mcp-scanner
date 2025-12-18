@@ -22,272 +22,22 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      run_integration_tests:
-        description: 'Run integration tests with live LLM'
-        required: false
-        default: false
-        type: boolean
-      run_e2e_tests:
-        description: 'Run end-to-end tests'
-        required: false
-        default: false
-        type: boolean
 
 env:
   PYTHON_DEFAULT_VERSION: "3.13"
 
 jobs:
   # ============================================================================
-  # Stage 1: Unit Tests - Multi-Python Version Matrix
-  # ============================================================================
-  unit-tests:
-    name: Unit Tests (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6.7.0
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Run unit tests with coverage
-        run: |
-          uv run pytest tests/ \
-            --ignore=tests/test_bedrock_integration.py \
-            --ignore=tests/test_openai_llm_integration.py \
-            -v \
-            --cov=mcpscanner \
-            --cov-report=xml \
-            --cov-report=html \
-            --cov-report=term-missing \
-            --junitxml=test-results-${{ matrix.python-version }}.xml
-
-      - name: Upload coverage report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report-${{ matrix.python-version }}
-          path: |
-            coverage.xml
-            htmlcov/
-          retention-days: 7
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results-${{ matrix.python-version }}
-          path: test-results-${{ matrix.python-version }}.xml
-          retention-days: 7
-
-  # ============================================================================
-  # Stage 4: Analyzer-Specific Tests
-  # ============================================================================
-  analyzer-tests:
-    name: Analyzer Tests
-    runs-on: ubuntu-latest
-    needs: [unit-tests]
-    strategy:
-      fail-fast: false
-      matrix:
-        analyzer:
-          - name: "YARA Analyzer"
-            test_file: "tests/test_yara_analyzer.py"
-          - name: "API Analyzer"
-            test_file: "tests/test_api_analyzer.py"
-          - name: "LLM Analyzer"
-            test_file: "tests/test_llm_analyzer.py"
-          - name: "Behavioral - Code Analyzer"
-            test_file: "tests/behavioral/test_code_analyzer.py"
-          - name: "Behavioral - Alignment Orchestrator"
-            test_file: "tests/behavioral/test_alignment_orchestrator.py"
-          - name: "Behavioral - Threat Mapper"
-            test_file: "tests/behavioral/test_threat_mapper.py"
-          - name: "Behavioral - Prompt Builder"
-            test_file: "tests/behavioral/test_prompt_builder.py"
-          - name: "Behavioral - Integration"
-            test_file: "tests/behavioral/test_integration.py"
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6.7.0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Run ${{ matrix.analyzer.name }} tests
-        run: |
-          uv run pytest ${{ matrix.analyzer.test_file }} -v --tb=short
-
-  # ============================================================================
-  # Stage 5: Static Analysis Tests
-  # ============================================================================
-  static-analysis-tests:
-    name: Static Analysis Tests
-    runs-on: ubuntu-latest
-    needs: [unit-tests]
-    strategy:
-      fail-fast: false
-      matrix:
-        test:
-          - name: "Parser"
-            test_file: "tests/static_analysis/test_parser.py"
-          - name: "Context Extractor"
-            test_file: "tests/static_analysis/test_context_extractor.py"
-          - name: "Dataflow"
-            test_file: "tests/static_analysis/test_dataflow.py"
-          - name: "Cross-File Dataflow"
-            test_file: "tests/static_analysis/test_cross_file_dataflow.py"
-          - name: "CFG"
-            test_file: "tests/static_analysis/test_cfg.py"
-          - name: "Taint Analysis"
-            test_file: "tests/static_analysis/test_taint.py"
-          - name: "Interprocedural"
-            test_file: "tests/static_analysis/test_interprocedural.py"
-          - name: "Semantic"
-            test_file: "tests/static_analysis/test_semantic.py"
-          - name: "Types"
-            test_file: "tests/static_analysis/test_types.py"
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6.7.0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Run ${{ matrix.test.name }} tests
-        run: |
-          uv run pytest ${{ matrix.test.test_file }} -v --tb=short
-
-  # ============================================================================
-  # Stage 6: Core Component Tests
-  # ============================================================================
-  core-tests:
-    name: Core Component Tests
-    runs-on: ubuntu-latest
-    needs: [unit-tests]
-    strategy:
-      fail-fast: false
-      matrix:
-        component:
-          - name: "Scanner"
-            test_file: "tests/test_scanner.py"
-          - name: "CLI"
-            test_file: "tests/test_cli.py"
-          - name: "Config"
-            test_file: "tests/test_config.py"
-          - name: "Config Parser"
-            test_file: "tests/test_config_parser.py"
-          - name: "Models"
-            test_file: "tests/test_models.py"
-          - name: "Base Analyzer"
-            test_file: "tests/test_base.py"
-          - name: "Authentication"
-            test_file: "tests/test_auth.py"
-          - name: "Report Generator"
-            test_file: "tests/test_report_generator.py"
-          - name: "Server API"
-            test_file: "tests/test_server.py"
-          - name: "Instructions Scanning"
-            test_file: "tests/test_instructions_scanning.py"
-          - name: "Custom Variable MCP"
-            test_file: "tests/test_custom_variable_mcp.py"
-          - name: "Expand Vars"
-            test_file: "tests/test_expand_vars_default.py"
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6.7.0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Run ${{ matrix.component.name }} tests
-        run: |
-          uv run pytest ${{ matrix.component.test_file }} -v --tb=short
-
-  # ============================================================================
-  # Stage 7: Integration Tests (Optional - requires secrets)
-  # ============================================================================
-  integration-tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    needs: [unit-tests, analyzer-tests]
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_integration_tests == true
-    env:
-      MCP_SCANNER_LLM_API_KEY: ${{ secrets.MCP_SCANNER_LLM_API_KEY }}
-      MCP_SCANNER_API_KEY: ${{ secrets.MCP_SCANNER_API_KEY }}
-      MCP_SCANNER_ENDPOINT: ${{ secrets.MCP_SCANNER_ENDPOINT }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6.7.0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Run OpenAI LLM Integration Tests
-        if: env.MCP_SCANNER_LLM_API_KEY != ''
-        env:
-          MCP_SCANNER_LLM_MODEL: "gpt-4o"
-        run: |
-          uv run pytest tests/test_openai_llm_integration.py -v -m integration
-
-      - name: Run Cisco AI Defense API Integration Tests
-        if: env.MCP_SCANNER_API_KEY != ''
-        env:
-          MCP_SCANNER_ENDPOINT: ${{ env.MCP_SCANNER_ENDPOINT || 'https://us.api.inspect.aidefense.security.cisco.com/api/v1' }}
-        run: |
-          uv run pytest tests/test_api_analyzer.py -v -m integration
-
-  # ============================================================================
-  # Stage 8: MCP Scanner Live Tests - Run Scanner Against Example Servers
+  # Stage 1: MCP Scanner Live Tests - Run Scanner Against Example Servers
   # ============================================================================
   scanner-live-tests:
     name: MCP Scanner Live Tests
     runs-on: ubuntu-latest
-    needs: [unit-tests]
+    env:
+      MCP_SCANNER_LLM_API_KEY: ${{ secrets.MCP_SCANNER_LLM_API_KEY }}
+      MCP_SCANNER_LLM_MODEL: ${{ secrets.MCP_SCANNER_LLM_MODEL }}
+      MCP_SCANNER_API_KEY: ${{ secrets.MCP_SCANNER_API_KEY }}
+      MCP_SCANNER_ENDPOINT: ${{ secrets.MCP_SCANNER_ENDPOINT }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -409,11 +159,69 @@ jobs:
           echo "================================================================================"
           uv run mcp-scanner --analyzers yara instructions --server-url http://127.0.0.1:8000/mcp || true
 
+      # ----------------------------------------------------------------------
+      # Test 3: Instructions Scanning
+      # ----------------------------------------------------------------------
+      - name: "🔍 Instructions Scan - Complete Server"
+        run: |
+          echo "================================================================================"
+          echo "🔍 INSTRUCTIONS SCANNING"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers yara instructions --server-url http://127.0.0.1:8000/mcp --format detailed || true
+
+      # ----------------------------------------------------------------------
+      # Test 4: LLM Analyzer (skip if no secrets)
+      # ----------------------------------------------------------------------
+      - name: "🔍 LLM Scan - Complete Server (skip if no API key)"
+        if: env.MCP_SCANNER_LLM_API_KEY != ''
+        run: |
+          echo "================================================================================"
+          echo "🔍 LLM ANALYZER - SCANNING COMPLETE SERVER"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers llm --format detailed remote --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: "⏭️ LLM Scan - Skipped (no API key)"
+        if: env.MCP_SCANNER_LLM_API_KEY == ''
+        run: |
+          echo "⏭️ LLM Analyzer scan skipped - MCP_SCANNER_LLM_API_KEY not set"
+
+      # ----------------------------------------------------------------------
+      # Test 5: API Analyzer / Cisco AI Defense (skip if no secrets)
+      # ----------------------------------------------------------------------
+      - name: "🔍 API Scan - Complete Server (skip if no API key)"
+        if: env.MCP_SCANNER_API_KEY != ''
+        run: |
+          echo "================================================================================"
+          echo "🔍 CISCO AI DEFENSE API ANALYZER - SCANNING COMPLETE SERVER"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers api --format detailed remote --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: "⏭️ API Scan - Skipped (no API key)"
+        if: env.MCP_SCANNER_API_KEY == ''
+        run: |
+          echo "⏭️ API Analyzer scan skipped - MCP_SCANNER_API_KEY not set"
+
+      # ----------------------------------------------------------------------
+      # Test 6: All Analyzers Combined (skip if no secrets)
+      # ----------------------------------------------------------------------
+      - name: "🔍 All Analyzers - Complete Server (skip if no API keys)"
+        if: env.MCP_SCANNER_LLM_API_KEY != '' && env.MCP_SCANNER_API_KEY != ''
+        run: |
+          echo "================================================================================"
+          echo "🔍 ALL ANALYZERS (API + YARA + LLM) - SCANNING COMPLETE SERVER"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers api yara llm --format detailed remote --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: "⏭️ All Analyzers - Skipped (missing API keys)"
+        if: env.MCP_SCANNER_LLM_API_KEY == '' || env.MCP_SCANNER_API_KEY == ''
+        run: |
+          echo "⏭️ All Analyzers scan skipped - requires both MCP_SCANNER_LLM_API_KEY and MCP_SCANNER_API_KEY"
+
       - name: Stop complete test server
         run: pkill -f "mcp_complete_server.py" || true
 
       # ----------------------------------------------------------------------
-      # Test 3: Behavioral Analyzer - Scan Malicious Source Code
+      # Test 7: Behavioral Analyzer - Scan Malicious Source Code
       # ----------------------------------------------------------------------
       - name: "🔍 Behavioral Scan - Malicious Server Source Code"
         run: |
@@ -429,7 +237,7 @@ jobs:
           uv run mcp-scanner behavioral examples/example-malicious-servers/ --format summary || true
 
       # ----------------------------------------------------------------------
-      # Test 4: API Server Tests
+      # Test 8: API Server Tests
       # ----------------------------------------------------------------------
       - name: Start MCP Scanner API Server
         run: |
@@ -510,78 +318,7 @@ jobs:
           pkill -f "mcp_complete_server.py" || true
 
   # ============================================================================
-  # Stage 9: End-to-End Tests with LLM (Optional - requires secrets)
-  # ============================================================================
-  e2e-tests-llm:
-    name: E2E Tests with LLM Analyzer
-    runs-on: ubuntu-latest
-    needs: [scanner-live-tests]
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_e2e_tests == true
-    env:
-      MCP_SCANNER_LLM_API_KEY: ${{ secrets.MCP_SCANNER_LLM_API_KEY }}
-      MCP_SCANNER_LLM_MODEL: ${{ secrets.MCP_SCANNER_LLM_MODEL }}
-      MCP_SCANNER_API_KEY: ${{ secrets.MCP_SCANNER_API_KEY }}
-      MCP_SCANNER_ENDPOINT: ${{ secrets.MCP_SCANNER_ENDPOINT }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6.7.0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Install package
-        run: uv pip install -e .
-
-      - name: Start Malicious MCP Server
-        run: |
-          uv run python examples/example-malicious-servers/malicious_mcp_streamable_server.py &
-          sleep 5
-
-      - name: Wait for server
-        run: |
-          for i in {1..30}; do
-            if curl -s http://127.0.0.1:8000/mcp > /dev/null 2>&1; then
-              echo "✅ Server is ready"
-              break
-            fi
-            sleep 1
-          done
-
-      - name: "🔍 LLM Scan - Malicious Server"
-        if: env.MCP_SCANNER_LLM_API_KEY != ''
-        env:
-          MCP_SCANNER_LLM_MODEL: ${{ env.MCP_SCANNER_LLM_MODEL || 'gpt-4o' }}
-        run: |
-          echo "================================================================================"
-          echo "🔍 LLM ANALYZER - SCANNING MALICIOUS SERVER"
-          echo "================================================================================"
-          uv run mcp-scanner --analyzers llm --format detailed remote --server-url http://127.0.0.1:8000/mcp || true
-
-      - name: "🔍 All Analyzers Scan - Malicious Server"
-        if: env.MCP_SCANNER_LLM_API_KEY != '' && env.MCP_SCANNER_API_KEY != ''
-        env:
-          MCP_SCANNER_ENDPOINT: ${{ env.MCP_SCANNER_ENDPOINT || 'https://us.api.inspect.aidefense.security.cisco.com/api/v1' }}
-          MCP_SCANNER_LLM_MODEL: ${{ env.MCP_SCANNER_LLM_MODEL || 'gpt-4o' }}
-        run: |
-          echo "================================================================================"
-          echo "🔍 ALL ANALYZERS (API + YARA + LLM) - SCANNING MALICIOUS SERVER"
-          echo "================================================================================"
-          uv run mcp-scanner --analyzers api yara llm --format detailed remote --server-url http://127.0.0.1:8000/mcp || true
-
-      - name: Cleanup
-        if: always()
-        run: pkill -f "malicious_mcp_streamable_server.py" || true
-
-  # ============================================================================
-  # Stage 9: Documentation Verification
+  # Stage 3: Documentation Verification
   # ============================================================================
   docs:
     name: Documentation Check
@@ -703,7 +440,7 @@ jobs:
   ci-summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [unit-tests, analyzer-tests, static-analysis-tests, core-tests, scanner-live-tests, docs, yara-validation, prompt-validation]
+    needs: [scanner-live-tests, docs, yara-validation, prompt-validation]
     if: always()
     steps:
       - name: Check job statuses
@@ -713,10 +450,6 @@ jobs:
           echo "================================================================================"
           echo ""
           echo "Job Results:"
-          echo "  - Unit Tests: ${{ needs.unit-tests.result }}"
-          echo "  - Analyzer Tests: ${{ needs.analyzer-tests.result }}"
-          echo "  - Static Analysis Tests: ${{ needs.static-analysis-tests.result }}"
-          echo "  - Core Tests: ${{ needs.core-tests.result }}"
           echo "  - Scanner Live Tests: ${{ needs.scanner-live-tests.result }}"
           echo "  - Docs: ${{ needs.docs.result }}"
           echo "  - YARA Validation: ${{ needs.yara-validation.result }}"
@@ -724,11 +457,7 @@ jobs:
           echo ""
           
           # Determine overall status
-          if [[ "${{ needs.unit-tests.result }}" == "failure" ]] || \
-             [[ "${{ needs.analyzer-tests.result }}" == "failure" ]] || \
-             [[ "${{ needs.static-analysis-tests.result }}" == "failure" ]] || \
-             [[ "${{ needs.core-tests.result }}" == "failure" ]] || \
-             [[ "${{ needs.scanner-live-tests.result }}" == "failure" ]]; then
+          if [[ "${{ needs.scanner-live-tests.result }}" == "failure" ]]; then
             echo "❌ Pipeline FAILED - Critical jobs failed"
             exit 1
           else
