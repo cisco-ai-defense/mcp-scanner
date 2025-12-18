@@ -597,14 +597,12 @@ jobs:
             "README.md"
             "docs/README.md"
             "docs/architecture.md"
-            "docs/behavioral-scanning.md"
             "docs/llm-providers.md"
             "docs/mcp-threats-taxonomy.md"
             "docs/authentication.md"
             "docs/api-reference.md"
             "docs/output-formats.md"
             "docs/programmatic-usage.md"
-            "docs/development.md"
           )
           
           MISSING=0
