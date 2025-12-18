@@ -18,7 +18,7 @@ name: Cisco MCP Scanner - Comprehensive CI/CD
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -221,9 +221,10 @@ jobs:
         run: pkill -f "mcp_complete_server.py" || true
 
       # ----------------------------------------------------------------------
-      # Test 7: Behavioral Analyzer - Scan Malicious Source Code
+      # Test 7: Behavioral Analyzer - Scan Malicious Source Code (requires LLM)
       # ----------------------------------------------------------------------
-      - name: "🔍 Behavioral Scan - Malicious Server Source Code"
+      - name: "🔍 Behavioral Scan - Malicious Server Source Code (skip if no LLM key)"
+        if: env.MCP_SCANNER_LLM_API_KEY != ''
         run: |
           echo "================================================================================"
           echo "🔍 BEHAVIORAL ANALYSIS - MALICIOUS SERVER SOURCE CODE"
@@ -235,6 +236,11 @@ jobs:
           echo ""
           echo "--- Scanning all malicious server examples ---"
           uv run mcp-scanner behavioral examples/example-malicious-servers/ --format summary || true
+
+      - name: "⏭️ Behavioral Scan - Skipped (no LLM API key)"
+        if: env.MCP_SCANNER_LLM_API_KEY == ''
+        run: |
+          echo "⏭️ Behavioral Analyzer scan skipped - MCP_SCANNER_LLM_API_KEY required"
 
       # ----------------------------------------------------------------------
       # Test 8: API Server Tests
