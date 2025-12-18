@@ -16,6 +16,9 @@
 
 name: Cisco MCP Scanner - Comprehensive CI/CD
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main, 'release-*']
