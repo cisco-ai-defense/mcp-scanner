@@ -191,8 +191,48 @@ class ResourceScanResult(ScanResult):
         return f"ResourceScanResult(resource_uri={self.resource_uri}, mime_type={self.resource_mime_type}, status={self.status}, findings={len(self.findings)})"
 
 
+class InstructionsScanResult(ScanResult):
+    """Aggregates all findings from a server instructions scan.
+
+    Inherits all attributes from ScanResult and adds:
+        instructions (str): The instructions text from the server.
+        server_name (str): The name of the server.
+        protocol_version (str): The MCP protocol version.
+    """
+
+    def __init__(
+        self,
+        instructions: str,
+        server_name: str,
+        protocol_version: str,
+        status: str,
+        analyzers: List[str],
+        findings: List[SecurityFinding],
+        server_source: str = None,
+    ):
+        """Initialize a new InstructionsScanResult instance.
+
+        Args:
+            instructions (str): The instructions text from the server.
+            server_name (str): The name of the server.
+            protocol_version (str): The MCP protocol version.
+            status (str): Inherited - The status of the scan.
+            analyzers (List[str]): Inherited - List of analyzers used.
+            findings (List[SecurityFinding]): Inherited - The security findings.
+            server_source (str): Inherited - The source server/config.
+        """
+        self.instructions = instructions
+        self.server_name = server_name
+        self.protocol_version = protocol_version
+        super().__init__(status, analyzers, findings, server_source, server_name)
+
+    def __str__(self) -> str:
+        """Return a string representation of the instructions scan result."""
+        return f"InstructionsScanResult(server_name={self.server_name}, protocol_version={self.protocol_version}, status={self.status}, findings={len(self.findings)})"
+
+
 def process_scan_results(
-    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]]
+    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]]
 ) -> Dict[str, Any]:
     """Process a list of scan results and return summary statistics.
 
@@ -207,7 +247,7 @@ def process_scan_results(
     unsafe_tools = [r for r in results if not r.is_safe]
 
     # Count findings by severity
-    severity_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "SAFE": 0, "UNKNOWN": 0}
+    severity_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0, "SAFE": 0, "UNKNOWN": 0}
     threat_types = {}
 
     for result in unsafe_tools:
@@ -240,9 +280,9 @@ def process_scan_results(
 
 
 def filter_results_by_severity(
-    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]],
+    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]],
     severity: str
-) -> List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]]:
+) -> List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]]:
     """Filter scan results by severity level.
 
     Args:
@@ -292,6 +332,15 @@ def filter_results_by_severity(
                     analyzers=result.analyzers,
                     findings=filtered_findings,
                 )
+            elif isinstance(result, InstructionsScanResult):
+                filtered_result = InstructionsScanResult(
+                    instructions=result.instructions,
+                    server_name=result.server_name,
+                    protocol_version=result.protocol_version,
+                    status=result.status,
+                    analyzers=result.analyzers,
+                    findings=filtered_findings,
+                )
             else:
                 continue  # Skip unknown types
 
@@ -329,7 +378,7 @@ def get_highest_severity(severities: List[str]) -> str:
     Returns:
         str: The highest severity level.
     """
-    severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "SAFE": 1}
+    severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "SAFE": 0}
     highest = "SAFE"
     highest_value = 0
 
@@ -343,7 +392,7 @@ def get_highest_severity(severities: List[str]) -> str:
 
 
 def format_results_as_json(
-    scan_results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult]]
+    scan_results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]]
 ) -> str:
     """Format scan results as structured JSON grouped by analyzer.
 
@@ -383,6 +432,15 @@ def format_results_as_json(
                 "findings": {},
                 "is_safe": scan_result.is_safe,
             }
+        elif isinstance(scan_result, InstructionsScanResult):
+            result_dict = {
+                "server_name": scan_result.server_name,
+                "protocol_version": scan_result.protocol_version,
+                "instructions": scan_result.instructions,
+                "status": scan_result.status,
+                "findings": {},
+                "is_safe": scan_result.is_safe,
+            }
 
         # Skip unknown types
         if result_dict is None:
@@ -416,6 +474,7 @@ def format_results_as_json(
 
                 # Collect MCP Taxonomy info (use first finding's taxonomy)
                 mcp_taxonomy = None
+                threat_vuln_classification = None
                 
                 for vuln in vulns:
                     severities.append(vuln.severity)
@@ -438,6 +497,10 @@ def format_results_as_json(
                     # Collect MCP Taxonomy from first finding
                     if mcp_taxonomy is None and hasattr(vuln, "mcp_taxonomy") and vuln.mcp_taxonomy:
                         mcp_taxonomy = vuln.mcp_taxonomy
+                    
+                    # Collect threat/vulnerability classification from first finding
+                    if threat_vuln_classification is None and hasattr(vuln, "details") and vuln.details:
+                        threat_vuln_classification = vuln.details.get("threat_vulnerability_classification")
 
                 # Get the highest severity for this analyzer
                 analyzer_severity = get_highest_severity(severities)
@@ -458,7 +521,13 @@ def format_results_as_json(
                 analyzer_finding = {
                     "severity": analyzer_severity,
                     "total_findings": len(vulns),
+                    "threat_names": list(set(threat_names)),  # Deduplicate threat names
+                    "threat_summary": threat_summary,
                 }
+                
+                # Add threat/vulnerability classification if available
+                if threat_vuln_classification:
+                    analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
                 
                 # Add MCP Taxonomy if available (this replaces threat_names and threat_summary)
                 if mcp_taxonomy:
@@ -480,7 +549,7 @@ def format_results_as_json(
 
 
 def format_results_by_analyzer(
-    scan_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult]
+    scan_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]
 ) -> str:
     """Format scan results grouped by analyzer for display.
 
@@ -497,6 +566,8 @@ def format_results_by_analyzer(
         item_name = f"Prompt '{scan_result.prompt_name}'"
     elif isinstance(scan_result, ResourceScanResult):
         item_name = f"Resource '{scan_result.resource_uri}'"
+    elif isinstance(scan_result, InstructionsScanResult):
+        item_name = f"Instructions from '{scan_result.server_name}'"
     else:
         item_name = "Item"
 

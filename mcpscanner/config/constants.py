@@ -120,6 +120,21 @@ class MCPScannerConstants:
     DEFAULT_LLM_BASE_URL: str = os.getenv("MCP_SCANNER_LLM_BASE_URL", None)
     DEFAULT_LLM_API_VERSION: str = os.getenv("MCP_SCANNER_LLM_API_VERSION", None)
     DEFAULT_LLM_TIMEOUT: int = int(os.getenv("MCP_SCANNER_LLM_TIMEOUT", "30"))
+    
+    # LLM Prompt Configuration
+    PROMPT_LENGTH_THRESHOLD: int = int(
+        os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
+    )
+    LLM_MAX_RETRIES: int = int(os.getenv("MCP_SCANNER_LLM_MAX_RETRIES", "3"))
+    LLM_RETRY_BASE_DELAY: float = float(os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0"))
+    
+    # Behavioral Analyzer File Size Limits
+    MAX_FILE_SIZE_BYTES: int = int(
+        os.getenv("MCP_SCANNER_MAX_FILE_SIZE_BYTES", "1000000")  # 1MB default
+    )
+    MAX_FUNCTION_SIZE_BYTES: int = int(
+        os.getenv("MCP_SCANNER_MAX_FUNCTION_SIZE_BYTES", "51200")  # 50 KB default
+    )
 
     # AWS Configuration Defaults
     DEFAULT_AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
@@ -148,6 +163,17 @@ class MCPScannerConstants:
 
     # Timeout Configuration
     DEFAULT_HTTP_TIMEOUT: int = int(os.getenv("MCP_SCANNER_HTTP_TIMEOUT", "30"))
+
+    # Behavioral Analyzer Prompt Limits
+    # These control how much context is included in alignment verification prompts
+    BEHAVIORAL_MAX_OPERATIONS_PER_PARAM: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_OPERATIONS_PER_PARAM", "10"))
+    BEHAVIORAL_MAX_FUNCTION_CALLS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_FUNCTION_CALLS", "20"))
+    BEHAVIORAL_MAX_ASSIGNMENTS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_ASSIGNMENTS", "15"))
+    BEHAVIORAL_MAX_CROSS_FILE_CALLS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_CROSS_FILE_CALLS", "10"))
+    BEHAVIORAL_MAX_REACHABLE_FILES: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHABLE_FILES", "5"))
+    BEHAVIORAL_MAX_CONSTANTS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_CONSTANTS", "10"))
+    BEHAVIORAL_MAX_STRING_LITERALS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_STRING_LITERALS", "15"))
+    BEHAVIORAL_MAX_REACHES_CALLS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHES_CALLS", "10"))
 
     # OAuth Configuration
     OAUTH_CLIENT_NAME: str = os.getenv(
