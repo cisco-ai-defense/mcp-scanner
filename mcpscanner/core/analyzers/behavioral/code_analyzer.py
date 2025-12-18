@@ -102,11 +102,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         file_size = os.path.getsize(py_file)
                         total_size += file_size
                         
-                        if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
-                            self.logger.debug(f"Large file detected: {py_file} ({file_size:,} bytes)")
-                        elif file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
+                        if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
                             self.logger.error(f"Very large file detected, skipping: {py_file} ({file_size:,} bytes)")
                             continue
+                        elif file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
+                            self.logger.debug(f"Large file detected: {py_file} ({file_size:,} bytes)")
                         
                         with open(py_file, 'r') as f:
                             source_code = f.read()
