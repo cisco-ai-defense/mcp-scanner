@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.0.1"
+version = "4.0.2"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
@@ -19,7 +19,7 @@ classifiers = [
     "Intended Audience :: Developers"
 ]
 dependencies = [
-    "mcp[cli]>=1.13.1",
+    "mcp[cli]>=1.25.0",
     "httpx>=0.28.1",
     "yara-python>=4.5.4",
     "fastapi==0.125.0",
