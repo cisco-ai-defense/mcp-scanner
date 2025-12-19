@@ -39,6 +39,7 @@ jobs:
     env:
       MCP_SCANNER_LLM_API_KEY: ${{ secrets.MCP_SCANNER_LLM_API_KEY }}
       MCP_SCANNER_LLM_MODEL: ${{ secrets.MCP_SCANNER_LLM_MODEL }}
+      MCP_SCANNER_LLM_BASE_URL: ${{ secrets.MCP_SCANNER_LLM_BASE_URL }}
       MCP_SCANNER_API_KEY: ${{ secrets.MCP_SCANNER_API_KEY }}
       MCP_SCANNER_ENDPOINT: ${{ secrets.MCP_SCANNER_ENDPOINT }}
     steps:
