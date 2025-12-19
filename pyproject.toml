@@ -22,7 +22,7 @@ dependencies = [
     "mcp[cli]>=1.13.1",
     "httpx>=0.28.1",
     "yara-python>=4.5.4",
-    "fastapi>=0.110.0",
+    "fastapi==0.125.0",
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
