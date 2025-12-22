@@ -21,8 +21,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from tree_sitter import Node
+
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ..parser.typescript_parser import TypeScriptParser
+from ..parser.kotlin_parser import KotlinParser
+from ..parser.go_parser import GoParser
 
 
 class ValueKind(Enum):
@@ -80,6 +85,15 @@ class ConstantPropagationAnalysis:
 
         if isinstance(self.analyzer, PythonParser):
             self._analyze_python(ast_root)
+        elif isinstance(self.analyzer, TypeScriptParser):
+            root = ast_root.root_node if hasattr(ast_root, 'root_node') else ast_root
+            self._analyze_typescript(root)
+        elif isinstance(self.analyzer, KotlinParser):
+            root = ast_root.root_node if hasattr(ast_root, 'root_node') else ast_root
+            self._analyze_kotlin(root)
+        elif isinstance(self.analyzer, GoParser):
+            root = ast_root.root_node if hasattr(ast_root, 'root_node') else ast_root
+            self._analyze_go(root)
 
     def _analyze_python(self, node: ast.AST) -> None:
         """Analyze Python code for constants and symbolic values.
@@ -254,3 +268,355 @@ class ConstantPropagationAnalysis:
                     return pattern_value == computed
 
         return False
+
+    def _analyze_typescript(self, node: Node) -> None:
+        """Analyze TypeScript code for constants and symbolic values.
+
+        Args:
+            node: tree-sitter Node
+        """
+        for n in self.analyzer.walk(node):
+            # Handle variable declarations (const/let/var)
+            if n.type in {'variable_declaration', 'lexical_declaration'}:
+                for child in n.children:
+                    if child.type == 'variable_declarator':
+                        name_node = child.child_by_field_name('name')
+                        value_node = child.child_by_field_name('value')
+                        
+                        if name_node and value_node:
+                            var_name = self.analyzer.get_node_text(name_node)
+                            rhs_value = self._eval_ts_expr(value_node)
+                            
+                            self.symbolic_values[var_name] = rhs_value
+                            if rhs_value.is_constant():
+                                self.constants[var_name] = rhs_value.value
+
+    def _eval_ts_expr(self, node: Node) -> SymbolicValue:
+        """Evaluate a TypeScript expression to a symbolic value.
+
+        Args:
+            node: tree-sitter Node
+
+        Returns:
+            Symbolic value
+        """
+        if not isinstance(node, Node):
+            return SymbolicValue(kind=ValueKind.NOT_CONST)
+        
+        node_type = node.type
+        
+        # String literals
+        if node_type == 'string':
+            text = self.analyzer.get_node_text(node)
+            # Remove quotes
+            value = text[1:-1] if len(text) >= 2 else text
+            return SymbolicValue(kind=ValueKind.LITERAL, value=value)
+        
+        # Number literals
+        if node_type == 'number':
+            text = self.analyzer.get_node_text(node)
+            try:
+                if '.' in text:
+                    return SymbolicValue(kind=ValueKind.LITERAL, value=float(text))
+                else:
+                    return SymbolicValue(kind=ValueKind.LITERAL, value=int(text))
+            except ValueError:
+                return SymbolicValue(kind=ValueKind.NOT_CONST)
+        
+        # Boolean literals
+        if node_type in {'true', 'false'}:
+            return SymbolicValue(kind=ValueKind.LITERAL, value=node_type == 'true')
+        
+        # Identifiers - check if we know the value
+        if node_type == 'identifier':
+            name = self.analyzer.get_node_text(node)
+            if name in self.symbolic_values:
+                return self.symbolic_values[name]
+            return SymbolicValue(kind=ValueKind.SYMBOLIC, dependencies={name})
+        
+        # Binary expressions
+        if node_type == 'binary_expression':
+            left = node.child_by_field_name('left')
+            right = node.child_by_field_name('right')
+            operator = node.child_by_field_name('operator')
+            
+            if left and right and operator:
+                left_val = self._eval_ts_expr(left)
+                right_val = self._eval_ts_expr(right)
+                op_text = self.analyzer.get_node_text(operator)
+                
+                if left_val.is_constant() and right_val.is_constant():
+                    result = self._compute_ts_binop(op_text, left_val.value, right_val.value)
+                    if result is not None:
+                        return SymbolicValue(kind=ValueKind.LITERAL, value=result)
+                
+                deps = set()
+                if left_val.dependencies:
+                    deps.update(left_val.dependencies)
+                if right_val.dependencies:
+                    deps.update(right_val.dependencies)
+                return SymbolicValue(kind=ValueKind.SYMBOLIC, dependencies=deps)
+        
+        # Template strings - check if all parts are constant
+        if node_type == 'template_string':
+            parts = []
+            all_const = True
+            for child in node.children:
+                if child.type == 'string_fragment':
+                    parts.append(self.analyzer.get_node_text(child))
+                elif child.type == 'template_substitution':
+                    for subchild in child.children:
+                        if subchild.type not in {'${', '}'}:
+                            sub_val = self._eval_ts_expr(subchild)
+                            if sub_val.is_constant():
+                                parts.append(str(sub_val.value))
+                            else:
+                                all_const = False
+            
+            if all_const:
+                return SymbolicValue(kind=ValueKind.LITERAL, value=''.join(parts))
+        
+        return SymbolicValue(kind=ValueKind.NOT_CONST)
+
+    def _compute_ts_binop(self, op: str, left: Any, right: Any) -> Any:
+        """Compute a TypeScript binary operation on constants.
+
+        Args:
+            op: Operator string
+            left: Left operand value
+            right: Right operand value
+
+        Returns:
+            Result or None
+        """
+        try:
+            if op == '+':
+                return left + right
+            elif op == '-':
+                return left - right
+            elif op == '*':
+                return left * right
+            elif op == '/':
+                return left / right if right != 0 else None
+            elif op == '%':
+                return left % right if right != 0 else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+        return None
+
+    def _analyze_kotlin(self, node: Node) -> None:
+        """Analyze Kotlin code for constants and symbolic values.
+
+        Args:
+            node: tree-sitter Node
+        """
+        for n in self.analyzer.walk(node):
+            # Handle property declarations (val/var)
+            if n.type == 'property_declaration':
+                var_name = ''
+                value_node = None
+                
+                for child in n.children:
+                    if child.type == 'variable_declaration':
+                        for subchild in child.children:
+                            if subchild.type in {'identifier', 'simple_identifier'}:
+                                var_name = self.analyzer.get_node_text(subchild)
+                                break
+                    elif child.type in {'identifier', 'simple_identifier'} and not var_name:
+                        var_name = self.analyzer.get_node_text(child)
+                    elif child.type in {'string_literal', 'integer_literal', 'boolean_literal',
+                                       'real_literal', 'call_expression', 'navigation_expression'}:
+                        value_node = child
+                
+                if var_name and value_node:
+                    rhs_value = self._eval_kt_expr(value_node)
+                    self.symbolic_values[var_name] = rhs_value
+                    if rhs_value.is_constant():
+                        self.constants[var_name] = rhs_value.value
+
+    def _eval_kt_expr(self, node: Node) -> SymbolicValue:
+        """Evaluate a Kotlin expression to a symbolic value.
+
+        Args:
+            node: tree-sitter Node
+
+        Returns:
+            Symbolic value
+        """
+        if not isinstance(node, Node):
+            return SymbolicValue(kind=ValueKind.NOT_CONST)
+        
+        node_type = node.type
+        
+        # String literals
+        if node_type == 'string_literal':
+            text = self.analyzer.get_node_text(node)
+            # Remove quotes
+            if text.startswith('"') and text.endswith('"'):
+                value = text[1:-1]
+            else:
+                value = text
+            return SymbolicValue(kind=ValueKind.LITERAL, value=value)
+        
+        # Integer literals
+        if node_type == 'integer_literal':
+            text = self.analyzer.get_node_text(node)
+            try:
+                return SymbolicValue(kind=ValueKind.LITERAL, value=int(text))
+            except ValueError:
+                return SymbolicValue(kind=ValueKind.NOT_CONST)
+        
+        # Real/float literals
+        if node_type == 'real_literal':
+            text = self.analyzer.get_node_text(node)
+            try:
+                return SymbolicValue(kind=ValueKind.LITERAL, value=float(text.rstrip('fF')))
+            except ValueError:
+                return SymbolicValue(kind=ValueKind.NOT_CONST)
+        
+        # Boolean literals
+        if node_type == 'boolean_literal':
+            text = self.analyzer.get_node_text(node)
+            return SymbolicValue(kind=ValueKind.LITERAL, value=text == 'true')
+        
+        # Identifiers - check if we know the value
+        if node_type in {'identifier', 'simple_identifier'}:
+            name = self.analyzer.get_node_text(node)
+            if name in self.symbolic_values:
+                return self.symbolic_values[name]
+            return SymbolicValue(kind=ValueKind.SYMBOLIC, dependencies={name})
+        
+        # Additive/multiplicative expressions
+        if node_type in {'additive_expression', 'multiplicative_expression'}:
+            children = list(node.children)
+            if len(children) >= 3:
+                left_val = self._eval_kt_expr(children[0])
+                op_text = self.analyzer.get_node_text(children[1])
+                right_val = self._eval_kt_expr(children[2])
+                
+                if left_val.is_constant() and right_val.is_constant():
+                    result = self._compute_ts_binop(op_text, left_val.value, right_val.value)
+                    if result is not None:
+                        return SymbolicValue(kind=ValueKind.LITERAL, value=result)
+        
+        return SymbolicValue(kind=ValueKind.NOT_CONST)
+
+    def _analyze_go(self, node: Node) -> None:
+        """Analyze Go code for constants and symbolic values.
+
+        Args:
+            node: tree-sitter Node
+        """
+        for n in self.analyzer.walk(node):
+            # Handle const declarations
+            if n.type == 'const_declaration':
+                for child in n.children:
+                    if child.type == 'const_spec':
+                        name_node = None
+                        value_node = None
+                        for subchild in child.children:
+                            if subchild.type == 'identifier' and name_node is None:
+                                name_node = subchild
+                            elif subchild.type == 'expression_list':
+                                # Get first expression from expression_list
+                                for expr in subchild.children:
+                                    if expr.type != ',':
+                                        value_node = expr
+                                        break
+                            elif subchild.type in {'interpreted_string_literal', 'raw_string_literal',
+                                                  'int_literal', 'float_literal', 'true', 'false'}:
+                                value_node = subchild
+                        
+                        if name_node and value_node:
+                            var_name = self.analyzer.get_node_text(name_node)
+                            rhs_value = self._eval_go_expr(value_node)
+                            self.symbolic_values[var_name] = rhs_value
+                            if rhs_value.is_constant():
+                                self.constants[var_name] = rhs_value.value
+            
+            # Handle short var declarations (:=)
+            elif n.type == 'short_var_declaration':
+                left = n.child_by_field_name('left')
+                right = n.child_by_field_name('right')
+                
+                if left and right:
+                    names = [c for c in left.children if c.type == 'identifier']
+                    values = [c for c in right.children if c.type != ',']
+                    
+                    for i, name_node in enumerate(names):
+                        var_name = self.analyzer.get_node_text(name_node)
+                        if i < len(values):
+                            rhs_value = self._eval_go_expr(values[i])
+                            self.symbolic_values[var_name] = rhs_value
+                            if rhs_value.is_constant():
+                                self.constants[var_name] = rhs_value.value
+
+    def _eval_go_expr(self, node: Node) -> SymbolicValue:
+        """Evaluate a Go expression to a symbolic value.
+
+        Args:
+            node: tree-sitter Node
+
+        Returns:
+            Symbolic value
+        """
+        if not isinstance(node, Node):
+            return SymbolicValue(kind=ValueKind.NOT_CONST)
+        
+        node_type = node.type
+        
+        # String literals
+        if node_type in {'interpreted_string_literal', 'raw_string_literal'}:
+            text = self.analyzer.get_node_text(node)
+            if text.startswith('"') and text.endswith('"'):
+                value = text[1:-1]
+            elif text.startswith('`') and text.endswith('`'):
+                value = text[1:-1]
+            else:
+                value = text
+            return SymbolicValue(kind=ValueKind.LITERAL, value=value)
+        
+        # Integer literals
+        if node_type == 'int_literal':
+            text = self.analyzer.get_node_text(node)
+            try:
+                return SymbolicValue(kind=ValueKind.LITERAL, value=int(text, 0))
+            except ValueError:
+                return SymbolicValue(kind=ValueKind.NOT_CONST)
+        
+        # Float literals
+        if node_type == 'float_literal':
+            text = self.analyzer.get_node_text(node)
+            try:
+                return SymbolicValue(kind=ValueKind.LITERAL, value=float(text))
+            except ValueError:
+                return SymbolicValue(kind=ValueKind.NOT_CONST)
+        
+        # Boolean literals
+        if node_type in {'true', 'false'}:
+            return SymbolicValue(kind=ValueKind.LITERAL, value=node_type == 'true')
+        
+        # Identifiers
+        if node_type == 'identifier':
+            name = self.analyzer.get_node_text(node)
+            if name in self.symbolic_values:
+                return self.symbolic_values[name]
+            return SymbolicValue(kind=ValueKind.SYMBOLIC, dependencies={name})
+        
+        # Binary expressions
+        if node_type == 'binary_expression':
+            left = node.child_by_field_name('left')
+            right = node.child_by_field_name('right')
+            operator = node.child_by_field_name('operator')
+            
+            if left and right and operator:
+                left_val = self._eval_go_expr(left)
+                right_val = self._eval_go_expr(right)
+                op_text = self.analyzer.get_node_text(operator)
+                
+                if left_val.is_constant() and right_val.is_constant():
+                    result = self._compute_ts_binop(op_text, left_val.value, right_val.value)
+                    if result is not None:
+                        return SymbolicValue(kind=ValueKind.LITERAL, value=result)
+        
+        return SymbolicValue(kind=ValueKind.NOT_CONST)

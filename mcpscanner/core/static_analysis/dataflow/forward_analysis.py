@@ -26,10 +26,14 @@ import ast
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Set
 
+from tree_sitter import Node
+
 from ..cfg.builder import CFGNode, DataFlowAnalyzer
 from ..taint.tracker import ShapeEnvironment, Taint, TaintStatus
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ..parser.typescript_parser import TypeScriptParser
+from ..parser.kotlin_parser import KotlinParser
 
 
 @dataclass
@@ -159,6 +163,10 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
 
         if isinstance(self.analyzer, PythonParser):
             self._transfer_python(ast_node, out_fact)
+        elif isinstance(self.analyzer, TypeScriptParser):
+            self._transfer_typescript(ast_node, out_fact)
+        elif isinstance(self.analyzer, KotlinParser):
+            self._transfer_kotlin(ast_node, out_fact)
 
         return out_fact
 
@@ -270,11 +278,28 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
                 return self._eval_expr_taint(expr.value, fact)
         
         elif isinstance(expr, ast.Call):
-            # Merge taint from all arguments
+            # Merge taint from the function/method being called AND all arguments
             result = Taint(status=TaintStatus.UNTAINTED)
+            
+            # For method calls like obj.method(), propagate taint from obj
+            if isinstance(expr.func, ast.Attribute):
+                obj_taint = self._eval_expr_taint(expr.func.value, fact)
+                result = result.merge(obj_taint)
+            elif isinstance(expr.func, ast.Name):
+                # Direct function call - check if the function itself is tainted
+                func_taint = self._eval_expr_taint(expr.func, fact)
+                result = result.merge(func_taint)
+            
+            # Merge taint from all arguments
             for arg in expr.args:
                 arg_taint = self._eval_expr_taint(arg, fact)
                 result = result.merge(arg_taint)
+            
+            # Also check keyword arguments
+            for kw in expr.keywords:
+                kw_taint = self._eval_expr_taint(kw.value, fact)
+                result = result.merge(kw_taint)
+            
             return result
         
         elif isinstance(expr, ast.BinOp):
@@ -376,6 +401,555 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
                 parts.append(current.id)
             return ".".join(reversed(parts))
         return ast.unparse(node.func)
+
+    def _transfer_typescript(self, node: Node, fact: ForwardFlowFact) -> None:
+        """Transfer function for TypeScript tree-sitter nodes.
+
+        Args:
+            node: tree-sitter Node
+            fact: Flow fact to update
+        """
+        if not isinstance(node, Node):
+            return
+        
+        node_type = node.type
+        
+        # Track variable declarations and assignments
+        if node_type in {'variable_declaration', 'lexical_declaration'}:
+            for child in node.children:
+                if child.type == 'variable_declarator':
+                    name_node = child.child_by_field_name('name')
+                    value_node = child.child_by_field_name('value')
+                    
+                    if name_node and value_node:
+                        var_name = self._get_ts_node_text(name_node)
+                        rhs_taint = self._eval_ts_expr_taint(value_node, fact)
+                        
+                        if rhs_taint.is_tainted():
+                            fact.shape_env.set_taint(var_name, rhs_taint)
+                            
+                            for param_name in self.parameter_names:
+                                if self._ts_expr_uses_var(value_node, param_name, fact):
+                                    if param_name in fact.parameter_flows:
+                                        value_text = self._get_ts_node_text(value_node)
+                                        fact.parameter_flows[param_name].reaches_assignments.append(
+                                            f"{var_name} = {value_text}"
+                                        )
+                                        fact.parameter_flows[param_name].operations.append({
+                                            "type": "assignment",
+                                            "target": var_name,
+                                            "value": value_text,
+                                            "line": node.start_point[0] + 1,
+                                        })
+                                        
+                                        # Handle call_expression or await_expression wrapping a call
+                                        call_node = value_node
+                                        if value_node.type == 'await_expression':
+                                            for c in value_node.children:
+                                                if c.type == 'call_expression':
+                                                    call_node = c
+                                                    break
+                                        
+                                        if call_node.type == 'call_expression':
+                                            call_name = self._get_ts_call_name(call_node)
+                                            fact.parameter_flows[param_name].reaches_calls.append(call_name)
+                        else:
+                            fact.shape_env.set_taint(var_name, Taint(status=TaintStatus.UNTAINTED))
+        
+        elif node_type == 'assignment_expression':
+            left = node.child_by_field_name('left')
+            right = node.child_by_field_name('right')
+            
+            if left and right:
+                var_name = self._get_ts_node_text(left)
+                rhs_taint = self._eval_ts_expr_taint(right, fact)
+                
+                if rhs_taint.is_tainted():
+                    fact.shape_env.set_taint(var_name, rhs_taint)
+                    
+                    for param_name in self.parameter_names:
+                        if self._ts_expr_uses_var(right, param_name, fact):
+                            if param_name in fact.parameter_flows:
+                                value_text = self._get_ts_node_text(right)
+                                fact.parameter_flows[param_name].reaches_assignments.append(
+                                    f"{var_name} = {value_text}"
+                                )
+                                fact.parameter_flows[param_name].operations.append({
+                                    "type": "assignment",
+                                    "target": var_name,
+                                    "value": value_text,
+                                    "line": node.start_point[0] + 1,
+                                })
+                else:
+                    fact.shape_env.set_taint(var_name, Taint(status=TaintStatus.UNTAINTED))
+        
+        # Track function calls
+        elif node_type == 'call_expression':
+            call_name = self._get_ts_call_name(node)
+            
+            args_node = node.child_by_field_name('arguments')
+            if args_node:
+                for arg in args_node.children:
+                    if arg.type not in {'(', ')', ','}:
+                        arg_taint = self._eval_ts_expr_taint(arg, fact)
+                        if arg_taint.is_tainted():
+                            for param_name in self.parameter_names:
+                                if self._ts_expr_uses_var(arg, param_name, fact):
+                                    if param_name in fact.parameter_flows:
+                                        fact.parameter_flows[param_name].reaches_calls.append(call_name)
+                                        fact.parameter_flows[param_name].operations.append({
+                                            "type": "function_call",
+                                            "function": call_name,
+                                            "argument": self._get_ts_node_text(arg),
+                                            "line": node.start_point[0] + 1,
+                                        })
+        
+        # Track returns
+        elif node_type == 'return_statement':
+            for child in node.children:
+                if child.type not in {'return', ';'}:
+                    ret_taint = self._eval_ts_expr_taint(child, fact)
+                    if ret_taint.is_tainted():
+                        for param_name in self.parameter_names:
+                            if self._ts_expr_uses_var(child, param_name, fact):
+                                if param_name in fact.parameter_flows:
+                                    fact.parameter_flows[param_name].reaches_returns = True
+                                    fact.parameter_flows[param_name].operations.append({
+                                        "type": "return",
+                                        "value": self._get_ts_node_text(child),
+                                        "line": node.start_point[0] + 1,
+                                    })
+
+    def _get_ts_node_text(self, node: Node) -> str:
+        """Get text content of a tree-sitter node.
+
+        Args:
+            node: tree-sitter Node
+
+        Returns:
+            Node text
+        """
+        if isinstance(self.analyzer, TypeScriptParser):
+            return self.analyzer.get_node_text(node)
+        return str(node)
+
+    def _get_ts_call_name(self, node: Node) -> str:
+        """Get function call name from TypeScript call_expression.
+
+        Args:
+            node: call_expression Node
+
+        Returns:
+            Function name
+        """
+        if isinstance(self.analyzer, TypeScriptParser):
+            return self.analyzer.get_call_name(node)
+        return ''
+
+    def _eval_ts_expr_taint(self, node: Node, fact: ForwardFlowFact) -> Taint:
+        """Evaluate taint of a TypeScript expression.
+
+        Args:
+            node: tree-sitter Node
+            fact: Current flow fact
+
+        Returns:
+            Taint of the expression
+        """
+        if not isinstance(node, Node):
+            return Taint(status=TaintStatus.UNTAINTED)
+        
+        node_type = node.type
+        
+        if node_type == 'identifier':
+            name = self._get_ts_node_text(node)
+            return fact.shape_env.get_taint(name)
+        
+        elif node_type == 'member_expression':
+            obj = node.child_by_field_name('object')
+            if obj and obj.type == 'identifier':
+                obj_name = self._get_ts_node_text(obj)
+                prop = node.child_by_field_name('property')
+                if prop:
+                    prop_name = self._get_ts_node_text(prop)
+                    shape = fact.shape_env.get(obj_name)
+                    return shape.get_field(prop_name)
+            elif obj:
+                return self._eval_ts_expr_taint(obj, fact)
+        
+        elif node_type == 'subscript_expression':
+            obj = node.child_by_field_name('object')
+            if obj and obj.type == 'identifier':
+                arr_name = self._get_ts_node_text(obj)
+                shape = fact.shape_env.get(arr_name)
+                return shape.get_element()
+            elif obj:
+                return self._eval_ts_expr_taint(obj, fact)
+        
+        elif node_type == 'await_expression':
+            # Propagate taint through await
+            for child in node.children:
+                if child.type != 'await':
+                    return self._eval_ts_expr_taint(child, fact)
+            return Taint(status=TaintStatus.UNTAINTED)
+        
+        elif node_type == 'call_expression':
+            result = Taint(status=TaintStatus.UNTAINTED)
+            
+            # For method calls like obj.method(), propagate taint from obj
+            func_node = node.child_by_field_name('function')
+            if func_node:
+                if func_node.type == 'member_expression':
+                    obj = func_node.child_by_field_name('object')
+                    if obj:
+                        result = result.merge(self._eval_ts_expr_taint(obj, fact))
+            
+            # Merge taint from arguments
+            args_node = node.child_by_field_name('arguments')
+            if args_node:
+                for arg in args_node.children:
+                    if arg.type not in {'(', ')', ','}:
+                        arg_taint = self._eval_ts_expr_taint(arg, fact)
+                        result = result.merge(arg_taint)
+            return result
+        
+        elif node_type == 'binary_expression':
+            left = node.child_by_field_name('left')
+            right = node.child_by_field_name('right')
+            result = Taint(status=TaintStatus.UNTAINTED)
+            if left:
+                result = result.merge(self._eval_ts_expr_taint(left, fact))
+            if right:
+                result = result.merge(self._eval_ts_expr_taint(right, fact))
+            return result
+        
+        elif node_type == 'template_string':
+            result = Taint(status=TaintStatus.UNTAINTED)
+            for child in node.children:
+                if child.type == 'template_substitution':
+                    for subchild in child.children:
+                        if subchild.type not in {'${', '}'}:
+                            result = result.merge(self._eval_ts_expr_taint(subchild, fact))
+            return result
+        
+        elif node_type in {'array', 'object'}:
+            result = Taint(status=TaintStatus.UNTAINTED)
+            for child in node.children:
+                if child.type not in {'[', ']', '{', '}', ','}:
+                    result = result.merge(self._eval_ts_expr_taint(child, fact))
+            return result
+        
+        elif node_type == 'pair':
+            # Object property pair - check the value (not the key)
+            for child in node.children:
+                if child.type not in {'property_identifier', ':', 'string'}:
+                    return self._eval_ts_expr_taint(child, fact)
+            return Taint(status=TaintStatus.UNTAINTED)
+        
+        elif node_type == 'shorthand_property_identifier':
+            # Shorthand like { userData } is equivalent to { userData: userData }
+            name = self._get_ts_node_text(node)
+            return fact.shape_env.get_taint(name)
+        
+        return Taint(status=TaintStatus.UNTAINTED)
+
+    def _ts_expr_uses_var(self, node: Node, var_name: str, fact: ForwardFlowFact) -> bool:
+        """Check if TypeScript expression uses a variable.
+
+        Args:
+            node: tree-sitter Node
+            var_name: Variable name to check
+            fact: Current flow fact
+
+        Returns:
+            True if expression uses the variable
+        """
+        if not isinstance(node, Node):
+            return False
+        
+        target_shape = fact.shape_env.get(var_name)
+        target_taint = target_shape.get_taint()
+        target_labels = target_taint.labels if target_taint.is_tainted() else set()
+        expected_label = f"param:{var_name}"
+        
+        # Walk all nodes in the expression
+        nodes_to_check = [node]
+        while nodes_to_check:
+            current = nodes_to_check.pop()
+            
+            if current.type in {'identifier', 'shorthand_property_identifier'}:
+                name = self._get_ts_node_text(current)
+                
+                # Direct reference
+                if name == var_name:
+                    return True
+                
+                # Check transitive dependencies
+                node_shape = fact.shape_env.get(name)
+                node_taint = node_shape.get_taint()
+                
+                if node_taint.is_tainted():
+                    if expected_label in node_taint.labels:
+                        return True
+                    if target_labels and node_taint.labels & target_labels:
+                        return True
+            
+            # Add children to check
+            nodes_to_check.extend(current.children)
+        
+        return False
+
+    def _transfer_kotlin(self, node: Node, fact: ForwardFlowFact) -> None:
+        """Transfer function for Kotlin tree-sitter nodes.
+
+        Args:
+            node: tree-sitter Node
+            fact: Flow fact to update
+        """
+        if not isinstance(node, Node):
+            return
+        
+        node_type = node.type
+        
+        # Track property declarations (val/var)
+        if node_type == 'property_declaration':
+            var_name = ''
+            value_node = None
+            
+            for child in node.children:
+                if child.type == 'variable_declaration':
+                    # Get name from variable_declaration
+                    for subchild in child.children:
+                        if subchild.type in {'identifier', 'simple_identifier'}:
+                            var_name = self._get_kt_node_text(subchild)
+                            break
+                elif child.type in {'identifier', 'simple_identifier'} and not var_name:
+                    var_name = self._get_kt_node_text(child)
+                elif child.type in {'call_expression', 'string_literal', 'navigation_expression',
+                                   'integer_literal', 'boolean_literal'}:
+                    value_node = child
+            
+            if var_name and value_node:
+                rhs_taint = self._eval_kt_expr_taint(value_node, fact)
+                
+                if rhs_taint.is_tainted():
+                    fact.shape_env.set_taint(var_name, rhs_taint)
+                    
+                    for param_name in self.parameter_names:
+                        if self._kt_expr_uses_var(value_node, param_name, fact):
+                            if param_name in fact.parameter_flows:
+                                value_text = self._get_kt_node_text(value_node)
+                                fact.parameter_flows[param_name].reaches_assignments.append(
+                                    f"{var_name} = {value_text}"
+                                )
+                                fact.parameter_flows[param_name].operations.append({
+                                    "type": "assignment",
+                                    "target": var_name,
+                                    "value": value_text,
+                                    "line": node.start_point[0] + 1,
+                                })
+                                
+                                if value_node.type == 'call_expression':
+                                    call_name = self._get_kt_call_name(value_node)
+                                    fact.parameter_flows[param_name].reaches_calls.append(call_name)
+                                elif value_node.type == 'navigation_expression':
+                                    # Check for chained call like File(x).readText()
+                                    for child in value_node.children:
+                                        if child.type == 'call_expression':
+                                            call_name = self._get_kt_call_name(child)
+                                            fact.parameter_flows[param_name].reaches_calls.append(call_name)
+                else:
+                    fact.shape_env.set_taint(var_name, Taint(status=TaintStatus.UNTAINTED))
+        
+        # Track assignments
+        elif node_type == 'assignment':
+            var_name = ''
+            value_node = None
+            
+            for child in node.children:
+                if child.type in {'identifier', 'simple_identifier'} and not var_name:
+                    var_name = self._get_kt_node_text(child)
+                elif child.type not in {'=', 'identifier', 'simple_identifier'}:
+                    value_node = child
+            
+            if var_name and value_node:
+                rhs_taint = self._eval_kt_expr_taint(value_node, fact)
+                
+                if rhs_taint.is_tainted():
+                    fact.shape_env.set_taint(var_name, rhs_taint)
+                    
+                    for param_name in self.parameter_names:
+                        if self._kt_expr_uses_var(value_node, param_name, fact):
+                            if param_name in fact.parameter_flows:
+                                value_text = self._get_kt_node_text(value_node)
+                                fact.parameter_flows[param_name].reaches_assignments.append(
+                                    f"{var_name} = {value_text}"
+                                )
+                else:
+                    fact.shape_env.set_taint(var_name, Taint(status=TaintStatus.UNTAINTED))
+        
+        # Track function calls
+        elif node_type == 'call_expression':
+            call_name = self._get_kt_call_name(node)
+            
+            # Check arguments
+            for child in node.children:
+                if child.type == 'value_arguments':
+                    for arg in child.children:
+                        if arg.type == 'value_argument':
+                            arg_taint = self._eval_kt_expr_taint(arg, fact)
+                            if arg_taint.is_tainted():
+                                for param_name in self.parameter_names:
+                                    if self._kt_expr_uses_var(arg, param_name, fact):
+                                        if param_name in fact.parameter_flows:
+                                            fact.parameter_flows[param_name].reaches_calls.append(call_name)
+                                            fact.parameter_flows[param_name].operations.append({
+                                                "type": "function_call",
+                                                "function": call_name,
+                                                "argument": self._get_kt_node_text(arg),
+                                                "line": node.start_point[0] + 1,
+                                            })
+        
+        # Track returns
+        elif node_type == 'jump_expression':
+            # Check if it's a return
+            is_return = False
+            return_value = None
+            
+            for child in node.children:
+                if child.type == 'return':
+                    is_return = True
+                elif is_return and child.type not in {'return'}:
+                    return_value = child
+            
+            if is_return and return_value:
+                ret_taint = self._eval_kt_expr_taint(return_value, fact)
+                if ret_taint.is_tainted():
+                    for param_name in self.parameter_names:
+                        if self._kt_expr_uses_var(return_value, param_name, fact):
+                            if param_name in fact.parameter_flows:
+                                fact.parameter_flows[param_name].reaches_returns = True
+                                fact.parameter_flows[param_name].operations.append({
+                                    "type": "return",
+                                    "value": self._get_kt_node_text(return_value),
+                                    "line": node.start_point[0] + 1,
+                                })
+
+    def _get_kt_node_text(self, node: Node) -> str:
+        """Get text content of a Kotlin tree-sitter node."""
+        if isinstance(self.analyzer, KotlinParser):
+            return self.analyzer.get_node_text(node)
+        return ""
+
+    def _get_kt_call_name(self, node: Node) -> str:
+        """Get function call name from Kotlin call_expression."""
+        if isinstance(self.analyzer, KotlinParser):
+            return self.analyzer.get_call_name(node)
+        return ""
+
+    def _eval_kt_expr_taint(self, node: Node, fact: ForwardFlowFact) -> Taint:
+        """Evaluate taint of a Kotlin expression."""
+        if not isinstance(node, Node):
+            return Taint(status=TaintStatus.UNTAINTED)
+        
+        node_type = node.type
+        
+        if node_type in {'identifier', 'simple_identifier'}:
+            name = self._get_kt_node_text(node)
+            return fact.shape_env.get_taint(name)
+        
+        elif node_type == 'navigation_expression':
+            # For obj.property or obj.method(), propagate taint from obj
+            result = Taint(status=TaintStatus.UNTAINTED)
+            for child in node.children:
+                if child.type in {'identifier', 'simple_identifier', 'call_expression', 'navigation_expression'}:
+                    result = result.merge(self._eval_kt_expr_taint(child, fact))
+            return result
+        
+        elif node_type == 'call_expression':
+            result = Taint(status=TaintStatus.UNTAINTED)
+            
+            # Check the function being called (for method calls)
+            for child in node.children:
+                if child.type == 'navigation_expression':
+                    result = result.merge(self._eval_kt_expr_taint(child, fact))
+                elif child.type in {'identifier', 'simple_identifier'}:
+                    result = result.merge(self._eval_kt_expr_taint(child, fact))
+            
+            # Check arguments
+            for child in node.children:
+                if child.type == 'value_arguments':
+                    for arg in child.children:
+                        if arg.type == 'value_argument':
+                            result = result.merge(self._eval_kt_expr_taint(arg, fact))
+            
+            return result
+        
+        elif node_type == 'value_argument':
+            # Evaluate the actual value in the argument
+            for child in node.children:
+                if child.type not in {'identifier', '='}:  # Skip named argument name
+                    return self._eval_kt_expr_taint(child, fact)
+            # If just an identifier
+            for child in node.children:
+                if child.type in {'identifier', 'simple_identifier'}:
+                    return self._eval_kt_expr_taint(child, fact)
+            return Taint(status=TaintStatus.UNTAINTED)
+        
+        elif node_type == 'string_literal':
+            # Check for string templates with variables
+            result = Taint(status=TaintStatus.UNTAINTED)
+            for child in node.children:
+                if child.type == 'interpolated_identifier':
+                    name = self._get_kt_node_text(child).lstrip('$')
+                    result = result.merge(fact.shape_env.get_taint(name))
+                elif child.type == 'interpolated_expression':
+                    for subchild in child.children:
+                        if subchild.type not in {'${', '}'}:
+                            result = result.merge(self._eval_kt_expr_taint(subchild, fact))
+            return result
+        
+        elif node_type == 'binary_expression':
+            result = Taint(status=TaintStatus.UNTAINTED)
+            for child in node.children:
+                if child.type not in {'+', '-', '*', '/', '%', '==', '!=', '<', '>', '<=', '>=', '&&', '||'}:
+                    result = result.merge(self._eval_kt_expr_taint(child, fact))
+            return result
+        
+        return Taint(status=TaintStatus.UNTAINTED)
+
+    def _kt_expr_uses_var(self, node: Node, var_name: str, fact: ForwardFlowFact) -> bool:
+        """Check if Kotlin expression uses a variable."""
+        if not isinstance(node, Node):
+            return False
+        
+        target_shape = fact.shape_env.get(var_name)
+        target_taint = target_shape.get_taint()
+        target_labels = target_taint.labels if target_taint.is_tainted() else set()
+        expected_label = f"param:{var_name}"
+        
+        nodes_to_check = [node]
+        while nodes_to_check:
+            current = nodes_to_check.pop()
+            
+            if current.type in {'identifier', 'simple_identifier'}:
+                name = self._get_kt_node_text(current)
+                
+                if name == var_name:
+                    return True
+                
+                node_shape = fact.shape_env.get(name)
+                node_taint = node_shape.get_taint()
+                
+                if node_taint.is_tainted():
+                    if expected_label in node_taint.labels:
+                        return True
+                    if target_labels and node_taint.labels & target_labels:
+                        return True
+            
+            nodes_to_check.extend(current.children)
+        
+        return False
 
     def _collect_flows(self) -> None:
         """Collect all flows from analysis results."""

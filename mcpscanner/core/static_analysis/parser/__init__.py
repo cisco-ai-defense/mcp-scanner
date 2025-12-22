@@ -18,5 +18,8 @@
 
 from .base import BaseParser
 from .python_parser import PythonParser
+from .typescript_parser import TypeScriptParser
+from .kotlin_parser import KotlinParser
+from .go_parser import GoParser
 
-__all__ = ["BaseParser", "PythonParser"]
+__all__ = ["BaseParser", "PythonParser", "TypeScriptParser", "KotlinParser", "GoParser"]

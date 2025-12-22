@@ -25,8 +25,12 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
+from tree_sitter import Node
+
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ..parser.typescript_parser import TypeScriptParser
+from ..parser.kotlin_parser import KotlinParser
 from ..semantic.type_analyzer import TypeAnalyzer
 
 
@@ -104,23 +108,57 @@ class CallGraphAnalyzer:
             file_path: Path to the file
             source_code: Source code content
         """
-        analyzer = PythonParser(file_path, source_code)
-        try:
-            analyzer.parse()
-            self.analyzers[file_path] = analyzer
-            
-            # Run type analysis
-            type_analyzer = TypeAnalyzer(analyzer)
-            type_analyzer.analyze()
-            self.type_analyzers[file_path] = type_analyzer
-            
-            # Extract function definitions and MCP entry points
-            self._extract_python_functions(file_path, analyzer)
-            
-            # Extract imports
-            self._extract_imports(file_path, analyzer)
-        except Exception as e:
-            self.logger.debug(f"Skipping unparseable file {file_path}: {e}")
+        # Determine language based on file extension
+        file_ext = file_path.suffix.lower()
+        
+        if file_ext in {'.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'}:
+            # TypeScript/JavaScript file
+            is_tsx = file_ext in {'.tsx', '.jsx'}
+            analyzer = TypeScriptParser(file_path, source_code, is_tsx=is_tsx)
+            try:
+                analyzer.parse()
+                self.analyzers[file_path] = analyzer
+                
+                # Extract function definitions and MCP entry points
+                self._extract_typescript_functions(file_path, analyzer)
+                
+                # Extract imports
+                self._extract_typescript_imports(file_path, analyzer)
+            except Exception as e:
+                self.logger.debug(f"Skipping unparseable TypeScript file {file_path}: {e}")
+        elif file_ext in {'.kt', '.kts'}:
+            # Kotlin file
+            analyzer = KotlinParser(file_path, source_code)
+            try:
+                analyzer.parse()
+                self.analyzers[file_path] = analyzer
+                
+                # Extract function definitions and MCP entry points
+                self._extract_kotlin_functions(file_path, analyzer)
+                
+                # Extract imports
+                self._extract_kotlin_imports(file_path, analyzer)
+            except Exception as e:
+                self.logger.debug(f"Skipping unparseable Kotlin file {file_path}: {e}")
+        else:
+            # Default to Python
+            analyzer = PythonParser(file_path, source_code)
+            try:
+                analyzer.parse()
+                self.analyzers[file_path] = analyzer
+                
+                # Run type analysis
+                type_analyzer = TypeAnalyzer(analyzer)
+                type_analyzer.analyze()
+                self.type_analyzers[file_path] = type_analyzer
+                
+                # Extract function definitions and MCP entry points
+                self._extract_python_functions(file_path, analyzer)
+                
+                # Extract imports
+                self._extract_imports(file_path, analyzer)
+            except Exception as e:
+                self.logger.debug(f"Skipping unparseable file {file_path}: {e}")
 
     def _extract_python_functions(self, file_path: Path, analyzer: PythonParser) -> None:
         """Extract function definitions and class methods from Python file.
@@ -213,6 +251,364 @@ class CallGraphAnalyzer:
         
         self.import_map[file_path] = imported_files
 
+    def _extract_typescript_functions(self, file_path: Path, analyzer: TypeScriptParser) -> None:
+        """Extract function definitions from TypeScript file.
+
+        Args:
+            file_path: File path
+            analyzer: TypeScript analyzer
+        """
+        root = analyzer.get_ast()
+        if hasattr(root, 'root_node'):
+            root = root.root_node
+        
+        # Extract function declarations
+        for func_node in analyzer.get_function_defs(root):
+            func_name = analyzer.get_function_name(func_node)
+            if func_name:
+                is_mcp = self._is_typescript_mcp_entry_point(func_node, analyzer)
+                self.call_graph.add_function(func_name, func_node, file_path, is_mcp)
+            elif func_node.type == 'arrow_function':
+                # Check if this is an MCP handler (passed to setRequestHandler, etc.)
+                is_mcp, handler_name = self._is_typescript_mcp_handler(func_node, analyzer)
+                if is_mcp and handler_name:
+                    self.call_graph.add_function(handler_name, func_node, file_path, is_mcp_entry=True)
+        
+        # Extract class methods
+        for class_node in analyzer.get_class_defs(root):
+            class_name = ''
+            for child in class_node.children:
+                if child.type == 'type_identifier' or child.type == 'identifier':
+                    class_name = analyzer.get_node_text(child)
+                    break
+            
+            if class_name:
+                for child in analyzer.walk(class_node):
+                    if child.type == 'method_definition':
+                        method_name = ''
+                        for subchild in child.children:
+                            if subchild.type == 'property_identifier':
+                                method_name = analyzer.get_node_text(subchild)
+                                break
+                        if method_name:
+                            full_name = f"{class_name}.{method_name}"
+                            self.call_graph.add_function(full_name, child, file_path, is_mcp_entry=False)
+    
+    def _is_typescript_mcp_handler(self, func_node: Node, analyzer: TypeScriptParser) -> tuple[bool, str]:
+        """Check if arrow function is an MCP handler and extract handler name.
+
+        Args:
+            func_node: Arrow function node
+            analyzer: TypeScript analyzer
+
+        Returns:
+            Tuple of (is_mcp_handler, handler_name)
+        """
+        parent = func_node.parent
+        if not parent or parent.type != 'arguments':
+            return False, ''
+        
+        grandparent = parent.parent
+        if not grandparent or grandparent.type != 'call_expression':
+            return False, ''
+        
+        call_name = analyzer.get_call_name(grandparent).lower()
+        
+        # Check for MCP handler registration patterns
+        mcp_patterns = [
+            'setrequesthandler', 'setnotificationhandler',
+            'server.tool', 'server.resource', 'server.prompt',
+            'registertool', 'registerresource', 'registerprompt',
+            'addtool', 'addresource', 'addprompt',
+        ]
+        
+        if any(pattern in call_name for pattern in mcp_patterns):
+            # Try to extract handler name from first argument (usually the route/method name)
+            handler_name = 'mcp_handler'
+            for child in parent.children:
+                if child.type == 'string' or child.type == 'template_string':
+                    handler_name = analyzer.get_node_text(child).strip('"\'`')
+                    break
+            return True, handler_name
+        
+        return False, ''
+
+    def _is_typescript_mcp_entry_point(self, func_node: Node, analyzer: TypeScriptParser) -> bool:
+        """Check if TypeScript function is an MCP entry point.
+
+        Args:
+            func_node: Function node
+            analyzer: TypeScript analyzer
+
+        Returns:
+            True if MCP entry point
+        """
+        # Check for decorators
+        decorators = analyzer.get_decorators(func_node)
+        for dec in decorators:
+            dec_text = analyzer.get_node_text(dec).lower()
+            if any(pattern in dec_text for pattern in ['tool', 'resource', 'prompt']):
+                return True
+        
+        # Check if function is passed to MCP registration call
+        parent = func_node.parent
+        while parent:
+            if parent.type == 'call_expression':
+                call_name = analyzer.get_call_name(parent).lower()
+                if any(pattern in call_name for pattern in [
+                    'registertool', 'registerresource', 'registerprompt',
+                    'server.tool', 'mcp.tool', 'addtool',
+                    'server.resource', 'mcp.resource', 'addresource',
+                    'server.prompt', 'mcp.prompt', 'addprompt'
+                ]):
+                    return True
+            parent = parent.parent
+        
+        return False
+
+    def _extract_typescript_imports(self, file_path: Path, analyzer: TypeScriptParser) -> None:
+        """Extract import relationships from TypeScript file.
+
+        Args:
+            file_path: File path
+            analyzer: TypeScript analyzer
+        """
+        root = analyzer.get_ast()
+        if hasattr(root, 'root_node'):
+            root = root.root_node
+        
+        imports = analyzer.get_imports(root)
+        imported_files = []
+        
+        for import_node in imports:
+            import_text = analyzer.get_node_text(import_node)
+            
+            # Extract module path from import statement
+            # e.g., import { foo } from './bar' or import foo from 'bar'
+            for child in analyzer.walk(import_node):
+                if child.type == 'string':
+                    module_path = analyzer.get_node_text(child).strip('"\'')
+                    resolved = self._resolve_typescript_import(file_path, module_path)
+                    if resolved:
+                        imported_files.append(resolved)
+        
+        self.import_map[file_path] = imported_files
+
+    def _resolve_typescript_import(self, from_file: Path, module_path: str) -> Path | None:
+        """Resolve TypeScript import to file path.
+
+        Args:
+            from_file: File doing the import
+            module_path: Module path (e.g., './foo' or '@scope/package')
+
+        Returns:
+            Resolved file path or None
+        """
+        # Skip node_modules imports
+        if not module_path.startswith('.'):
+            return None
+        
+        current_dir = from_file.parent
+        
+        # Handle relative imports
+        if module_path.startswith('./') or module_path.startswith('../'):
+            potential_path = (current_dir / module_path).resolve()
+            
+            # Try various extensions
+            for ext in ['.ts', '.tsx', '.js', '.jsx', '.mjs', '']:
+                test_path = potential_path.with_suffix(ext) if ext else potential_path
+                if test_path.exists() and test_path.is_file():
+                    return test_path
+            
+            # Try as directory with index file
+            if potential_path.is_dir():
+                for index_name in ['index.ts', 'index.tsx', 'index.js', 'index.jsx']:
+                    index_path = potential_path / index_name
+                    if index_path.exists():
+                        return index_path
+        
+        return None
+
+    def _extract_kotlin_functions(self, file_path: Path, analyzer: KotlinParser) -> None:
+        """Extract function definitions from Kotlin file.
+
+        Args:
+            file_path: File path
+            analyzer: Kotlin analyzer
+        """
+        root = analyzer.get_ast()
+        if hasattr(root, 'root_node'):
+            root = root.root_node
+        
+        # Extract function declarations
+        for func_node in analyzer.get_function_defs(root):
+            func_name = analyzer.get_function_name(func_node)
+            if func_name:
+                is_mcp = self._is_kotlin_mcp_entry_point(func_node, analyzer)
+                self.call_graph.add_function(func_name, func_node, file_path, is_mcp)
+        
+        # Extract class methods
+        for class_node in analyzer.get_class_defs(root):
+            class_name = analyzer.get_class_name(class_node)
+            
+            if class_name:
+                for child in analyzer.walk(class_node):
+                    if child.type == 'function_declaration':
+                        method_name = analyzer.get_function_name(child)
+                        if method_name:
+                            full_name = f"{class_name}.{method_name}"
+                            self.call_graph.add_function(full_name, child, file_path, is_mcp_entry=False)
+
+    def _is_kotlin_mcp_entry_point(self, func_node: Node, analyzer: KotlinParser) -> bool:
+        """Check if Kotlin function is an MCP entry point.
+
+        Args:
+            func_node: Function node
+            analyzer: Kotlin analyzer
+
+        Returns:
+            True if MCP entry point
+        """
+        # Check for annotations
+        annotations = analyzer.get_annotations(func_node)
+        for ann in annotations:
+            ann_text = analyzer.get_node_text(ann).lower()
+            if any(pattern in ann_text for pattern in ['tool', 'resource', 'prompt']):
+                return True
+        
+        # Check if function is passed to MCP registration call
+        parent = func_node.parent
+        while parent:
+            if parent.type == 'call_expression':
+                call_name = analyzer.get_call_name(parent).lower()
+                if any(pattern in call_name for pattern in [
+                    'addtool', 'addresource', 'addprompt',
+                    'registertool', 'registerresource', 'registerprompt',
+                ]):
+                    return True
+            parent = parent.parent
+        
+        return False
+
+    def _extract_kotlin_imports(self, file_path: Path, analyzer: KotlinParser) -> None:
+        """Extract import relationships from Kotlin file.
+
+        Args:
+            file_path: File path
+            analyzer: Kotlin analyzer
+        """
+        root = analyzer.get_ast()
+        if hasattr(root, 'root_node'):
+            root = root.root_node
+        
+        imports = analyzer.get_imports(root)
+        imported_files = []
+        
+        for import_node in imports:
+            import_text = analyzer.get_node_text(import_node)
+            # Extract package path from import statement
+            # e.g., import io.modelcontextprotocol.kotlin.sdk.server.Server
+            resolved = self._resolve_kotlin_import(file_path, import_text)
+            if resolved:
+                imported_files.append(resolved)
+        
+        self.import_map[file_path] = imported_files
+
+    def _resolve_kotlin_import(self, from_file: Path, import_text: str) -> Path | None:
+        """Resolve Kotlin import to file path.
+
+        Args:
+            from_file: File doing the import
+            import_text: Import statement text
+
+        Returns:
+            Resolved file path or None
+        """
+        # Extract the package/class path from import statement
+        # Skip external library imports
+        if 'import ' in import_text:
+            import_path = import_text.replace('import ', '').strip()
+        else:
+            import_path = import_text.strip()
+        
+        # Skip standard library and external imports
+        if import_path.startswith(('java.', 'kotlin.', 'kotlinx.', 'io.ktor', 'org.', 'com.')):
+            return None
+        
+        current_dir = from_file.parent
+        
+        # Convert package path to file path
+        path_parts = import_path.split('.')
+        
+        # Try to find the file
+        for i in range(len(path_parts), 0, -1):
+            potential_path = current_dir / '/'.join(path_parts[:i])
+            
+            # Try as Kotlin file
+            kt_file = potential_path.with_suffix('.kt')
+            if kt_file.exists():
+                return kt_file
+        
+        return None
+
+    def _extract_kotlin_calls(self, file_path: Path, analyzer: KotlinParser) -> None:
+        """Extract function calls from Kotlin file.
+
+        Args:
+            file_path: File path
+            analyzer: Kotlin analyzer
+        """
+        root = analyzer.get_ast()
+        if hasattr(root, 'root_node'):
+            root = root.root_node
+        
+        # Extract calls from function declarations
+        for func_node in analyzer.get_function_defs(root):
+            func_name = analyzer.get_function_name(func_node)
+            if func_name:
+                caller_name = f"{file_path}::{func_name}"
+                self._extract_kotlin_calls_from_function(file_path, func_node, caller_name, analyzer)
+        
+        # Extract calls from class methods
+        for class_node in analyzer.get_class_defs(root):
+            class_name = analyzer.get_class_name(class_node)
+            
+            if class_name:
+                for child in analyzer.walk(class_node):
+                    if child.type == 'function_declaration':
+                        method_name = analyzer.get_function_name(child)
+                        if method_name:
+                            caller_name = f"{file_path}::{class_name}.{method_name}"
+                            self._extract_kotlin_calls_from_function(file_path, child, caller_name, analyzer)
+
+    def _extract_kotlin_calls_from_function(
+        self,
+        file_path: Path,
+        func_node: Node,
+        caller_name: str,
+        analyzer: KotlinParser
+    ) -> None:
+        """Extract calls from a Kotlin function.
+
+        Args:
+            file_path: File path
+            func_node: Function node
+            caller_name: Full caller name
+            analyzer: Kotlin analyzer
+        """
+        for call_node in analyzer.get_function_calls(func_node):
+            callee_name = analyzer.get_call_name(call_node)
+            
+            if callee_name:
+                # Try to resolve to full name
+                full_callee = self._resolve_call_target(file_path, callee_name)
+                
+                if full_callee:
+                    self.call_graph.add_call(caller_name, full_callee)
+                else:
+                    # Add with partial name (might be external library)
+                    self.call_graph.add_call(caller_name, callee_name)
+
     def _resolve_python_import(self, from_file: Path, module_name: str) -> Path | None:
         """Resolve Python import to file path.
 
@@ -250,9 +646,86 @@ class CallGraphAnalyzer:
         """
         # Extract function calls from each file
         for file_path, analyzer in self.analyzers.items():
-            self._extract_python_calls(file_path, analyzer)
+            if isinstance(analyzer, TypeScriptParser):
+                self._extract_typescript_calls(file_path, analyzer)
+            elif isinstance(analyzer, KotlinParser):
+                self._extract_kotlin_calls(file_path, analyzer)
+            elif isinstance(analyzer, PythonParser):
+                self._extract_python_calls(file_path, analyzer)
 
         return self.call_graph
+
+    def _extract_typescript_calls(self, file_path: Path, analyzer: TypeScriptParser) -> None:
+        """Extract function calls from TypeScript file.
+
+        Args:
+            file_path: File path
+            analyzer: TypeScript analyzer
+        """
+        root = analyzer.get_ast()
+        if hasattr(root, 'root_node'):
+            root = root.root_node
+        
+        # Extract calls from function declarations
+        for func_node in analyzer.get_function_defs(root):
+            func_name = analyzer.get_function_name(func_node)
+            if func_name:
+                caller_name = f"{file_path}::{func_name}"
+                self._extract_ts_calls_from_function(file_path, func_node, caller_name, analyzer)
+            elif func_node.type == 'arrow_function':
+                # Check if this is an MCP handler
+                is_mcp, handler_name = self._is_typescript_mcp_handler(func_node, analyzer)
+                if is_mcp and handler_name:
+                    caller_name = f"{file_path}::{handler_name}"
+                    self._extract_ts_calls_from_function(file_path, func_node, caller_name, analyzer)
+        
+        # Extract calls from class methods
+        for class_node in analyzer.get_class_defs(root):
+            class_name = ''
+            for child in class_node.children:
+                if child.type == 'type_identifier' or child.type == 'identifier':
+                    class_name = analyzer.get_node_text(child)
+                    break
+            
+            if class_name:
+                for child in analyzer.walk(class_node):
+                    if child.type == 'method_definition':
+                        method_name = ''
+                        for subchild in child.children:
+                            if subchild.type == 'property_identifier':
+                                method_name = analyzer.get_node_text(subchild)
+                                break
+                        if method_name:
+                            caller_name = f"{file_path}::{class_name}.{method_name}"
+                            self._extract_ts_calls_from_function(file_path, child, caller_name, analyzer)
+
+    def _extract_ts_calls_from_function(
+        self,
+        file_path: Path,
+        func_node: Node,
+        caller_name: str,
+        analyzer: TypeScriptParser
+    ) -> None:
+        """Extract calls from a TypeScript function.
+
+        Args:
+            file_path: File path
+            func_node: Function node
+            caller_name: Full caller name
+            analyzer: TypeScript analyzer
+        """
+        for call_node in analyzer.get_function_calls(func_node):
+            callee_name = analyzer.get_call_name(call_node)
+            
+            if callee_name:
+                # Try to resolve to full name
+                full_callee = self._resolve_call_target(file_path, callee_name)
+                
+                if full_callee:
+                    self.call_graph.add_call(caller_name, full_callee)
+                else:
+                    # Add with partial name (might be external library)
+                    self.call_graph.add_call(caller_name, callee_name)
 
     def _extract_python_calls(self, file_path: Path, analyzer: PythonParser) -> None:
         """Extract function calls from Python file.
@@ -356,6 +829,13 @@ class CallGraphAnalyzer:
                 potential_name = f"{imported_file}::{call_name}"
                 if potential_name in self.call_graph.functions:
                     return potential_name
+        
+        # Try to find function in any loaded file (for in-memory cross-file analysis)
+        for func_name in self.call_graph.functions.keys():
+            if func_name.endswith(f"::{call_name}"):
+                # Don't match same file (already checked above)
+                if not func_name.startswith(str(file_path)):
+                    return func_name
         
         return None
 

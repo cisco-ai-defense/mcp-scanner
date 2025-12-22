@@ -19,7 +19,7 @@
 This module provides comprehensive static analysis capabilities following
 industry-standard SAST tool conventions:
 
-- **Parser**: Language-specific source code parsers (Python, etc.)
+- **Parser**: Language-specific source code parsers (Python, TypeScript, etc.)
 - **Context Extraction**: Extract rich code context for security analysis
 - **CFG**: Control Flow Graph construction
 - **Dataflow**: Forward/backward dataflow analysis passes
@@ -31,7 +31,17 @@ Architecture inspired by Semgrep, CodeQL, and other production SAST tools.
 """
 
 from .context_extractor import ContextExtractor, FunctionContext
+from .typescript_context_extractor import TypeScriptContextExtractor, TypeScriptFunctionContext
+from .kotlin_context_extractor import KotlinContextExtractor, KotlinFunctionContext
 
 __version__ = "1.0.0"
 
-__all__ = ["__version__", "ContextExtractor", "FunctionContext"]
+__all__ = [
+    "__version__",
+    "ContextExtractor",
+    "FunctionContext",
+    "TypeScriptContextExtractor",
+    "TypeScriptFunctionContext",
+    "KotlinContextExtractor",
+    "KotlinFunctionContext",
+]

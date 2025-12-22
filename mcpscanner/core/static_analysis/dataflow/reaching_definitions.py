@@ -20,9 +20,14 @@ import ast
 from dataclasses import dataclass, field
 from typing import Any
 
+from tree_sitter import Node
+
 from ..cfg.builder import CFGNode, DataFlowAnalyzer
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ..parser.typescript_parser import TypeScriptParser
+from ..parser.kotlin_parser import KotlinParser
+from ..parser.go_parser import GoParser
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,12 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
         
         if isinstance(self.analyzer, PythonParser):
             self._transfer_python(ast_node, node, out_fact)
+        elif isinstance(self.analyzer, TypeScriptParser):
+            self._transfer_typescript(ast_node, node, out_fact)
+        elif isinstance(self.analyzer, KotlinParser):
+            self._transfer_kotlin(ast_node, node, out_fact)
+        elif isinstance(self.analyzer, GoParser):
+            self._transfer_go(ast_node, node, out_fact)
         
         return out_fact
     
@@ -226,6 +237,8 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
             for child in ast.walk(node):
                 if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
                     uses.add(child.id)
+        elif isinstance(self.analyzer, (TypeScriptParser, KotlinParser, GoParser)):
+            uses = self._find_ts_kt_uses(node)
         
         return uses
     
@@ -254,3 +267,243 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
                 influenced.add(var)
         
         return influenced
+
+    def _transfer_typescript(self, ast_node: Node, cfg_node: CFGNode, fact: ReachingDefsFact) -> None:
+        """Transfer function for TypeScript nodes.
+
+        Args:
+            ast_node: tree-sitter Node
+            cfg_node: CFG node
+            fact: Reaching definitions fact to update
+        """
+        if not isinstance(ast_node, Node):
+            return
+        
+        node_type = ast_node.type
+        
+        # Variable declarations (const/let/var)
+        if node_type in {'variable_declaration', 'lexical_declaration'}:
+            for child in ast_node.children:
+                if child.type == 'variable_declarator':
+                    name_node = child.child_by_field_name('name')
+                    value_node = child.child_by_field_name('value')
+                    
+                    if name_node:
+                        var_name = self.analyzer.get_node_text(name_node)
+                        
+                        # Check if RHS uses parameters BEFORE kill
+                        uses_param = False
+                        if value_node:
+                            uses_param = self._ts_expr_uses_parameters(value_node, fact)
+                        
+                        # KILL: Remove previous definitions
+                        fact.defs = {d for d in fact.defs if d.var != var_name}
+                        
+                        # GEN: Add new definition
+                        new_def = Definition(var=var_name, node_id=cfg_node.id, is_parameter=uses_param)
+                        fact.defs.add(new_def)
+        
+        # Assignment expressions
+        elif node_type == 'assignment_expression':
+            left = ast_node.child_by_field_name('left')
+            right = ast_node.child_by_field_name('right')
+            
+            if left and left.type == 'identifier':
+                var_name = self.analyzer.get_node_text(left)
+                
+                uses_param = False
+                if right:
+                    uses_param = self._ts_expr_uses_parameters(right, fact)
+                
+                fact.defs = {d for d in fact.defs if d.var != var_name}
+                new_def = Definition(var=var_name, node_id=cfg_node.id, is_parameter=uses_param)
+                fact.defs.add(new_def)
+
+    def _transfer_kotlin(self, ast_node: Node, cfg_node: CFGNode, fact: ReachingDefsFact) -> None:
+        """Transfer function for Kotlin nodes.
+
+        Args:
+            ast_node: tree-sitter Node
+            cfg_node: CFG node
+            fact: Reaching definitions fact to update
+        """
+        if not isinstance(ast_node, Node):
+            return
+        
+        node_type = ast_node.type
+        
+        # Property declarations (val/var)
+        if node_type == 'property_declaration':
+            var_name = ''
+            value_node = None
+            
+            for child in ast_node.children:
+                if child.type == 'variable_declaration':
+                    for subchild in child.children:
+                        if subchild.type in {'identifier', 'simple_identifier'}:
+                            var_name = self.analyzer.get_node_text(subchild)
+                            break
+                elif child.type in {'identifier', 'simple_identifier'} and not var_name:
+                    var_name = self.analyzer.get_node_text(child)
+                elif child.type not in {'val', 'var', ':', '='}:
+                    value_node = child
+            
+            if var_name:
+                uses_param = False
+                if value_node:
+                    uses_param = self._kt_expr_uses_parameters(value_node, fact)
+                
+                fact.defs = {d for d in fact.defs if d.var != var_name}
+                new_def = Definition(var=var_name, node_id=cfg_node.id, is_parameter=uses_param)
+                fact.defs.add(new_def)
+        
+        # Assignment expressions
+        elif node_type == 'assignment':
+            left = None
+            right = None
+            for child in ast_node.children:
+                if child.type in {'identifier', 'simple_identifier'} and left is None:
+                    left = child
+                elif child.type == '=':
+                    continue
+                elif left is not None:
+                    right = child
+                    break
+            
+            if left:
+                var_name = self.analyzer.get_node_text(left)
+                uses_param = False
+                if right:
+                    uses_param = self._kt_expr_uses_parameters(right, fact)
+                
+                fact.defs = {d for d in fact.defs if d.var != var_name}
+                new_def = Definition(var=var_name, node_id=cfg_node.id, is_parameter=uses_param)
+                fact.defs.add(new_def)
+
+    def _ts_expr_uses_parameters(self, node: Node, fact: ReachingDefsFact) -> bool:
+        """Check if TypeScript expression uses any parameters.
+
+        Args:
+            node: tree-sitter Node
+            fact: Current reaching definitions
+
+        Returns:
+            True if expression uses parameters
+        """
+        for child in self.analyzer.walk(node):
+            if child.type == 'identifier':
+                name = self.analyzer.get_node_text(child)
+                reaching_defs = [d for d in fact.defs if d.var == name]
+                if any(d.is_parameter for d in reaching_defs):
+                    return True
+        return False
+
+    def _kt_expr_uses_parameters(self, node: Node, fact: ReachingDefsFact) -> bool:
+        """Check if Kotlin expression uses any parameters.
+
+        Args:
+            node: tree-sitter Node
+            fact: Current reaching definitions
+
+        Returns:
+            True if expression uses parameters
+        """
+        for child in self.analyzer.walk(node):
+            if child.type in {'identifier', 'simple_identifier'}:
+                name = self.analyzer.get_node_text(child)
+                reaching_defs = [d for d in fact.defs if d.var == name]
+                if any(d.is_parameter for d in reaching_defs):
+                    return True
+        return False
+
+    def _find_ts_kt_uses(self, node: Any) -> set[str]:
+        """Find all variable uses in a TypeScript/Kotlin node.
+
+        Args:
+            node: tree-sitter Node
+
+        Returns:
+            Set of variable names used
+        """
+        uses = set()
+        if not isinstance(node, Node):
+            return uses
+        
+        for child in self.analyzer.walk(node):
+            if child.type in {'identifier', 'simple_identifier'}:
+                # Check if it's being read (not defined)
+                parent = child.parent
+                if parent and parent.type == 'variable_declarator':
+                    name_node = parent.child_by_field_name('name')
+                    if name_node == child:
+                        continue
+                if parent and parent.type == 'variable_declaration':
+                    continue
+                uses.add(self.analyzer.get_node_text(child))
+        return uses
+
+    def _transfer_go(self, ast_node: Node, cfg_node: CFGNode, fact: ReachingDefsFact) -> None:
+        """Transfer function for Go nodes.
+
+        Args:
+            ast_node: tree-sitter Node
+            cfg_node: CFG node
+            fact: Reaching definitions fact to update
+        """
+        if not isinstance(ast_node, Node):
+            return
+        
+        node_type = ast_node.type
+        
+        # Short var declarations (:=)
+        if node_type == 'short_var_declaration':
+            left = ast_node.child_by_field_name('left')
+            right = ast_node.child_by_field_name('right')
+            
+            if left:
+                names = [c for c in left.children if c.type == 'identifier']
+                
+                uses_param = False
+                if right:
+                    uses_param = self._go_expr_uses_parameters(right, fact)
+                
+                for name_node in names:
+                    var_name = self.analyzer.get_node_text(name_node)
+                    fact.defs = {d for d in fact.defs if d.var != var_name}
+                    new_def = Definition(var=var_name, node_id=cfg_node.id, is_parameter=uses_param)
+                    fact.defs.add(new_def)
+        
+        # Assignment statements
+        elif node_type == 'assignment_statement':
+            left = ast_node.child_by_field_name('left')
+            right = ast_node.child_by_field_name('right')
+            
+            if left:
+                uses_param = False
+                if right:
+                    uses_param = self._go_expr_uses_parameters(right, fact)
+                
+                for child in self.analyzer.walk(left):
+                    if child.type == 'identifier':
+                        var_name = self.analyzer.get_node_text(child)
+                        fact.defs = {d for d in fact.defs if d.var != var_name}
+                        new_def = Definition(var=var_name, node_id=cfg_node.id, is_parameter=uses_param)
+                        fact.defs.add(new_def)
+
+    def _go_expr_uses_parameters(self, node: Node, fact: ReachingDefsFact) -> bool:
+        """Check if Go expression uses any parameters.
+
+        Args:
+            node: tree-sitter Node
+            fact: Current reaching definitions
+
+        Returns:
+            True if expression uses parameters
+        """
+        for child in self.analyzer.walk(node):
+            if child.type == 'identifier':
+                name = self.analyzer.get_node_text(child)
+                reaching_defs = [d for d in fact.defs if d.var == name]
+                if any(d.is_parameter for d in reaching_defs):
+                    return True
+        return False
