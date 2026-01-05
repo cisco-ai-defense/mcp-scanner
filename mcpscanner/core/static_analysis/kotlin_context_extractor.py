@@ -43,7 +43,7 @@ class KotlinFunctionContext:
     """Complete context for a Kotlin function."""
     # Required fields (no defaults)
     name: str
-    annotation_types: List[str]
+    decorator_types: List[str]  # Alias: annotation_types for compatibility
     imports: List[str]
     function_calls: List[Dict[str, Any]]
     assignments: List[Dict[str, Any]]
@@ -58,7 +58,7 @@ class KotlinFunctionContext:
     has_dangerous_imports: bool
     
     # Optional fields (with defaults)
-    annotation_params: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    decorator_params: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Alias: annotation_params
     docstring: Optional[str] = None
     parameters: List[Dict[str, Any]] = field(default_factory=list)
     return_type: Optional[str] = None
@@ -72,10 +72,11 @@ class KotlinFunctionContext:
     string_literals: List[str] = field(default_factory=list)
     return_expressions: List[str] = field(default_factory=list)
     exception_handlers: List[Dict[str, Any]] = field(default_factory=list)
+    env_var_access: List[str] = field(default_factory=list)
     
     # State manipulation
     global_writes: List[Dict[str, Any]] = field(default_factory=list)
-    property_access: List[Dict[str, Any]] = field(default_factory=list)
+    attribute_access: List[Dict[str, Any]] = field(default_factory=list)  # Alias: property_access
     
     # Dataflow facts
     dataflow_summary: Dict[str, Any] = field(default_factory=dict)
@@ -300,8 +301,8 @@ class KotlinContextExtractor:
         
         return KotlinFunctionContext(
             name=name,
-            annotation_types=annotation_types,
-            annotation_params={},
+            decorator_types=annotation_types,
+            decorator_params={},
             docstring=docstring,
             parameters=parameters,
             return_type=return_type,
@@ -322,8 +323,9 @@ class KotlinContextExtractor:
             string_literals=string_literals,
             return_expressions=return_expressions,
             exception_handlers=exception_handlers,
+            env_var_access=[],
             global_writes=global_writes,
-            property_access=property_access,
+            attribute_access=property_access,
         )
 
     def _extract_imports(self) -> List[str]:
@@ -706,6 +708,8 @@ class KotlinContextExtractor:
                 handler_info = {
                     'line': child.start_point[0] + 1,
                     'parameter': '',
+                    'exception_type': 'Exception',  # Kotlin catch
+                    'is_silent': False,
                     'body_preview': '',
                 }
                 
@@ -715,6 +719,7 @@ class KotlinContextExtractor:
                     elif subchild.type == 'control_structure_body':
                         body_text = self.parser.get_node_text(subchild)
                         handler_info['body_preview'] = body_text[:100]
+                        handler_info['is_silent'] = body_text.strip() in {'{}', '{ }', ''}
                 
                 handlers.append(handler_info)
         
@@ -739,7 +744,9 @@ class KotlinContextExtractor:
                         text = self.parser.get_node_text(subchild)
                         writes.append({
                             'target': text,
+                            'variable': text,  # Alias for compatibility
                             'line': child.start_point[0] + 1,
+                            'value': '<assigned>',
                         })
         
         return writes
@@ -763,10 +770,17 @@ class KotlinContextExtractor:
                         parts.append(self.parser.get_node_text(subchild))
                 
                 if len(parts) >= 2:
+                    # Determine if this is a read or write based on parent context
+                    parent = child.parent
+                    is_write = parent and parent.type in {'assignment', 'property_declaration'}
+                    
                     accesses.append({
                         'object': parts[0],
                         'property': parts[-1],
+                        'attribute': parts[-1],  # Alias for compatibility
                         'line': child.start_point[0] + 1,
+                        'type': 'write' if is_write else 'read',
+                        'value': '<assigned>' if is_write else None,
                     })
         
         # Limit to avoid huge lists

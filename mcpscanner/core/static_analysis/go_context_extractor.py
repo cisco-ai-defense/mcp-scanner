@@ -14,9 +14,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""TypeScript Code Context Extractor for Static Analysis.
+"""Go Code Context Extractor for Static Analysis.
 
-This module extracts comprehensive code context from TypeScript/JavaScript source
+This module extracts comprehensive code context from Go source
 by traversing and analyzing tree-sitter ASTs. It provides:
 - Extracts complete function context for MCP entry points
 - Performs forward dataflow analysis from parameters
@@ -24,8 +24,8 @@ by traversing and analyzing tree-sitter ASTs. It provides:
 - Collects constants, imports, and behavioral patterns
 
 Classes:
-    TypeScriptFunctionContext: Complete context for a TypeScript function
-    TypeScriptContextExtractor: Main extractor for comprehensive TypeScript code analysis
+    GoFunctionContext: Complete context for a Go function
+    GoContextExtractor: Main extractor for comprehensive Go code analysis
 """
 
 import logging
@@ -35,12 +35,12 @@ from typing import Any, Dict, List, Optional
 
 from tree_sitter import Node
 
-from .parser.typescript_parser import TypeScriptParser
+from .parser.go_parser import GoParser
 
 
 @dataclass
-class TypeScriptFunctionContext:
-    """Complete context for a TypeScript function."""
+class GoFunctionContext:
+    """Complete context for a Go function."""
     # Required fields (no defaults)
     name: str
     decorator_types: List[str]
@@ -82,42 +82,41 @@ class TypeScriptFunctionContext:
     dataflow_summary: Dict[str, Any] = field(default_factory=dict)
 
 
-class TypeScriptContextExtractor:
-    """Extracts comprehensive code context by analyzing TypeScript tree-sitter ASTs.
+class GoContextExtractor:
+    """Extracts comprehensive code context by analyzing Go tree-sitter ASTs.
     
-    This class traverses TypeScript ASTs to extract rich context information including
+    This class traverses Go ASTs to extract rich context information including
     dataflow, taint tracking, and behavioral patterns for security analysis.
     """
     
     # Configurable security pattern lists
-    DEFAULT_FILE_PATTERNS = ["readfile", "writefile", "readfilesync", "writefilesync", 
-                            "createreadstream", "createwritestream", "unlink", "rmdir",
-                            "mkdir", "rename", "copyfile", "fs.", "path."]
-    DEFAULT_NETWORK_PATTERNS = ["fetch", "axios", "http.", "https.", "request", 
-                               "xmlhttprequest", "websocket", "socket.", "net."]
-    DEFAULT_SUBPROCESS_PATTERNS = ["exec", "spawn", "execsync", "spawnsync", 
-                                   "child_process", "execfile", "fork"]
+    DEFAULT_FILE_PATTERNS = ["ioutil.readfile", "ioutil.writefile", "os.open", "os.create",
+                            "os.readfile", "os.writefile", "os.remove", "os.rename",
+                            "os.mkdir", "os.mkdirall", "filepath.", "bufio."]
+    DEFAULT_NETWORK_PATTERNS = ["http.get", "http.post", "http.newrequest", "http.client",
+                               "net.dial", "net.listen", "grpc.", "websocket."]
+    DEFAULT_SUBPROCESS_PATTERNS = ["exec.command", "os.exec", "syscall.exec", "os/exec"]
     
-    # MCP SDK patterns for detecting tool/resource/prompt registrations
+    # MCP SDK patterns for detecting tool/resource/prompt registrations (mcp-go)
     MCP_PATTERNS = [
-        'registerTool', 'server.tool', 'mcp.tool',
-        'registerResource', 'server.resource', 'mcp.resource', 
-        'registerPrompt', 'server.prompt', 'mcp.prompt',
-        'setRequestHandler', 'addTool', 'addResource', 'addPrompt'
+        'AddTool', 'server.AddTool', 'mcp.NewTool',
+        'AddResource', 'server.AddResource', 'mcp.NewResource',
+        'AddPrompt', 'server.AddPrompt', 'mcp.NewPrompt',
+        'SetRequestHandler', 'server.tool', 'server.resource', 'server.prompt'
     ]
 
     def __init__(
         self, 
         source_code: str, 
-        file_path: str = "unknown.ts",
+        file_path: str = "unknown.go",
         file_patterns: List[str] = None,
         network_patterns: List[str] = None,
         subprocess_patterns: List[str] = None
     ):
-        """Initialize TypeScript context extractor.
+        """Initialize Go context extractor.
 
         Args:
-            source_code: TypeScript source code
+            source_code: Go source code
             file_path: Path to source file
             file_patterns: Custom file operation patterns
             network_patterns: Custom network operation patterns
@@ -127,9 +126,7 @@ class TypeScriptContextExtractor:
         self.file_path = Path(file_path)
         self.logger = logging.getLogger(__name__)
         
-        # Determine if TSX based on file extension
-        is_tsx = str(file_path).endswith('.tsx')
-        self.parser = TypeScriptParser(self.file_path, source_code, is_tsx=is_tsx)
+        self.parser = GoParser(self.file_path, source_code)
         
         # Use provided patterns or defaults
         self.file_patterns = [p.lower() for p in (file_patterns or self.DEFAULT_FILE_PATTERNS)]
@@ -141,9 +138,9 @@ class TypeScriptContextExtractor:
             self.tree = self.parser.parse()
             self.root = self.tree.root_node
         except SyntaxError as e:
-            raise ValueError(f"Failed to parse TypeScript source code: {e}")
+            raise ValueError(f"Failed to parse Go source code: {e}")
 
-    def extract_mcp_function_contexts(self) -> List[TypeScriptFunctionContext]:
+    def extract_mcp_function_contexts(self) -> List[GoFunctionContext]:
         """Extract contexts for all MCP-related functions.
 
         Returns:
@@ -153,21 +150,17 @@ class TypeScriptContextExtractor:
         
         # Find all function definitions
         for node in self.parser.walk(self.root):
-            if node.type in {'function_declaration', 'arrow_function', 'function_expression', 'method_definition'}:
+            if node.type in {'function_declaration', 'method_declaration'}:
                 # Check if this is an MCP handler
                 mcp_type = self._get_mcp_type(node)
                 if mcp_type:
                     context = self._extract_function_context(node, mcp_type)
                     contexts.append(context)
         
-        # Also look for registerTool/setRequestHandler/etc. call patterns
+        # Also look for AddTool/etc. call patterns
         for call_node in self.parser.get_function_calls(self.root):
             call_name = self.parser.get_call_name(call_node)
-            if any(pattern in call_name.lower() for pattern in [
-                'registertool', 'registerresource', 'registerprompt', 
-                'server.tool', 'mcp.tool', 'setrequesthandler', 'addtool',
-                'addresource', 'addprompt', 'server.setRequestHandler'
-            ]):
+            if any(pattern.lower() in call_name.lower() for pattern in ['addtool', 'addresource', 'addprompt', 'newtool']):
                 # Extract the handler function from the call arguments
                 handler_context = self._extract_mcp_registration_context(call_node)
                 if handler_context:
@@ -184,7 +177,18 @@ class TypeScriptContextExtractor:
         Returns:
             MCP type ('tool', 'resource', 'prompt') or None
         """
-        # Check for decorators (TypeScript experimental decorators)
+        func_name = self.parser.get_function_name(node).lower()
+        
+        # Check function name patterns
+        if 'handler' in func_name:
+            if 'tool' in func_name:
+                return 'tool'
+            if 'resource' in func_name:
+                return 'resource'
+            if 'prompt' in func_name:
+                return 'prompt'
+        
+        # Check for comment annotations (Go uses comments for annotations)
         decorators = self.parser.get_decorators(node)
         for dec in decorators:
             dec_text = self.parser.get_node_text(dec).lower()
@@ -210,8 +214,8 @@ class TypeScriptContextExtractor:
         
         return None
 
-    def _extract_mcp_registration_context(self, call_node: Node) -> Optional[TypeScriptFunctionContext]:
-        """Extract context from an MCP registration call like server.registerTool().
+    def _extract_mcp_registration_context(self, call_node: Node) -> Optional[GoFunctionContext]:
+        """Extract context from an MCP registration call like s.AddTool().
 
         Args:
             call_node: The call_expression node
@@ -232,7 +236,7 @@ class TypeScriptContextExtractor:
         args_node = call_node.child_by_field_name('arguments')
         if not args_node:
             for child in call_node.children:
-                if child.type == 'arguments':
+                if child.type == 'argument_list':
                     args_node = child
                     break
         
@@ -242,26 +246,23 @@ class TypeScriptContextExtractor:
         # Extract tool name and handler from arguments
         tool_name = ''
         handler_node = None
-        config_node = None
         
-        for i, child in enumerate(args_node.children):
-            if child.type in {'string', 'template_string'}:
-                tool_name = self.parser.get_node_text(child).strip('"\'`')
-            elif child.type == 'object':
-                config_node = child
-            elif child.type in {'arrow_function', 'function_expression', 'identifier'}:
+        for child in args_node.children:
+            if child.type == 'interpreted_string_literal':
+                tool_name = self.parser.get_node_text(child).strip('"')
+            elif child.type == 'identifier':
+                # This might be a handler function reference
+                handler_name = self.parser.get_node_text(child)
+                for func in self.parser.get_function_defs(self.root):
+                    if self.parser.get_function_name(func) == handler_name:
+                        handler_node = func
+                        break
+            elif child.type == 'func_literal':
                 handler_node = child
         
-        # If handler is an identifier, try to find the actual function
-        if handler_node and handler_node.type == 'identifier':
-            handler_name = self.parser.get_node_text(handler_node)
-            for func in self.parser.get_function_defs(self.root):
-                if self.parser.get_function_name(func) == handler_name:
-                    handler_node = func
-                    break
-        
         if not handler_node:
-            return None
+            # Create a context from the call itself
+            return self._create_context_from_call(call_node, tool_name, mcp_type)
         
         # Extract context from the handler
         context = self._extract_function_context(handler_node, mcp_type)
@@ -270,13 +271,53 @@ class TypeScriptContextExtractor:
         if tool_name:
             context.name = tool_name
         
-        # Extract config parameters if present
-        if config_node:
-            context.decorator_params = self._extract_object_properties(config_node)
-        
         return context
 
-    def _extract_function_context(self, node: Node, mcp_type: str) -> TypeScriptFunctionContext:
+    def _create_context_from_call(self, call_node: Node, tool_name: str, mcp_type: str) -> GoFunctionContext:
+        """Create a context from an MCP registration call when handler is inline or not found.
+
+        Args:
+            call_node: The call_expression node
+            tool_name: Tool name
+            mcp_type: MCP type
+
+        Returns:
+            Function context
+        """
+        # Extract what we can from the call context
+        imports = self._extract_imports()
+        function_calls = self._extract_function_calls(call_node)
+        
+        return GoFunctionContext(
+            name=tool_name or '<unknown>',
+            decorator_types=[mcp_type],
+            decorator_params={},
+            docstring=None,
+            parameters=[],
+            return_type=None,
+            line_number=call_node.start_point[0] + 1,
+            imports=imports,
+            function_calls=function_calls,
+            assignments=[],
+            control_flow={'has_conditionals': False, 'has_loops': False, 'has_exception_handling': False},
+            parameter_flows=[],
+            constants={},
+            variable_dependencies={},
+            has_file_operations=False,
+            has_network_operations=False,
+            has_subprocess_calls=False,
+            has_eval_exec=False,
+            has_dangerous_imports=self._has_dangerous_imports(),
+            dataflow_summary={'total_statements': 0, 'total_expressions': 0, 'complexity': 1},
+            string_literals=[],
+            return_expressions=[],
+            exception_handlers=[],
+            env_var_access=[],
+            global_writes=[],
+            attribute_access=[],
+        )
+
+    def _extract_function_context(self, node: Node, mcp_type: str) -> GoFunctionContext:
         """Extract complete context for a function.
 
         Args:
@@ -288,12 +329,12 @@ class TypeScriptContextExtractor:
         """
         # Basic info
         name = self.parser.get_function_name(node) or '<anonymous>'
-        docstring = self.parser.get_docstring(node)
+        docstring = self._get_docstring(node)
         parameters = self.parser.get_function_parameters(node)
-        return_type = self.parser.get_return_type(node)
+        return_type = self._get_return_type(node)
         line_number = node.start_point[0] + 1
         
-        # Decorators
+        # Decorators (Go uses comments)
         decorators = self.parser.get_decorators(node)
         decorator_types = [self.parser.get_node_text(d) for d in decorators]
         
@@ -332,7 +373,7 @@ class TypeScriptContextExtractor:
         # Dataflow summary
         dataflow_summary = self._create_dataflow_summary(node)
         
-        return TypeScriptFunctionContext(
+        return GoFunctionContext(
             name=name,
             decorator_types=decorator_types,
             decorator_params={},
@@ -360,6 +401,43 @@ class TypeScriptContextExtractor:
             global_writes=global_writes,
             attribute_access=attribute_access,
         )
+
+    def _get_docstring(self, node: Node) -> Optional[str]:
+        """Get docstring/comment for a function.
+
+        Args:
+            node: Function node
+
+        Returns:
+            Docstring or None
+        """
+        # In Go, documentation is in comments preceding the function
+        prev = node.prev_sibling
+        comments = []
+        
+        while prev and prev.type == 'comment':
+            comment_text = self.parser.get_node_text(prev)
+            # Remove // prefix
+            if comment_text.startswith('//'):
+                comment_text = comment_text[2:].strip()
+            comments.insert(0, comment_text)
+            prev = prev.prev_sibling
+        
+        return '\n'.join(comments) if comments else None
+
+    def _get_return_type(self, node: Node) -> Optional[str]:
+        """Get return type of a function.
+
+        Args:
+            node: Function node
+
+        Returns:
+            Return type or None
+        """
+        result = node.child_by_field_name('result')
+        if result:
+            return self.parser.get_node_text(result)
+        return None
 
     def _extract_imports(self) -> List[str]:
         """Extract all imports from the file.
@@ -415,22 +493,20 @@ class TypeScriptContextExtractor:
         assignments = []
         
         for assign_node in self.parser.get_assignments(node):
-            if assign_node.type in {'variable_declaration', 'lexical_declaration'}:
-                # Handle const/let/var declarations
-                for child in assign_node.children:
-                    if child.type == 'variable_declarator':
-                        name_node = child.child_by_field_name('name')
-                        value_node = child.child_by_field_name('value')
-                        
-                        if name_node:
-                            assignments.append({
-                                'variable': self.parser.get_node_text(name_node),
-                                'value': self.parser.get_node_text(value_node) if value_node else '<no value>',
-                                'line': assign_node.start_point[0] + 1,
-                                'type': 'declaration',
-                            })
+            if assign_node.type == 'short_var_declaration':
+                # Handle := declarations
+                left = assign_node.child_by_field_name('left')
+                right = assign_node.child_by_field_name('right')
+                
+                if left:
+                    assignments.append({
+                        'variable': self.parser.get_node_text(left),
+                        'value': self.parser.get_node_text(right) if right else '<no value>',
+                        'line': assign_node.start_point[0] + 1,
+                        'type': 'short_var',
+                    })
             
-            elif assign_node.type == 'assignment_expression':
+            elif assign_node.type == 'assignment_statement':
                 left = assign_node.child_by_field_name('left')
                 right = assign_node.child_by_field_name('right')
                 
@@ -441,6 +517,21 @@ class TypeScriptContextExtractor:
                         'line': assign_node.start_point[0] + 1,
                         'type': 'assignment',
                     })
+            
+            elif assign_node.type == 'var_declaration':
+                # Handle var declarations
+                for child in assign_node.children:
+                    if child.type == 'var_spec':
+                        name_node = child.child_by_field_name('name')
+                        value_node = child.child_by_field_name('value')
+                        
+                        if name_node:
+                            assignments.append({
+                                'variable': self.parser.get_node_text(name_node),
+                                'value': self.parser.get_node_text(value_node) if value_node else '<no value>',
+                                'line': assign_node.start_point[0] + 1,
+                                'type': 'var_declaration',
+                            })
         
         return assignments
 
@@ -455,26 +546,23 @@ class TypeScriptContextExtractor:
         """
         has_if = False
         has_for = False
-        has_while = False
-        has_try = False
         has_switch = False
+        has_defer = False
         
         for child in self.parser.walk(node):
             if child.type == 'if_statement':
                 has_if = True
-            elif child.type in {'for_statement', 'for_in_statement', 'for_of_statement'}:
+            elif child.type in {'for_statement', 'range_statement'}:
                 has_for = True
-            elif child.type in {'while_statement', 'do_statement'}:
-                has_while = True
-            elif child.type == 'try_statement':
-                has_try = True
-            elif child.type == 'switch_statement':
+            elif child.type in {'switch_statement', 'type_switch_statement', 'select_statement'}:
                 has_switch = True
+            elif child.type == 'defer_statement':
+                has_defer = True
         
         return {
             'has_conditionals': has_if or has_switch,
-            'has_loops': has_for or has_while,
-            'has_exception_handling': has_try,
+            'has_loops': has_for,
+            'has_exception_handling': has_defer,  # Go uses defer for cleanup
             'has_switch': has_switch,
         }
 
@@ -519,15 +607,15 @@ class TypeScriptContextExtractor:
                             if any(p in call_lower for p in self.network_patterns + self.subprocess_patterns):
                                 flow['reaches_external'] = True
                         
-                        elif parent.type in {'assignment_expression', 'variable_declarator'}:
+                        elif parent.type in {'assignment_statement', 'short_var_declaration'}:
                             flow['reaches_assignments'].append(self.parser.get_node_text(parent))
                         
                         elif parent.type == 'return_statement':
                             flow['reaches_returns'] = True
                         
-                        elif parent.type == 'member_expression':
+                        elif parent.type == 'selector_expression':
                             flow['operations'].append({
-                                'type': 'property_access',
+                                'type': 'field_access',
                                 'line': child.start_point[0] + 1,
                                 'target': self.parser.get_node_text(parent),
                                 'value': param_name,
@@ -549,22 +637,17 @@ class TypeScriptContextExtractor:
         constants = {}
         
         for child in self.parser.walk(node):
-            if child.type == 'lexical_declaration':
-                # Check if it's a const declaration
-                for subchild in child.children:
-                    if subchild.type == 'const':
-                        # Extract variable declarators
-                        for declarator in child.children:
-                            if declarator.type == 'variable_declarator':
-                                name_node = declarator.child_by_field_name('name')
-                                value_node = declarator.child_by_field_name('value')
-                                
-                                if name_node and value_node:
-                                    name = self.parser.get_node_text(name_node)
-                                    
-                                    # Only extract simple constant values
-                                    if value_node.type in {'string', 'number', 'true', 'false', 'null'}:
-                                        constants[name] = self.parser.get_node_text(value_node)
+            if child.type == 'const_declaration':
+                for spec in child.children:
+                    if spec.type == 'const_spec':
+                        name_node = spec.child_by_field_name('name')
+                        value_node = spec.child_by_field_name('value')
+                        
+                        if name_node and value_node:
+                            name = self.parser.get_node_text(name_node)
+                            if value_node.type in {'interpreted_string_literal', 'int_literal', 
+                                                   'float_literal', 'true', 'false', 'nil'}:
+                                constants[name] = self.parser.get_node_text(value_node)
         
         return constants
 
@@ -580,15 +663,15 @@ class TypeScriptContextExtractor:
         dependencies: Dict[str, List[str]] = {}
         
         for assign in self.parser.get_assignments(node):
-            if assign.type == 'variable_declarator':
-                name_node = assign.child_by_field_name('name')
-                value_node = assign.child_by_field_name('value')
+            if assign.type == 'short_var_declaration':
+                left = assign.child_by_field_name('left')
+                right = assign.child_by_field_name('right')
                 
-                if name_node and value_node:
-                    var_name = self.parser.get_node_text(name_node)
+                if left and right:
+                    var_name = self.parser.get_node_text(left)
                     deps = []
                     
-                    for child in self.parser.walk(value_node):
+                    for child in self.parser.walk(right):
                         if child.type == 'identifier':
                             deps.append(self.parser.get_node_text(child))
                     
@@ -642,22 +725,20 @@ class TypeScriptContextExtractor:
         return False
 
     def _has_eval_exec(self, node: Node) -> bool:
-        """Check for eval/exec calls.
+        """Check for dynamic code execution.
 
         Args:
             node: Function node
 
         Returns:
-            True if eval/exec detected
+            True if dynamic execution detected
         """
-        dangerous_funcs = {'eval', 'function', 'settimeout', 'setinterval'}
+        # Go doesn't have eval, but check for reflect-based dynamic calls
+        dangerous_patterns = {'reflect.call', 'reflect.value', 'plugin.open'}
         
         for call in self.parser.get_function_calls(node):
             call_name = self.parser.get_call_name(call).lower()
-            if call_name in dangerous_funcs:
-                return True
-            # Check for new Function() pattern
-            if 'function' in call_name:
+            if any(p in call_name for p in dangerous_patterns):
                 return True
         
         return False
@@ -668,7 +749,7 @@ class TypeScriptContextExtractor:
         Returns:
             True if dangerous imports detected
         """
-        dangerous_modules = {'child_process', 'vm', 'eval'}
+        dangerous_modules = {'os/exec', 'syscall', 'unsafe', 'reflect', 'plugin'}
         
         for import_node in self.parser.get_imports(self.root):
             import_text = self.parser.get_node_text(import_node).lower()
@@ -689,12 +770,10 @@ class TypeScriptContextExtractor:
         literals = []
         
         for child in self.parser.walk(node):
-            if child.type in {'string', 'template_string'}:
+            if child.type in {'interpreted_string_literal', 'raw_string_literal'}:
                 text = self.parser.get_node_text(child)
                 # Remove quotes
-                if text.startswith('"') or text.startswith("'"):
-                    text = text[1:-1]
-                elif text.startswith('`'):
+                if text.startswith('"') or text.startswith('`'):
                     text = text[1:-1]
                 
                 # Limit length
@@ -717,47 +796,32 @@ class TypeScriptContextExtractor:
         
         for child in self.parser.walk(node):
             if child.type == 'return_statement':
-                # Get the return value
+                # Get the return values
                 for subchild in child.children:
-                    if subchild.type not in {'return', ';'}:
+                    if subchild.type not in {'return'}:
                         returns.append(self.parser.get_node_text(subchild))
         
         return returns
 
     def _extract_exception_handlers(self, node: Node) -> List[Dict[str, Any]]:
-        """Extract exception handlers from function.
+        """Extract defer statements (Go's cleanup mechanism).
 
         Args:
             node: Function node
 
         Returns:
-            List of exception handler info
+            List of defer statement info
         """
         handlers = []
         
         for child in self.parser.walk(node):
-            if child.type == 'catch_clause':
+            if child.type == 'defer_statement':
                 handler_info = {
                     'line': child.start_point[0] + 1,
-                    'parameter': '',
-                    'exception_type': 'Error',  # TypeScript catch is generic
+                    'exception_type': 'defer',  # Go uses defer instead of try/except
                     'is_silent': False,
-                    'body_preview': '',
+                    'body_preview': self.parser.get_node_text(child)[:100],
                 }
-                
-                # Get catch parameter
-                param = child.child_by_field_name('parameter')
-                if param:
-                    handler_info['parameter'] = self.parser.get_node_text(param)
-                
-                # Get body preview
-                body = child.child_by_field_name('body')
-                if body:
-                    body_text = self.parser.get_node_text(body)
-                    handler_info['body_preview'] = body_text[:100]
-                    # Check if it's a silent catch (empty or just comments)
-                    handler_info['is_silent'] = body_text.strip() in {'{}', '{ }', ''}
-                
                 handlers.append(handler_info)
         
         return handlers
@@ -773,14 +837,15 @@ class TypeScriptContextExtractor:
         """
         env_vars = []
         
-        for child in self.parser.walk(node):
-            if child.type == 'member_expression':
-                text = self.parser.get_node_text(child)
-                if 'process.env' in text:
-                    # Extract the env var name
-                    parts = text.split('.')
-                    if len(parts) >= 3:
-                        env_vars.append(parts[2])
+        for call in self.parser.get_function_calls(node):
+            call_name = self.parser.get_call_name(call).lower()
+            if 'os.getenv' in call_name or 'os.lookupenv' in call_name:
+                # Extract the env var name from arguments
+                args_node = call.child_by_field_name('arguments')
+                if args_node:
+                    for child in args_node.children:
+                        if child.type == 'interpreted_string_literal':
+                            env_vars.append(self.parser.get_node_text(child).strip('"'))
         
         return env_vars
 
@@ -795,22 +860,25 @@ class TypeScriptContextExtractor:
         """
         writes = []
         
-        # Look for assignments to global-looking variables
+        # In Go, global writes are typically to package-level variables
+        # This is harder to detect without full scope analysis
+        # For now, look for assignments to capitalized identifiers (exported)
         for child in self.parser.walk(node):
-            if child.type == 'assignment_expression':
+            if child.type == 'assignment_statement':
                 left = child.child_by_field_name('left')
-                if left and left.type == 'member_expression':
-                    text = self.parser.get_node_text(left)
-                    if text.startswith('global.') or text.startswith('window.'):
+                if left and left.type == 'identifier':
+                    var_name = self.parser.get_node_text(left)
+                    # Check if it looks like a package-level variable
+                    if var_name[0].isupper():
                         writes.append({
-                            'target': text,
+                            'target': var_name,
                             'line': child.start_point[0] + 1,
                         })
         
         return writes
 
     def _extract_attribute_access(self, node: Node) -> List[Dict[str, Any]]:
-        """Extract attribute/property accesses.
+        """Extract field/method accesses.
 
         Args:
             node: Function node
@@ -821,19 +889,19 @@ class TypeScriptContextExtractor:
         accesses = []
         
         for child in self.parser.walk(node):
-            if child.type == 'member_expression':
-                obj = child.child_by_field_name('object')
-                prop = child.child_by_field_name('property')
+            if child.type == 'selector_expression':
+                operand = child.child_by_field_name('operand')
+                field = child.child_by_field_name('field')
                 
-                if obj and prop:
+                if operand and field:
                     # Determine if this is a read or write based on parent context
                     parent = child.parent
-                    is_write = parent and parent.type in {'assignment_expression', 'augmented_assignment_expression'}
+                    is_write = parent and parent.type in {'assignment_statement', 'short_var_declaration'}
                     
                     accesses.append({
-                        'object': self.parser.get_node_text(obj),
-                        'property': self.parser.get_node_text(prop),
-                        'attribute': self.parser.get_node_text(prop),  # Alias for compatibility
+                        'object': self.parser.get_node_text(operand),
+                        'attribute': self.parser.get_node_text(field),
+                        'property': self.parser.get_node_text(field),  # Alias for compatibility
                         'line': child.start_point[0] + 1,
                         'type': 'write' if is_write else 'read',
                         'value': '<assigned>' if is_write else None,
@@ -878,45 +946,39 @@ class TypeScriptContextExtractor:
         complexity = 1
         
         for child in self.parser.walk(node):
-            if child.type in {'if_statement', 'for_statement', 'for_in_statement', 
-                             'for_of_statement', 'while_statement', 'do_statement',
-                             'catch_clause', 'switch_case'}:
-                complexity += 1
-            elif child.type == 'ternary_expression':
+            if child.type in {'if_statement', 'for_statement', 'range_statement',
+                             'switch_statement', 'type_switch_statement', 'select_statement',
+                             'case_clause', 'default_case'}:
                 complexity += 1
             elif child.type == 'binary_expression':
                 # Check for && or ||
-                op = child.child_by_field_name('operator')
-                if op:
-                    op_text = self.parser.get_node_text(op)
-                    if op_text in {'&&', '||'}:
+                op_node = child.child_by_field_name('operator')
+                if op_node:
+                    op = self.parser.get_node_text(op_node)
+                    if op in {'&&', '||'}:
                         complexity += 1
         
         return complexity
 
     def _extract_object_properties(self, node: Node) -> Dict[str, Any]:
-        """Extract properties from an object literal.
+        """Extract properties from a struct literal.
 
         Args:
-            node: Object node
+            node: Struct literal node
 
         Returns:
             Dictionary of properties
         """
         props = {}
         
-        for child in node.children:
-            if child.type == 'pair':
-                key = child.child_by_field_name('key')
-                value = child.child_by_field_name('value')
+        for child in self.parser.walk(node):
+            if child.type == 'keyed_element':
+                key_node = child.child_by_field_name('key')
+                value_node = child.child_by_field_name('value')
                 
-                if key and value:
-                    key_text = self.parser.get_node_text(key).strip('"\'')
-                    
-                    # Extract simple values
-                    if value.type in {'string', 'number', 'true', 'false', 'null'}:
-                        props[key_text] = self.parser.get_node_text(value).strip('"\'')
-                    else:
-                        props[key_text] = self.parser.get_node_text(value)
+                if key_node and value_node:
+                    key = self.parser.get_node_text(key_node)
+                    value = self.parser.get_node_text(value_node)
+                    props[key] = value
         
         return props

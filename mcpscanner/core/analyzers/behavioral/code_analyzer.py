@@ -34,6 +34,9 @@ from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ...static_analysis.context_extractor import ContextExtractor
+from ...static_analysis.typescript_context_extractor import TypeScriptContextExtractor
+from ...static_analysis.go_context_extractor import GoContextExtractor
+from ...static_analysis.kotlin_context_extractor import KotlinContextExtractor
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
@@ -171,27 +174,53 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.logger.error(f"Behavioural analysis failed: {e}", exc_info=True)
             return []
     
+    # Supported file extensions by language
+    SUPPORTED_EXTENSIONS = {
+        '.py': 'python',
+        '.ts': 'typescript',
+        '.tsx': 'typescript',
+        '.js': 'javascript',
+        '.jsx': 'javascript',
+        '.go': 'go',
+        '.kt': 'kotlin',
+        '.kts': 'kotlin',
+    }
+    
     def _find_python_files(self, directory: str) -> List[str]:
-        """Find all Python files in a directory.
+        """Find all supported source files in a directory.
         
         Args:
             directory: Directory path to search
             
         Returns:
-            List of Python file paths
+            List of source file paths
         """
-        python_files = []
+        source_files = []
         path = Path(directory)
         
-        # Recursively find all .py files
-        for py_file in path.rglob("*.py"):
-            # Skip __pycache__ and hidden directories
-            if "__pycache__" not in str(py_file) and not any(
-                part.startswith(".") for part in py_file.parts
-            ):
-                python_files.append(str(py_file))
+        # Recursively find all supported files
+        for ext in self.SUPPORTED_EXTENSIONS.keys():
+            for src_file in path.rglob(f"*{ext}"):
+                # Skip __pycache__, node_modules, and hidden directories
+                file_str = str(src_file)
+                if ("__pycache__" not in file_str and 
+                    "node_modules" not in file_str and
+                    not any(part.startswith(".") for part in src_file.parts)):
+                    source_files.append(file_str)
         
-        return sorted(python_files)
+        return sorted(source_files)
+    
+    def _get_language(self, file_path: str) -> Optional[str]:
+        """Determine the language of a file based on its extension.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            Language name or None if unsupported
+        """
+        ext = Path(file_path).suffix.lower()
+        return self.SUPPORTED_EXTENSIONS.get(ext)
     
     async def _analyze_file(
         self, 
@@ -199,10 +228,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         context: Dict[str, Any],
         cross_file_analyzer: Optional[CallGraphAnalyzer] = None
     ) -> List[SecurityFinding]:
-        """Analyze a single Python file.
+        """Analyze a single source file (Python, TypeScript, Go, or Kotlin).
         
         Args:
-            file_path: Path to Python file
+            file_path: Path to source file
             context: Analysis context
             cross_file_analyzer: Optional cross-file analyzer for tracking imports
             
@@ -210,11 +239,17 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             List of SecurityFinding objects
         """
         try:
+            language = self._get_language(file_path)
+            if not language:
+                self.logger.debug(f"Unsupported file type: {file_path}")
+                return []
+            
             with open(file_path, 'r', encoding='utf-8') as f:
                 source_code = f.read()
             
             file_context = context.copy()
             file_context['file_path'] = file_path
+            file_context['language'] = language
             file_context['cross_file_analyzer'] = cross_file_analyzer
             
             findings = await self._analyze_source_code(source_code, file_context)
@@ -223,6 +258,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             for finding in findings:
                 if finding.details:
                     finding.details['source_file'] = file_path
+                    finding.details['language'] = language
             
             return findings
             
@@ -230,22 +266,47 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.logger.error(f"Failed to analyze {file_path}: {e}")
             return []
     
-    async def _analyze_source_code(self, source_code: str, context: Dict[str, Any]) -> List[SecurityFinding]:
-        """Analyze Python source code for MCP docstring mismatches.
+    def _get_context_extractor(self, source_code: str, file_path: str, language: str):
+        """Get the appropriate context extractor for the language.
         
         Args:
-            source_code: Python source code to analyze
-            context: Analysis context with file_path
+            source_code: Source code to analyze
+            file_path: Path to the file
+            language: Programming language
+            
+        Returns:
+            Context extractor instance
+        """
+        if language == 'python':
+            return ContextExtractor(source_code, file_path)
+        elif language in ('typescript', 'javascript'):
+            return TypeScriptContextExtractor(source_code, file_path)
+        elif language == 'go':
+            return GoContextExtractor(source_code, file_path)
+        elif language == 'kotlin':
+            return KotlinContextExtractor(source_code, file_path)
+        else:
+            raise ValueError(f"Unsupported language: {language}")
+    
+    async def _analyze_source_code(self, source_code: str, context: Dict[str, Any]) -> List[SecurityFinding]:
+        """Analyze source code for MCP docstring mismatches.
+        
+        Supports Python, TypeScript, Go, and Kotlin.
+        
+        Args:
+            source_code: Source code to analyze
+            context: Analysis context with file_path and language
             
         Returns:
             List of security findings
         """
         file_path = context.get("file_path", "unknown")
+        language = context.get("language") or self._get_language(file_path) or "python"
         findings = []
         
         try:
-            # Use context extractor for complete analysis
-            extractor = ContextExtractor(source_code, file_path)
+            # Use appropriate context extractor based on language
+            extractor = self._get_context_extractor(source_code, file_path, language)
             mcp_contexts = extractor.extract_mcp_function_contexts()
             
             if not mcp_contexts:

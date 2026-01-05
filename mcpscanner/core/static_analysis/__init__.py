@@ -33,6 +33,7 @@ Architecture inspired by Semgrep, CodeQL, and other production SAST tools.
 from .context_extractor import ContextExtractor, FunctionContext
 from .typescript_context_extractor import TypeScriptContextExtractor, TypeScriptFunctionContext
 from .kotlin_context_extractor import KotlinContextExtractor, KotlinFunctionContext
+from .go_context_extractor import GoContextExtractor, GoFunctionContext
 
 __version__ = "1.0.0"
 
@@ -44,4 +45,6 @@ __all__ = [
     "TypeScriptFunctionContext",
     "KotlinContextExtractor",
     "KotlinFunctionContext",
+    "GoContextExtractor",
+    "GoFunctionContext",
 ]
