@@ -266,8 +266,14 @@ class TypeScriptContextExtractor:
         # Extract context from the handler
         context = self._extract_function_context(handler_node, mcp_type)
         
-        # Override name if explicitly provided
-        if tool_name:
+        # Try to extract a more specific tool name from the handler body
+        # Look for patterns like: if (name === "tool_name") or if (name === 'tool_name')
+        inner_tool_name = self._extract_tool_name_from_handler(handler_node)
+        
+        # Override name - prefer inner tool name, then explicit tool_name, then default
+        if inner_tool_name:
+            context.name = inner_tool_name
+        elif tool_name:
             context.name = tool_name
         
         # Extract config parameters if present
@@ -275,6 +281,40 @@ class TypeScriptContextExtractor:
             context.decorator_params = self._extract_object_properties(config_node)
         
         return context
+
+    def _extract_tool_name_from_handler(self, handler_node: Node) -> Optional[str]:
+        """Extract tool name from handler body by looking for if (name === "tool_name") patterns.
+
+        Args:
+            handler_node: The handler function node
+
+        Returns:
+            Tool name if found, None otherwise
+        """
+        for child in self.parser.walk(handler_node):
+            # Look for binary expressions with === or ==
+            if child.type == 'binary_expression':
+                operator = None
+                left_text = ''
+                right_text = ''
+                
+                for subchild in child.children:
+                    if subchild.type in {'===', '==', '!==', '!='}:
+                        operator = subchild.type
+                    elif subchild.type == 'identifier':
+                        text = self.parser.get_node_text(subchild)
+                        if not left_text:
+                            left_text = text
+                        else:
+                            right_text = text
+                    elif subchild.type in {'string', 'template_string'}:
+                        right_text = self.parser.get_node_text(subchild).strip('"\'`')
+                
+                # Check if this is a name comparison like: name === "tool_name"
+                if operator in {'===', '=='} and left_text == 'name' and right_text:
+                    return right_text
+        
+        return None
 
     def _extract_function_context(self, node: Node, mcp_type: str) -> TypeScriptFunctionContext:
         """Extract complete context for a function.
