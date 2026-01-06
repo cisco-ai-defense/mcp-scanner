@@ -22,6 +22,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **MCP Server Integration**: Connect directly to MCP servers to scan tools, prompts, and resources with flexible authentication.
 - **Customizable YARA Rules**: Add your own YARA rules to detect specific patterns.
 - **Comprehensive Reporting**: Detailed reports on detected security findings.
+- **Behavioural Code Scannig**: Scan Source code of MCP servers for finding threats.
 
 ## Installation
 
