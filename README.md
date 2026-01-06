@@ -16,13 +16,14 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
+- **Behavioural Code Scannig**: Scan Source code of MCP servers for finding threats.
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
 - **Custom Endpoints**: Configure the API endpoint to support any Cisco AI Defense environments.
 - **MCP Server Integration**: Connect directly to MCP servers to scan tools, prompts, and resources with flexible authentication.
 - **Customizable YARA Rules**: Add your own YARA rules to detect specific patterns.
 - **Comprehensive Reporting**: Detailed reports on detected security findings.
-- **Behavioural Code Scannig**: Scan Source code of MCP servers for finding threats.
+
 
 ## Installation
 
