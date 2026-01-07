@@ -150,17 +150,10 @@ class TypeScriptContextExtractor:
             List of function contexts
         """
         contexts = []
+        seen_lines = set()  # Track line numbers to avoid duplicates
         
-        # Find all function definitions
-        for node in self.parser.walk(self.root):
-            if node.type in {'function_declaration', 'arrow_function', 'function_expression', 'method_definition'}:
-                # Check if this is an MCP handler
-                mcp_type = self._get_mcp_type(node)
-                if mcp_type:
-                    context = self._extract_function_context(node, mcp_type)
-                    contexts.append(context)
-        
-        # Also look for registerTool/setRequestHandler/etc. call patterns
+        # First, look for registerTool/setRequestHandler/etc. call patterns
+        # These have better context (tool name, description from config)
         for call_node in self.parser.get_function_calls(self.root):
             call_name = self.parser.get_call_name(call_node)
             if any(pattern in call_name.lower() for pattern in [
@@ -172,6 +165,21 @@ class TypeScriptContextExtractor:
                 handler_context = self._extract_mcp_registration_context(call_node)
                 if handler_context:
                     contexts.append(handler_context)
+                    seen_lines.add(handler_context.line_number)
+        
+        # Then find decorated function definitions (not already captured)
+        for node in self.parser.walk(self.root):
+            if node.type in {'function_declaration', 'arrow_function', 'function_expression', 'method_definition'}:
+                line_number = node.start_point[0] + 1
+                if line_number in seen_lines:
+                    continue  # Skip - already captured from registration call
+                
+                # Check if this is an MCP handler via decorators
+                mcp_type = self._get_mcp_type(node)
+                if mcp_type:
+                    context = self._extract_function_context(node, mcp_type)
+                    contexts.append(context)
+                    seen_lines.add(line_number)
         
         return contexts
 
