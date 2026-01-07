@@ -1456,16 +1456,18 @@ async def main():
                     "findings": {}
                 })
             
-            # Automatically filter out VULNERABILITY findings - only show THREATS
+            # Include all findings - both THREAT and VULNERABILITY are security issues
+            # Only filter out explicitly safe/benign results
             filtered_results = []
             for result in results:
-                # Check if result has behavioral_analyzer findings with classification
+                # Check if result has behavioral_analyzer findings
                 if "findings" in result and "behavioral_analyzer" in result["findings"]:
                     analyzer_data = result["findings"]["behavioral_analyzer"]
                     classification = analyzer_data.get("threat_vulnerability_classification", "").upper()
                     
-                    # Only include THREAT findings, exclude VULNERABILITY
-                    if classification == "THREAT":
+                    # Include THREAT, VULNERABILITY, or unclassified findings
+                    # Only exclude if explicitly marked as SAFE or BENIGN
+                    if classification not in ["SAFE", "BENIGN"]:
                         filtered_results.append(result)
                 # Keep results without findings (safe results)
                 elif not result.get("findings"):
