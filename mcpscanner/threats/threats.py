@@ -116,7 +116,7 @@ class ThreatMapping:
         },
         "SYSTEM MANIPULATION": {
             "scanner_category": "SYSTEM MANIPULATION",
-            "severity": "MEDIUM",
+            "severity": "HIGH",
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.2",
