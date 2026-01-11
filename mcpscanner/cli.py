@@ -995,7 +995,7 @@ async def main():
             "Control env var expansion for stdio command/args. "
             "off: no env expansion (only ~). "
             "linux/mac: expand $VAR and ${VAR} (POSIX). "
-            "windows: expand %VAR% (Windows style only). "
+            "windows: expand %%VAR%% (Windows style only). "
             "auto: linux/mac on POSIX, windows on Windows."
         ),
     )
