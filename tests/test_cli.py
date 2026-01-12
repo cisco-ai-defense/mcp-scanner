@@ -520,7 +520,7 @@ class TestStaticSubcommandCLI:
             captured = capsys.readouterr()
             assert "MCP Scanner Results" in captured.out
             assert "Total tools scanned: 1" in captured.out
-            assert "Safe tools: 1" in captured.out
+            assert "Safe items: 1" in captured.out
 
     @pytest.mark.asyncio
     async def test_static_resources_result_conversion(self, resources_json_file):
@@ -566,7 +566,9 @@ class TestStaticSubcommandCLI:
             
             captured = capsys.readouterr()
             assert "MCP Scanner Results" in captured.out
-            assert "prompts scanned: 1" in captured.out or "Total prompts scanned: 1" in captured.out
+            # Static subcommand uses unified output format - prompts appear as scanned items
+            assert "Total tools scanned: 1" in captured.out
+            assert "Safe items: 1" in captured.out
 
     @pytest.mark.asyncio
     async def test_static_no_files_specified(self, capsys):
@@ -624,4 +626,6 @@ class TestStaticSubcommandCLI:
             
             captured = capsys.readouterr()
             assert "MCP Scanner Results" in captured.out
-            assert "resources scanned: 1" in captured.out
+            # Static subcommand uses unified output format - resources appear as scanned items
+            assert "Total tools scanned: 1" in captured.out
+            assert "Safe items: 1" in captured.out
