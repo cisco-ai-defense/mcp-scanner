@@ -45,10 +45,19 @@ except ImportError:  # pragma: no cover - fallback for environments without mcp 
 
 from ..config.config import Config
 from ..utils.logging_config import get_logger
+from ..utils.command_utils import (
+    build_env_for_expansion,
+    decide_windows_semantics,
+    expand_text,
+    normalize_and_expand_command_args,
+    split_embedded_args,
+    resolve_executable_path,
+)
 from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
+from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .auth import (
     Auth,
     AuthType,
@@ -62,10 +71,9 @@ from .exceptions import (
 from .models import AnalyzerEnum
 from .mcp_models import StdioServer, RemoteServer
 from ..config.config_parser import MCPConfigScanner
-from .result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult
+from .result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
-
 
 logger = get_logger(__name__)
 
@@ -113,6 +121,9 @@ class Scanner:
         self._llm_analyzer = (
             LLMAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
         )
+        self._behavioral_analyzer = (
+            BehavioralCodeAnalyzer(config) if config.llm_provider_api_key else None
+        )
         self._custom_analyzers = custom_analyzers or []
 
         # Debug logging for analyzer initialization
@@ -123,6 +134,8 @@ class Scanner:
             active_analyzers.append("YARA")
         if self._llm_analyzer:
             active_analyzers.append("LLM")
+        if self._behavioral_analyzer:
+            active_analyzers.append("Behavioral")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -155,6 +168,11 @@ class Scanner:
         if AnalyzerEnum.LLM in requested_analyzers and not self._llm_analyzer:
             missing_requirements.append(
                 "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured (or AWS credentials for Bedrock models)"
+            )
+
+        if AnalyzerEnum.BEHAVIORAL in requested_analyzers and not self._behavioral_analyzer:
+            missing_requirements.append(
+                "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
             )
 
         # YARA analyzer should always be available since it doesn't require API keys
@@ -454,6 +472,111 @@ class Scanner:
             findings=all_findings,
         )
 
+    async def _analyze_instructions(
+        self,
+        instructions: str,
+        server_name: str,
+        protocol_version: str,
+        analyzers: List[AnalyzerEnum],
+        http_headers: Optional[dict] = None,
+    ) -> InstructionsScanResult:
+        """Analyze server instructions using specified analyzers.
+
+        Args:
+            instructions (str): The instructions text from the server.
+            server_name (str): The name of the server.
+            protocol_version (str): The MCP protocol version.
+            analyzers (List[AnalyzerEnum]): List of analyzers to run.
+            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
+
+        Returns:
+            InstructionsScanResult: The result of the analysis.
+        """
+        all_findings = []
+
+        if AnalyzerEnum.API in analyzers and self._api_analyzer:
+            # Run API analysis on the instructions
+            try:
+                api_context = {"server_name": server_name, "content_type": "instructions"}
+                api_findings = await self._api_analyzer.analyze(
+                    instructions, api_context
+                )
+                for finding in api_findings:
+                    finding.analyzer = "API"
+                all_findings.extend(api_findings)
+            except Exception as e:
+                logger.error(
+                    f'API analysis failed on instructions: server="{server_name}", error="{e}"'
+                )
+
+        if AnalyzerEnum.YARA in analyzers:
+            # Run YARA analysis on the instructions
+            try:
+                yara_context = {"server_name": server_name, "content_type": "instructions"}
+                yara_findings = await self._yara_analyzer.analyze(
+                    instructions, yara_context
+                )
+                for finding in yara_findings:
+                    finding.analyzer = "YARA"
+                all_findings.extend(yara_findings)
+            except Exception as e:
+                logger.error(
+                    f'YARA analysis failed on instructions: server="{server_name}", error="{e}"'
+                )
+
+        if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
+            # Run LLM analysis on the instructions
+            try:
+                # Format content for comprehensive analysis
+                analysis_content = f"Server Name: {server_name}\n"
+                analysis_content += f"Protocol Version: {protocol_version}\n"
+                analysis_content += f"Instructions: {instructions}\n"
+
+                llm_context = {"server_name": server_name, "content_type": "instructions"}
+                llm_findings = await self._llm_analyzer.analyze(
+                    analysis_content, llm_context
+                )
+                for finding in llm_findings:
+                    finding.analyzer = "LLM"
+                all_findings.extend(llm_findings)
+            except Exception as e:
+                logger.error(f'LLM analysis failed on instructions: server="{server_name}", error="{e}"')
+        elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
+            logger.warning(
+                f"LLM scan requested for instructions from '{server_name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
+            )
+
+        # Run custom analyzers
+        custom_analyzer_names = []
+        for analyzer in self._custom_analyzers:
+            try:
+                custom_context = {"server_name": server_name, "content_type": "instructions"}
+                # Add HTTP headers to context for custom analyzers
+                if http_headers:
+                    custom_context["http_headers"] = http_headers
+                findings = await analyzer.analyze(instructions, custom_context)
+                for finding in findings:
+                    finding.analyzer = analyzer.name
+                all_findings.extend(findings)
+                # Track which custom analyzers were successfully run
+                custom_analyzer_names.append(analyzer.name)
+            except Exception as e:
+                logger.error(
+                    f'Custom analyzer "{analyzer.name}" failed on instructions: server="{server_name}", error="{e}"'
+                )
+
+        # Combine enum analyzers and custom analyzer names
+        all_analyzers = list(analyzers) + custom_analyzer_names
+
+        return InstructionsScanResult(
+            instructions=instructions,
+            server_name=server_name,
+            protocol_version=protocol_version,
+            status="completed",
+            analyzers=all_analyzers,
+            findings=all_findings,
+        )
+
     def _check_http_error_in_logs(self, msg: str) -> Optional[int]:
         """Check if a log message contains an HTTP error status code.
 
@@ -549,10 +672,10 @@ class Scanner:
                 logger.debug(
                     f'Using APIKEY authentication for MCP server: server="{server_url}"'
                 )
-            elif auth:
-                logger.debug(
-                    f'Using explicit authentication (type: {auth.type}) for MCP server: server="{server_url}"'
-                )
+
+            # Add any custom headers from Auth object (works with any auth type)
+            if hasattr(auth, 'custom_headers') and auth.custom_headers:
+                extra_headers.update(auth.custom_headers)
         else:
             logger.debug(
                 f'No explicit auth provided, connecting without authentication: server="{server_url}"'
@@ -626,7 +749,9 @@ class Scanner:
                 session = ClientSession(read, write)
                 await session.__aenter__()
                 logger.debug(f'Initializing MCP session: server="{server_url}"')
-                await session.initialize()
+                init_result = await session.initialize()
+                # Store the initialize result on the session for later access
+                session._init_result = init_result
             logger.debug(f'Successfully connected to MCP server: server="{server_url}"')
             return client_context, session
         except (asyncio.CancelledError, GeneratorExit) as e:
@@ -871,31 +996,19 @@ class Scanner:
             logger.debug(f"Creating stdio client for command: {server_config.command}")
 
             # Normalize and validate command/args to avoid FileNotFoundError ([Errno 2])
-            # 1) Expand ~ and environment variables (merge server_config.env into expansion context)
-            raw_command = server_config.command or ""
-            env_for_expansion = {**os.environ, **(server_config.env or {})}
-            expanded_command = os.path.expanduser(raw_command).strip()
-            # Manually expand vars using the merged env
-            for key, val in env_for_expansion.items():
-                expanded_command = expanded_command.replace(f"${key}", val).replace(f"${{{key}}}", val)
+            # Expansion mode comes from StdioServer config; default is 'off'
+            expand_mode = (server_config.expand_vars or "off").lower()
+            logger.debug(f"expand_mode='{expand_mode}' for command: {server_config.command}")
+            env_for_expansion = build_env_for_expansion(server_config.env)
+            windows_semantics = decide_windows_semantics(expand_mode)
 
-            # 2) Expand ~ and env vars in args too
-            cmd_args = []
-            for arg in (server_config.args or []):
-                expanded_arg = os.path.expanduser(arg)
-                for key, val in env_for_expansion.items():
-                    expanded_arg = expanded_arg.replace(f"${key}", val).replace(f"${{{key}}}", val)
-                cmd_args.append(expanded_arg)
-
-            # 3) If args not provided and command embeds args, split them
-            cmd_command = expanded_command
-            if not cmd_args and (" " in expanded_command or "\t" in expanded_command):
-                parts = shlex.split(expanded_command)
-                if parts:
-                    cmd_command, cmd_args = parts[0], parts[1:]
-
-            # 4) Resolve executable path (absolute or via PATH)
-            resolved_exe = cmd_command if os.path.isabs(cmd_command) else shutil.which(cmd_command or "")
+            expanded_command, expanded_args = normalize_and_expand_command_args(
+                server_config.command or "", server_config.args or [], env_for_expansion, expand_mode
+            )
+            cmd_command, cmd_args = split_embedded_args(
+                expanded_command, expanded_args, windows_semantics
+            )
+            resolved_exe = resolve_executable_path(cmd_command)
             if not resolved_exe or not os.path.exists(resolved_exe):
                 # Provide a clear, actionable message and fail fast for this server only
                 msg = (
@@ -1141,6 +1254,7 @@ class Scanner:
         self,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
+        expand_vars_default: Optional[str] = None,
     ) -> Dict[str, List[ToolScanResult]]:
         """Scan all well-known MCP configuration files and their servers.
 
@@ -1172,6 +1286,13 @@ class Scanner:
 
                 try:
                     if isinstance(server_config, StdioServer):
+                        # Apply default expand mode if not provided by config
+                        if expand_vars_default and not server_config.expand_vars:
+                            logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
+                            server_config.expand_vars = expand_vars_default
+                        else:
+                            logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
+                            
                         # Scan stdio server with timeout and error recovery
                         try:
                             results = await self.scan_stdio_server_tools(
@@ -1234,6 +1355,7 @@ class Scanner:
         config_path: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
+        expand_vars_default: Optional[str] = None,
     ) -> List[ToolScanResult]:
         """Scan all servers in a specific MCP configuration file.
 
@@ -1265,6 +1387,13 @@ class Scanner:
 
             try:
                 if isinstance(server_config, StdioServer):
+                    # Apply default expand mode if not provided by config
+                    if expand_vars_default and not server_config.expand_vars:
+                        logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
+                        server_config.expand_vars = expand_vars_default
+                    else:
+                        logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
+                        
                     # Scan stdio server with timeout and error recovery
                     try:
                         results = await self.scan_stdio_server_tools(
@@ -1466,6 +1595,92 @@ class Scanner:
         except Exception as e:
             logger.error(
                 f'Error scanning prompt \'{prompt_name}\' on MCP server: server="{server_url}", error="{e}"'
+            )
+            raise
+        finally:
+            await self._close_mcp_session(client_context, session)
+
+    async def scan_remote_server_instructions(
+        self,
+        server_url: str,
+        auth: Optional[Auth] = None,
+        analyzers: Optional[List[AnalyzerEnum]] = None,
+        http_headers: Optional[dict] = None,
+    ) -> InstructionsScanResult:
+        """Scan server instructions from the InitializeResult.
+
+        Args:
+            server_url (str): The URL of the MCP server to scan.
+            auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
+            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API, YARA, and LLM.
+            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
+
+        Returns:
+            InstructionsScanResult: The result of the scan.
+
+        Raises:
+            ValueError: If the server does not provide instructions.
+        """
+        if not server_url:
+            raise ValueError(
+                "No server URL provided. Please specify a valid server URL."
+            )
+
+        # Default to all analyzers including LLM for instructions
+        # Instructions benefit from semantic analysis
+        if analyzers is None:
+            analyzers = [AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
+
+        # Validate that requested analyzers have required configuration
+        self._validate_analyzer_requirements(analyzers)
+
+        client_context = None
+        session = None
+        try:
+            client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # Get the initialize result which was stored during session initialization
+            init_result = getattr(session, '_init_result', None)
+            
+            if not init_result:
+                raise ValueError(
+                    f"Failed to get initialization result from server at {server_url}"
+                )
+
+            # Extract instructions from the initialize result
+            instructions = getattr(init_result, 'instructions', None)
+            
+            if not instructions:
+                # Return a result with no findings if instructions are not provided
+                logger.info(f"Server at {server_url} does not provide instructions field")
+                return InstructionsScanResult(
+                    instructions="",
+                    server_name=getattr(init_result.serverInfo, 'name', 'Unknown') if hasattr(init_result, 'serverInfo') else 'Unknown',
+                    protocol_version=getattr(init_result, 'protocolVersion', 'Unknown'),
+                    status="skipped",
+                    analyzers=[],
+                    findings=[],
+                )
+
+            # Extract server info
+            server_name = getattr(init_result.serverInfo, 'name', 'Unknown') if hasattr(init_result, 'serverInfo') else 'Unknown'
+            protocol_version = getattr(init_result, 'protocolVersion', 'Unknown')
+
+            # Analyze the instructions
+            result = await self._analyze_instructions(
+                instructions=instructions,
+                server_name=server_name,
+                protocol_version=protocol_version,
+                analyzers=analyzers,
+                http_headers=http_headers
+            )
+            return result
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(
+                f'Error scanning instructions on MCP server: server="{server_url}", error="{e}"'
             )
             raise
         finally:

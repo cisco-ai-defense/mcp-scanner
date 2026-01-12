@@ -28,6 +28,7 @@ from ..core.models import (
     SpecificToolScanRequest,
     SpecificPromptScanRequest,
     SpecificResourceScanRequest,
+    SpecificInstructionsScanRequest,
     ToolScanResult,
 )
 from ..core.report_generator import ReportGenerator, results_to_json
@@ -35,6 +36,7 @@ from ..core.result import (
     ScanResult,
     PromptScanResult,
     ResourceScanResult,
+    InstructionsScanResult,
     get_highest_severity,
     group_findings_by_analyzer,
 )
@@ -129,7 +131,7 @@ def _build_taxonomy_hierarchy(findings: List[Any]) -> List[Dict[str, Any]]:
 
 
 def _group_findings_for_api(
-    scanner_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult],
+    scanner_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult],
     scanner: Scanner
 ) -> Dict[str, Any]:
     """
@@ -224,6 +226,8 @@ def _group_findings_for_api(
                 result_id = scanner_result.prompt_name
             elif isinstance(scanner_result, ResourceScanResult):
                 result_id = scanner_result.resource_uri
+            elif isinstance(scanner_result, InstructionsScanResult):
+                result_id = f"instructions:{scanner_result.server_name}"
             else:
                 result_id = "unknown"
 
@@ -362,8 +366,15 @@ async def scan_tool_endpoint(
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)
-            if request.auth.auth_type == AuthType.APIKEY:
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.custom_headers:
+                # Custom headers only (no bearer or API key)
+                auth = Auth.custom(request.auth.custom_headers)
 
         result = await scanner.scan_remote_server_tool(
             server_url=request.server_url,
@@ -437,8 +448,14 @@ async def scan_all_tools_endpoint(
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)
-            if request.auth.auth_type == AuthType.APIKEY:
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.custom_headers:
+                auth = Auth.custom(request.auth.custom_headers)
 
         results = await scanner.scan_remote_server_tools(
             server_url=request.server_url,
@@ -515,8 +532,14 @@ async def scan_prompt_endpoint(
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)
-            if request.auth.auth_type == AuthType.APIKEY:
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.custom_headers:
+                auth = Auth.custom(request.auth.custom_headers)
 
         result = await scanner.scan_remote_server_prompt(
             server_url=request.server_url,
@@ -573,8 +596,14 @@ async def scan_all_prompts_endpoint(
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)
-            if request.auth.auth_type == AuthType.APIKEY:
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.custom_headers:
+                auth = Auth.custom(request.auth.custom_headers)
 
         results = await scanner.scan_remote_server_prompts(
             server_url=request.server_url,
@@ -640,9 +669,15 @@ async def scan_resource_endpoint(
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)
-            if request.auth.auth_type == AuthType.APIKEY:
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
-                
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.custom_headers:
+                auth = Auth.custom(request.auth.custom_headers)
+
         # Use allowed MIME types from request or default
         allowed_mime_types = request.allowed_mime_types or ["text/plain", "text/html"]
 
@@ -706,8 +741,14 @@ async def scan_all_resources_endpoint(
         if request.auth:
             if request.auth.auth_type == AuthType.BEARER:
                 auth = Auth.bearer(request.auth.bearer_token)
-            if request.auth.auth_type == AuthType.APIKEY:
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.auth_type == AuthType.APIKEY:
                 auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
+                if request.auth.custom_headers:
+                    auth.custom_headers = request.auth.custom_headers
+            elif request.auth.custom_headers:
+                auth = Auth.custom(request.auth.custom_headers)
 
         # Default allowed MIME types
         allowed_mime_types = ["text/plain", "text/html"]
@@ -769,3 +810,64 @@ async def scan_all_resources_endpoint(
     except Exception as e:
         logger.error(f"Unexpected error in resource scan: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning resources: {str(e)}")
+
+
+@router.post(
+    "/scan-instructions",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_instructions_endpoint(
+    request: SpecificInstructionsScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan server instructions from the InitializeResult."""
+    logger.debug(f"Starting instructions scan - server: {request.server_url}")
+
+    try:
+        scanner = scanner_factory(request.analyzers)
+
+        # Extract HTTP headers for analyzers
+        http_headers = dict(http_request.headers)
+
+        auth = None
+        if request.auth:
+            if request.auth.auth_type == AuthType.BEARER:
+                auth = Auth.bearer(request.auth.bearer_token)
+            if request.auth.auth_type == AuthType.APIKEY:
+                auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
+
+        result = await scanner.scan_remote_server_instructions(
+            server_url=request.server_url,
+            auth=auth,
+            analyzers=request.analyzers,
+            http_headers=http_headers,
+        )
+        logger.debug(f"Scanner completed - scanned instructions from server")
+
+        # Convert result to API format using helper function
+        if result.status == "completed":
+            grouped_findings = _group_findings_for_api(result, scanner)
+        else:
+            grouped_findings = {}
+
+        response = {
+            "server_url": request.server_url,
+            "server_name": result.server_name,
+            "protocol_version": result.protocol_version,
+            "instructions": result.instructions,
+            "status": result.status,
+            "is_safe": result.is_safe if result.status == "completed" else None,
+            "findings": grouped_findings,
+        }
+
+        logger.debug(f"Instructions scan completed successfully")
+        return response
+
+    except ValueError as e:
+        logger.error(f"ValueError in instructions scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in instructions scan: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error scanning instructions: {str(e)}")
