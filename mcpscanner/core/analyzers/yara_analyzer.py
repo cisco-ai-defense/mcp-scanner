@@ -66,7 +66,7 @@ class YaraAnalyzer(BaseAnalyzer):
                 self._rules_dir = Path(rules_dir)
             else:
                 self._rules_dir = rules_dir
-            self.logger.info(
+            self.logger.debug(
                 f'Using custom YARA rules directory: rules_dir="{self._rules_dir}"'
             )
         else:
@@ -109,7 +109,7 @@ class YaraAnalyzer(BaseAnalyzer):
         )
         try:
             rules = yara.compile(sources=rule_sources)
-            self.logger.info("YARA rules compiled successfully")
+            self.logger.debug("YARA rules compiled successfully")
             return rules
         except yara.Error as e:
             self.logger.error(f"Error compiling YARA rules: {e}")
