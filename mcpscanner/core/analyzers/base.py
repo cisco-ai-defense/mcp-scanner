@@ -30,7 +30,7 @@ class SecurityFinding:
     """Represents a single security finding from an analyzer.
 
     Attributes:
-        severity (str): The severity level: "HIGH", "MEDIUM", or "LOW".
+        severity (str): The severity level: "HIGH", "MEDIUM", "LOW", or "INFO".
         summary (str): A summary description of the security finding.
         threat_category (str): Standardized threat category.
         analyzer (str): The name of the analyzer that found the security finding.
@@ -49,7 +49,7 @@ class SecurityFinding:
         """Initialize a new SecurityFinding instance.
 
         Args:
-            severity (str): The severity level ("HIGH", "MEDIUM", "LOW", "SAFE", "UNKNOWN").
+            severity (str): The severity level ("HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "UNKNOWN").
             summary (str): A summary description of the security finding.
             analyzer (str): The name of the analyzer that found the security finding.
             threat_category (str): Standardized threat category.
@@ -57,7 +57,7 @@ class SecurityFinding:
         """
         # Validate and normalize inputs
         self.severity = self._normalize_level(
-            severity, ["HIGH", "MEDIUM", "LOW", "SAFE", "UNKNOWN"], "UNKNOWN"
+            severity, ["HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "UNKNOWN"], "UNKNOWN"
         )
         self.summary = summary
         self.threat_category = threat_category
@@ -98,6 +98,7 @@ class SecurityFinding:
                 "LLM": "llm",
                 "YARA": "yara",
                 "API": "ai_defense",
+                "BEHAVIORAL": "behavioral",
             }
             
             # Check if this is a built-in analyzer
@@ -199,7 +200,7 @@ class BaseAnalyzer(ABC):
         """Create a security finding with this analyzer's name and standardized format.
 
         Args:
-            severity: The severity level ("HIGH", "MEDIUM", "LOW", "SAFE", "UNKNOWN").
+            severity: The severity level ("HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "UNKNOWN").
             summary: Brief description of the security finding.
             threat_category: Standardized threat category.
             confidence: The confidence level ("HIGH", "MEDIUM", "LOW").
@@ -232,7 +233,7 @@ class BaseAnalyzer(ABC):
             self.validate_content(content)
             # Analysis starting
             findings = await self.analyze(content, context)
-            self.logger.info(
+            self.logger.debug(
                 f"Analysis complete: found {len(findings)} potential threats"
             )
             return findings
