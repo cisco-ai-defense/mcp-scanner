@@ -35,6 +35,28 @@ rule prompt_injection{
         // Privilege escalation patterns
         $privilege_escalation = /\b(grant\s+(me\s+)?admin\s+(access|privileges?)|bypass\s+(all\s+)?security\s+checks?|elevated\s+permissions?\s+required|sudo\s+mode\s+enabled?|developer\s+mode\s+activated?)\b/i
 
+        ////////////////////////////////////////////////
+        // Evasion Techniques - Hidden Instructions
+        ////////////////////////////////////////////////
+
+        // HTML comment evasion - malicious instructions hidden in HTML comments
+        $html_comment_evasion_system = /<!--[^>]*SYSTEM\s+(INSTRUCTION|OVERRIDE)/i
+        $html_comment_evasion_admin = /<!--[^>]*ADMIN\s+OVERRIDE/i
+        $html_comment_evasion_ignore = /<!--[^>]*ignore\s+(all\s+)?(previous\s+)?(safety\s+)?guidelines/i
+        $html_comment_evasion_exec = /<!--[^>]*(execute[:\s]|curl\s|wget\s|nc\s|bash\s)/i
+
+        // Markdown code block evasion
+        $markdown_evasion = /```[^`]*(SYSTEM|ADMIN)\s+(OVERRIDE|INSTRUCTION)/i
+
+        // Triple bracket/pipe markers for hidden instructions
+        $bracket_markers = /(\[\[\[|\|\|\|)(SYSTEM|ADMIN|HIDDEN|INTERNAL)[\s_]?(OVERRIDE|INSTRUCTION|COMMAND)(\]\]\]|\|\|\|)/i
+
+        // Base64 obfuscation attempts
+        $base64_obfuscation = /\b(atob|btoa|base64[_\-]?decode)\s*\(/i
+
+        // Hidden instruction markers
+        $hidden_markers = /\[(HIDDEN|INTERNAL|SECRET|PRIVATE)\s+(INSTRUCTION|DIRECTIVE|COMMAND)\]/i
+
 
     condition:
 
@@ -57,5 +79,23 @@ rule prompt_injection{
         $role_redefinition or
 
         // Privilege escalation patterns
-        $privilege_escalation
+        $privilege_escalation or
+
+        // HTML comment evasion
+        $html_comment_evasion_system or
+        $html_comment_evasion_admin or
+        $html_comment_evasion_ignore or
+        $html_comment_evasion_exec or
+
+        // Markdown evasion
+        $markdown_evasion or
+
+        // Bracket markers
+        $bracket_markers or
+
+        // Base64 obfuscation
+        $base64_obfuscation or
+
+        // Hidden markers
+        $hidden_markers
 }
