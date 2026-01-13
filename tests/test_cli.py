@@ -445,3 +445,187 @@ class TestDisplayResults:
         assert "Valid finding" in captured.out
         assert "Severity: LOW" in captured.out
         # Should handle invalid analyzer gracefully
+
+
+class TestStaticSubcommandCLI:
+    """Test cases for the static subcommand CLI integration."""
+
+    @pytest.fixture
+    def tools_json_file(self, tmp_path):
+        """Create a temporary tools JSON file."""
+        tools_data = {
+            "tools": [
+                {
+                    "name": "test_tool",
+                    "description": "A test tool",
+                    "inputSchema": {"type": "object"}
+                }
+            ]
+        }
+        file_path = tmp_path / "tools.json"
+        with open(file_path, 'w') as f:
+            json.dump(tools_data, f)
+        return str(file_path)
+
+    @pytest.fixture
+    def prompts_json_file(self, tmp_path):
+        """Create a temporary prompts JSON file."""
+        prompts_data = {
+            "prompts": [
+                {
+                    "name": "test_prompt",
+                    "description": "A test prompt",
+                    "arguments": []
+                }
+            ]
+        }
+        file_path = tmp_path / "prompts.json"
+        with open(file_path, 'w') as f:
+            json.dump(prompts_data, f)
+        return str(file_path)
+
+    @pytest.fixture
+    def resources_json_file(self, tmp_path):
+        """Create a temporary resources JSON file."""
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///test/resource.txt",
+                    "name": "test_resource",
+                    "description": "A test resource",
+                    "mimeType": "text/plain"
+                }
+            ]
+        }
+        file_path = tmp_path / "resources.json"
+        with open(file_path, 'w') as f:
+            json.dump(resources_data, f)
+        return str(file_path)
+
+    @pytest.mark.asyncio
+    async def test_static_tools_scan_success(self, tools_json_file, capsys):
+        """Test static subcommand with tools file."""
+        from mcpscanner.cli import main
+        
+        test_args = [
+            "mcp-scanner",
+            "--analyzers", "yara",
+            "static",
+            "--tools", tools_json_file
+        ]
+        
+        with patch("sys.argv", test_args):
+            await main()
+            
+            captured = capsys.readouterr()
+            assert "MCP Scanner Results" in captured.out
+            assert "Total tools scanned: 1" in captured.out
+            assert "Safe items: 1" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_static_resources_result_conversion(self, resources_json_file):
+        """Test that resources from static scan are correctly converted to ResourceScanResult."""
+        from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
+        from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
+        from mcpscanner.core.result import ResourceScanResult
+        
+        analyzer = StaticAnalyzer(analyzers=[YaraAnalyzer()])
+        results = await analyzer.scan_resources_file(resources_json_file)
+        
+        assert len(results) == 1
+        r = results[0]
+        
+        # Verify we can create a ResourceScanResult - this is what CLI does
+        resource_result = ResourceScanResult(
+            resource_uri=r["resource_uri"],
+            resource_name=r["resource_name"],
+            resource_mime_type=r.get("resource_mime_type", "unknown"),
+            status=r["status"],
+            analyzers=r.get("analyzers", []),
+            findings=r["findings"]
+        )
+        
+        assert resource_result.resource_uri == "file:///test/resource.txt"
+        assert resource_result.resource_name == "test_resource"
+        assert resource_result.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_static_prompts_scan(self, prompts_json_file, capsys):
+        """Test static subcommand with prompts file only."""
+        from mcpscanner.cli import main
+        
+        test_args = [
+            "mcp-scanner",
+            "--analyzers", "yara",
+            "static",
+            "--prompts", prompts_json_file
+        ]
+        
+        with patch("sys.argv", test_args):
+            await main()
+            
+            captured = capsys.readouterr()
+            assert "MCP Scanner Results" in captured.out
+            # Static subcommand uses unified output format - prompts appear as scanned items
+            assert "Total tools scanned: 1" in captured.out
+            assert "Safe items: 1" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_static_no_files_specified(self, capsys):
+        """Test static subcommand with no files specified."""
+        from mcpscanner.cli import main
+        
+        test_args = [
+            "mcp-scanner",
+            "--analyzers", "yara",
+            "static"
+        ]
+        
+        with patch("sys.argv", test_args):
+            with pytest.raises(SystemExit) as exc_info:
+                await main()
+            
+            assert exc_info.value.code == 1
+            captured = capsys.readouterr()
+            assert "No files specified" in captured.err
+
+    @pytest.mark.asyncio
+    async def test_static_file_not_found(self, capsys):
+        """Test static subcommand with non-existent file."""
+        from mcpscanner.cli import main
+        
+        test_args = [
+            "mcp-scanner",
+            "--analyzers", "yara",
+            "static",
+            "--tools", "/nonexistent/tools.json"
+        ]
+        
+        with patch("sys.argv", test_args):
+            with pytest.raises(SystemExit):
+                await main()
+            
+            captured = capsys.readouterr()
+            assert "Error" in captured.err or "not found" in captured.err.lower()
+
+    @pytest.mark.asyncio
+    async def test_static_with_mime_type_filter(self, resources_json_file, capsys):
+        """Test static subcommand with MIME type filtering for resources."""
+        from mcpscanner.cli import main
+        
+        test_args = [
+            "mcp-scanner",
+            "--analyzers", "yara",
+            "static",
+            "--resources", resources_json_file,
+            "--mime-types", "text/plain,text/html"
+        ]
+        
+        with patch("sys.argv", test_args):
+            await main()
+            
+            captured = capsys.readouterr()
+            assert "MCP Scanner Results" in captured.out
+            # Static subcommand uses unified output format - resources appear as scanned items
+            assert "Total tools scanned: 1" in captured.out
+            assert "Safe items: 1" in captured.out

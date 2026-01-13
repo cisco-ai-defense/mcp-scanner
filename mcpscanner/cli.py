@@ -47,6 +47,10 @@ from mcpscanner.core.report_generator import (
 from mcpscanner.utils.logging_config import set_verbose_logging
 from mcpscanner.core.auth import Auth
 from mcpscanner.core.mcp_models import StdioServer
+from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
+from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
+from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
+from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 
 logger = get_logger(__name__)
 
@@ -765,6 +769,7 @@ async def main():
     parser = argparse.ArgumentParser(
         description="MCP Security Scanner - Comprehensive security analysis for MCP servers",
         epilog="""Examples:
+  # Live server scanning:
   %(prog)s                                                    # Basic security scan with summary (all analyzers)
   %(prog)s --api-key YOUR_API_KEY --endpoint-url <your-endpoint> # Scan with an endpoint
   %(prog)s --format detailed --api-key YOUR_API_KEY         # Detailed security findings report with API
@@ -778,12 +783,40 @@ async def main():
   %(prog)s --scan-known-configs --expand-vars auto          # Scan configs with OS-appropriate expansion
   %(prog)s --scan-known-configs --expand-vars linux/mac         # Expand $VAR and ${VAR} only (POSIX)
   %(prog)s --scan-known-configs --expand-vars windows       # Expand %%VAR%% only (Windows style)
+  
+  # Static file scanning (CI/CD friendly):
+  %(prog)s static --tools tools.json --analyzers yara                         # Scan static tools file
+  %(prog)s static --prompts prompts.json --analyzers llm                     # Scan prompts file
+  %(prog)s static --resources resources.json --analyzers yara                # Scan resources file
+  %(prog)s static --tools t.json --prompts p.json --analyzers yara,llm,api   # Scan all three types
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # Subcommands for scan modes (remote, stdio, config, known-configs, prompts, resources, instructions)
+    # Subcommands for scan modes (remote, stdio, config, known-configs, prompts, resources, instructions, static)
     subparsers = parser.add_subparsers(dest="cmd")
+
+    # Static file scanning subcommand
+    p_static = subparsers.add_parser(
+        "static", help="Scan pre-generated MCP JSON files (offline/CI-CD mode)"
+    )
+    p_static.add_argument(
+        "--tools",
+        help="Path to tools JSON file (MCP tools/list output)",
+    )
+    p_static.add_argument(
+        "--prompts",
+        help="Path to prompts JSON file (MCP prompts/list output)",
+    )
+    p_static.add_argument(
+        "--resources",
+        help="Path to resources JSON file (MCP resources/list output)",
+    )
+    p_static.add_argument(
+        "--mime-types",
+        default="text/plain,text/html",
+        help="Comma-separated MIME types for resource scanning (default: %(default)s)",
+    )
 
     p_remote = subparsers.add_parser(
         "remote", help="Scan a remote MCP server (SSE or streamable HTTP)"
@@ -1141,7 +1174,92 @@ async def main():
         os.environ["MCP_SCANNER_LLM_TIMEOUT"] = str(args.llm_timeout)
 
     try:
-        if args.cmd == "remote":
+        # Handle static file scanning subcommand (matches 'prompts' and 'resources' pattern)
+        if args.cmd == "static":
+            
+            cfg = _build_config(selected_analyzers)
+            
+            # Build analyzer list
+            analyzers = []
+            if AnalyzerEnum.YARA in selected_analyzers:
+                analyzers.append(YaraAnalyzer(rules_dir=args.rules_path))
+            if AnalyzerEnum.LLM in selected_analyzers:
+                if cfg.llm_provider_api_key:
+                    analyzers.append(LLMAnalyzer(cfg))
+                else:
+                    print("Warning: LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not set", file=sys.stderr)
+            if AnalyzerEnum.API in selected_analyzers:
+                if cfg.api_key:
+                    analyzers.append(ApiAnalyzer(cfg))
+                else:
+                    print("Warning: API analyzer requested but MCP_SCANNER_API_KEY not set", file=sys.stderr)
+            
+            if not analyzers:
+                print("Error: No analyzers available. Set appropriate API keys or use YARA.", file=sys.stderr)
+                sys.exit(1)
+            
+            static = StaticAnalyzer(analyzers=analyzers, config=cfg)
+            all_results = []
+            
+            # Get files to scan from subcommand args
+            tools_file = getattr(args, "tools", None)
+            prompts_file = getattr(args, "prompts", None)
+            resources_file = getattr(args, "resources", None)
+            
+            if not (tools_file or prompts_file or resources_file):
+                print("Error: No files specified for static scanning", file=sys.stderr)
+                print("Usage: mcp-scanner static --tools FILE and/or --prompts FILE and/or --resources FILE", file=sys.stderr)
+                sys.exit(1)
+            
+            # Scan tools
+            if tools_file:
+                tools_results = await static.scan_tools_file(tools_file)
+                # Convert to ToolScanResult format
+                from mcpscanner.core.result import ToolScanResult
+                for r in tools_results:
+                    tool_result = ToolScanResult(
+                        tool_name=r["tool_name"],
+                        tool_description=r.get("tool_description", ""),
+                        status=r["status"],
+                        analyzers=r.get("analyzers", []),
+                        findings=r["findings"]
+                    )
+                    all_results.append(tool_result)
+            
+            # Scan prompts
+            if prompts_file:
+                prompts_results = await static.scan_prompts_file(prompts_file)
+                from mcpscanner.core.result import PromptScanResult
+                for r in prompts_results:
+                    prompt_result = PromptScanResult(
+                        prompt_name=r["prompt_name"],
+                        prompt_description=r.get("prompt_description", ""),
+                        status=r["status"],
+                        analyzers=r.get("analyzers", []),
+                        findings=r["findings"]
+                    )
+                    all_results.append(prompt_result)
+            
+            # Scan resources
+            if resources_file:
+                mime_types = getattr(args, "mime_types", "text/plain,text/html")
+                mime_types_list = mime_types.split(",") if mime_types else ["text/plain", "text/html"]
+                resources_results = await static.scan_resources_file(resources_file, allowed_mime_types=mime_types_list)
+                from mcpscanner.core.result import ResourceScanResult
+                for r in resources_results:
+                    resource_result = ResourceScanResult(
+                        resource_uri=r["resource_uri"],
+                        resource_name=r["resource_name"],
+                        resource_mime_type=r.get("resource_mime_type", "unknown"),
+                        status=r["status"],
+                        analyzers=r.get("analyzers", []),
+                        findings=r["findings"]
+                    )
+                    all_results.append(resource_result)
+            
+            results = await results_to_json(all_results)
+        
+        elif args.cmd == "remote":
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             # Parse custom headers and create auth
