@@ -107,6 +107,10 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                 
                 if taxonomy_key not in existing_keys:
                     findings_by_analyzer[analyzer]["mcp_taxonomies"].append(finding.mcp_taxonomy)
+            
+            # Add capability field if present (only for behavioral findings)
+            if hasattr(finding, "capability") and finding.capability:
+                findings_by_analyzer[analyzer]["capability"] = finding.capability
 
         # Use analyzer-provided summaries for analyzers with findings
         for analyzer, data in findings_by_analyzer.items():
