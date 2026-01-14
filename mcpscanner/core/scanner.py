@@ -45,14 +45,7 @@ except ImportError:  # pragma: no cover - fallback for environments without mcp 
 
 from ..config.config import Config
 from ..utils.logging_config import get_logger
-from ..utils.command_utils import (
-    build_env_for_expansion,
-    decide_windows_semantics,
-    expand_text,
-    normalize_and_expand_command_args,
-    split_embedded_args,
-    resolve_executable_path,
-)
+from ..utils.translation import get_translation_service
 from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
@@ -74,6 +67,7 @@ from ..config.config_parser import MCPConfigScanner
 from .result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
+
 
 logger = get_logger(__name__)
 
@@ -125,6 +119,7 @@ class Scanner:
             BehavioralCodeAnalyzer(config) if config.llm_provider_api_key else None
         )
         self._custom_analyzers = custom_analyzers or []
+        self._translation_service = get_translation_service()
 
         # Debug logging for analyzer initialization
         active_analyzers = []
@@ -242,12 +237,18 @@ class Scanner:
         tool_json = tool.model_dump_json()
         tool_data = json.loads(tool_json)
 
+        # Translate description if needed
+        translation_result = self._translation_service.translate_to_english(description)
+        translated_description = translation_result['translated_text']
+        if translation_result['was_translated']:
+            logger.info(f"Translated tool '{name}' description from {translation_result['source_language']} to English")
+
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
-            # Run API analysis on the description
+            # Run API analysis on the translated description
             try:
                 api_context = {"tool_name": name, "content_type": "description"}
                 api_findings = await self._api_analyzer.analyze(
-                    description, api_context
+                    translated_description, api_context
                 )
                 for finding in api_findings:
                     finding.analyzer = "API"
@@ -258,11 +259,11 @@ class Scanner:
                 )
 
         if AnalyzerEnum.YARA in analyzers:
-            # Run YARA analysis on the description
+            # Run YARA analysis on the translated description
             try:
                 yara_desc_context = {"tool_name": name, "content_type": "description"}
                 yara_desc_findings = await self._yara_analyzer.analyze(
-                    description, yara_desc_context
+                    translated_description, yara_desc_context
                 )
                 for finding in yara_desc_findings:
                     finding.analyzer = "YARA"
@@ -295,7 +296,7 @@ class Scanner:
             try:
                 # Format content for comprehensive analysis
                 analysis_content = f"Tool Name: {name}\n"
-                analysis_content += f"Description: {description}\n"
+                analysis_content += f"Description: {translated_description}\n"
                 if "inputSchema" in tool_data:
                     analysis_content += f"Parameters Schema: {json.dumps(tool_data['inputSchema'], indent=2)}\n"
 
@@ -321,7 +322,7 @@ class Scanner:
                 # Add HTTP headers to context for custom analyzers
                 if http_headers:
                     custom_context["http_headers"] = http_headers
-                findings = await analyzer.analyze(description, custom_context)
+                findings = await analyzer.analyze(translated_description, custom_context)
                 for finding in findings:
                     finding.analyzer = analyzer.name
                 all_findings.extend(findings)
@@ -371,12 +372,18 @@ class Scanner:
             logger.warning(f"Error parsing prompt '{name}' data: {e}. Using minimal data.")
             prompt_data = {"name": name, "description": description}
 
+        # Translate description if needed
+        translation_result = self._translation_service.translate_to_english(description)
+        translated_description = translation_result['translated_text']
+        if translation_result['was_translated']:
+            logger.info(f"Translated prompt '{name}' description from {translation_result['source_language']} to English")
+
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
-            # Run API analysis on the description
+            # Run API analysis on the translated description
             try:
                 api_context = {"prompt_name": name, "content_type": "description"}
                 api_findings = await self._api_analyzer.analyze(
-                    description, api_context
+                    translated_description, api_context
                 )
                 for finding in api_findings:
                     finding.analyzer = "API"
@@ -387,11 +394,11 @@ class Scanner:
                 )
 
         if AnalyzerEnum.YARA in analyzers:
-            # Run YARA analysis on the description
+            # Run YARA analysis on the translated description
             try:
                 yara_desc_context = {"prompt_name": name, "content_type": "description"}
                 yara_desc_findings = await self._yara_analyzer.analyze(
-                    description, yara_desc_context
+                    translated_description, yara_desc_context
                 )
                 for finding in yara_desc_findings:
                     finding.analyzer = "YARA"
@@ -424,7 +431,7 @@ class Scanner:
             try:
                 # Format content for comprehensive analysis
                 analysis_content = f"Prompt Name: {name}\n"
-                analysis_content += f"Description: {description}\n"
+                analysis_content += f"Description: {translated_description}\n"
                 if "arguments" in prompt_data and prompt_data["arguments"]:
                     analysis_content += f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
 
@@ -450,7 +457,7 @@ class Scanner:
                 # Add HTTP headers to context for custom analyzers
                 if http_headers:
                     custom_context["http_headers"] = http_headers
-                findings = await analyzer.analyze(description, custom_context)
+                findings = await analyzer.analyze(translated_description, custom_context)
                 for finding in findings:
                     finding.analyzer = analyzer.name
                 all_findings.extend(findings)
@@ -996,19 +1003,31 @@ class Scanner:
             logger.debug(f"Creating stdio client for command: {server_config.command}")
 
             # Normalize and validate command/args to avoid FileNotFoundError ([Errno 2])
-            # Expansion mode comes from StdioServer config; default is 'off'
-            expand_mode = (server_config.expand_vars or "off").lower()
-            logger.debug(f"expand_mode='{expand_mode}' for command: {server_config.command}")
-            env_for_expansion = build_env_for_expansion(server_config.env)
-            windows_semantics = decide_windows_semantics(expand_mode)
+            # 1) Expand ~ and environment variables (merge server_config.env into expansion context)
+            raw_command = server_config.command or ""
+            env_for_expansion = {**os.environ, **(server_config.env or {})}
+            expanded_command = os.path.expanduser(raw_command).strip()
+            # Manually expand vars using the merged env
+            for key, val in env_for_expansion.items():
+                expanded_command = expanded_command.replace(f"${key}", val).replace(f"${{{key}}}", val)
 
-            expanded_command, expanded_args = normalize_and_expand_command_args(
-                server_config.command or "", server_config.args or [], env_for_expansion, expand_mode
-            )
-            cmd_command, cmd_args = split_embedded_args(
-                expanded_command, expanded_args, windows_semantics
-            )
-            resolved_exe = resolve_executable_path(cmd_command)
+            # 2) Expand ~ and env vars in args too
+            cmd_args = []
+            for arg in (server_config.args or []):
+                expanded_arg = os.path.expanduser(arg)
+                for key, val in env_for_expansion.items():
+                    expanded_arg = expanded_arg.replace(f"${key}", val).replace(f"${{{key}}}", val)
+                cmd_args.append(expanded_arg)
+
+            # 3) If args not provided and command embeds args, split them
+            cmd_command = expanded_command
+            if not cmd_args and (" " in expanded_command or "\t" in expanded_command):
+                parts = shlex.split(expanded_command)
+                if parts:
+                    cmd_command, cmd_args = parts[0], parts[1:]
+
+            # 4) Resolve executable path (absolute or via PATH)
+            resolved_exe = cmd_command if os.path.isabs(cmd_command) else shutil.which(cmd_command or "")
             if not resolved_exe or not os.path.exists(resolved_exe):
                 # Provide a clear, actionable message and fail fast for this server only
                 msg = (
@@ -1254,7 +1273,6 @@ class Scanner:
         self,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
-        expand_vars_default: Optional[str] = None,
     ) -> Dict[str, List[ToolScanResult]]:
         """Scan all well-known MCP configuration files and their servers.
 
@@ -1286,13 +1304,6 @@ class Scanner:
 
                 try:
                     if isinstance(server_config, StdioServer):
-                        # Apply default expand mode if not provided by config
-                        if expand_vars_default and not server_config.expand_vars:
-                            logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
-                            server_config.expand_vars = expand_vars_default
-                        else:
-                            logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
-                            
                         # Scan stdio server with timeout and error recovery
                         try:
                             results = await self.scan_stdio_server_tools(
@@ -1355,7 +1366,6 @@ class Scanner:
         config_path: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
-        expand_vars_default: Optional[str] = None,
     ) -> List[ToolScanResult]:
         """Scan all servers in a specific MCP configuration file.
 
@@ -1387,13 +1397,6 @@ class Scanner:
 
             try:
                 if isinstance(server_config, StdioServer):
-                    # Apply default expand mode if not provided by config
-                    if expand_vars_default and not server_config.expand_vars:
-                        logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
-                        server_config.expand_vars = expand_vars_default
-                    else:
-                        logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
-                        
                     # Scan stdio server with timeout and error recovery
                     try:
                         results = await self.scan_stdio_server_tools(

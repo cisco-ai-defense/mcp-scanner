@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from ...utils.logging_config import get_logger
 from ...threats.threats import ThreatMapping
+from ...utils.translation import get_translation_service
 
 
 class SecurityFinding:
@@ -171,7 +172,38 @@ class BaseAnalyzer(ABC):
         """
         self.name = name
         self.logger = get_logger(f"{__name__}.{name}")
+        self.translation_service = get_translation_service()
 
+    def translate_description(self, description: str) -> Dict[str, Any]:
+        """Translate a tool/prompt/resource description to English if needed.
+        
+        Args:
+            description: The description text to translate
+            
+        Returns:
+            Dictionary containing:
+                - translated_text: The English translation
+                - original_text: The original text
+                - source_language: Detected source language
+                - was_translated: Whether translation occurred
+        """
+        if not description:
+            return {
+                'translated_text': description,
+                'original_text': description,
+                'source_language': 'en',
+                'was_translated': False
+            }
+        
+        result = self.translation_service.translate_to_english(description)
+        
+        if result['was_translated']:
+            self.logger.info(
+                f"Translated description from {result['source_language']} to English"
+            )
+        
+        return result
+    
     def validate_content(self, content: str) -> None:
         """Validate that content is suitable for analysis.
 
@@ -185,8 +217,9 @@ class BaseAnalyzer(ABC):
             raise ValueError("Content cannot be empty or whitespace-only")
 
         if len(content) > 100000:  # 100KB limit
+            content_len = len(content)
             self.logger.warning(
-                f"Content is very large ({len(content)} chars), analysis may be slow"
+                f"Content is very large ({content_len} chars), analysis may be slow"
             )
 
     def create_security_finding(
