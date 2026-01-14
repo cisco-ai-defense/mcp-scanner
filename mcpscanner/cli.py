@@ -216,6 +216,10 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
         if threat_vuln_classification:
             analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
         
+        # Add capability field from finding if present
+        if func_findings and hasattr(func_findings[0], "capability") and func_findings[0].capability:
+            analyzer_finding["capability"] = func_findings[0].capability
+        
         results.append({
             "tool_name": func_name,
             "tool_description": f"MCP function from {display_name}",
@@ -1553,6 +1557,10 @@ async def main():
                 # Add threat/vulnerability classification if available
                 if threat_vuln_classification:
                     analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
+                
+                # Add capability field from finding if present
+                if func_findings and hasattr(func_findings[0], "capability") and func_findings[0].capability:
+                    analyzer_finding["capability"] = func_findings[0].capability
                 
                 results.append({
                     "tool_name": func_name,  # This should match the name from decorator params or function name
