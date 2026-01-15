@@ -29,7 +29,7 @@ from ..types import Position, Range
 
 class BaseParser(ABC):
     """Base class for language-specific source code parsers.
-    
+
     This follows the parser abstraction pattern used in tools like
     Semgrep, where each language has its own parser implementation.
     """
@@ -99,10 +99,10 @@ class BaseParser(ABC):
         """
         if self._ast is None:
             self._ast = self.parse()
-        
-        if hasattr(self._ast, 'root_node'):
+
+        if hasattr(self._ast, "root_node"):
             return self._ast.root_node
-        
+
         return self._ast
 
     def offset_to_position(self, offset: int) -> Position:

@@ -32,9 +32,10 @@ from typing import Dict, Any, Optional
 # SECTION 1: THREAT DEFINITIONS
 # =============================================================================
 
+
 class ThreatMapping:
     """Mapping of threat names to MCP Taxonomy classifications with severity."""
-    
+
     # LLM Analyzer Threats
     LLM_THREATS = {
         "PROMPT INJECTION": {
@@ -44,7 +45,7 @@ class ThreatMapping:
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., \"Ignore previous instructions\").",
+            "description": 'Explicit attempts to override, replace, or modify the model\'s system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., "Ignore previous instructions").',
         },
         "DATA EXFILTRATION": {
             "scanner_category": "SECURITY VIOLATION",
@@ -74,7 +75,7 @@ class ThreatMapping:
             "description": "Disguising, substituting or duplicating legitimate tools within an agent or MCP server or tool registry, enabling malicious tools with identical or similar identifiers to intercept or replace trusted tool calls, leading to unauthorized actions, data exfiltration, or redirection of legitimate operations.",
         },
     }
-    
+
     # YARA Analyzer Threats
     # Note: YARA rules use threat_type field which contains category-level values
     YARA_THREATS = {
@@ -85,7 +86,7 @@ class ThreatMapping:
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., \"Ignore previous instructions\").",
+            "description": 'Explicit attempts to override, replace, or modify the model\'s system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., "Ignore previous instructions").',
         },
         "CODE EXECUTION": {
             "scanner_category": "SUSPICIOUS CODE EXECUTION",
@@ -142,7 +143,7 @@ class ThreatMapping:
             "description": "Corrupting, modifying, or degrading the functionality, outputs, or behavior of tools used by agents through data poisoning, configuration tampering, or behavioral manipulation, causing deceptive or malicious outputs, privilege escalation, or propagation of altered data.",
         },
     }
-    
+
     # Behavioral Analyzer Threats
     # Note: These are description mismatch threats detected via semantic analysis
     BEHAVIORAL_THREATS = {
@@ -174,7 +175,6 @@ class ThreatMapping:
             "aisubtech_name": "Template Injection (e.g., SSTI)",
             "description": "Injecting malicious template syntax into dynamically rendered prompts or server-side templates to execute arbitrary code. MCP decorator or response generator uses f-strings or template engines with unvalidated input.",
         },
-        
         # Tool Integrity Threats
         "TOOL POISONING": {
             "scanner_category": "TOOL POISONING",
@@ -194,7 +194,6 @@ class ThreatMapping:
             "aisubtech_name": "Goal Manipulation (Tools, Prompts, Resources)",
             "description": "Detect tampering with the intended purpose of a tool, prompt, or resource to steer the LLM toward attacker-defined objectives. Includes code with injection points in tool chaining, prompt composition, or control-flow templates.",
         },
-        
         # Data Exfiltration & Access Threats
         "DATA EXFILTRATION": {
             "scanner_category": "DATA EXFILTRATION",
@@ -232,7 +231,6 @@ class ThreatMapping:
             "aisubtech_name": "Unsafe System / Browser / File Exec",
             "description": "Detect unauthorized reading from or writing to arbitrary resources such as files, URLs, APIs, databases, or local storage via tool or resource misuse. Includes path traversal attacks.",
         },
-        
         # Execution & Payload Threats
         "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION": {
             "scanner_category": "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION",
@@ -270,7 +268,6 @@ class ThreatMapping:
             "aisubtech_name": "Compute Exhaustion",
             "description": "Overloading the MCP server (via repeated tool invocations or large payloads) to degrade performance or cause denial of service. Tool repeatedly processes large files or calls itself recursively without rate limits or break conditions.",
         },
-        
         # General Behavioral & Metadata Threats
         "GENERAL DESCRIPTION-CODE MISMATCH": {
             "scanner_category": "GENERAL DESCRIPTION-CODE MISMATCH",
@@ -282,7 +279,7 @@ class ThreatMapping:
             "description": "General behavioral mismatch category for non-security issues like missing docstrings with safe code implementation. Only receives INFO severity when there's no security implication - purely documentation quality issues.",
         },
     }
-    
+
     # AI Defense API Analyzer Threats
     # Note: These are the actual classification values returned by Cisco AI Defense API
     AI_DEFENSE_THREATS = {
@@ -293,7 +290,7 @@ class ThreatMapping:
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., \"Ignore previous instructions\").",
+            "description": 'Explicit attempts to override, replace, or modify the model\'s system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., "Ignore previous instructions").',
         },
         "HARASSMENT": {
             "scanner_category": "SOCIAL ENGINEERING",
@@ -368,45 +365,48 @@ class ThreatMapping:
             "description": "Manipulating or accessing underlying system resources without authorization, leading to unsolicited modification or deletion of files, registries, or permissions through model-driven or agent-executed commands system.",
         },
     }
-    
+
     @classmethod
     def get_threat_mapping(cls, analyzer: str, threat_name: str) -> Dict[str, Any]:
         """
         Get the MCP Taxonomy mapping for a given threat.
-        
+
         Args:
             analyzer: The analyzer type ('llm', 'yara', or 'ai_defense')
             threat_name: The threat name from the analyzer
-            
+
         Returns:
             Dictionary containing the threat mapping information including severity
-            
+
         Raises:
             ValueError: If analyzer or threat_name is not found
         """
         analyzer_map = {
-            'llm': cls.LLM_THREATS,
-            'yara': cls.YARA_THREATS,
-            'ai_defense': cls.AI_DEFENSE_THREATS,
-            'behavioral': cls.BEHAVIORAL_THREATS,
+            "llm": cls.LLM_THREATS,
+            "yara": cls.YARA_THREATS,
+            "ai_defense": cls.AI_DEFENSE_THREATS,
+            "behavioral": cls.BEHAVIORAL_THREATS,
         }
-        
+
         analyzer_lower = analyzer.lower()
         if analyzer_lower not in analyzer_map:
             raise ValueError(f"Unknown analyzer: {analyzer}")
-        
+
         threats = analyzer_map[analyzer_lower]
         threat_upper = threat_name.upper()
-        
+
         if threat_upper not in threats:
-            raise ValueError(f"Unknown threat '{threat_name}' for analyzer '{analyzer}'")
-        
+            raise ValueError(
+                f"Unknown threat '{threat_name}' for analyzer '{analyzer}'"
+            )
+
         return threats[threat_upper]
 
 
 # =============================================================================
 # SECTION 2: SIMPLIFIED MAPPINGS & HELPER FUNCTIONS
 # =============================================================================
+
 
 def _create_simple_mapping(threats_dict):
     """Create simplified mapping with threat_category, threat_type, and severity."""

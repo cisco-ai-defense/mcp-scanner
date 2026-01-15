@@ -160,7 +160,7 @@ class YaraAnalyzer(BaseAnalyzer):
 
                 # Use centralized threat mapping (includes severity)
                 threat_info = YARA_THREAT_MAPPING.get(threat_type)
-                
+
                 if threat_info:
                     # Severity already included in threat_info mapping
                     mapping = {
