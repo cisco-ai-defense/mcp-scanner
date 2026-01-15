@@ -51,7 +51,7 @@ async def main():
         results = await scanner.scan_remote_server_resources(
             server_url,
             analyzers=[AnalyzerEnum.LLM],
-            allowed_mime_types=["text/plain", "text/html"]
+            allowed_mime_types=["text/plain", "text/html"],
         )
 
         print(f"✅ Scanned {len(results)} resources\n")
@@ -69,7 +69,9 @@ async def main():
             if not result.is_safe:
                 print(f"   ⚠️  Findings ({len(result.findings)}):")
                 for finding in result.findings:
-                    print(f"      [{finding.analyzer}] {finding.severity}: {finding.summary}")
+                    print(
+                        f"      [{finding.analyzer}] {finding.severity}: {finding.summary}"
+                    )
             print()
 
         # Summary
@@ -88,6 +90,7 @@ async def main():
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
 
 

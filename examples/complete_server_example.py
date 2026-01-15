@@ -61,8 +61,7 @@ async def main():
 
     try:
         prompt_results = await scanner.scan_remote_server_prompts(
-            server_url,
-            analyzers=[AnalyzerEnum.LLM]
+            server_url, analyzers=[AnalyzerEnum.LLM]
         )
 
         print(f"\n✅ Scanned {len(prompt_results)} prompts\n")
@@ -74,7 +73,11 @@ async def main():
 
             if not result.is_safe:
                 for finding in result.findings:
-                    threats = finding.details.get('threat_type', 'Unknown') if finding.details else 'Unknown'
+                    threats = (
+                        finding.details.get("threat_type", "Unknown")
+                        if finding.details
+                        else "Unknown"
+                    )
                     print(f"   [{finding.analyzer}] {finding.severity}: {threats}")
             print()
 
@@ -96,7 +99,7 @@ async def main():
         resource_results = await scanner.scan_remote_server_resources(
             server_url,
             analyzers=[AnalyzerEnum.LLM],
-            allowed_mime_types=["text/plain", "text/html"]
+            allowed_mime_types=["text/plain", "text/html"],
         )
 
         print(f"\n✅ Scanned {len(resource_results)} resources\n")
@@ -114,7 +117,11 @@ async def main():
 
                 if not result.is_safe:
                     for finding in result.findings:
-                        threats = finding.details.get('threat_type', 'Unknown') if finding.details else 'Unknown'
+                        threats = (
+                            finding.details.get("threat_type", "Unknown")
+                            if finding.details
+                            else "Unknown"
+                        )
                         print(f"   [{finding.analyzer}] {finding.severity}: {threats}")
             print()
 
@@ -124,7 +131,9 @@ async def main():
         safe_resources = sum(1 for r in completed if r.is_safe)
         unsafe_resources = len(completed) - safe_resources
 
-        print(f"Resource Summary: {safe_resources} safe, {unsafe_resources} unsafe, {len(skipped)} skipped\n")
+        print(
+            f"Resource Summary: {safe_resources} safe, {unsafe_resources} unsafe, {len(skipped)} skipped\n"
+        )
 
     except Exception as e:
         print(f"❌ Error scanning resources: {e}\n")
@@ -155,9 +164,12 @@ async def main():
         print(f"  ⚠️  Unsafe: {unsafe_resources}")
         print(f"  ⏭️  Skipped: {len(skipped)}")
 
-    total_scanned = len(prompt_results) + len([r for r in resource_results if r.status == "completed"])
-    total_safe = (sum(1 for r in prompt_results if r.is_safe) +
-                  sum(1 for r in resource_results if r.status == "completed" and r.is_safe))
+    total_scanned = len(prompt_results) + len(
+        [r for r in resource_results if r.status == "completed"]
+    )
+    total_safe = sum(1 for r in prompt_results if r.is_safe) + sum(
+        1 for r in resource_results if r.status == "completed" and r.is_safe
+    )
     total_unsafe = total_scanned - total_safe
 
     print(f"\nOverall:")

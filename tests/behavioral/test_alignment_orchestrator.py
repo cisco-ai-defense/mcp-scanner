@@ -18,33 +18,43 @@
 
 import pytest
 
+
 class TestBehavioralAnalyzerModule:
     """Test that behavioral analyzer module is importable."""
-    
+
     def test_behavioral_code_analyzer_import(self):
         """Test that BehavioralCodeAnalyzer can be imported."""
-        from mcpscanner.core.analyzers.behavioral.code_analyzer import BehavioralCodeAnalyzer
+        from mcpscanner.core.analyzers.behavioral.code_analyzer import (
+            BehavioralCodeAnalyzer,
+        )
+
         assert BehavioralCodeAnalyzer is not None
-    
+
     def test_alignment_orchestrator_import(self):
         """Test that AlignmentOrchestrator can be imported."""
-        from mcpscanner.core.analyzers.behavioral.alignment.alignment_orchestrator import AlignmentOrchestrator
+        from mcpscanner.core.analyzers.behavioral.alignment.alignment_orchestrator import (
+            AlignmentOrchestrator,
+        )
+
         assert AlignmentOrchestrator is not None
-    
+
     def test_behavioral_analyzer_has_required_methods(self):
         """Test that BehavioralCodeAnalyzer has required methods."""
-        from mcpscanner.core.analyzers.behavioral.code_analyzer import BehavioralCodeAnalyzer
-        
+        from mcpscanner.core.analyzers.behavioral.code_analyzer import (
+            BehavioralCodeAnalyzer,
+        )
+
         # Check that class has analyze method (main entry point)
-        assert hasattr(BehavioralCodeAnalyzer, 'analyze'), \
-            "BehavioralCodeAnalyzer should have analyze method"
-    
+        assert hasattr(
+            BehavioralCodeAnalyzer, "analyze"
+        ), "BehavioralCodeAnalyzer should have analyze method"
+
     def test_analyzer_processes_python_syntax(self):
         """Test that analyzer can process Python code syntax."""
         import ast
         import tempfile
         from pathlib import Path
-        
+
         # Create a test MCP tool
         code = '''
 import mcp
@@ -57,23 +67,25 @@ def example_tool(param: str) -> str:
         # Verify it's valid Python
         tree = ast.parse(code)
         assert tree is not None
-        
+
         # Verify we can detect the decorator
         decorators = []
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 for dec in node.decorator_list:
-                    if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute):
+                    if isinstance(dec, ast.Call) and isinstance(
+                        dec.func, ast.Attribute
+                    ):
                         decorators.append(dec.func.attr)
-        
-        assert 'tool' in decorators, "Should detect @mcp.tool() decorator"
-    
+
+        assert "tool" in decorators, "Should detect @mcp.tool() decorator"
+
     def test_threat_categories_completeness(self):
         """Test that all major threat categories are covered."""
         from mcpscanner.threats.threats import ThreatMapping
-        
+
         behavioral_threats = ThreatMapping.BEHAVIORAL_THREATS
-        
+
         # Major threat categories that should be covered
         important_categories = [
             "DATA EXFILTRATION",
@@ -84,18 +96,21 @@ def example_tool(param: str) -> str:
             "GOAL MANIPULATION",  # Updated from TOOL SHADOWING
             "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION",  # Full name
             "UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS",  # Full name
-            "UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS"  # Full name
+            "UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS",  # Full name
         ]
-        
+
         for category in important_categories:
-            assert category in behavioral_threats, f"Missing important category: {category}"
-            
+            assert (
+                category in behavioral_threats
+            ), f"Missing important category: {category}"
+
             threat = behavioral_threats[category]
             assert threat["severity"] in ["HIGH", "MEDIUM", "LOW", "INFO"]
             assert len(threat["description"]) > 50, f"{category} description too short"
-    
+
     def test_threat_mapper_import(self):
         """Test that threat mappings are available."""
         from mcpscanner.threats import threats
+
         assert threats is not None
-        assert hasattr(threats, 'ThreatMapping')
+        assert hasattr(threats, "ThreatMapping")

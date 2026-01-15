@@ -116,7 +116,7 @@ async def main():
     if not result.is_safe:
         for finding in result.findings:
             print(f"  - {finding.severity}: {finding.summary}")
-            
+
             # Access MCP Taxonomy information
             if hasattr(finding, 'mcp_taxonomy') and finding.mcp_taxonomy:
                 taxonomy = finding.mcp_taxonomy
@@ -183,19 +183,19 @@ async def main():
     print(f"Server: {result.server_name}")
     print(f"Protocol Version: {result.protocol_version}")
     print(f"Status: {result.status}")
-    
+
     if result.instructions:
         print(f"Instructions (preview): {result.instructions[:100]}...")
     else:
         print("No instructions provided by server")
-    
+
     print(f"Safe: {result.is_safe}")
 
     if result.status == "completed" and not result.is_safe:
         print(f"\nSecurity Findings ({len(result.findings)}):")
         for finding in result.findings:
             print(f"  - {finding.severity}: {finding.summary}")
-            
+
             # Access MCP Taxonomy information
             if hasattr(finding, 'mcp_taxonomy') and finding.mcp_taxonomy:
                 taxonomy = finding.mcp_taxonomy

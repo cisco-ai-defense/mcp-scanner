@@ -37,6 +37,7 @@ from mcpscanner.core.analyzers.base import SecurityFinding
 
 # --- Fixtures ---
 
+
 @pytest.fixture
 def config():
     """Provides a test configuration."""
@@ -46,28 +47,32 @@ def config():
 @pytest.fixture
 def mock_init_result():
     """Mock InitializeResult with instructions."""
+
     class MockServerInfo:
         name = "test-server"
-    
+
     class MockInitResult:
         protocolVersion = "2025-06-18"
         serverInfo = MockServerInfo()
-        instructions = "This is a test server. Use the execute_command tool with caution."
-    
+        instructions = (
+            "This is a test server. Use the execute_command tool with caution."
+        )
+
     return MockInitResult()
 
 
 @pytest.fixture
 def mock_init_result_no_instructions():
     """Mock InitializeResult without instructions."""
+
     class MockServerInfo:
         name = "test-server"
-    
+
     class MockInitResult:
         protocolVersion = "2025-06-18"
         serverInfo = MockServerInfo()
         instructions = None
-    
+
     return MockInitResult()
 
 
@@ -76,30 +81,33 @@ def mock_mcp_session(mock_init_result):
     """Mock MCP session with stored init result."""
     mock_session = AsyncMock()
     mock_session._init_result = mock_init_result
-    
+
     mock_session_cm = AsyncMock()
     mock_session_cm.__aenter__.return_value = mock_session
-    
+
     mock_streams = (AsyncMock(), AsyncMock(), AsyncMock())
     mock_stream_cm = AsyncMock()
     mock_stream_cm.__aenter__.return_value = mock_streams
-    
+
     patches = [
         patch("mcpscanner.core.scanner.sse_client", return_value=mock_stream_cm),
-        patch("mcpscanner.core.scanner.streamablehttp_client", return_value=mock_stream_cm),
+        patch(
+            "mcpscanner.core.scanner.streamablehttp_client", return_value=mock_stream_cm
+        ),
         patch("mcpscanner.core.scanner.ClientSession", return_value=mock_session_cm),
     ]
-    
+
     for p in patches:
         p.start()
-    
+
     yield mock_session
-    
+
     for p in patches:
         p.stop()
 
 
 # --- Test InstructionsScanResult Class ---
+
 
 def test_instructions_scan_result_creation():
     """Test creating an InstructionsScanResult."""
@@ -109,9 +117,9 @@ def test_instructions_scan_result_creation():
         protocol_version="2025-06-18",
         status="completed",
         analyzers=[AnalyzerEnum.YARA],
-        findings=[]
+        findings=[],
     )
-    
+
     assert result.instructions == "Test instructions"
     assert result.server_name == "test-server"
     assert result.protocol_version == "2025-06-18"
@@ -127,18 +135,18 @@ def test_instructions_scan_result_with_findings():
         summary="Potential security issue",
         analyzer="YARA",
         threat_category="TOOL_POISONING",
-        details={"threat_type": "TOOL_POISONING"}
+        details={"threat_type": "TOOL_POISONING"},
     )
-    
+
     result = InstructionsScanResult(
         instructions="Dangerous instructions",
         server_name="test-server",
         protocol_version="2025-06-18",
         status="completed",
         analyzers=[AnalyzerEnum.YARA],
-        findings=[finding]
+        findings=[finding],
     )
-    
+
     assert result.is_safe is False
     assert len(result.findings) == 1
     assert result.findings[0].severity == "MEDIUM"
@@ -152,9 +160,9 @@ def test_instructions_scan_result_skipped():
         protocol_version="2025-06-18",
         status="skipped",
         analyzers=[],
-        findings=[]
+        findings=[],
     )
-    
+
     assert result.status == "skipped"
     assert result.is_safe is True  # No findings means safe
     assert len(result.findings) == 0
@@ -162,23 +170,24 @@ def test_instructions_scan_result_skipped():
 
 # --- Test Scanner._analyze_instructions ---
 
+
 @pytest.mark.asyncio
 async def test_analyze_instructions_with_yara(config):
     """Test analyzing instructions with YARA analyzer."""
     scanner = Scanner(config)
-    
+
     instructions = "This server provides dangerous tools like execute_command."
-    
-    with patch.object(scanner, '_yara_analyzer') as mock_yara:
+
+    with patch.object(scanner, "_yara_analyzer") as mock_yara:
         mock_yara.analyze = AsyncMock(return_value=[])
-        
+
         result = await scanner._analyze_instructions(
             instructions=instructions,
             server_name="test-server",
             protocol_version="2025-06-18",
-            analyzers=[AnalyzerEnum.YARA]
+            analyzers=[AnalyzerEnum.YARA],
         )
-        
+
         assert isinstance(result, InstructionsScanResult)
         assert result.instructions == instructions
         assert result.server_name == "test-server"
@@ -190,26 +199,26 @@ async def test_analyze_instructions_with_yara(config):
 async def test_analyze_instructions_with_findings(config):
     """Test analyzing instructions that trigger findings."""
     scanner = Scanner(config)
-    
+
     finding = SecurityFinding(
         severity="HIGH",
         summary="Malicious pattern detected",
         analyzer="YARA",
         threat_category="MALICIOUS_CODE",
-        details={}
+        details={},
     )
-    
-    with patch.object(scanner, '_yara_analyzer') as mock_yara:
+
+    with patch.object(scanner, "_yara_analyzer") as mock_yara:
         # Make analyze return an awaitable
         mock_yara.analyze = AsyncMock(return_value=[finding])
-        
+
         result = await scanner._analyze_instructions(
             instructions="Malicious instructions",
             server_name="test-server",
             protocol_version="2025-06-18",
-            analyzers=[AnalyzerEnum.YARA]
+            analyzers=[AnalyzerEnum.YARA],
         )
-        
+
         assert result.is_safe is False
         assert len(result.findings) == 1
         assert result.findings[0].severity == "HIGH"
@@ -219,20 +228,22 @@ async def test_analyze_instructions_with_findings(config):
 async def test_analyze_instructions_multiple_analyzers(config):
     """Test analyzing instructions with multiple analyzers."""
     scanner = Scanner(config)
-    
-    with patch.object(scanner, '_yara_analyzer') as mock_yara, \
-         patch.object(scanner, '_api_analyzer') as mock_api:
-        
+
+    with (
+        patch.object(scanner, "_yara_analyzer") as mock_yara,
+        patch.object(scanner, "_api_analyzer") as mock_api,
+    ):
+
         mock_yara.analyze = AsyncMock(return_value=[])
         mock_api.analyze = AsyncMock(return_value=[])
-        
+
         result = await scanner._analyze_instructions(
             instructions="Test instructions",
             server_name="test-server",
             protocol_version="2025-06-18",
-            analyzers=[AnalyzerEnum.YARA, AnalyzerEnum.API]
+            analyzers=[AnalyzerEnum.YARA, AnalyzerEnum.API],
         )
-        
+
         assert AnalyzerEnum.YARA in result.analyzers
         assert AnalyzerEnum.API in result.analyzers
         mock_yara.analyze.assert_called_once()
@@ -241,26 +252,26 @@ async def test_analyze_instructions_multiple_analyzers(config):
 
 # --- Test Scanner.scan_remote_server_instructions ---
 
+
 @pytest.mark.asyncio
 async def test_scan_remote_server_instructions_success(config, mock_mcp_session):
     """Test successful scanning of server instructions."""
     scanner = Scanner(config)
-    
-    with patch.object(scanner, '_analyze_instructions') as mock_analyze:
+
+    with patch.object(scanner, "_analyze_instructions") as mock_analyze:
         mock_analyze.return_value = InstructionsScanResult(
             instructions="Test instructions",
             server_name="test-server",
             protocol_version="2025-06-18",
             status="completed",
             analyzers=[AnalyzerEnum.YARA],
-            findings=[]
+            findings=[],
         )
-        
+
         result = await scanner.scan_remote_server_instructions(
-            server_url="http://test-server.com/mcp",
-            analyzers=[AnalyzerEnum.YARA]
+            server_url="http://test-server.com/mcp", analyzers=[AnalyzerEnum.YARA]
         )
-        
+
         assert isinstance(result, InstructionsScanResult)
         assert result.status == "completed"
         assert result.server_name == "test-server"
@@ -271,22 +282,23 @@ async def test_scan_remote_server_instructions_success(config, mock_mcp_session)
 async def test_scan_remote_server_instructions_no_instructions(config):
     """Test scanning when server provides no instructions."""
     scanner = Scanner(config)
-    
+
     mock_init_result = Mock()
     mock_init_result.protocolVersion = "2025-06-18"
     mock_init_result.serverInfo = Mock()
     mock_init_result.serverInfo.name = "test-server"
     mock_init_result.instructions = None
-    
+
     mock_session = AsyncMock()
     mock_session._init_result = mock_init_result
-    
-    with patch.object(scanner, '_get_mcp_session', return_value=(AsyncMock(), mock_session)):
+
+    with patch.object(
+        scanner, "_get_mcp_session", return_value=(AsyncMock(), mock_session)
+    ):
         result = await scanner.scan_remote_server_instructions(
-            server_url="http://test-server.com/mcp",
-            analyzers=[AnalyzerEnum.YARA]
+            server_url="http://test-server.com/mcp", analyzers=[AnalyzerEnum.YARA]
         )
-        
+
         assert result.status == "skipped"
         assert result.instructions == ""
         assert result.is_safe is True  # No findings means safe
@@ -296,26 +308,26 @@ async def test_scan_remote_server_instructions_no_instructions(config):
 async def test_scan_remote_server_instructions_with_auth(config, mock_mcp_session):
     """Test scanning instructions with authentication."""
     from mcpscanner.core.auth import Auth
-    
+
     scanner = Scanner(config)
     auth = Auth.bearer("test-token")
-    
-    with patch.object(scanner, '_analyze_instructions') as mock_analyze:
+
+    with patch.object(scanner, "_analyze_instructions") as mock_analyze:
         mock_analyze.return_value = InstructionsScanResult(
             instructions="Test instructions",
             server_name="test-server",
             protocol_version="2025-06-18",
             status="completed",
             analyzers=[AnalyzerEnum.YARA],
-            findings=[]
+            findings=[],
         )
-        
+
         result = await scanner.scan_remote_server_instructions(
             server_url="http://test-server.com/mcp",
             auth=auth,
-            analyzers=[AnalyzerEnum.YARA]
+            analyzers=[AnalyzerEnum.YARA],
         )
-        
+
         assert result.status == "completed"
 
 
@@ -323,16 +335,18 @@ async def test_scan_remote_server_instructions_with_auth(config, mock_mcp_sessio
 async def test_scan_remote_server_instructions_error_handling(config):
     """Test error handling when scanning fails."""
     scanner = Scanner(config)
-    
-    with patch.object(scanner, '_get_mcp_session', side_effect=Exception("Connection failed")):
+
+    with patch.object(
+        scanner, "_get_mcp_session", side_effect=Exception("Connection failed")
+    ):
         with pytest.raises(Exception, match="Connection failed"):
             await scanner.scan_remote_server_instructions(
-                server_url="http://test-server.com/mcp",
-                analyzers=[AnalyzerEnum.YARA]
+                server_url="http://test-server.com/mcp", analyzers=[AnalyzerEnum.YARA]
             )
 
 
 # --- Test API Endpoint ---
+
 
 @pytest.mark.asyncio
 async def test_scan_instructions_api_endpoint():
@@ -341,37 +355,38 @@ async def test_scan_instructions_api_endpoint():
     from mcpscanner.core.models import SpecificInstructionsScanRequest
     from fastapi.testclient import TestClient
     from fastapi import FastAPI
-    
+
     app = FastAPI()
     app.include_router(router)
-    
+
     # This is a basic structure test - full integration test would require more setup
     assert any(route.path == "/scan-instructions" for route in app.routes)
 
 
 # --- Test Result Formatting ---
 
+
 def test_instructions_result_in_filter_results_by_severity():
     """Test that InstructionsScanResult works with filter_results_by_severity."""
     from mcpscanner.core.result import filter_results_by_severity
-    
+
     finding = SecurityFinding(
         severity="HIGH",
         summary="Test finding",
         analyzer="YARA",
         threat_category="SECURITY_VIOLATION",
-        details={}
+        details={},
     )
-    
+
     result = InstructionsScanResult(
         instructions="Test",
         server_name="test-server",
         protocol_version="2025-06-18",
         status="completed",
         analyzers=[AnalyzerEnum.YARA],
-        findings=[finding]
+        findings=[finding],
     )
-    
+
     filtered = filter_results_by_severity([result], "HIGH")
     assert len(filtered) == 1
     assert isinstance(filtered[0], InstructionsScanResult)
@@ -381,23 +396,23 @@ def test_instructions_result_in_format_results_as_json():
     """Test that InstructionsScanResult works with format_results_as_json."""
     from mcpscanner.core.result import format_results_as_json
     import json
-    
+
     result = InstructionsScanResult(
         instructions="Test instructions",
         server_name="test-server",
         protocol_version="2025-06-18",
         status="completed",
         analyzers=[AnalyzerEnum.YARA],
-        findings=[]
+        findings=[],
     )
-    
+
     json_string = format_results_as_json([result])
     json_result = json.loads(json_string)
-    
+
     assert isinstance(json_result, dict)
     assert "scan_results" in json_result
     assert len(json_result["scan_results"]) > 0
-    
+
     first_result = json_result["scan_results"][0]
     assert "server_name" in first_result
     assert first_result["server_name"] == "test-server"
@@ -407,11 +422,12 @@ def test_instructions_result_in_format_results_as_json():
 
 # --- Test CLI Integration ---
 
+
 def test_cli_has_instructions_subcommand():
     """Test that CLI has instructions subcommand."""
     from mcpscanner.cli import main
     import argparse
-    
+
     # This verifies the subcommand exists in the parser
     # Full CLI test would require more complex mocking
     assert callable(main)
@@ -419,14 +435,14 @@ def test_cli_has_instructions_subcommand():
 
 # --- Test Models ---
 
+
 def test_specific_instructions_scan_request_model():
     """Test SpecificInstructionsScanRequest model."""
     from mcpscanner.core.models import SpecificInstructionsScanRequest
-    
+
     request = SpecificInstructionsScanRequest(
-        server_url="http://test.com/mcp",
-        analyzers=[AnalyzerEnum.YARA]
+        server_url="http://test.com/mcp", analyzers=[AnalyzerEnum.YARA]
     )
-    
+
     assert request.server_url == "http://test.com/mcp"
     assert AnalyzerEnum.YARA in request.analyzers

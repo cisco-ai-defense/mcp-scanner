@@ -91,8 +91,8 @@ def _validate_api_config(
                 raise HTTPException(
                     status_code=400,
                     detail=f"LLM analyzer with Bedrock model requested but configuration is missing. "
-                           f"Please set either {CONSTANTS.ENV_LLM_API_KEY} (for Bedrock API key) "
-                           f"or AWS credentials ({CONSTANTS.ENV_AWS_REGION}, {CONSTANTS.ENV_AWS_PROFILE}) environment variables.",
+                    f"Please set either {CONSTANTS.ENV_LLM_API_KEY} (for Bedrock API key) "
+                    f"or AWS credentials ({CONSTANTS.ENV_AWS_REGION}, {CONSTANTS.ENV_AWS_PROFILE}) environment variables.",
                 )
         else:
             # For non-Bedrock models: API key is required
@@ -103,7 +103,9 @@ def _validate_api_config(
                 )
 
 
-def _prepare_scanner_config(analyzers: List[AnalyzerEnum]) -> tuple[str, str, str, str, str, str]:
+def _prepare_scanner_config(
+    analyzers: List[AnalyzerEnum],
+) -> tuple[str, str, str, str, str, str]:
     """Prepare scanner configuration based on scan requirements.
 
     Args:
@@ -126,7 +128,15 @@ def _prepare_scanner_config(analyzers: List[AnalyzerEnum]) -> tuple[str, str, st
     aws_profile_to_use = AWS_PROFILE
 
     # Validate configuration if API scan or LLM scan is requested
-    _validate_api_config(api_scan, api_key_to_use, llm_scan, llm_api_key_to_use, LLM_MODEL, aws_region_to_use, aws_profile_to_use)
+    _validate_api_config(
+        api_scan,
+        api_key_to_use,
+        llm_scan,
+        llm_api_key_to_use,
+        LLM_MODEL,
+        aws_region_to_use,
+        aws_profile_to_use,
+    )
 
     # If not doing API scan, we don't need an API key
     if not api_scan:
@@ -139,7 +149,14 @@ def _prepare_scanner_config(analyzers: List[AnalyzerEnum]) -> tuple[str, str, st
         aws_session_token_to_use = ""
         aws_profile_to_use = ""
 
-    return api_key_to_use, endpoint_url, llm_api_key_to_use, aws_region_to_use, aws_session_token_to_use, aws_profile_to_use
+    return (
+        api_key_to_use,
+        endpoint_url,
+        llm_api_key_to_use,
+        aws_region_to_use,
+        aws_session_token_to_use,
+        aws_profile_to_use,
+    )
 
 
 def create_default_scanner_factory() -> ScannerFactory:
@@ -163,7 +180,14 @@ def create_default_scanner_factory() -> ScannerFactory:
         Raises:
             HTTPException: If API scan is requested but config is invalid.
         """
-        api_key, endpoint_url, llm_api_key, aws_region, aws_session_token, aws_profile = _prepare_scanner_config(analyzers)
+        (
+            api_key,
+            endpoint_url,
+            llm_api_key,
+            aws_region,
+            aws_session_token,
+            aws_profile,
+        ) = _prepare_scanner_config(analyzers)
         config = Config(
             api_key=api_key,
             endpoint_url=endpoint_url,

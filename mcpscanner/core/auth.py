@@ -45,6 +45,7 @@ class AuthType(str, Enum):
     APIKEY = "apikey"
     NONE = "none"
 
+
 class APIAuthConfig(BaseModel):
     """Authentication configuration for MCP scanner requests."""
 
@@ -79,8 +80,8 @@ class Auth:
         redirect_handler: Optional[Callable[[str], None]] = None,
         callback_handler: Optional[Callable[[], Tuple[str, Optional[str]]]] = None,
         bearer_token: Optional[str] = None,
-        api_key : Optional[str] = None,
-        api_key_header : Optional[str] = None,
+        api_key: Optional[str] = None,
+        api_key_header: Optional[str] = None,
         custom_headers: Optional[Dict[str, str]] = None,
     ):
         """Initialize Auth configuration.
@@ -117,10 +118,7 @@ class Auth:
         return self.enabled
 
     @classmethod
-    def apikey(
-        cls,
-        api_key: str,
-        api_key_header: str) -> "Auth":
+    def apikey(cls, api_key: str, api_key_header: str) -> "Auth":
         """Create API key authentication configuration.
         Args:
             api_key (str): The API key value.
@@ -132,7 +130,7 @@ class Auth:
             enabled=True,
             auth_type=AuthType.APIKEY,
             api_key=api_key,
-            api_key_header=api_key_header
+            api_key_header=api_key_header,
         )
 
     @classmethod
@@ -194,6 +192,7 @@ class Auth:
     def is_apikey(self) -> bool:
         """Check if this is API key authentication."""
         return self.enabled and self.type == AuthType.APIKEY
+
     def is_oauth(self) -> bool:
         """Check if this is OAuth authentication."""
         return self.enabled and self.type == AuthType.OAUTH
@@ -493,6 +492,7 @@ class BearerAuth(httpx.Auth):
         request.headers["Authorization"] = f"Bearer {self.token.get_secret_value()}"
         yield request
 
+
 class ApiKeyAuth(httpx.Auth):
     """API Key authentication for HTTP requests."""
 
@@ -505,6 +505,7 @@ class ApiKeyAuth(httpx.Auth):
         """
         self.api_key_header = api_key_header
         self.api_key = SecretStr(api_key)
+
     def auth_flow(self, request):
         """Add API key to request headers.
 

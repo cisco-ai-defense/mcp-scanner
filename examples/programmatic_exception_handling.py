@@ -44,8 +44,7 @@ async def scan_with_error_handling(server_url: str):
     try:
         # Use only YARA analyzer (doesn't require API key)
         results = await scanner.scan_remote_server_tools(
-            server_url,
-            analyzers=[AnalyzerEnum.YARA]
+            server_url, analyzers=[AnalyzerEnum.YARA]
         )
 
         print(f"✅ Scan completed successfully!")

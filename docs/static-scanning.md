@@ -6,21 +6,21 @@ The **Static Analyzer** enables scanning of pre-generated MCP JSON files without
 
 ## Features
 
-✅ **Offline Scanning** - No live MCP server required  
-✅ **Fast** - YARA scans complete in milliseconds  
-✅ **CI/CD Ready** - Easy integration with build pipelines  
-✅ **Deterministic** - Same input always produces same output  
-✅ **Air-gapped Support** - Works in restricted network environments  
+✅ **Offline Scanning** - No live MCP server required
+✅ **Fast** - YARA scans complete in milliseconds
+✅ **CI/CD Ready** - Easy integration with build pipelines
+✅ **Deterministic** - Same input always produces same output
+✅ **Air-gapped Support** - Works in restricted network environments
 ✅ **Version Control Friendly** - Store scan snapshots in git
 
 ## Files Created
 
 ### 1. Core Implementation
-- **`mcpscanner/core/analyzers/static_analyzer.py`**  
+- **`mcpscanner/core/analyzers/static_analyzer.py`**
   Main StaticAnalyzer class that coordinates scanning of JSON files
 
-### 2. Comprehensive Tests  
-- **`tests/test_static_analyzer.py`**  
+### 2. Comprehensive Tests
+- **`tests/test_static_analyzer.py`**
   19 test cases covering all functionality:
   - Basic operations (initialization, file loading)
   - Tools scanning (safe and malicious)
@@ -29,7 +29,7 @@ The **Static Analyzer** enables scanning of pre-generated MCP JSON files without
   - Edge cases and error handling
 
 ### 3. Working Example
-- **`examples/static_scanning_example.py`**  
+- **`examples/static_scanning_example.py`**
   Complete examples demonstrating:
   - YARA-only scanning
   - Multi-analyzer scanning (YARA + LLM)
@@ -49,10 +49,10 @@ async def scan():
     # Initialize analyzers
     yara = YaraAnalyzer()
     static = StaticAnalyzer(analyzers=[yara])
-    
+
     # Scan tools from JSON file
     results = await static.scan_tools_file("tools-list.json")
-    
+
     # Check results
     for result in results:
         if not result["is_safe"]:
@@ -127,33 +127,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Install MCP Scanner
         run: pip install cisco-ai-mcp-scanner
-      
+
       - name: Generate MCP Snapshots
         run: python scripts/generate_mcp_snapshots.py
-      
+
       - name: Run Security Scan
         run: |
           python -c "
           import asyncio
           from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
           from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
-          
+
           async def scan():
               yara = YaraAnalyzer()
               static = StaticAnalyzer(analyzers=[yara])
               results = await static.scan_tools_file('output/tools-list.json')
               unsafe = [r for r in results if not r['is_safe']]
-              
+
               if unsafe:
                   print(f'❌ {len(unsafe)} unsafe tools detected')
                   exit(1)
               else:
                   print('✅ Security scan passed')
                   exit(0)
-          
+
           asyncio.run(scan())
           "
 ```
@@ -165,20 +165,20 @@ jobs:
 ```python
 class StaticAnalyzer:
     """Coordinator for scanning static MCP JSON files."""
-    
+
     def __init__(
         self,
         analyzers: Optional[List[BaseAnalyzer]] = None,
         config: Optional[Any] = None
     ):
         """Initialize with list of sub-analyzers (YARA, LLM, API, etc.)"""
-    
+
     async def scan_tools_file(self, file_path: Union[str, Path]) -> List[Dict]:
         """Scan tools from JSON file."""
-    
+
     async def scan_prompts_file(self, file_path: Union[str, Path]) -> List[Dict]:
         """Scan prompts from JSON file."""
-    
+
     async def scan_resources_file(
         self,
         file_path: Union[str, Path],
@@ -300,7 +300,7 @@ results = await static.scan_tools_file("tools.json")
 To fully integrate this feature:
 
 1. ✅ **Code written** - StaticAnalyzer class complete
-2. ✅ **Tests passing** - 19/19 tests green  
+2. ✅ **Tests passing** - 19/19 tests green
 3. ✅ **Examples working** - Full demo script functional
 4. ⏳ **Export to `__init__.py`** - Make publicly available
 5. ⏳ **CLI integration** - Add `--static` flags to CLI
@@ -325,7 +325,6 @@ For questions or issues with the Static Analyzer:
 
 ---
 
-**Status**: ✅ Fully implemented and tested  
-**Version**: Compatible with mcp-scanner v3.1.1+  
+**Status**: ✅ Fully implemented and tested
+**Version**: Compatible with mcp-scanner v3.1.1+
 **License**: Apache 2.0
-

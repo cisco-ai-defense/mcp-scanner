@@ -21,16 +21,20 @@ import pytest
 
 class TestCrossFileDataflowAnalyzer:
     """Test cross-file dataflow analysis for behavioral analyzer."""
-    
+
     def test_behavioral_dataflow_module_exists(self):
         """Test that behavioral analyzer dataflow module exists."""
         from mcpscanner.core.analyzers import behavioral
+
         assert behavioral is not None
-    
+
     def test_cross_file_analyzer_importable(self):
         """Test that CrossFileDataflowAnalyzer can be imported."""
         try:
-            from mcpscanner.core.analyzers.behavioral.dataflow import cross_file_dataflow_analyzer
+            from mcpscanner.core.analyzers.behavioral.dataflow import (
+                cross_file_dataflow_analyzer,
+            )
+
             assert cross_file_dataflow_analyzer is not None
         except ImportError:
             pytest.skip("CrossFileDataflowAnalyzer import path needs verification")

@@ -70,7 +70,9 @@ async def oauth_scanning_example():
             if not result.is_safe:
                 print("Security findings found:")
                 for finding in result.findings:
-                    print(f"  - {finding.severity} ({finding.analyzer}): {finding.summary}")
+                    print(
+                        f"  - {finding.severity} ({finding.analyzer}): {finding.summary}"
+                    )
 
     except Exception as e:
         print(f"Error during OAuth scanning: {e}")

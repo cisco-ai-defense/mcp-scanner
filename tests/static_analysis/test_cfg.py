@@ -21,16 +21,18 @@ import pytest
 
 class TestCFG:
     """Test CFG construction and analysis."""
-    
+
     def test_cfg_module_exists(self):
         """Test that CFG module can be imported."""
         from mcpscanner.core.static_analysis import cfg
+
         assert cfg is not None
-    
+
     def test_cfg_builder_importable(self):
         """Test that CFG builder can be imported."""
         try:
             from mcpscanner.core.static_analysis.cfg.builder import CFGBuilder
+
             assert CFGBuilder is not None
         except ImportError:
             pytest.skip("CFG builder structure needs verification")

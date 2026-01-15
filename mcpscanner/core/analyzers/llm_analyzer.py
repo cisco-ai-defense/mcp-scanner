@@ -34,6 +34,7 @@ from .base import BaseAnalyzer, SecurityFinding
 
 class SecurityError(Exception):
     """Custom exception for security violations in LLM prompts."""
+
     pass
 
 
@@ -78,7 +79,10 @@ class LLMAnalyzer(BaseAnalyzer):
 
         if not is_bedrock:
             # Non-Bedrock providers always require API key
-            if not hasattr(config, "llm_provider_api_key") or not config.llm_provider_api_key:
+            if (
+                not hasattr(config, "llm_provider_api_key")
+                or not config.llm_provider_api_key
+            ):
                 raise ValueError("LLM provider API key is required for LLM analyzer")
             self._api_key = config.llm_provider_api_key
         else:
@@ -90,7 +94,9 @@ class LLMAnalyzer(BaseAnalyzer):
             else:
                 # Use AWS credentials (profile/IAM/session token)
                 self._api_key = None
-                self.logger.debug("Bedrock: Using AWS credentials (profile/IAM/session)")
+                self.logger.debug(
+                    "Bedrock: Using AWS credentials (profile/IAM/session)"
+                )
 
         # Store configuration for per-request usage
         self._base_url = config.llm_base_url
@@ -311,7 +317,7 @@ class LLMAnalyzer(BaseAnalyzer):
                 # Create specific findings for each detected threat
                 for threat_name in primary_threats:
                     threat_info = LLM_THREAT_MAPPING.get(threat_name)
-                    
+
                     if threat_info:
                         category = threat_info["threat_category"]
                         display_name = threat_info["threat_type"]

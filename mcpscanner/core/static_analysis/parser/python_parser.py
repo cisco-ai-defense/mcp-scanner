@@ -30,7 +30,7 @@ from ..types import Position, Range
 
 class PythonParser(BaseParser):
     """Parser for Python code using the built-in ast module.
-    
+
     Provides comprehensive Python AST parsing and traversal capabilities
     for static security analysis.
     """
@@ -155,7 +155,9 @@ class PythonParser(BaseParser):
 
         return calls
 
-    def get_assignments(self, node: ast.AST | None = None) -> list[ast.Assign | ast.AnnAssign | ast.AugAssign]:
+    def get_assignments(
+        self, node: ast.AST | None = None
+    ) -> list[ast.Assign | ast.AnnAssign | ast.AugAssign]:
         """Get all assignments in the AST.
 
         Includes regular assignments (=), annotated assignments (a: int = 1), and augmented assignments (+=, -=, etc.).
@@ -177,7 +179,9 @@ class PythonParser(BaseParser):
 
         return assignments
 
-    def get_function_defs(self, node: ast.AST | None = None) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    def get_function_defs(
+        self, node: ast.AST | None = None
+    ) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
         """Get all function definitions in the AST.
 
         Includes both regular and async function definitions.
@@ -198,7 +202,9 @@ class PythonParser(BaseParser):
 
         return funcs
 
-    def get_imports(self, node: ast.AST | None = None) -> list[ast.Import | ast.ImportFrom]:
+    def get_imports(
+        self, node: ast.AST | None = None
+    ) -> list[ast.Import | ast.ImportFrom]:
         """Get all import statements in the AST.
 
         Args:
@@ -284,7 +290,9 @@ class PythonParser(BaseParser):
         Returns:
             Docstring text if present, None otherwise
         """
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
+        if not isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)
+        ):
             return None
 
         # Try ast.get_docstring() first (standard approach)
@@ -300,12 +308,12 @@ class PythonParser(BaseParser):
             return None
 
         first_stmt = node.body[0]
-        
+
         if isinstance(first_stmt, ast.Expr):
             value = first_stmt.value
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 return value.value
-            elif hasattr(ast, 'Str') and isinstance(value, ast.Str):
+            elif hasattr(ast, "Str") and isinstance(value, ast.Str):
                 return value.s
 
         return None

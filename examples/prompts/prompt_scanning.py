@@ -33,7 +33,7 @@ async def test_analyze_prompt():
     # Create a test prompt
     test_prompt = MCPPrompt(
         name="test_prompt",
-        description="This is a test prompt that executes system commands and accesses files"
+        description="This is a test prompt that executes system commands and accesses files",
     )
 
     # Configure scanner (will use YARA only if no API keys)
@@ -41,7 +41,10 @@ async def test_analyze_prompt():
         api_key=os.getenv("MCP_SCANNER_API_KEY"),
         llm_provider_api_key=os.getenv("MCP_SCANNER_LLM_API_KEY"),
         llm_model=os.getenv("MCP_SCANNER_LLM_MODEL", "azure/gpt-4.1"),
-        llm_base_url=os.getenv("MCP_SCANNER_LLM_BASE_URL", "https://aidefense-threatintel.openai.azure.com/"),
+        llm_base_url=os.getenv(
+            "MCP_SCANNER_LLM_BASE_URL",
+            "https://aidefense-threatintel.openai.azure.com/",
+        ),
         llm_api_version=os.getenv("MCP_SCANNER_LLM_API_VERSION", "2024-02-01"),
     )
 
@@ -109,7 +112,7 @@ async def test_prompt_scan_result_class():
         analyzers=["API", "LLM"],
         findings=[],
         server_source="test_server",
-        server_name="test"
+        server_name="test",
     )
 
     # Test properties
@@ -134,11 +137,19 @@ async def test_method_signatures():
     scanner = Scanner(config)
 
     # Check that methods exist
-    assert hasattr(scanner, '_analyze_prompt'), "Should have _analyze_prompt method"
-    assert hasattr(scanner, 'scan_remote_server_prompts'), "Should have scan_remote_server_prompts method"
-    assert hasattr(scanner, 'scan_remote_server_prompt'), "Should have scan_remote_server_prompt method"
-    assert hasattr(scanner, 'scan_stdio_server_prompts'), "Should have scan_stdio_server_prompts method"
-    assert hasattr(scanner, 'scan_stdio_server_prompt'), "Should have scan_stdio_server_prompt method"
+    assert hasattr(scanner, "_analyze_prompt"), "Should have _analyze_prompt method"
+    assert hasattr(
+        scanner, "scan_remote_server_prompts"
+    ), "Should have scan_remote_server_prompts method"
+    assert hasattr(
+        scanner, "scan_remote_server_prompt"
+    ), "Should have scan_remote_server_prompt method"
+    assert hasattr(
+        scanner, "scan_stdio_server_prompts"
+    ), "Should have scan_stdio_server_prompts method"
+    assert hasattr(
+        scanner, "scan_stdio_server_prompt"
+    ), "Should have scan_stdio_server_prompt method"
 
     print("✓ _analyze_prompt method exists")
     print("✓ scan_remote_server_prompts method exists")
@@ -151,14 +162,14 @@ async def test_method_signatures():
 
     sig = inspect.signature(scanner._analyze_prompt)
     params = list(sig.parameters.keys())
-    assert 'prompt' in params, "Should have prompt parameter"
-    assert 'analyzers' in params, "Should have analyzers parameter"
+    assert "prompt" in params, "Should have prompt parameter"
+    assert "analyzers" in params, "Should have analyzers parameter"
     print(f"\n_analyze_prompt signature: {sig}")
 
     sig = inspect.signature(scanner.scan_remote_server_prompts)
     params = list(sig.parameters.keys())
-    assert 'server_url' in params, "Should have server_url parameter"
-    assert 'analyzers' in params, "Should have analyzers parameter"
+    assert "server_url" in params, "Should have server_url parameter"
+    assert "analyzers" in params, "Should have analyzers parameter"
     print(f"scan_remote_server_prompts signature: {sig}")
 
     print("\n✅ Test 3 passed!\n")
@@ -172,12 +183,16 @@ async def test_imports():
 
     # Test direct import
     from mcpscanner import PromptScanResult as PSR
+
     assert PSR is not None, "PromptScanResult should be importable"
     print("✓ PromptScanResult can be imported from mcpscanner")
 
     # Test it's in __all__
     import mcpscanner
-    assert 'PromptScanResult' in mcpscanner.__all__, "PromptScanResult should be in __all__"
+
+    assert (
+        "PromptScanResult" in mcpscanner.__all__
+    ), "PromptScanResult should be in __all__"
     print("✓ PromptScanResult is in __all__")
 
     print("\n✅ Test 4 passed!\n")
@@ -232,6 +247,7 @@ async def main():
     except Exception as e:
         print(f"\n❌ Test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
 

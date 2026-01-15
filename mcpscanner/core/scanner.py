@@ -36,12 +36,18 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import Tool as MCPTool, Prompt as MCPPrompt
 from mcp import StdioServerParameters
+
 try:
     from mcp.shared.exceptions import McpError
-except ImportError:  # pragma: no cover - fallback for environments without mcp installed
+except (
+    ImportError
+):  # pragma: no cover - fallback for environments without mcp installed
+
     class McpError(Exception):
         """Fallback error class when MCP dependency is unavailable."""
+
         pass
+
 
 from ..config.config import Config
 from ..utils.logging_config import get_logger
@@ -71,7 +77,13 @@ from .exceptions import (
 from .models import AnalyzerEnum
 from .mcp_models import StdioServer, RemoteServer
 from ..config.config_parser import MCPConfigScanner
-from .result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult
+from .result import (
+    ScanResult,
+    ToolScanResult,
+    PromptScanResult,
+    ResourceScanResult,
+    InstructionsScanResult,
+)
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
 
@@ -170,7 +182,10 @@ class Scanner:
                 "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured (or AWS credentials for Bedrock models)"
             )
 
-        if AnalyzerEnum.BEHAVIORAL in requested_analyzers and not self._behavioral_analyzer:
+        if (
+            AnalyzerEnum.BEHAVIORAL in requested_analyzers
+            and not self._behavioral_analyzer
+        ):
             missing_requirements.append(
                 "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
             )
@@ -368,7 +383,9 @@ class Scanner:
             prompt_json = prompt.model_dump_json()
             prompt_data = json.loads(prompt_json)
         except (json.JSONDecodeError, AttributeError, TypeError) as e:
-            logger.warning(f"Error parsing prompt '{name}' data: {e}. Using minimal data.")
+            logger.warning(
+                f"Error parsing prompt '{name}' data: {e}. Using minimal data."
+            )
             prompt_data = {"name": name, "description": description}
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
@@ -426,7 +443,9 @@ class Scanner:
                 analysis_content = f"Prompt Name: {name}\n"
                 analysis_content += f"Description: {description}\n"
                 if "arguments" in prompt_data and prompt_data["arguments"]:
-                    analysis_content += f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
+                    analysis_content += (
+                        f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
+                    )
 
                 llm_context = {"prompt_name": name, "content_type": "comprehensive"}
                 llm_findings = await self._llm_analyzer.analyze(
@@ -497,7 +516,10 @@ class Scanner:
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the instructions
             try:
-                api_context = {"server_name": server_name, "content_type": "instructions"}
+                api_context = {
+                    "server_name": server_name,
+                    "content_type": "instructions",
+                }
                 api_findings = await self._api_analyzer.analyze(
                     instructions, api_context
                 )
@@ -512,7 +534,10 @@ class Scanner:
         if AnalyzerEnum.YARA in analyzers:
             # Run YARA analysis on the instructions
             try:
-                yara_context = {"server_name": server_name, "content_type": "instructions"}
+                yara_context = {
+                    "server_name": server_name,
+                    "content_type": "instructions",
+                }
                 yara_findings = await self._yara_analyzer.analyze(
                     instructions, yara_context
                 )
@@ -532,7 +557,10 @@ class Scanner:
                 analysis_content += f"Protocol Version: {protocol_version}\n"
                 analysis_content += f"Instructions: {instructions}\n"
 
-                llm_context = {"server_name": server_name, "content_type": "instructions"}
+                llm_context = {
+                    "server_name": server_name,
+                    "content_type": "instructions",
+                }
                 llm_findings = await self._llm_analyzer.analyze(
                     analysis_content, llm_context
                 )
@@ -540,7 +568,9 @@ class Scanner:
                     finding.analyzer = "LLM"
                 all_findings.extend(llm_findings)
             except Exception as e:
-                logger.error(f'LLM analysis failed on instructions: server="{server_name}", error="{e}"')
+                logger.error(
+                    f'LLM analysis failed on instructions: server="{server_name}", error="{e}"'
+                )
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for instructions from '{server_name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
@@ -550,7 +580,10 @@ class Scanner:
         custom_analyzer_names = []
         for analyzer in self._custom_analyzers:
             try:
-                custom_context = {"server_name": server_name, "content_type": "instructions"}
+                custom_context = {
+                    "server_name": server_name,
+                    "content_type": "instructions",
+                }
                 # Add HTTP headers to context for custom analyzers
                 if http_headers:
                     custom_context["http_headers"] = http_headers
@@ -605,7 +638,12 @@ class Scanner:
         if session:
             try:
                 await session.__aexit__(None, None, None)
-            except (asyncio.CancelledError, GeneratorExit, RuntimeError, BaseExceptionGroup):
+            except (
+                asyncio.CancelledError,
+                GeneratorExit,
+                RuntimeError,
+                BaseExceptionGroup,
+            ):
                 # Suppress cleanup errors from MCP library bugs
                 # These are expected when connection fails
                 pass
@@ -619,7 +657,12 @@ class Scanner:
             try:
                 # Ensure we're in the same task context for cleanup
                 await client_context.__aexit__(None, None, None)
-            except (asyncio.CancelledError, GeneratorExit, RuntimeError, BaseExceptionGroup):
+            except (
+                asyncio.CancelledError,
+                GeneratorExit,
+                RuntimeError,
+                BaseExceptionGroup,
+            ):
                 # Suppress cleanup errors from MCP library bugs
                 # These are expected when connection fails
                 pass
@@ -664,7 +707,9 @@ class Scanner:
                     f'Using explicit Bearer authentication for MCP server: server="{server_url}"'
                 )
             elif auth and auth.type == AuthType.APIKEY:
-                if not getattr(auth, "api_key", None) or not getattr(auth, "api_key_header", None):
+                if not getattr(auth, "api_key", None) or not getattr(
+                    auth, "api_key_header", None
+                ):
                     raise ValueError(
                         "APIKEY authentication selected but no api key or api header value provided"
                     )
@@ -674,7 +719,7 @@ class Scanner:
                 )
 
             # Add any custom headers from Auth object (works with any auth type)
-            if hasattr(auth, 'custom_headers') and auth.custom_headers:
+            if hasattr(auth, "custom_headers") and auth.custom_headers:
                 extra_headers.update(auth.custom_headers)
         else:
             logger.debug(
@@ -726,7 +771,10 @@ class Scanner:
             def emit(self, record):
                 nonlocal http_status_code
                 # Capture the status code silently (don't propagate to console)
-                http_status_code = self._check_http_error_in_logs(record.getMessage()) or http_status_code
+                http_status_code = (
+                    self._check_http_error_in_logs(record.getMessage())
+                    or http_status_code
+                )
 
         capture_handler = StatusCodeCapture()
         capture_handler._check_http_error_in_logs = self._check_http_error_in_logs
@@ -734,7 +782,10 @@ class Scanner:
         # Temporarily set httpx logger to INFO to ensure it emits logs we can capture
         # Disable propagation only if we're raising the log level to avoid console output
         httpx_logger.addHandler(capture_handler)
-        if httpx_logger.level > stdlib_logging.INFO or httpx_logger.level == stdlib_logging.NOTSET:
+        if (
+            httpx_logger.level > stdlib_logging.INFO
+            or httpx_logger.level == stdlib_logging.NOTSET
+        ):
             httpx_logger.setLevel(stdlib_logging.INFO)
             httpx_logger.propagate = False  # Prevent console output
 
@@ -742,7 +793,9 @@ class Scanner:
             logger.debug(f'Attempting to connect to MCP server: server="{server_url}"')
             # Suppress async generator warnings from MCP library cleanup bugs
             with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*async.*generator.*")
+                warnings.filterwarnings(
+                    "ignore", category=RuntimeWarning, message=".*async.*generator.*"
+                )
                 client_context_opened = await client_context.__aenter__()
                 streams = client_context_opened
                 read, write, *_ = streams
@@ -790,7 +843,9 @@ class Scanner:
             error_str = str(first_error)
 
             # Check if we captured an HTTP error status code from logs, or check error string
-            detected_code = http_status_code or self._check_http_error_in_logs(error_str)
+            detected_code = http_status_code or self._check_http_error_in_logs(
+                error_str
+            )
 
             if detected_code == 401:
                 raise MCPAuthenticationError(
@@ -820,7 +875,11 @@ class Scanner:
             # Try to clean up resources on any error
             await self._close_mcp_session(client_context, session)
             # Convert connection errors to more user-friendly messages
-            if "ConnectError" in str(type(e)) or "connection" in str(e).lower() or "nodename nor servname" in str(e):
+            if (
+                "ConnectError" in str(type(e))
+                or "connection" in str(e).lower()
+                or "nodename nor servname" in str(e)
+            ):
                 raise MCPConnectionError(
                     f"Unable to connect to MCP server at {server_url}. "
                     f"Please verify the server is running and accessible. "
@@ -880,9 +939,7 @@ class Scanner:
                 tool_list = await session.list_tools()
             except McpError as e:
                 if self._is_missing_capability_error(e):
-                    message = (
-                        f"Server '{server_url}' does not expose tools; cannot scan '{tool_name}'."
-                    )
+                    message = f"Server '{server_url}' does not expose tools; cannot scan '{tool_name}'."
                     logger.warning(message)
                     raise ValueError(message) from e
                 raise
@@ -955,9 +1012,7 @@ class Scanner:
                 tool_list = await session.list_tools()
             except McpError as e:
                 if self._is_missing_capability_error(e):
-                    logger.warning(
-                        f"Server '{server_url}' does not expose tools: {e}"
-                    )
+                    logger.warning(f"Server '{server_url}' does not expose tools: {e}")
                     return []
                 raise
 
@@ -998,12 +1053,17 @@ class Scanner:
             # Normalize and validate command/args to avoid FileNotFoundError ([Errno 2])
             # Expansion mode comes from StdioServer config; default is 'off'
             expand_mode = (server_config.expand_vars or "off").lower()
-            logger.debug(f"expand_mode='{expand_mode}' for command: {server_config.command}")
+            logger.debug(
+                f"expand_mode='{expand_mode}' for command: {server_config.command}"
+            )
             env_for_expansion = build_env_for_expansion(server_config.env)
             windows_semantics = decide_windows_semantics(expand_mode)
 
             expanded_command, expanded_args = normalize_and_expand_command_args(
-                server_config.command or "", server_config.args or [], env_for_expansion, expand_mode
+                server_config.command or "",
+                server_config.args or [],
+                env_for_expansion,
+                expand_mode,
             )
             cmd_command, cmd_args = split_embedded_args(
                 expanded_command, expanded_args, windows_semantics
@@ -1221,9 +1281,7 @@ class Scanner:
                 tool_list = await session.list_tools()
             except McpError as e:
                 if self._is_missing_capability_error(e):
-                    message = (
-                        f"Stdio server '{server_config.command}' does not expose tools; cannot scan '{tool_name}'."
-                    )
+                    message = f"Stdio server '{server_config.command}' does not expose tools; cannot scan '{tool_name}'."
                     logger.warning(message)
                     raise ValueError(message) from e
                 raise
@@ -1288,11 +1346,15 @@ class Scanner:
                     if isinstance(server_config, StdioServer):
                         # Apply default expand mode if not provided by config
                         if expand_vars_default and not server_config.expand_vars:
-                            logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
+                            logger.debug(
+                                f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'"
+                            )
                             server_config.expand_vars = expand_vars_default
                         else:
-                            logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
-                            
+                            logger.debug(
+                                f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})"
+                            )
+
                         # Scan stdio server with timeout and error recovery
                         try:
                             results = await self.scan_stdio_server_tools(
@@ -1389,11 +1451,15 @@ class Scanner:
                 if isinstance(server_config, StdioServer):
                     # Apply default expand mode if not provided by config
                     if expand_vars_default and not server_config.expand_vars:
-                        logger.debug(f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'")
+                        logger.debug(
+                            f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'"
+                        )
                         server_config.expand_vars = expand_vars_default
                     else:
-                        logger.debug(f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})")
-                        
+                        logger.debug(
+                            f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})"
+                        )
+
                     # Scan stdio server with timeout and error recovery
                     try:
                         results = await self.scan_stdio_server_tools(
@@ -1510,13 +1576,15 @@ class Scanner:
                 except Exception as e:
                     logger.error(f"Error analyzing prompt '{prompt.name}': {e}")
                     # Create a failed result for this prompt
-                    scan_results.append(PromptScanResult(
-                        prompt_name=prompt.name,
-                        prompt_description=prompt.description or "",
-                        status="failed",
-                        analyzers=[],
-                        findings=[],
-                    ))
+                    scan_results.append(
+                        PromptScanResult(
+                            prompt_name=prompt.name,
+                            prompt_description=prompt.description or "",
+                            status="failed",
+                            analyzers=[],
+                            findings=[],
+                        )
+                    )
 
             return scan_results
 
@@ -1571,9 +1639,7 @@ class Scanner:
                 prompt_list = await session.list_prompts()
             except McpError as e:
                 if self._is_missing_capability_error(e):
-                    message = (
-                        f"Server '{server_url}' does not expose prompts; cannot scan '{prompt_name}'."
-                    )
+                    message = f"Server '{server_url}' does not expose prompts; cannot scan '{prompt_name}'."
                     logger.warning(message)
                     raise ValueError(message) from e
                 raise
@@ -1640,31 +1706,41 @@ class Scanner:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
             # Get the initialize result which was stored during session initialization
-            init_result = getattr(session, '_init_result', None)
-            
+            init_result = getattr(session, "_init_result", None)
+
             if not init_result:
                 raise ValueError(
                     f"Failed to get initialization result from server at {server_url}"
                 )
 
             # Extract instructions from the initialize result
-            instructions = getattr(init_result, 'instructions', None)
-            
+            instructions = getattr(init_result, "instructions", None)
+
             if not instructions:
                 # Return a result with no findings if instructions are not provided
-                logger.info(f"Server at {server_url} does not provide instructions field")
+                logger.info(
+                    f"Server at {server_url} does not provide instructions field"
+                )
                 return InstructionsScanResult(
                     instructions="",
-                    server_name=getattr(init_result.serverInfo, 'name', 'Unknown') if hasattr(init_result, 'serverInfo') else 'Unknown',
-                    protocol_version=getattr(init_result, 'protocolVersion', 'Unknown'),
+                    server_name=(
+                        getattr(init_result.serverInfo, "name", "Unknown")
+                        if hasattr(init_result, "serverInfo")
+                        else "Unknown"
+                    ),
+                    protocol_version=getattr(init_result, "protocolVersion", "Unknown"),
                     status="skipped",
                     analyzers=[],
                     findings=[],
                 )
 
             # Extract server info
-            server_name = getattr(init_result.serverInfo, 'name', 'Unknown') if hasattr(init_result, 'serverInfo') else 'Unknown'
-            protocol_version = getattr(init_result, 'protocolVersion', 'Unknown')
+            server_name = (
+                getattr(init_result.serverInfo, "name", "Unknown")
+                if hasattr(init_result, "serverInfo")
+                else "Unknown"
+            )
+            protocol_version = getattr(init_result, "protocolVersion", "Unknown")
 
             # Analyze the instructions
             result = await self._analyze_instructions(
@@ -1672,7 +1748,7 @@ class Scanner:
                 server_name=server_name,
                 protocol_version=protocol_version,
                 analyzers=analyzers,
-                http_headers=http_headers
+                http_headers=http_headers,
             )
             return result
 
@@ -1735,7 +1811,8 @@ class Scanner:
 
                 # Create analysis tasks for each prompt
                 scan_tasks = [
-                    self._analyze_prompt(prompt, analyzers) for prompt in prompt_list.prompts
+                    self._analyze_prompt(prompt, analyzers)
+                    for prompt in prompt_list.prompts
                 ]
 
                 # Run all tasks concurrently
@@ -1746,7 +1823,9 @@ class Scanner:
             return await connect_and_scan()
 
         except Exception as e:
-            logger.error(f"Error scanning prompts on stdio server {server_config.command}: {e}")
+            logger.error(
+                f"Error scanning prompts on stdio server {server_config.command}: {e}"
+            )
             raise
         finally:
             # Always clean up resources
@@ -1795,9 +1874,7 @@ class Scanner:
                 prompt_list = await session.list_prompts()
             except McpError as e:
                 if self._is_missing_capability_error(e):
-                    message = (
-                        f"Stdio server '{server_config.command}' does not expose prompts; cannot scan '{prompt_name}'."
-                    )
+                    message = f"Stdio server '{server_config.command}' does not expose prompts; cannot scan '{prompt_name}'."
                     logger.warning(message)
                     raise ValueError(message) from e
                 raise
@@ -1855,18 +1932,25 @@ class Scanner:
         if resource_mime_type == "text/html":
             try:
                 from bs4 import BeautifulSoup
-                soup = BeautifulSoup(resource_content, 'html.parser')
+
+                soup = BeautifulSoup(resource_content, "html.parser")
                 # Extract text content from HTML
-                analysis_content = soup.get_text(separator='\n', strip=True)
+                analysis_content = soup.get_text(separator="\n", strip=True)
                 logger.info(f"Extracted text from HTML resource: {resource_uri}")
             except ImportError:
-                logger.warning("BeautifulSoup not installed, analyzing raw HTML content")
+                logger.warning(
+                    "BeautifulSoup not installed, analyzing raw HTML content"
+                )
                 analysis_content = resource_content
             except (ValueError, TypeError) as e:
-                logger.warning(f"Error parsing HTML for resource '{resource_uri}': {e}. Using raw content.")
+                logger.warning(
+                    f"Error parsing HTML for resource '{resource_uri}': {e}. Using raw content."
+                )
                 analysis_content = resource_content
             except Exception as e:
-                logger.error(f"Unexpected error extracting text from HTML '{resource_uri}': {e}. Using raw content.")
+                logger.error(
+                    f"Unexpected error extracting text from HTML '{resource_uri}': {e}. Using raw content."
+                )
                 analysis_content = resource_content
 
         # Only API and LLM analyzers are used for resources
@@ -1877,7 +1961,7 @@ class Scanner:
                     "resource_uri": resource_uri,
                     "resource_name": resource_name,
                     "resource_description": resource_description,
-                    "mime_type": resource_mime_type
+                    "mime_type": resource_mime_type,
                 }
                 api_findings = await self._api_analyzer.analyze(
                     analysis_content, api_context
@@ -1899,13 +1983,15 @@ class Scanner:
                 if resource_description:
                     llm_content += f"Description: {resource_description}\n"
                 llm_content += f"MIME Type: {resource_mime_type}\n"
-                llm_content += f"Content:\n{analysis_content[:2000]}\n"  # Limit content size
+                llm_content += (
+                    f"Content:\n{analysis_content[:2000]}\n"  # Limit content size
+                )
 
                 llm_context = {
                     "resource_uri": resource_uri,
                     "resource_name": resource_name,
                     "resource_description": resource_description,
-                    "mime_type": resource_mime_type
+                    "mime_type": resource_mime_type,
                 }
                 llm_findings = await self._llm_analyzer.analyze(
                     llm_content, llm_context
@@ -1914,7 +2000,9 @@ class Scanner:
                     finding.analyzer = "LLM"
                 all_findings.extend(llm_findings)
             except Exception as e:
-                logger.error(f'LLM analysis failed: resource="{resource_uri}", error="{e}"')
+                logger.error(
+                    f'LLM analysis failed: resource="{resource_uri}", error="{e}"'
+                )
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for resource '{resource_uri}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
@@ -1928,7 +2016,7 @@ class Scanner:
                     "resource_uri": resource_uri,
                     "resource_name": resource_name,
                     "resource_description": resource_description,
-                    "mime_type": resource_mime_type
+                    "mime_type": resource_mime_type,
                 }
                 # Add HTTP headers to context for custom analyzers
                 if http_headers:
@@ -1945,7 +2033,9 @@ class Scanner:
                 )
 
         # Combine enum analyzers and custom analyzer names (filter out YARA if present)
-        active_analyzers = [a for a in analyzers if a in [AnalyzerEnum.API, AnalyzerEnum.LLM]]
+        active_analyzers = [
+            a for a in analyzers if a in [AnalyzerEnum.API, AnalyzerEnum.LLM]
+        ]
         all_analyzers = active_analyzers + custom_analyzer_names
 
         return ResourceScanResult(
@@ -2019,15 +2109,19 @@ class Scanner:
             for resource in resource_list.resources:
                 # Check if MIME type is allowed
                 if resource.mimeType and resource.mimeType not in allowed_mime_types:
-                    logger.info(f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'")
-                    results.append(ResourceScanResult(
-                        resource_uri=resource.uri,
-                        resource_name=resource.name or "",
-                        resource_mime_type=resource.mimeType or "unknown",
-                        status="skipped",
-                        analyzers=[],
-                        findings=[],
-                    ))
+                    logger.info(
+                        f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'"
+                    )
+                    results.append(
+                        ResourceScanResult(
+                            resource_uri=resource.uri,
+                            resource_name=resource.name or "",
+                            resource_mime_type=resource.mimeType or "unknown",
+                            status="skipped",
+                            analyzers=[],
+                            findings=[],
+                        )
+                    )
                     continue
 
                 # Read resource content
@@ -2038,34 +2132,44 @@ class Scanner:
                     text_content = ""
                     try:
                         for content in resource_contents.contents:
-                            if hasattr(content, 'text'):
+                            if hasattr(content, "text"):
                                 text_content += content.text
-                            elif hasattr(content, 'blob'):
+                            elif hasattr(content, "blob"):
                                 # Skip binary content
-                                logger.info(f"Skipping binary content for resource '{resource.uri}'")
+                                logger.info(
+                                    f"Skipping binary content for resource '{resource.uri}'"
+                                )
                                 continue
                     except (AttributeError, TypeError) as e:
-                        logger.warning(f"Error extracting content from resource '{resource.uri}': {e}")
-                        results.append(ResourceScanResult(
-                            resource_uri=resource.uri,
-                            resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
-                            status="failed",
-                            analyzers=[],
-                            findings=[],
-                        ))
+                        logger.warning(
+                            f"Error extracting content from resource '{resource.uri}': {e}"
+                        )
+                        results.append(
+                            ResourceScanResult(
+                                resource_uri=resource.uri,
+                                resource_name=resource.name or "",
+                                resource_mime_type=resource.mimeType or "unknown",
+                                status="failed",
+                                analyzers=[],
+                                findings=[],
+                            )
+                        )
                         continue
 
                     if not text_content:
-                        logger.info(f"No text content found for resource '{resource.uri}'")
-                        results.append(ResourceScanResult(
-                            resource_uri=resource.uri,
-                            resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
-                            status="skipped",
-                            analyzers=[],
-                            findings=[],
-                        ))
+                        logger.info(
+                            f"No text content found for resource '{resource.uri}'"
+                        )
+                        results.append(
+                            ResourceScanResult(
+                                resource_uri=resource.uri,
+                                resource_name=resource.name or "",
+                                resource_mime_type=resource.mimeType or "unknown",
+                                status="skipped",
+                                analyzers=[],
+                                findings=[],
+                            )
+                        )
                         continue
 
                     # Analyze the resource
@@ -2077,40 +2181,46 @@ class Scanner:
                             resource.description or "",
                             resource.mimeType or "unknown",
                             analyzers,
-                            http_headers
+                            http_headers,
                         )
                         results.append(result)
                     except Exception as e:
                         logger.error(f"Error analyzing resource '{resource.uri}': {e}")
-                        results.append(ResourceScanResult(
+                        results.append(
+                            ResourceScanResult(
+                                resource_uri=resource.uri,
+                                resource_name=resource.name or "",
+                                resource_mime_type=resource.mimeType or "unknown",
+                                status="failed",
+                                analyzers=[],
+                                findings=[],
+                            )
+                        )
+
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout reading resource '{resource.uri}'")
+                    results.append(
+                        ResourceScanResult(
                             resource_uri=resource.uri,
                             resource_name=resource.name or "",
                             resource_mime_type=resource.mimeType or "unknown",
                             status="failed",
                             analyzers=[],
                             findings=[],
-                        ))
-
-                except asyncio.TimeoutError:
-                    logger.error(f"Timeout reading resource '{resource.uri}'")
-                    results.append(ResourceScanResult(
-                        resource_uri=resource.uri,
-                        resource_name=resource.name or "",
-                        resource_mime_type=resource.mimeType or "unknown",
-                        status="failed",
-                        analyzers=[],
-                        findings=[],
-                    ))
+                        )
+                    )
                 except Exception as e:
                     logger.error(f"Error reading resource '{resource.uri}': {e}")
-                    results.append(ResourceScanResult(
-                        resource_uri=resource.uri,
-                        resource_name=resource.name or "",
-                        resource_mime_type=resource.mimeType or "unknown",
-                        status="failed",
-                        analyzers=[],
-                        findings=[],
-                    ))
+                    results.append(
+                        ResourceScanResult(
+                            resource_uri=resource.uri,
+                            resource_name=resource.name or "",
+                            resource_mime_type=resource.mimeType or "unknown",
+                            status="failed",
+                            analyzers=[],
+                            findings=[],
+                        )
+                    )
 
             return results
 
@@ -2179,9 +2289,7 @@ class Scanner:
                 resource_list = await session.list_resources()
             except McpError as e:
                 if self._is_missing_capability_error(e):
-                    message = (
-                        f"Server '{server_url}' does not expose resources; cannot scan '{resource_uri}'."
-                    )
+                    message = f"Server '{server_url}' does not expose resources; cannot scan '{resource_uri}'."
                     logger.warning(message)
                     raise ValueError(message) from e
                 raise
@@ -2189,17 +2297,28 @@ class Scanner:
             target_resource = None
             for resource in resource_list.resources:
                 # Convert AnyUrl to string for comparison
-                resource_uri_str = str(resource.uri) if hasattr(resource.uri, '__str__') else resource.uri
+                resource_uri_str = (
+                    str(resource.uri)
+                    if hasattr(resource.uri, "__str__")
+                    else resource.uri
+                )
                 if resource_uri_str == resource_uri:
                     target_resource = resource
                     break
 
             if not target_resource:
-                raise ValueError(f"Resource '{resource_uri}' not found on server {server_url}")
+                raise ValueError(
+                    f"Resource '{resource_uri}' not found on server {server_url}"
+                )
 
             # Check if MIME type is allowed
-            if target_resource.mimeType and target_resource.mimeType not in allowed_mime_types:
-                logger.info(f"Resource '{resource_uri}' has unsupported MIME type '{target_resource.mimeType}'")
+            if (
+                target_resource.mimeType
+                and target_resource.mimeType not in allowed_mime_types
+            ):
+                logger.info(
+                    f"Resource '{resource_uri}' has unsupported MIME type '{target_resource.mimeType}'"
+                )
                 return ResourceScanResult(
                     resource_uri=target_resource.uri,
                     resource_name=target_resource.name or "",
@@ -2217,13 +2336,17 @@ class Scanner:
                 text_content = ""
                 try:
                     for content in resource_contents.contents:
-                        if hasattr(content, 'text'):
+                        if hasattr(content, "text"):
                             text_content += content.text
-                        elif hasattr(content, 'blob'):
-                            logger.info(f"Skipping binary content for resource '{resource_uri}'")
+                        elif hasattr(content, "blob"):
+                            logger.info(
+                                f"Skipping binary content for resource '{resource_uri}'"
+                            )
                             continue
                 except (AttributeError, TypeError) as e:
-                    logger.warning(f"Error extracting content from resource '{resource_uri}': {e}")
+                    logger.warning(
+                        f"Error extracting content from resource '{resource_uri}': {e}"
+                    )
                     return ResourceScanResult(
                         resource_uri=target_resource.uri,
                         resource_name=target_resource.name or "",
@@ -2252,7 +2375,7 @@ class Scanner:
                     target_resource.description or "",
                     target_resource.mimeType or "unknown",
                     analyzers,
-                    http_headers
+                    http_headers,
                 )
                 return result
 
@@ -2280,7 +2403,9 @@ class Scanner:
         except ValueError:
             raise
         except Exception as e:
-            logger.error(f"Error scanning resource '{resource_uri}' on server {server_url}: {e}")
+            logger.error(
+                f"Error scanning resource '{resource_uri}' on server {server_url}: {e}"
+            )
             raise
         finally:
             await self._close_mcp_session(client_context, session)

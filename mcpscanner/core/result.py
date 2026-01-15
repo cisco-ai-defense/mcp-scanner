@@ -232,7 +232,11 @@ class InstructionsScanResult(ScanResult):
 
 
 def process_scan_results(
-    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]]
+    results: List[
+        Union[
+            ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult
+        ]
+    ],
 ) -> Dict[str, Any]:
     """Process a list of scan results and return summary statistics.
 
@@ -247,7 +251,14 @@ def process_scan_results(
     unsafe_tools = [r for r in results if not r.is_safe]
 
     # Count findings by severity
-    severity_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0, "SAFE": 0, "UNKNOWN": 0}
+    severity_counts = {
+        "HIGH": 0,
+        "MEDIUM": 0,
+        "LOW": 0,
+        "INFO": 0,
+        "SAFE": 0,
+        "UNKNOWN": 0,
+    }
     threat_types = {}
 
     for result in unsafe_tools:
@@ -280,9 +291,15 @@ def process_scan_results(
 
 
 def filter_results_by_severity(
-    results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]],
-    severity: str
-) -> List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]]:
+    results: List[
+        Union[
+            ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult
+        ]
+    ],
+    severity: str,
+) -> List[
+    Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]
+]:
     """Filter scan results by severity level.
 
     Args:
@@ -378,7 +395,14 @@ def get_highest_severity(severities: List[str]) -> str:
     Returns:
         str: The highest severity level.
     """
-    severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1, "SAFE": 0}
+    severity_order = {
+        "HIGH": 5,
+        "UNKNOWN": 4,
+        "MEDIUM": 3,
+        "LOW": 2,
+        "INFO": 1,
+        "SAFE": 0,
+    }
     highest = "SAFE"
     highest_value = 0
 
@@ -392,7 +416,11 @@ def get_highest_severity(severities: List[str]) -> str:
 
 
 def format_results_as_json(
-    scan_results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]]
+    scan_results: List[
+        Union[
+            ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult
+        ]
+    ],
 ) -> str:
     """Format scan results as structured JSON grouped by analyzer.
 
@@ -475,7 +503,7 @@ def format_results_as_json(
                 # Collect MCP Taxonomy info (use first finding's taxonomy)
                 mcp_taxonomy = None
                 threat_vuln_classification = None
-                
+
                 for vuln in vulns:
                     severities.append(vuln.severity)
 
@@ -493,14 +521,24 @@ def format_results_as_json(
                         threat_type = vuln.details["threat_type"]
                         if threat_type not in threat_names:
                             threat_names.append(threat_type)
-                    
+
                     # Collect MCP Taxonomy from first finding
-                    if mcp_taxonomy is None and hasattr(vuln, "mcp_taxonomy") and vuln.mcp_taxonomy:
+                    if (
+                        mcp_taxonomy is None
+                        and hasattr(vuln, "mcp_taxonomy")
+                        and vuln.mcp_taxonomy
+                    ):
                         mcp_taxonomy = vuln.mcp_taxonomy
-                    
+
                     # Collect threat/vulnerability classification from first finding
-                    if threat_vuln_classification is None and hasattr(vuln, "details") and vuln.details:
-                        threat_vuln_classification = vuln.details.get("threat_vulnerability_classification")
+                    if (
+                        threat_vuln_classification is None
+                        and hasattr(vuln, "details")
+                        and vuln.details
+                    ):
+                        threat_vuln_classification = vuln.details.get(
+                            "threat_vulnerability_classification"
+                        )
 
                 # Get the highest severity for this analyzer
                 analyzer_severity = get_highest_severity(severities)
@@ -524,17 +562,19 @@ def format_results_as_json(
                     "threat_names": list(set(threat_names)),  # Deduplicate threat names
                     "threat_summary": threat_summary,
                 }
-                
+
                 # Add threat/vulnerability classification if available
                 if threat_vuln_classification:
-                    analyzer_finding["threat_vulnerability_classification"] = threat_vuln_classification
-                
+                    analyzer_finding["threat_vulnerability_classification"] = (
+                        threat_vuln_classification
+                    )
+
                 # Add MCP Taxonomy if available (this replaces threat_names and threat_summary)
                 if mcp_taxonomy:
                     analyzer_finding["threats"] = mcp_taxonomy
                     # Also add as mcp_taxonomy for CLI display compatibility
                     analyzer_finding["mcp_taxonomy"] = mcp_taxonomy
-                
+
                 result_dict["findings"][analyzer_display_name] = analyzer_finding
             else:
                 # Analyzer has no findings - set default values
@@ -549,7 +589,9 @@ def format_results_as_json(
 
 
 def format_results_by_analyzer(
-    scan_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]
+    scan_result: Union[
+        ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult
+    ],
 ) -> str:
     """Format scan results grouped by analyzer for display.
 
@@ -574,9 +616,7 @@ def format_results_by_analyzer(
     if scan_result.is_safe:
         return f"✅ {item_name} is safe - no potential threats detected"
 
-    output = [
-        f"🚨 {item_name} - Found {len(scan_result.findings)} potential threats\n"
-    ]
+    output = [f"🚨 {item_name} - Found {len(scan_result.findings)} potential threats\n"]
 
     # Group findings by analyzer
     analyzer_groups = group_findings_by_analyzer(scan_result.findings)

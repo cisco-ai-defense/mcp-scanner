@@ -95,18 +95,26 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                 and finding.severity == "LOW"
             ):
                 findings_by_analyzer[analyzer]["severity"] = "LOW"
-            
+
             # Collect MCP Taxonomy from all findings
             if "mcp_taxonomies" not in findings_by_analyzer[analyzer]:
                 findings_by_analyzer[analyzer]["mcp_taxonomies"] = []
-            
+
             if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
                 # Check if this taxonomy is unique (based on aitech + aisubtech)
-                taxonomy_key = (finding.mcp_taxonomy.get("aitech"), finding.mcp_taxonomy.get("aisubtech"))
-                existing_keys = [(t.get("aitech"), t.get("aisubtech")) for t in findings_by_analyzer[analyzer]["mcp_taxonomies"]]
-                
+                taxonomy_key = (
+                    finding.mcp_taxonomy.get("aitech"),
+                    finding.mcp_taxonomy.get("aisubtech"),
+                )
+                existing_keys = [
+                    (t.get("aitech"), t.get("aisubtech"))
+                    for t in findings_by_analyzer[analyzer]["mcp_taxonomies"]
+                ]
+
                 if taxonomy_key not in existing_keys:
-                    findings_by_analyzer[analyzer]["mcp_taxonomies"].append(finding.mcp_taxonomy)
+                    findings_by_analyzer[analyzer]["mcp_taxonomies"].append(
+                        finding.mcp_taxonomy
+                    )
 
         # Use analyzer-provided summaries for analyzers with findings
         for analyzer, data in findings_by_analyzer.items():
@@ -133,7 +141,7 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
             "is_safe": result.is_safe,
             "findings": findings_by_analyzer,
         }
-        
+
         # Add type-specific fields
         if hasattr(result, "tool_name"):
             # ToolScanResult
@@ -343,7 +351,7 @@ class ReportGenerator:
             output.append("\n=== Unsafe Items ===")
             for i, result in enumerate(unsafe_results, 1):
                 item_type = result.get("item_type", "tool")
-                
+
                 # Get item name based on type
                 if item_type == "tool":
                     item_name = result.get("tool_name", "Unknown")
@@ -353,7 +361,7 @@ class ReportGenerator:
                     item_name = result.get("resource_name", "Unknown")
                 else:
                     item_name = "Unknown"
-                
+
                 findings = result.get("findings", {})
 
                 # Get the highest severity and total findings count
@@ -422,13 +430,13 @@ class ReportGenerator:
                 )
             else:
                 output.append(f"{item_label} {i}: {item_name}")
-            
+
             # Add resource-specific info
             if item_type == "resource" and "resource_uri" in result:
                 output.append(f"URI: {result['resource_uri']}")
                 if "resource_mime_type" in result:
                     output.append(f"MIME Type: {result['resource_mime_type']}")
-            
+
             output.append(f"Status: {status}")
             output.append(f"Safe: {'Yes' if is_safe else 'No'}")
 
@@ -448,7 +456,7 @@ class ReportGenerator:
                         f"    - Threat Names: {', '.join(threat_names) if threat_names else 'None'}"
                     )
                     output.append(f"    - Total Findings: {total_findings}")
-                    
+
                     # Add MCP Taxonomy details if available
                     mcp_taxonomies = data.get("mcp_taxonomies", [])
                     if mcp_taxonomies and total_findings > 0:
@@ -458,35 +466,57 @@ class ReportGenerator:
                             if taxonomy.get("aitech"):
                                 output.append(f"      • AITech: {taxonomy['aitech']}")
                             if taxonomy.get("aitech_name"):
-                                output.append(f"      • AITech Name: {taxonomy['aitech_name']}")
+                                output.append(
+                                    f"      • AITech Name: {taxonomy['aitech_name']}"
+                                )
                             if taxonomy.get("aisubtech"):
-                                output.append(f"      • AISubtech: {taxonomy['aisubtech']}")
+                                output.append(
+                                    f"      • AISubtech: {taxonomy['aisubtech']}"
+                                )
                             if taxonomy.get("aisubtech_name"):
-                                output.append(f"      • AISubtech Name: {taxonomy['aisubtech_name']}")
+                                output.append(
+                                    f"      • AISubtech Name: {taxonomy['aisubtech_name']}"
+                                )
                             if taxonomy.get("description"):
                                 # Wrap long descriptions
-                                desc = taxonomy['description']
+                                desc = taxonomy["description"]
                                 if len(desc) > 80:
-                                    output.append(f"      • Description: {desc[:80]}...")
+                                    output.append(
+                                        f"      • Description: {desc[:80]}..."
+                                    )
                                 else:
                                     output.append(f"      • Description: {desc}")
                         else:
                             # Multiple taxonomies - show them numbered
-                            output.append(f"    - MCP Taxonomies ({len(mcp_taxonomies)} unique threats):")
+                            output.append(
+                                f"    - MCP Taxonomies ({len(mcp_taxonomies)} unique threats):"
+                            )
                             for idx, taxonomy in enumerate(mcp_taxonomies, 1):
-                                output.append(f"      [{idx}] {taxonomy.get('aitech_name', 'Unknown')}")
+                                output.append(
+                                    f"      [{idx}] {taxonomy.get('aitech_name', 'Unknown')}"
+                                )
                                 if taxonomy.get("aitech"):
-                                    output.append(f"          • AITech: {taxonomy['aitech']}")
+                                    output.append(
+                                        f"          • AITech: {taxonomy['aitech']}"
+                                    )
                                 if taxonomy.get("aisubtech"):
-                                    output.append(f"          • AISubtech: {taxonomy['aisubtech']}")
+                                    output.append(
+                                        f"          • AISubtech: {taxonomy['aisubtech']}"
+                                    )
                                 if taxonomy.get("aisubtech_name"):
-                                    output.append(f"          • AISubtech Name: {taxonomy['aisubtech_name']}")
+                                    output.append(
+                                        f"          • AISubtech Name: {taxonomy['aisubtech_name']}"
+                                    )
                                 if taxonomy.get("description"):
-                                    desc = taxonomy['description']
+                                    desc = taxonomy["description"]
                                     if len(desc) > 80:
-                                        output.append(f"          • Description: {desc[:80]}...")
+                                        output.append(
+                                            f"          • Description: {desc[:80]}..."
+                                        )
                                     else:
-                                        output.append(f"          • Description: {desc}")
+                                        output.append(
+                                            f"          • Description: {desc}"
+                                        )
             else:
                 output.append("No findings.")
 
@@ -667,7 +697,7 @@ class ReportGenerator:
         has_config_results = any(
             "server_source" in result and result["server_source"] for result in results
         )
-        
+
         # Check if this is a behavioral scan
         is_behavioral = any(
             "behavioral_analyzer" in result.get("findings", {}) for result in results
@@ -692,16 +722,21 @@ class ReportGenerator:
                 scan_target_source = result["server_source"]
             else:
                 scan_target_source = self.server_url
-            
+
             # For behavioral scans, extract just the filename
             if is_behavioral and "behavioral:" in scan_target_source:
                 # Extract filename from "behavioral:/path/to/file.py"
                 import os
+
                 full_path = scan_target_source.replace("behavioral:", "")
                 scan_target_source = os.path.basename(full_path)
             else:
                 # Truncate for non-behavioral scans
-                scan_target_source = scan_target_source[:28] if not has_config_results else scan_target_source[:18]
+                scan_target_source = (
+                    scan_target_source[:28]
+                    if not has_config_results
+                    else scan_target_source[:18]
+                )
 
             if has_config_results:
                 # Config-based scan: show target server
