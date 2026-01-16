@@ -428,5 +428,5 @@ else:
 
 ## Credits
 
-The Readiness Analyzer was contributed by Nik Kale, ported from the [MCP Readiness Scanner](https://github.com/nik-kale/mcp-readiness-scanner) project.
+The Readiness Analyzer was contributed by Nik Kale, Principal Engineer, Cisco Syetems, ported from the [MCP Readiness Scanner](https://github.com/nik-kale/mcp-readiness-scanner) project.
 
