@@ -7,10 +7,12 @@ The Readiness Analyzer is a zero-dependency static analysis engine that checks M
 While security scanning tells you if a tool is **safe**, readiness scanning tells you if a tool will be **reliable** in production. The Readiness Analyzer detects issues like missing timeouts, unsafe retry loops, silent failures, and overloaded tool scope.
 
 **Key Features:**
-- **Zero external dependencies** — Always available, no API keys required
-- **20 heuristic rules** — Comprehensive coverage of operational issues
-- **Readiness score** — 0-100 numeric score for easy thresholding
-- **Production ready flag** — Quick pass/fail assessment
+- **Zero external dependencies** - Always available, no API keys required
+- **20 heuristic rules** - Comprehensive coverage of operational issues
+- **Readiness score** - 0-100 numeric score for easy thresholding
+- **Production ready flag** - Quick pass/fail assessment
+- **Optional OPA integration** - Policy-based checks using Rego policies
+- **Optional LLM semantic analysis** - Deep semantic evaluation with LLM
 
 ## Quick Start
 
@@ -257,6 +259,171 @@ Use readiness scanning in your CI pipeline:
       echo "::error::Readiness check failed with HIGH severity findings"
       exit 1
     fi
+```
+
+## Optional Providers
+
+The Readiness Analyzer supports optional backends for enhanced analysis.
+
+### OPA Policy Provider
+
+When OPA (Open Policy Agent) is installed and available in PATH, additional policy-based checks are performed using Rego policies.
+
+```python
+from mcpscanner.core.analyzers import ReadinessAnalyzer
+
+# Enable OPA policy checks
+analyzer = ReadinessAnalyzer(enable_opa=True)
+
+# Use custom policies directory
+analyzer = ReadinessAnalyzer(
+    enable_opa=True,
+    opa_policies_dir="/path/to/custom/policies"
+)
+```
+
+OPA is not required. If not available, the analyzer gracefully falls back to heuristic-only mode.
+
+#### Built-in Policies
+
+MCP Scanner includes three built-in Rego policies:
+
+| Policy | Description |
+|--------|-------------|
+| `timeout_required.rego` | Validates timeout configuration (must exist, not zero, not negative, reasonable range) |
+| `error_schema_required.rego` | Validates error handling (error schema, input schema, required fields, description) |
+| `max_capabilities.rego` | Validates tool scope (capability count, input parameter count) |
+
+Policies are located in `mcpscanner/data/readiness_policies/`.
+
+#### Installing OPA
+
+To enable OPA policy checks, install the OPA binary:
+
+```bash
+# macOS
+brew install opa
+
+# Linux
+curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+chmod +x opa
+sudo mv opa /usr/local/bin/
+
+# Verify installation
+opa version
+```
+
+#### Using OpaProvider Directly
+
+For standalone OPA policy evaluation:
+
+```python
+from mcpscanner.core.analyzers import OpaProvider
+
+provider = OpaProvider()
+
+if provider.is_available():
+    tool_definition = {
+        "name": "my_tool",
+        "description": "A sample tool",
+    }
+    violations = await provider.evaluate_tool(tool_definition, "my_tool")
+    for v in violations:
+        print(f"[{v['severity']}] {v['message']}")
+else:
+    print(f"OPA unavailable: {provider.get_unavailable_reason()}")
+```
+
+#### Custom Policies
+
+Create custom Rego policies following the OPA package convention:
+
+```rego
+# custom_policy.rego
+package mcp.readiness
+
+violation[msg] {
+    input.type == "tool"
+    # Your custom rule logic
+    msg := sprintf("Tool '%s' violates custom policy", [input.tool_name])
+}
+```
+
+The facts document passed to policies includes:
+
+```json
+{
+    "type": "tool",
+    "tool_name": "my_tool",
+    "has_timeout": false,
+    "timeout_value": null,
+    "has_retry_limit": false,
+    "retry_limit": null,
+    "capabilities_count": 0,
+    "has_error_schema": false,
+    "has_input_schema": false,
+    "input_properties_count": 0,
+    "has_required_fields": false,
+    "has_description": true,
+    "description_length": 25,
+    "has_rate_limit": false,
+    "raw": { /* full tool definition */ }
+}
+```
+
+### LLM Semantic Analysis
+
+When `MCP_SCANNER_LLM_API_KEY` is set, optional LLM-based semantic analysis can be enabled for deeper insights that heuristics cannot detect:
+
+- **Actionable error handling** - Are error messages useful for humans and agents?
+- **Failure mode documentation** - Are potential failures clearly documented?
+- **Scope clarity** - Is the tool's purpose well-defined and focused?
+
+```python
+import os
+from mcpscanner.core.analyzers import ReadinessAnalyzer
+
+# Set API key via environment variable
+os.environ["MCP_SCANNER_LLM_API_KEY"] = "your-api-key"
+
+# Enable LLM semantic analysis
+analyzer = ReadinessAnalyzer(enable_llm_judge=True)
+
+# Or override model/key directly
+analyzer = ReadinessAnalyzer(
+    enable_llm_judge=True,
+    llm_model="gpt-4o",
+    llm_api_key="your-api-key"
+)
+```
+
+LLM semantic analysis is disabled by default and requires explicit opt-in. Findings from LLM analysis use rule IDs prefixed with `LLM-READINESS-`.
+
+### Using ReadinessLLMJudge Directly
+
+For standalone LLM semantic analysis:
+
+```python
+from mcpscanner.core.analyzers import ReadinessLLMJudge
+
+judge = ReadinessLLMJudge()
+
+if judge.is_available():
+    tool_definition = {
+        "name": "execute_query",
+        "description": "Executes database queries",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"}
+            }
+        }
+    }
+    findings = await judge.analyze(tool_definition)
+    for finding in findings:
+        print(f"[{finding.severity}] {finding.summary}")
+else:
+    print(f"LLM judge unavailable: {judge.get_unavailable_reason()}")
 ```
 
 ## Credits

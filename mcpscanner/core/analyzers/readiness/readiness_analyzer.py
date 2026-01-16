@@ -18,7 +18,7 @@
 Readiness Analyzer for MCP Scanner SDK.
 
 Analyzes MCP tools for production readiness issues using zero-dependency
-heuristic checks. Ported from MCP Readiness Scanner project.
+heuristic checks and optional OPA policy evaluation.
 
 This analyzer focuses on operational reliability, NOT security vulnerabilities.
 It detects issues like missing timeouts, unsafe retry loops, and silent failures.
@@ -60,22 +60,42 @@ Safety (HEUR-018, HEUR-019, HEUR-020):
 - Dangerous operation keywords
 - No authentication context
 - Circular dependency risk
+
+Optional OPA Integration:
+- If OPA is installed and available in PATH, additional policy-based checks
+  are performed using Rego policies from data/readiness_policies/
+- OPA findings are merged with heuristic findings
+- If OPA is not available, only heuristic checks are performed
+
+Optional LLM-based Semantic Analysis:
+- When MCP_SCANNER_LLM_API_KEY is set and enable_llm_judge=True, additional
+  semantic checks are performed using LLM to evaluate aspects that heuristics
+  cannot detect:
+  - Actionable error handling
+  - Failure mode documentation quality
+  - Scope clarity assessment
+- LLM judge is disabled by default and requires explicit opt-in
 """
 
 import json
 from typing import Any, Dict, List, Optional
 
-from .base import BaseAnalyzer, SecurityFinding
+from ..base import BaseAnalyzer, SecurityFinding
+from .opa_provider import OpaProvider
 
 
 class ReadinessAnalyzer(BaseAnalyzer):
     """
     Analyzer for production readiness issues in MCP tools.
 
-    This analyzer requires NO external dependencies or API keys.
-    It performs static analysis of tool definitions using heuristics
-    to detect operational issues that may cause reliability problems
-    in production.
+    This analyzer requires NO external dependencies or API keys for core
+    functionality. It performs static analysis of tool definitions using
+    heuristics to detect operational issues that may cause reliability
+    problems in production.
+
+    Optionally, if OPA (Open Policy Agent) is installed, additional
+    policy-based checks are performed. OPA is not required - if not
+    available, the analyzer falls back to heuristic-only mode.
 
     Example:
         >>> from mcpscanner.core.analyzers import ReadinessAnalyzer
@@ -83,6 +103,17 @@ class ReadinessAnalyzer(BaseAnalyzer):
         >>> findings = await analyzer.analyze(tool_json_content)
         >>> for finding in findings:
         ...     print(f"{finding.severity}: {finding.summary}")
+
+    Example with OPA enabled:
+        >>> analyzer = ReadinessAnalyzer(enable_opa=True)
+        >>> # If OPA is in PATH, policy checks will also run
+        >>> findings = await analyzer.analyze(tool_json_content)
+
+    Example with LLM semantic analysis:
+        >>> import os
+        >>> os.environ["MCP_SCANNER_LLM_API_KEY"] = "your-api-key"
+        >>> analyzer = ReadinessAnalyzer(enable_llm_judge=True)
+        >>> findings = await analyzer.analyze(tool_json_content)
     """
 
     # Severity deductions for readiness score calculation
@@ -99,6 +130,11 @@ class ReadinessAnalyzer(BaseAnalyzer):
         config=None,
         max_capabilities: int = 10,
         min_description_length: int = 20,
+        enable_opa: bool = False,
+        opa_policies_dir: Optional[str] = None,
+        enable_llm_judge: bool = False,
+        llm_model: Optional[str] = None,
+        llm_api_key: Optional[str] = None,
     ):
         """Initialize the ReadinessAnalyzer.
 
@@ -106,10 +142,67 @@ class ReadinessAnalyzer(BaseAnalyzer):
             config: Optional configuration object (unused, for interface consistency).
             max_capabilities: Maximum capabilities before flagging overload.
             min_description_length: Minimum description length before warning.
+            enable_opa: Whether to enable OPA policy checks (default: False).
+                       If True and OPA is not available, a debug message is logged
+                       and heuristic-only mode is used.
+            opa_policies_dir: Optional path to custom Rego policies directory.
+                             If not specified, uses built-in policies.
+            enable_llm_judge: Whether to enable LLM-based semantic analysis
+                             (default: False). Requires MCP_SCANNER_LLM_API_KEY
+                             environment variable to be set.
+            llm_model: Override LLM model for semantic analysis.
+            llm_api_key: Override LLM API key for semantic analysis.
         """
         super().__init__("READINESS")
         self.max_capabilities = max_capabilities
         self.min_description_length = min_description_length
+        self.enable_opa = enable_opa
+        self._enable_llm_judge = enable_llm_judge
+
+        # Initialize OPA provider if enabled
+        self._opa_provider: Optional[OpaProvider] = None
+        if enable_opa:
+            from pathlib import Path
+            policies_dir = Path(opa_policies_dir) if opa_policies_dir else None
+            self._opa_provider = OpaProvider(policies_dir=policies_dir)
+
+            if self._opa_provider.is_available():
+                self.logger.info("OPA provider enabled and available")
+            else:
+                reason = self._opa_provider.get_unavailable_reason()
+                self.logger.debug(f"OPA not available: {reason}")
+
+        # Initialize LLM judge if enabled
+        self._llm_judge = None
+        if enable_llm_judge:
+            self._init_llm_judge(llm_model, llm_api_key)
+
+    def _init_llm_judge(
+        self,
+        llm_model: Optional[str] = None,
+        llm_api_key: Optional[str] = None,
+    ) -> None:
+        """Initialize the LLM judge for semantic analysis."""
+        try:
+            from .llm_judge import ReadinessLLMJudge
+
+            self._llm_judge = ReadinessLLMJudge(
+                model=llm_model,
+                api_key=llm_api_key,
+            )
+            if self._llm_judge.is_available():
+                self.logger.info("Readiness LLM judge enabled and available")
+            else:
+                reason = self._llm_judge.get_unavailable_reason()
+                self.logger.debug(f"LLM judge not available: {reason}")
+        except ImportError as e:
+            self.logger.debug(f"Could not initialize LLM judge: {e}")
+            self._llm_judge = None
+
+    @property
+    def llm_judge_available(self) -> bool:
+        """Check if LLM judge is available for semantic analysis."""
+        return self._llm_judge is not None and self._llm_judge.is_available()
 
     async def analyze(
         self, content: str, context: Optional[Dict[str, Any]] = None
@@ -131,45 +224,21 @@ class ReadinessAnalyzer(BaseAnalyzer):
         tool_def = self._parse_tool_definition(content, context)
 
         if tool_def:
-            # Timeout Guards
-            findings.extend(self._check_missing_timeout(tool_def, tool_name))
-            findings.extend(self._check_timeout_too_long(tool_def, tool_name))
+            # Run heuristic checks
+            findings.extend(self._run_heuristic_checks(tool_def, tool_name))
 
-            # Retry Configuration
-            findings.extend(self._check_no_retry_limit(tool_def, tool_name))
-            findings.extend(self._check_unlimited_retries(tool_def, tool_name))
-            findings.extend(self._check_no_backoff_strategy(tool_def, tool_name))
+            # Run OPA policy checks if enabled and available
+            if self._opa_provider and self._opa_provider.is_available():
+                opa_findings = await self._run_opa_checks(tool_def, tool_name)
+                findings.extend(opa_findings)
 
-            # Error Handling
-            findings.extend(self._check_missing_error_schema(tool_def, tool_name))
-            findings.extend(self._check_error_schema_missing_code(tool_def, tool_name))
-            findings.extend(self._check_no_output_schema(tool_def, tool_name))
-
-            # Description Quality
-            findings.extend(self._check_vague_description(tool_def, tool_name))
-            findings.extend(self._check_too_many_capabilities(tool_def, tool_name))
-
-            # Input Validation
-            findings.extend(self._check_no_required_fields(tool_def, tool_name))
-            findings.extend(self._check_no_input_validation_hints(tool_def, tool_name))
-
-            # Operational Config
-            findings.extend(self._check_no_rate_limit(tool_def, tool_name))
-            findings.extend(self._check_no_version(tool_def, tool_name))
-            findings.extend(self._check_no_observability(tool_def, tool_name))
-
-            # Resource Management
-            findings.extend(
-                self._check_resource_cleanup_not_documented(tool_def, tool_name)
-            )
-            findings.extend(self._check_no_idempotency_indication(tool_def, tool_name))
-
-            # Safety
-            findings.extend(
-                self._check_dangerous_operation_keywords(tool_def, tool_name)
-            )
-            findings.extend(self._check_no_authentication_context(tool_def, tool_name))
-            findings.extend(self._check_circular_dependency_risk(tool_def, tool_name))
+            # Run LLM semantic analysis if enabled and available
+            if self._llm_judge is not None and self._llm_judge.is_available():
+                try:
+                    llm_findings = await self._llm_judge.analyze(tool_def, tool_name)
+                    findings.extend(llm_findings)
+                except Exception as e:
+                    self.logger.warning(f"LLM judge analysis failed: {e}")
 
         # Calculate readiness score
         score = self._calculate_readiness_score(findings)
@@ -183,6 +252,91 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 finding.details = {}
             finding.details["readiness_score"] = score
             finding.details["is_production_ready"] = is_production_ready
+
+        return findings
+
+    def _run_heuristic_checks(
+        self, tool_def: Dict[str, Any], tool_name: str
+    ) -> List[SecurityFinding]:
+        """Run all heuristic checks on the tool definition."""
+        findings: List[SecurityFinding] = []
+
+        # Timeout Guards
+        findings.extend(self._check_missing_timeout(tool_def, tool_name))
+        findings.extend(self._check_timeout_too_long(tool_def, tool_name))
+
+        # Retry Configuration
+        findings.extend(self._check_no_retry_limit(tool_def, tool_name))
+        findings.extend(self._check_unlimited_retries(tool_def, tool_name))
+        findings.extend(self._check_no_backoff_strategy(tool_def, tool_name))
+
+        # Error Handling
+        findings.extend(self._check_missing_error_schema(tool_def, tool_name))
+        findings.extend(self._check_error_schema_missing_code(tool_def, tool_name))
+        findings.extend(self._check_no_output_schema(tool_def, tool_name))
+
+        # Description Quality
+        findings.extend(self._check_vague_description(tool_def, tool_name))
+        findings.extend(self._check_too_many_capabilities(tool_def, tool_name))
+
+        # Input Validation
+        findings.extend(self._check_no_required_fields(tool_def, tool_name))
+        findings.extend(self._check_no_input_validation_hints(tool_def, tool_name))
+
+        # Operational Config
+        findings.extend(self._check_no_rate_limit(tool_def, tool_name))
+        findings.extend(self._check_no_version(tool_def, tool_name))
+        findings.extend(self._check_no_observability(tool_def, tool_name))
+
+        # Resource Management
+        findings.extend(
+            self._check_resource_cleanup_not_documented(tool_def, tool_name)
+        )
+        findings.extend(self._check_no_idempotency_indication(tool_def, tool_name))
+
+        # Safety
+        findings.extend(
+            self._check_dangerous_operation_keywords(tool_def, tool_name)
+        )
+        findings.extend(self._check_no_authentication_context(tool_def, tool_name))
+        findings.extend(self._check_circular_dependency_risk(tool_def, tool_name))
+
+        return findings
+
+    async def _run_opa_checks(
+        self, tool_def: Dict[str, Any], tool_name: str
+    ) -> List[SecurityFinding]:
+        """
+        Run OPA policy checks on the tool definition.
+
+        Args:
+            tool_def: The tool definition dictionary.
+            tool_name: The name of the tool.
+
+        Returns:
+            List of SecurityFinding objects from OPA violations.
+        """
+        findings: List[SecurityFinding] = []
+
+        if not self._opa_provider:
+            return findings
+
+        violations = await self._opa_provider.evaluate_tool(tool_def, tool_name)
+
+        for violation in violations:
+            finding = self.create_security_finding(
+                severity=violation.get("severity", "MEDIUM"),
+                summary=violation.get("message", "Policy violation"),
+                threat_category=violation.get("category", "SILENT_FAILURE_PATH"),
+                details={
+                    "tool_name": tool_name,
+                    "rule_id": violation.get("rule_id", "OPA-unknown"),
+                    "location": f"tool.{tool_name}",
+                    "policy": violation.get("policy", "unknown"),
+                    "source": "opa",
+                },
+            )
+            findings.append(finding)
 
         return findings
 
@@ -1332,4 +1486,3 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 break  # Only report once
 
         return findings
-

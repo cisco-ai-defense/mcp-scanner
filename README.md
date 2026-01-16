@@ -15,6 +15,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
+- **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scannig**: Scan Source code of MCP servers for finding threats.
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
@@ -355,6 +356,23 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
+
+#### Readiness Scanning
+
+The Readiness Analyzer checks MCP tools for production readiness issues using 20 heuristic rules. It requires no API keys and focuses on operational reliability: timeouts, retries, error handling, and more.
+
+```bash
+# Readiness-only scan (no API keys required)
+mcp-scanner --analyzers readiness --server-url http://localhost:8000/mcp
+
+# Combined security + readiness scan
+mcp-scanner --analyzers yara,readiness --server-url http://localhost:8000/mcp
+
+# Detailed readiness output
+mcp-scanner --analyzers readiness --detailed --server-url http://localhost:8000/mcp
+```
+
+See [Readiness Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/readiness-scanning.md) for complete technical details.
 
 ### API Server Usage
 

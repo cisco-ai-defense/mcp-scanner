@@ -58,7 +58,7 @@ from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
-from .analyzers.readiness_analyzer import ReadinessAnalyzer
+from .analyzers.readiness import ReadinessAnalyzer
 from .auth import (
     Auth,
     AuthType,
