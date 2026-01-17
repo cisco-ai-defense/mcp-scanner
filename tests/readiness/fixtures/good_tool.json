@@ -1,0 +1,52 @@
+{
+  "name": "calculate_sum",
+  "description": "Calculate the sum of two numbers. This tool takes two numeric inputs and returns their sum. It is idempotent and safe to retry. The operation is atomic and requires no cleanup.",
+  "version": "1.0.0",
+  "timeout": 30000,
+  "maxRetries": 3,
+  "backoffMs": 1000,
+  "rateLimit": 100,
+  "logging": true,
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "a": {
+        "type": "number",
+        "description": "First number",
+        "minimum": -1000000,
+        "maximum": 1000000
+      },
+      "b": {
+        "type": "number",
+        "description": "Second number",
+        "minimum": -1000000,
+        "maximum": 1000000
+      }
+    },
+    "required": ["a", "b"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "result": {
+        "type": "number",
+        "description": "Sum of a and b"
+      }
+    },
+    "required": ["result"]
+  },
+  "errorSchema": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string",
+        "enum": ["INVALID_INPUT", "OVERFLOW"]
+      },
+      "message": {
+        "type": "string"
+      }
+    },
+    "required": ["code", "message"]
+  }
+}
+

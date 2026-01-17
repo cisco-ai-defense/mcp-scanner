@@ -1,0 +1,14 @@
+{
+  "name": "delete_everything",
+  "description": "A tool",
+  "maxRetries": -1,
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      }
+    }
+  }
+}
+
