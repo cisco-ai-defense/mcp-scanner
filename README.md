@@ -357,6 +357,51 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
 
+#### Scan Static/Offline Files (CI/CD Mode)
+
+The `static` subcommand allows you to scan pre-generated JSON files without connecting to a live MCP server. This is ideal for CI/CD pipelines, air-gapped environments, or reproducible security checks.
+
+```bash
+# Scan tools from a static JSON file
+mcp-scanner --analyzers yara static --tools /path/to/tools-list.json
+
+# Scan with multiple analyzers
+mcp-scanner --analyzers yara,llm static --tools /path/to/tools-list.json
+
+# Scan prompts from a static JSON file
+mcp-scanner --analyzers llm static --prompts /path/to/prompts-list.json
+
+# Scan resources from a static JSON file
+mcp-scanner --analyzers llm static --resources /path/to/resources-list.json
+
+# Scan all three types at once with detailed output
+mcp-scanner \
+  --analyzers yara,llm,api \
+  --format detailed \
+  static \
+  --tools /path/to/tools-list.json \
+  --prompts /path/to/prompts-list.json \
+  --resources /path/to/resources-list.json
+
+# CI/CD example: YARA-only scan (no API keys needed)
+mcp-scanner --analyzers yara --format summary static --tools output/tools.json
+```
+
+**Expected JSON Format:**
+```json
+{
+  "tools": [
+    {
+      "name": "tool_name",
+      "description": "Tool description",
+      "inputSchema": { "type": "object", "properties": {} }
+    }
+  ]
+}
+```
+
+For more details, see [Static Scanning Documentation](docs/static-scanning.md) and [examples/static_scanning_example.py](examples/static_scanning_example.py).
+
 #### Readiness Scanning
 
 The Readiness Analyzer checks MCP tools for production readiness issues using 20 heuristic rules. It requires no API keys and focuses on operational reliability: timeouts, retries, error handling, and more.
