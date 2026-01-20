@@ -5,7 +5,9 @@ description: Scans MCP servers, tools, prompts, and resources for security vulne
 
 # MCP Security Scanning
 
-When the user asks to scan MCP servers or check for security issues in MCP configurations, use the `mcp-scanner` CLI tool. This tool detects prompt injection, tool poisoning, command injection, data exfiltration, and other MCP-specific threats.
+When the user asks to scan MCP servers or check for security issues in MCP configurations, use the `uv run mcp-scanner` CLI tool. This tool detects prompt injection, tool poisoning, command injection, data exfiltration, and other MCP-specific threats.
+
+**Important:** Always run mcp-scanner using `uv run mcp-scanner` to ensure proper dependency management.
 
 ## Threat Types Detected
 
@@ -33,13 +35,13 @@ When the user asks to scan MCP servers or check for security issues in MCP confi
 Scan tools on a remote SSE or streamable HTTP MCP server:
 ```bash
 # Basic scan
-mcp-scanner --analyzers yara remote --server-url https://mcp.example.com/mcp
+uv run mcp-scanner --analyzers yara remote --server-url https://mcp.example.com/mcp
 
 # With authentication
-mcp-scanner --analyzers yara remote --server-url https://mcp.example.com/mcp --bearer-token "$TOKEN"
+uv run mcp-scanner --analyzers yara remote --server-url https://mcp.example.com/mcp --bearer-token "$TOKEN"
 
 # With custom headers (e.g., MCP Gateway dual-token auth)
-mcp-scanner --analyzers yara remote --server-url https://gateway.example.com/mcp \
+uv run mcp-scanner --analyzers yara remote --server-url https://gateway.example.com/mcp \
   --header "Authorization: Bearer ingress-token" \
   --header "X-Egress-Auth: Bearer egress-token"
 ```
@@ -48,13 +50,13 @@ mcp-scanner --analyzers yara remote --server-url https://gateway.example.com/mcp
 Scan well-known MCP config paths (Windsurf, Cursor, Claude Desktop, VS Code):
 ```bash
 # Quick summary scan
-mcp-scanner --scan-known-configs --analyzers yara --format summary
+uv run mcp-scanner --scan-known-configs --analyzers yara --format summary
 
 # Detailed scan
-mcp-scanner --scan-known-configs --analyzers yara --format detailed
+uv run mcp-scanner --scan-known-configs --analyzers yara --format detailed
 
 # With authentication for remote servers in configs
-mcp-scanner known-configs --bearer-token "$TOKEN" --analyzers yara
+uv run mcp-scanner known-configs --bearer-token "$TOKEN" --analyzers yara
 ```
 
 **Config locations scanned:**
@@ -66,24 +68,24 @@ mcp-scanner known-configs --bearer-token "$TOKEN" --analyzers yara
 ### 3. Specific Config File
 Scan a specific MCP configuration file:
 ```bash
-mcp-scanner config --config-path /path/to/mcp_config.json --analyzers yara --format detailed
+uv run mcp-scanner config --config-path /path/to/mcp_config.json --analyzers yara --format detailed
 ```
 
 ### 4. Stdio MCP Server
 Launch and scan a stdio-based MCP server:
 ```bash
 # Using uvx
-mcp-scanner stdio --stdio-command uvx \
+uv run mcp-scanner stdio --stdio-command uvx \
   --stdio-arg=--from --stdio-arg=mcp-server-fetch --stdio-arg=mcp-server-fetch \
   --analyzers yara --format summary
 
 # Scan specific tool only
-mcp-scanner stdio --stdio-command uvx \
+uv run mcp-scanner stdio --stdio-command uvx \
   --stdio-arg=--from --stdio-arg=mcp-server-fetch --stdio-arg=mcp-server-fetch \
   --stdio-tool fetch --analyzers yara
 
 # With environment variables
-mcp-scanner stdio --stdio-command python --stdio-arg=server.py \
+uv run mcp-scanner stdio --stdio-command python --stdio-arg=server.py \
   --stdio-env API_KEY=secret --analyzers yara
 ```
 
@@ -91,53 +93,53 @@ mcp-scanner stdio --stdio-command python --stdio-arg=server.py \
 Scan MCP server prompts for prompt injection and manipulation:
 ```bash
 # Scan all prompts
-mcp-scanner --analyzers llm prompts --server-url http://127.0.0.1:8000/mcp
+uv run mcp-scanner --analyzers llm prompts --server-url http://127.0.0.1:8000/mcp
 
 # Scan specific prompt
-mcp-scanner --analyzers llm prompts --server-url http://127.0.0.1:8000/mcp --prompt-name "greet_user"
+uv run mcp-scanner --analyzers llm prompts --server-url http://127.0.0.1:8000/mcp --prompt-name "greet_user"
 
 # Table format output
-mcp-scanner --analyzers llm --format table prompts --server-url http://127.0.0.1:8000/mcp
+uv run mcp-scanner --analyzers llm --format table prompts --server-url http://127.0.0.1:8000/mcp
 ```
 
 ### 6. Resources
 Scan MCP server resources for malicious content:
 ```bash
 # Scan all resources
-mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp
+uv run mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp
 
 # Scan specific resource
-mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
+uv run mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
   --resource-uri "file://test/document.txt"
 
 # Filter by MIME types
-mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
+uv run mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
   --mime-types "text/plain,text/html,application/json"
 ```
 
 ### 7. Server Instructions
 Scan server instructions from InitializeResult for prompt injection and misleading guidance:
 ```bash
-mcp-scanner instructions --server-url http://127.0.0.1:8000/mcp
+uv run mcp-scanner instructions --server-url http://127.0.0.1:8000/mcp
 
 # With LLM for semantic analysis
-mcp-scanner --analyzers llm instructions --server-url http://127.0.0.1:8000/mcp
+uv run mcp-scanner --analyzers llm instructions --server-url http://127.0.0.1:8000/mcp
 ```
 
 ### 8. Behavioral Code Analysis
 Analyze MCP server source code to detect mismatches between documentation and implementation:
 ```bash
 # Scan a single file
-mcp-scanner behavioral /path/to/mcp_server.py
+uv run mcp-scanner behavioral /path/to/mcp_server.py
 
 # Scan a directory
-mcp-scanner behavioral /path/to/mcp_servers/
+uv run mcp-scanner behavioral /path/to/mcp_servers/
 
 # With specific output format
-mcp-scanner behavioral /path/to/mcp_server.py --format by_severity
+uv run mcp-scanner behavioral /path/to/mcp_server.py --format by_severity
 
 # Save results to file
-mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
+uv run mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 ```
 
 **Detects:**
@@ -150,16 +152,16 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 Scan pre-generated JSON files without connecting to a live server:
 ```bash
 # Scan tools JSON (YARA-only, no API keys needed)
-mcp-scanner --analyzers yara --format summary static --tools /path/to/tools.json
+uv run mcp-scanner --analyzers yara --format summary static --tools /path/to/tools.json
 
 # Scan prompts JSON
-mcp-scanner --analyzers llm static --prompts /path/to/prompts.json
+uv run mcp-scanner --analyzers llm static --prompts /path/to/prompts.json
 
 # Scan resources JSON
-mcp-scanner --analyzers llm static --resources /path/to/resources.json
+uv run mcp-scanner --analyzers llm static --resources /path/to/resources.json
 
 # Scan all types at once
-mcp-scanner --analyzers yara,llm,api --format detailed static \
+uv run mcp-scanner --analyzers yara,llm,api --format detailed static \
   --tools /path/to/tools.json \
   --prompts /path/to/prompts.json \
   --resources /path/to/resources.json
@@ -241,14 +243,14 @@ export MCP_SCANNER_LLM_TIMEOUT=300
 
 ```bash
 # 1. Quick scan of all local configs
-mcp-scanner --scan-known-configs --analyzers yara --format summary
+uv run mcp-scanner --scan-known-configs --analyzers yara --format summary
 
 # 2. If issues found, run detailed scan
-mcp-scanner --scan-known-configs --analyzers yara,llm --format detailed
+uv run mcp-scanner --scan-known-configs --analyzers yara,llm --format detailed
 
 # 3. For new server, scan before installing
-mcp-scanner --analyzers yara,llm remote --server-url https://new-mcp-server.com/mcp
+uv run mcp-scanner --analyzers yara,llm remote --server-url https://new-mcp-server.com/mcp
 
 # 4. For MCP server code you're reviewing
-mcp-scanner behavioral ./mcp-server-source/ --format by_severity
+uv run mcp-scanner behavioral ./mcp-server-source/ --format by_severity
 ```
