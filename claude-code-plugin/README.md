@@ -1,6 +1,6 @@
 # MCP Scanner - Claude Code Plugin
 
-A Claude Code plugin for scanning MCP servers and tools for security vulnerabilities using YARA rules, LLM analysis, and Cisco AI Defense API.
+A Claude Code plugin for scanning MCP servers and tools for security threats and risks using YARA rules, LLM analysis, Behavioral analysis, and Cisco AI Defense API.
 
 ## Features
 
@@ -65,6 +65,7 @@ The plugin includes an `mcp-security-scan` skill that Claude will automatically 
 |----------|-------------|--------------|
 | `yara` | Pattern-based threat detection | None |
 | `llm` | LLM-powered semantic analysis | `MCP_SCANNER_LLM_API_KEY` |
+| `behavioral` | Detect mismatches between documentation and implementation | `MCP_SCANNER_LLM_API_KEY` |
 | `api` | Cisco AI Defense API | `MCP_SCANNER_API_KEY` |
 
 ## Output Formats

@@ -1,10 +1,10 @@
 ---
-description: Scan pre-generated JSON files offline without connecting to a live MCP server (CI/CD mode)
+description: Scan pre-generated JSON files offline for security threats and risks (CI/CD mode)
 ---
 
 # Scan Static/Offline Files
 
-Scan pre-generated MCP JSON files at "$ARGUMENTS" for security vulnerabilities. This mode is ideal for CI/CD pipelines, air-gapped environments, or reproducible security checks.
+Scan pre-generated MCP JSON files at "$ARGUMENTS" for security threats and risks. This mode is ideal for CI/CD pipelines, air-gapped environments, or reproducible security checks.
 
 If the user provides a path, determine the file type and run the appropriate command:
 

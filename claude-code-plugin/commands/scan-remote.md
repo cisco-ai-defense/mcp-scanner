@@ -1,10 +1,10 @@
 ---
-description: Scan a remote MCP server for security vulnerabilities
+description: Scan a remote MCP server for security threats and risks
 ---
 
 # Scan Remote MCP Server
 
-Scan the remote MCP server at URL "$ARGUMENTS" for security vulnerabilities.
+Scan the remote MCP server at URL "$ARGUMENTS" for security threats and risks.
 
 Run the following command:
 ```bash
