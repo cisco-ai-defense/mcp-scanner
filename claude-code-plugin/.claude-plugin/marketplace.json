@@ -1,0 +1,28 @@
+{
+  "name": "mcp-scanner-marketplace",
+  "owner": {
+    "name": "Cisco AI Defense",
+    "email": "ai-defense@cisco.com"
+  },
+  "metadata": {
+    "description": "Official Claude Code plugins for MCP security scanning by Cisco AI Defense",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "mcp-scanner",
+      "source": "./",
+      "description": "Security scanning for MCP servers using YARA rules, LLM analysis, and Cisco AI Defense API. Detect prompt injection, tool poisoning, command injection, data exfiltration, and other threats in MCP tools, prompts, and resources.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Cisco AI Defense"
+      },
+      "homepage": "https://github.com/cisco-ai-defense/mcp-scanner",
+      "repository": "https://github.com/cisco-ai-defense/mcp-scanner",
+      "license": "Apache-2.0",
+      "keywords": ["security", "mcp", "scanning", "yara", "threat-detection", "prompt-injection", "tool-poisoning"],
+      "category": "security",
+      "tags": ["security", "mcp", "scanning", "cisco", "ai-defense"]
+    }
+  ]
+}
