@@ -284,6 +284,10 @@ class APIScanRequest(BaseModel):
     show_stats: bool = False
     rules_path: Optional[str] = None
     auth: Optional[APIAuthConfig] = None
+    enable_meta: bool = Field(
+        default=False,
+        description="Enable meta-analysis to filter false positives and prioritize findings",
+    )
 
 
 class SpecificToolScanRequest(APIScanRequest):

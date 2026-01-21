@@ -15,6 +15,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
+- **Meta-Analysis**: Optional second-pass LLM analysis to filter false positives, prioritize findings, and provide actionable recommendations.
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
@@ -356,6 +357,39 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
 
+#### Meta-Analysis (False Positive Filtering)
+
+The Meta-Analyzer performs a second-pass LLM analysis on findings from other analyzers to filter false positives, prioritize findings by actual risk, and provide actionable recommendations.
+
+```bash
+# Enable meta-analysis with --enable-meta flag
+mcp-scanner --analyzers yara,llm --enable-meta --format summary \
+  remote --server-url https://mcp.example.com/mcp
+
+# Meta-analysis with stdio server
+mcp-scanner --analyzers yara,llm --enable-meta --format summary \
+  stdio --stdio-command uvx \
+  --stdio-arg=--from --stdio-arg=mcp-server-fetch --stdio-arg=mcp-server-fetch
+
+# Meta-analysis with known configs
+mcp-scanner --analyzers yara,llm --enable-meta --format detailed known-configs
+```
+
+**Meta-Analyzer Features:**
+- **False Positive Filtering**: Identifies and filters out false positives based on context
+- **Priority Ranking**: Ranks findings by actual exploitability and impact
+- **Correlation**: Groups related findings across different analyzers
+- **Recommendations**: Provides specific remediation guidance
+
+**Configuration:** The meta-analyzer uses the same LLM settings as the LLM analyzer, or can be configured separately:
+```bash
+# Optional: Use different LLM settings for meta-analyzer
+export MCP_SCANNER_META_LLM_API_KEY="your_meta_llm_key"
+export MCP_SCANNER_META_LLM_MODEL="azure/gpt-4"
+export MCP_SCANNER_META_LLM_BASE_URL="https://your-resource.openai.azure.com/"
+export MCP_SCANNER_META_LLM_API_VERSION="2024-02-01"
+```
+
 #### Scan Static/Offline Files (CI/CD Mode)
 
 The `static` subcommand allows you to scan pre-generated JSON files without connecting to a live MCP server. This is ideal for CI/CD pipelines, air-gapped environments, or reproducible security checks.
@@ -495,6 +529,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
 - **[Behavioral Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
+- **[Meta-Analysis](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/meta-analysis.md)** - Second-pass LLM analysis to filter false positives
 - **[LLM Providers](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/llm-providers.md)** - LLM configuration for all providers
 - **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration

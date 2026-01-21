@@ -54,8 +54,9 @@ from ..utils.command_utils import (
     resolve_executable_path,
 )
 from .analyzers.api_analyzer import ApiAnalyzer
-from .analyzers.base import BaseAnalyzer
+from .analyzers.base import BaseAnalyzer, SecurityFinding
 from .analyzers.llm_analyzer import LLMAnalyzer
+from .analyzers.meta_analyzer import LLMMetaAnalyzer, MetaAnalysisResult
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .auth import (
@@ -126,6 +127,17 @@ class Scanner:
         )
         self._custom_analyzers = custom_analyzers or []
 
+        # Initialize meta-analyzer (optional, requires LLM API key)
+        # Meta-analyzer is controlled via CLI --enable-meta flag, not env vars
+        self._meta_analyzer = None
+        try:
+            is_bedrock = config.llm_model and "bedrock/" in config.llm_model
+            if config.llm_provider_api_key or is_bedrock:
+                self._meta_analyzer = LLMMetaAnalyzer(config)
+                logger.debug("Meta-analyzer initialized")
+        except Exception as e:
+            logger.debug(f"Meta-analyzer not initialized: {e}")
+
         # Debug logging for analyzer initialization
         active_analyzers = []
         if self._api_analyzer:
@@ -136,6 +148,8 @@ class Scanner:
             active_analyzers.append("LLM")
         if self._behavioral_analyzer:
             active_analyzers.append("Behavioral")
+        if self._meta_analyzer:
+            active_analyzers.append("META")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -146,6 +160,154 @@ class Scanner:
             List[BaseAnalyzer]: List of custom analyzers.
         """
         return self._custom_analyzers
+
+    def has_meta_analyzer(self) -> bool:
+        """Check if meta-analyzer is available.
+        
+        Returns:
+            bool: True if meta-analyzer is initialized and not disabled.
+        """
+        return self._meta_analyzer is not None
+
+    async def run_meta_analysis(
+        self,
+        scan_results: List[ScanResult],
+        original_content: str = "",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> List[SecurityFinding]:
+        """Run meta-analysis on accumulated findings from scan results.
+        
+        Returns validated findings as List[SecurityFinding] - same format as 
+        other analyzers (API, YARA, LLM). False positives are filtered out.
+        
+        Meta-analysis provides:
+        - False positive identification and filtering
+        - Priority ranking of findings
+        - Enriched details (confidence, exploitability, impact)
+        
+        Requirements:
+        - Meta-analyzer must be initialized (LLM API key configured)
+        - At least 2 different analyzers must have been used
+        - MCP_SCANNER_DISABLE_META_ANALYZER must not be set to 'true'
+        
+        Args:
+            scan_results: List of ScanResult objects from previous scans
+            original_content: Original scanned content for context
+            context: Additional context about the scan
+            
+        Returns:
+            List[SecurityFinding]: Validated findings only (false positives removed).
+            Returns original findings if meta-analysis cannot be performed.
+        """
+        # Collect all findings from scan results
+        all_findings: List[SecurityFinding] = []
+        analyzers_used: List[str] = []
+        
+        for result in scan_results:
+            all_findings.extend(result.findings)
+            for analyzer in result.analyzers:
+                if isinstance(analyzer, str):
+                    if analyzer.upper() not in [a.upper() for a in analyzers_used]:
+                        analyzers_used.append(analyzer.upper())
+                else:
+                    analyzer_name = analyzer.value.upper() if hasattr(analyzer, 'value') else str(analyzer).upper()
+                    if analyzer_name not in [a.upper() for a in analyzers_used]:
+                        analyzers_used.append(analyzer_name)
+
+        if not self._meta_analyzer:
+            logger.debug("Meta-analyzer not available - returning original findings")
+            return all_findings
+
+        if not all_findings:
+            logger.debug("No findings to analyze")
+            return []
+
+        # Build context from scan results
+        scan_context = context or {}
+        scan_context["analyzers_used"] = analyzers_used
+        scan_context["total_findings"] = len(all_findings)
+        scan_context["scan_results_count"] = len(scan_results)
+
+        logger.info(
+            f"Running meta-analysis on {len(all_findings)} findings from {len(analyzers_used)} analyzers"
+        )
+
+        try:
+            meta_result = await self._meta_analyzer.analyze_findings(
+                findings=all_findings,
+                original_content=original_content,
+                context=scan_context,
+                analyzers_used=analyzers_used,
+            )
+            
+            # Return validated findings as List[SecurityFinding]
+            validated = meta_result.get_validated_findings()
+            
+            logger.info(
+                f"Meta-analysis complete: {len(validated)} validated, "
+                f"{len(meta_result.false_positives)} false positives filtered out"
+            )
+            
+            return validated
+            
+        except Exception as e:
+            logger.error(f"Meta-analysis failed: {e}")
+            return all_findings
+
+    async def run_meta_analysis_full(
+        self,
+        scan_results: List[ScanResult],
+        original_content: str = "",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[MetaAnalysisResult]:
+        """Run meta-analysis and return full result with all details.
+        
+        Use this if you need access to false_positives, recommendations,
+        correlations, etc. For just validated findings, use run_meta_analysis().
+        
+        Args:
+            scan_results: List of ScanResult objects from previous scans
+            original_content: Original scanned content for context
+            context: Additional context about the scan
+            
+        Returns:
+            MetaAnalysisResult with all details, or None if cannot be performed.
+        """
+        all_findings: List[SecurityFinding] = []
+        analyzers_used: List[str] = []
+        
+        for result in scan_results:
+            all_findings.extend(result.findings)
+            for analyzer in result.analyzers:
+                if isinstance(analyzer, str):
+                    if analyzer.upper() not in [a.upper() for a in analyzers_used]:
+                        analyzers_used.append(analyzer.upper())
+                else:
+                    analyzer_name = analyzer.value.upper() if hasattr(analyzer, 'value') else str(analyzer).upper()
+                    if analyzer_name not in [a.upper() for a in analyzers_used]:
+                        analyzers_used.append(analyzer_name)
+
+        if not self._meta_analyzer:
+            return None
+
+        if not all_findings:
+            return MetaAnalysisResult(
+                overall_risk_assessment={"risk_level": "SAFE", "summary": "No findings"}
+            )
+
+        scan_context = context or {}
+        scan_context["analyzers_used"] = analyzers_used
+
+        try:
+            return await self._meta_analyzer.analyze_findings(
+                findings=all_findings,
+                original_content=original_content,
+                context=scan_context,
+                analyzers_used=analyzers_used,
+            )
+        except Exception as e:
+            logger.error(f"Meta-analysis failed: {e}")
+            return None
 
     def _validate_analyzer_requirements(
         self, requested_analyzers: List[AnalyzerEnum]

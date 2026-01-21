@@ -37,6 +37,7 @@ The MCP Scanner API supports all the same output formatting options as the CLI t
 | `show_stats` | boolean | false | Include scan statistics |
 | `rules_path` | string | null | Custom YARA rules directory path |
 | `tool_name` | string | null | Specific tool name (scan-tool endpoint only) |
+| `enable_meta` | boolean | false | Enable meta-analysis to filter false positives and prioritize findings |
 
 ### Output Formats
 
@@ -160,6 +161,25 @@ curl -X POST "http://localhost:8001/scan-all-tools" \
     "rules_path": null
   }'
 ```
+
+**With Meta-Analysis (False Positive Filtering):**
+```bash
+curl -X POST "http://localhost:8001/scan-all-tools" \
+  -H "accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "server_url": "https://mcp-server.example.com/mcp",
+    "analyzers": ["yara", "llm"],
+    "output_format": "summary",
+    "enable_meta": true
+  }'
+```
+
+The `enable_meta` parameter activates a second-pass LLM analysis that:
+- Filters out false positives based on context
+- Prioritizes findings by actual exploitability and impact
+- Correlates related findings across analyzers
+- Provides specific remediation recommendations
 
 ## Response Structure
 

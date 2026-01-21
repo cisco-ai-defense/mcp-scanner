@@ -548,6 +548,146 @@ def format_results_as_json(
     return json.dumps({"scan_results": results}, indent=2)
 
 
+def apply_meta_analysis_to_results(
+    scan_results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]],
+    validated_findings: List[SecurityFinding],
+) -> List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]]:
+    """Apply meta-analysis validated findings back to scan results.
+    
+    Replaces findings in scan results with meta-validated findings,
+    effectively filtering out false positives identified by meta-analysis.
+    
+    Args:
+        scan_results: Original scan results from analyzers
+        validated_findings: Validated findings from meta-analysis (false positives removed)
+        
+    Returns:
+        Updated scan results with meta-validated findings
+    """
+    if not validated_findings:
+        # No validated findings means all were false positives or no findings
+        updated_results = []
+        for result in scan_results:
+            if isinstance(result, ToolScanResult):
+                updated_results.append(ToolScanResult(
+                    tool_name=result.tool_name,
+                    tool_description=result.tool_description,
+                    status=result.status,
+                    analyzers=result.analyzers + ["META"],
+                    findings=[],  # All filtered out
+                    server_source=result.server_source,
+                    server_name=result.server_name,
+                ))
+            elif isinstance(result, PromptScanResult):
+                updated_results.append(PromptScanResult(
+                    prompt_name=result.prompt_name,
+                    prompt_description=result.prompt_description,
+                    status=result.status,
+                    analyzers=result.analyzers + ["META"],
+                    findings=[],
+                    server_source=result.server_source,
+                    server_name=result.server_name,
+                ))
+            elif isinstance(result, ResourceScanResult):
+                updated_results.append(ResourceScanResult(
+                    resource_uri=result.resource_uri,
+                    resource_name=result.resource_name,
+                    resource_mime_type=result.resource_mime_type,
+                    status=result.status,
+                    analyzers=result.analyzers + ["META"],
+                    findings=[],
+                    server_source=result.server_source,
+                    server_name=result.server_name,
+                ))
+            elif isinstance(result, InstructionsScanResult):
+                updated_results.append(InstructionsScanResult(
+                    instructions=result.instructions,
+                    server_name=result.server_name,
+                    protocol_version=result.protocol_version,
+                    status=result.status,
+                    analyzers=result.analyzers + ["META"],
+                    findings=[],
+                    server_source=result.server_source,
+                ))
+            else:
+                updated_results.append(result)
+        return updated_results
+
+    # Create lookup for validated findings by their details (tool_name, threat_type)
+    validated_set = set()
+    for f in validated_findings:
+        key = (
+            f.details.get("tool_name", "") if f.details else "",
+            f.threat_category,
+            f.summary,
+        )
+        validated_set.add(key)
+
+    updated_results = []
+    for result in scan_results:
+        # Filter findings to only include validated ones
+        filtered_findings = []
+        for finding in result.findings:
+            key = (
+                finding.details.get("tool_name", "") if finding.details else "",
+                finding.threat_category,
+                finding.summary,
+            )
+            if key in validated_set:
+                # Add meta_validated flag to details
+                if finding.details is None:
+                    finding.details = {}
+                finding.details["meta_validated"] = True
+                filtered_findings.append(finding)
+
+        # Create updated result with filtered findings
+        if isinstance(result, ToolScanResult):
+            updated_results.append(ToolScanResult(
+                tool_name=result.tool_name,
+                tool_description=result.tool_description,
+                status=result.status,
+                analyzers=result.analyzers + ["META"],
+                findings=filtered_findings,
+                server_source=result.server_source,
+                server_name=result.server_name,
+            ))
+        elif isinstance(result, PromptScanResult):
+            updated_results.append(PromptScanResult(
+                prompt_name=result.prompt_name,
+                prompt_description=result.prompt_description,
+                status=result.status,
+                analyzers=result.analyzers + ["META"],
+                findings=filtered_findings,
+                server_source=result.server_source,
+                server_name=result.server_name,
+            ))
+        elif isinstance(result, ResourceScanResult):
+            updated_results.append(ResourceScanResult(
+                resource_uri=result.resource_uri,
+                resource_name=result.resource_name,
+                resource_mime_type=result.resource_mime_type,
+                status=result.status,
+                analyzers=result.analyzers + ["META"],
+                findings=filtered_findings,
+                server_source=result.server_source,
+                server_name=result.server_name,
+            ))
+        elif isinstance(result, InstructionsScanResult):
+            updated_results.append(InstructionsScanResult(
+                instructions=result.instructions,
+                server_name=result.server_name,
+                protocol_version=result.protocol_version,
+                status=result.status,
+                analyzers=result.analyzers + ["META"],
+                findings=filtered_findings,
+                server_source=result.server_source,
+            ))
+        else:
+            updated_results.append(result)
+
+    return updated_results
+
+
 def format_results_by_analyzer(
     scan_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]
 ) -> str:

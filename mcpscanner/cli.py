@@ -51,6 +51,8 @@ from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
 from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
+from mcpscanner.core.analyzers.meta_analyzer import LLMMetaAnalyzer
+from mcpscanner.core.result import apply_meta_analysis_to_results
 
 logger = get_logger(__name__)
 
@@ -1098,8 +1100,13 @@ async def main():
     )
     parser.add_argument(
         "--analyzer-filter",
-        choices=["api_analyzer", "yara_analyzer", "llm_analyzer", "behavioral_analyzer"],
+        choices=["api_analyzer", "yara_analyzer", "llm_analyzer", "behavioral_analyzer", "meta_analyzer"],
         help="Filter results by specific analyzer",
+    )
+    parser.add_argument(
+        "--enable-meta",
+        action="store_true",
+        help="Enable meta-analysis to filter false positives and prioritize findings (requires 2+ analyzers)",
     )
     parser.add_argument(
         "--severity-filter",
@@ -1172,6 +1179,9 @@ async def main():
         os.environ["MCP_SCANNER_LLM_API_KEY"] = args.llm_api_key
     if args.llm_timeout:
         os.environ["MCP_SCANNER_LLM_TIMEOUT"] = str(args.llm_timeout)
+    
+    # Check if meta-analysis should run (CLI flag only)
+    enable_meta = args.enable_meta
 
     try:
         # Handle static file scanning subcommand (matches 'prompts' and 'resources' pattern)
@@ -1268,6 +1278,16 @@ async def main():
             results_raw = await scanner.scan_remote_server_tools(
                 args.server_url, auth=auth, analyzers=selected_analyzers
             )
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(results_raw)
+                results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
             results = await results_to_json(results_raw)
 
         elif args.cmd == "stdio":
@@ -1292,24 +1312,44 @@ async def main():
                 scan_result = await scanner.scan_stdio_server_tool(
                     stdio, args.stdio_tool, analyzers=selected_analyzers
                 )
-                results = await results_to_json([scan_result])
+                results_raw = [scan_result]
             else:
-                scan_results = await scanner.scan_stdio_server_tools(
+                results_raw = await scanner.scan_stdio_server_tools(
                     stdio, analyzers=selected_analyzers
                 )
-                results = await results_to_json(scan_results)
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(results_raw)
+                results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
+            results = await results_to_json(results_raw)
 
         elif args.cmd == "config":
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-            scan_results = await scanner.scan_mcp_config_file(
+            results_raw = await scanner.scan_mcp_config_file(
                 args.config_path,
                 analyzers=selected_analyzers,
                 auth=auth,
                 expand_vars_default=args.expand_vars,
             )
-            results = await results_to_json(scan_results)
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(results_raw)
+                results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
+            results = await results_to_json(results_raw)
 
         elif args.cmd == "known-configs":
             cfg = _build_config(selected_analyzers)
@@ -1323,12 +1363,26 @@ async def main():
             if args.raw:
                 output = {}
                 for cfg_path, scan_results in results_by_cfg.items():
+                    # Run meta-analysis if enabled
+                    if enable_meta and scanner.has_meta_analyzer():
+                        validated_findings = await scanner.run_meta_analysis(scan_results)
+                        scan_results = apply_meta_analysis_to_results(scan_results, validated_findings)
                     output[cfg_path] = await results_to_json(scan_results)
                 print(json.dumps(output, indent=2))
                 return
             flattened = []
             for scan_results in results_by_cfg.values():
                 flattened.extend(scan_results)
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(flattened)
+                flattened = apply_meta_analysis_to_results(flattened, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
             results = await results_to_json(flattened)
 
         elif args.cmd == "prompts":
@@ -1621,25 +1675,45 @@ async def main():
                 scan_result = await scanner.scan_stdio_server_tool(
                     stdio, args.stdio_tool, analyzers=selected_analyzers
                 )
-                results = await results_to_json([scan_result])
+                results_raw = [scan_result]
             else:
-                scan_results = await scanner.scan_stdio_server_tools(
+                results_raw = await scanner.scan_stdio_server_tools(
                     stdio, analyzers=selected_analyzers
                 )
-                results = await results_to_json(scan_results)
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(results_raw)
+                results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
+            results = await results_to_json(results_raw)
 
         elif args.scan_known_configs or args.config_path:
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             if args.config_path:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-                scan_results = await scanner.scan_mcp_config_file(
+                results_raw = await scanner.scan_mcp_config_file(
                     args.config_path,
                     analyzers=selected_analyzers,
                     auth=auth,
                     expand_vars_default=args.expand_vars,
                 )
-                results = await results_to_json(scan_results)
+                
+                # Run meta-analysis if enabled
+                if enable_meta and scanner.has_meta_analyzer():
+                    if args.verbose:
+                        print("🔍 Running meta-analysis to filter false positives...")
+                    validated_findings = await scanner.run_meta_analysis(results_raw)
+                    results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                    if args.verbose:
+                        print(f"✅ Meta-analysis complete")
+                
+                results = await results_to_json(results_raw)
             else:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                 results_by_cfg = await scanner.scan_well_known_mcp_configs(
@@ -1650,6 +1724,10 @@ async def main():
                 if args.raw:
                     output = {}
                     for cfg_path, scan_results in results_by_cfg.items():
+                        # Run meta-analysis if enabled
+                        if enable_meta and scanner.has_meta_analyzer():
+                            validated_findings = await scanner.run_meta_analysis(scan_results)
+                            scan_results = apply_meta_analysis_to_results(scan_results, validated_findings)
                         output[cfg_path] = await results_to_json(scan_results)
                     print(json.dumps(output, indent=2))
                     return
@@ -1663,6 +1741,16 @@ async def main():
                         )
                         result.server_source = f"{config_name}"
                     flattened.extend(scan_results)
+                
+                # Run meta-analysis if enabled
+                if enable_meta and scanner.has_meta_analyzer():
+                    if args.verbose:
+                        print("🔍 Running meta-analysis to filter false positives...")
+                    validated_findings = await scanner.run_meta_analysis(flattened)
+                    flattened = apply_meta_analysis_to_results(flattened, validated_findings)
+                    if args.verbose:
+                        print(f"✅ Meta-analysis complete")
+                
                 results = await results_to_json(flattened)
 
         else:
@@ -1680,7 +1768,6 @@ async def main():
                         auth=Auth.bearer(args.bearer_token),
                         analyzers=selected_analyzers,
                     )
-                    results = await results_to_json(results_raw)
                 else:
                     cfg = _build_config(selected_analyzers, endpoint_url=args.endpoint_url)
                     scanner = Scanner(cfg, rules_dir=args.rules_path)
@@ -1688,7 +1775,17 @@ async def main():
                     results_raw = await scanner.scan_remote_server_tools(
                         args.server_url, auth=auth, analyzers=selected_analyzers
                     )
-                    results = await results_to_json(results_raw)
+                
+                # Run meta-analysis if enabled
+                if enable_meta and scanner.has_meta_analyzer():
+                    if args.verbose:
+                        print("🔍 Running meta-analysis to filter false positives...")
+                    validated_findings = await scanner.run_meta_analysis(results_raw)
+                    results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                    if args.verbose:
+                        print(f"✅ Meta-analysis complete")
+                
+                results = await results_to_json(results_raw)
 
     except Exception as e:
         print(f"Error during scanning: {e}", file=sys.stderr)
