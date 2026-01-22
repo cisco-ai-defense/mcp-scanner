@@ -1215,6 +1215,7 @@ class Scanner:
         """
         client_context = None
         session = None
+        devnull = None
 
         try:
             logger.debug(f"Creating stdio client for command: {server_config.command}")
@@ -1256,7 +1257,10 @@ class Scanner:
             )
 
             # Create client context and session with proper error handling
-            client_context = stdio_client(server_params)
+            # Redirect stderr to devnull to prevent MCP server startup messages
+            # from corrupting the JSON-RPC communication on stdout
+            devnull = open(os.devnull, 'w')
+            client_context = stdio_client(server_params, errlog=devnull)
 
             # Use asyncio.wait_for for timeout instead of asyncio.timeout
             try:
@@ -1292,6 +1296,8 @@ class Scanner:
             logger.error(
                 f"Timeout connecting to stdio server {server_config.command} after {timeout}s"
             )
+            if devnull:
+                devnull.close()
             raise MCPConnectionError(
                 f"Timeout connecting to stdio MCP server with command {server_config.command}. "
                 f"Server took longer than {timeout} seconds to start."
@@ -1311,6 +1317,8 @@ class Scanner:
                     await client_context.__aexit__(None, None, None)
                 except:
                     pass
+            if devnull:
+                devnull.close()
             raise MCPConnectionError(
                 f"Connection cancelled for stdio MCP server with command {server_config.command}. "
                 f"This may indicate the server failed to start properly."
@@ -1330,6 +1338,8 @@ class Scanner:
                     await client_context.__aexit__(None, None, None)
                 except:
                     pass
+            if devnull:
+                devnull.close()
             raise MCPConnectionError(
                 f"Unable to connect to stdio MCP server with command {server_config.command}. "
                 f"Please verify the command is correct and executable. "
