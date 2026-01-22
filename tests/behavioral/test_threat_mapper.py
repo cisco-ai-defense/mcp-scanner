@@ -162,14 +162,19 @@ class TestThreatMapper:
             "TEMPLATE INJECTION",
             "TOOL POISONING",
             "GOAL MANIPULATION",
+            "AGENT MASQUERADING",
             "DATA EXFILTRATION",
             "UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS",
             "UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS",
             "ARBITRARY RESOURCE READ/WRITE",
+            "WEAK ACCESS CONTROLS",
             "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION",
             "BACKDOOR",
+            "SAME-ORIGIN POLICY BYPASS",
+            "CROSS-ORIGIN SECURITY BYPASS",
             "DEFENSE EVASION",
             "RESOURCE EXHAUSTION",
+            "AUTOMATED FRAUD CONTENT GENERATION",
             "GENERAL DESCRIPTION-CODE MISMATCH"
         ]
         
@@ -184,8 +189,8 @@ class TestThreatMapper:
         
         behavioral_threats = ThreatMapping.BEHAVIORAL_THREATS
         
-        # Should have at least 14 threat categories (comprehensive taxonomy)
-        assert len(behavioral_threats) >= 14, f"Expected at least 14 threats, got {len(behavioral_threats)}"
+        # Should have at least 19 threat categories (comprehensive taxonomy)
+        assert len(behavioral_threats) >= 19, f"Expected at least 19 threats, got {len(behavioral_threats)}"
     
     def test_data_exfiltration_threat_details(self):
         """Test specific details of DATA EXFILTRATION threat."""
@@ -209,3 +214,68 @@ class TestThreatMapper:
         assert threat["severity"] == "HIGH"
         assert threat["aitech"] == "AITech-9.1"
         assert len(threat["description"]) > 50, "Description should be detailed"
+
+    def test_agent_masquerading_threat_details(self):
+        """Test specific details of AGENT MASQUERADING threat."""
+        from mcpscanner.threats.threats import ThreatMapping
+        
+        threat = ThreatMapping.BEHAVIORAL_THREATS["AGENT MASQUERADING"]
+        
+        assert threat["severity"] == "HIGH"
+        assert threat["aitech"] == "AITech-3.1"
+        assert threat["aitech_name"] == "Identity Manipulation"
+        assert threat["aisubtech"] == "AISubtech-3.1.2"
+        assert threat["aisubtech_name"] == "Agent Masquerading"
+        assert "masquerading" in threat["description"].lower()
+    
+    def test_weak_access_controls_threat_details(self):
+        """Test specific details of WEAK ACCESS CONTROLS threat."""
+        from mcpscanner.threats.threats import ThreatMapping
+        
+        threat = ThreatMapping.BEHAVIORAL_THREATS["WEAK ACCESS CONTROLS"]
+        
+        assert threat["severity"] == "HIGH"
+        assert threat["aitech"] == "AITech-14.1"
+        assert threat["aitech_name"] == "Misconfiguration"
+        assert threat["aisubtech"] == "AISubtech-14.1.2"
+        assert threat["aisubtech_name"] == "Weak Access Controls"
+        assert "access" in threat["description"].lower() or "authentication" in threat["description"].lower()
+    
+    def test_automated_fraud_content_generation_threat_details(self):
+        """Test specific details of AUTOMATED FRAUD CONTENT GENERATION threat."""
+        from mcpscanner.threats.threats import ThreatMapping
+        
+        threat = ThreatMapping.BEHAVIORAL_THREATS["AUTOMATED FRAUD CONTENT GENERATION"]
+        
+        assert threat["severity"] == "HIGH"
+        assert threat["aitech"] == "AITech-18.1"
+        assert threat["aitech_name"] == "Financial and Fraud-Related Harm"
+        assert threat["aisubtech"] == "AISubtech-18.1.1"
+        assert threat["aisubtech_name"] == "Automated Generation of Unsolicited / Fraud Content"
+        assert "fraud" in threat["description"].lower() or "phishing" in threat["description"].lower()
+    
+    def test_same_origin_policy_bypass_threat_details(self):
+        """Test specific details of SAME-ORIGIN POLICY BYPASS threat."""
+        from mcpscanner.threats.threats import ThreatMapping
+        
+        threat = ThreatMapping.BEHAVIORAL_THREATS["SAME-ORIGIN POLICY BYPASS"]
+        
+        assert threat["severity"] == "HIGH"
+        assert threat["aitech"] == "AITech-4.3"
+        assert threat["aitech_name"] == "Bypassing Security Mechanisms"
+        assert threat["aisubtech"] == "AISubtech-4.3.4"
+        assert threat["aisubtech_name"] == "Same-Origin Policy (SOP) Bypass"
+        assert "same-origin" in threat["description"].lower() or "sop" in threat["description"].lower()
+    
+    def test_cross_origin_security_bypass_threat_details(self):
+        """Test specific details of CROSS-ORIGIN SECURITY BYPASS threat."""
+        from mcpscanner.threats.threats import ThreatMapping
+        
+        threat = ThreatMapping.BEHAVIORAL_THREATS["CROSS-ORIGIN SECURITY BYPASS"]
+        
+        assert threat["severity"] == "HIGH"
+        assert threat["aitech"] == "AITech-4.3"
+        assert threat["aitech_name"] == "Bypassing Security Mechanisms"
+        assert threat["aisubtech"] == "AISubtech-4.3.6"
+        assert threat["aisubtech_name"] == "Cross-Origin Security Bypass"
+        assert "cross-origin" in threat["description"].lower() or "trust boundaries" in threat["description"].lower()
