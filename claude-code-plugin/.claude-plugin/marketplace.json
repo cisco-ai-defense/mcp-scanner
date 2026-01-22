@@ -2,7 +2,7 @@
   "name": "mcp-scanner-marketplace",
   "owner": {
     "name": "Cisco AI Defense",
-    "email": "ai-defense@cisco.com"
+    "email": "cisco-ai-oss@cisco.com"
   },
   "metadata": {
     "description": "Official Claude Code plugins for MCP security scanning by Cisco AI Defense",
