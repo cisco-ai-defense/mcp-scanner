@@ -199,12 +199,40 @@ class Scanner:
             List[SecurityFinding]: Validated findings only (false positives removed).
             Returns original findings if meta-analysis cannot be performed.
         """
-        # Collect all findings from scan results
+        # Collect all findings and tool info from scan results
         all_findings: List[SecurityFinding] = []
         analyzers_used: List[str] = []
+        tools_info: List[Dict[str, Any]] = []
         
         for result in scan_results:
             all_findings.extend(result.findings)
+            
+            # Extract tool/item info for context
+            if hasattr(result, 'tool_name'):
+                tools_info.append({
+                    "name": result.tool_name,
+                    "description": getattr(result, 'tool_description', ''),
+                    "type": "tool",
+                    "is_safe": result.is_safe,
+                    "finding_count": len(result.findings),
+                })
+            elif hasattr(result, 'prompt_name'):
+                tools_info.append({
+                    "name": result.prompt_name,
+                    "description": getattr(result, 'prompt_description', ''),
+                    "type": "prompt",
+                    "is_safe": result.is_safe,
+                    "finding_count": len(result.findings),
+                })
+            elif hasattr(result, 'resource_uri'):
+                tools_info.append({
+                    "name": result.resource_uri,
+                    "description": getattr(result, 'resource_name', ''),
+                    "type": "resource",
+                    "is_safe": result.is_safe,
+                    "finding_count": len(result.findings),
+                })
+            
             for analyzer in result.analyzers:
                 if isinstance(analyzer, str):
                     if analyzer.upper() not in [a.upper() for a in analyzers_used]:
@@ -222,11 +250,26 @@ class Scanner:
             logger.debug("No findings to analyze")
             return []
 
+        # Build tool content for meta-analyzer (names + descriptions)
+        tool_content_lines = []
+        for tool in tools_info:
+            status = "SAFE" if tool["is_safe"] else f"UNSAFE ({tool['finding_count']} findings)"
+            tool_content_lines.append(f"- {tool['name']}: {tool['description']} [{status}]")
+        tool_content = "\n".join(tool_content_lines)
+        
+        # Combine with any provided original_content
+        full_content = original_content or ""
+        if tool_content:
+            full_content = f"## Scanned Tools/Items ({len(tools_info)} total)\n\n{tool_content}\n\n{full_content}"
+
         # Build context from scan results
         scan_context = context or {}
         scan_context["analyzers_used"] = analyzers_used
         scan_context["total_findings"] = len(all_findings)
         scan_context["scan_results_count"] = len(scan_results)
+        scan_context["tools_count"] = len(tools_info)
+        scan_context["safe_count"] = sum(1 for t in tools_info if t["is_safe"])
+        scan_context["unsafe_count"] = sum(1 for t in tools_info if not t["is_safe"])
 
         logger.info(
             f"Running meta-analysis on {len(all_findings)} findings from {len(analyzers_used)} analyzers"
@@ -235,20 +278,39 @@ class Scanner:
         try:
             meta_result = await self._meta_analyzer.analyze_findings(
                 findings=all_findings,
-                original_content=original_content,
+                original_content=full_content,
                 context=scan_context,
                 analyzers_used=analyzers_used,
             )
             
-            # Return validated findings as List[SecurityFinding]
-            validated = meta_result.get_validated_findings()
+            # Build set of false positive indices to filter out
+            fp_indices = set()
+            for fp in meta_result.false_positives:
+                if "_index" in fp:
+                    fp_indices.add(fp["_index"])
+            
+            # Keep all original findings EXCEPT those marked as false positives
+            # This is the conservative approach: only remove explicit FPs
+            filtered_findings = []
+            for i, finding in enumerate(all_findings):
+                if i not in fp_indices:
+                    # Mark as meta-reviewed
+                    if finding.details is None:
+                        finding.details = {}
+                    finding.details["meta_reviewed"] = True
+                    filtered_findings.append(finding)
+            
+            # Add missed threats (new detections from meta-analyzer)
+            missed_threats = meta_result.get_missed_threats()
+            all_meta_findings = filtered_findings + missed_threats
             
             logger.info(
-                f"Meta-analysis complete: {len(validated)} validated, "
-                f"{len(meta_result.false_positives)} false positives filtered out"
+                f"Meta-analysis complete: {len(filtered_findings)} kept, "
+                f"{len(fp_indices)} false positives filtered, "
+                f"{len(missed_threats)} missed threats detected"
             )
             
-            return validated
+            return all_meta_findings
             
         except Exception as e:
             logger.error(f"Meta-analysis failed: {e}")

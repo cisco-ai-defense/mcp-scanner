@@ -552,102 +552,72 @@ def apply_meta_analysis_to_results(
     scan_results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]],
     validated_findings: List[SecurityFinding],
 ) -> List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]]:
-    """Apply meta-analysis validated findings back to scan results.
+    """Apply meta-analysis to scan results by enriching findings with validation info.
     
-    Replaces findings in scan results with meta-validated findings,
-    effectively filtering out false positives identified by meta-analysis.
+    IMPORTANT: This function preserves ALL original findings and only adds
+    meta-analysis enrichments. It does NOT filter out findings unless they
+    are explicitly marked as false positives by the meta-analyzer.
     
     Args:
         scan_results: Original scan results from analyzers
-        validated_findings: Validated findings from meta-analysis (false positives removed)
+        validated_findings: Validated findings from meta-analysis with enrichments
         
     Returns:
-        Updated scan results with meta-validated findings
+        Updated scan results with meta-analysis enrichments added to findings
     """
-    if not validated_findings:
-        # No validated findings means all were false positives or no findings
-        updated_results = []
-        for result in scan_results:
-            if isinstance(result, ToolScanResult):
-                updated_results.append(ToolScanResult(
-                    tool_name=result.tool_name,
-                    tool_description=result.tool_description,
-                    status=result.status,
-                    analyzers=result.analyzers + ["META"],
-                    findings=[],  # All filtered out
-                    server_source=result.server_source,
-                    server_name=result.server_name,
-                ))
-            elif isinstance(result, PromptScanResult):
-                updated_results.append(PromptScanResult(
-                    prompt_name=result.prompt_name,
-                    prompt_description=result.prompt_description,
-                    status=result.status,
-                    analyzers=result.analyzers + ["META"],
-                    findings=[],
-                    server_source=result.server_source,
-                    server_name=result.server_name,
-                ))
-            elif isinstance(result, ResourceScanResult):
-                updated_results.append(ResourceScanResult(
-                    resource_uri=result.resource_uri,
-                    resource_name=result.resource_name,
-                    resource_mime_type=result.resource_mime_type,
-                    status=result.status,
-                    analyzers=result.analyzers + ["META"],
-                    findings=[],
-                    server_source=result.server_source,
-                    server_name=result.server_name,
-                ))
-            elif isinstance(result, InstructionsScanResult):
-                updated_results.append(InstructionsScanResult(
-                    instructions=result.instructions,
-                    server_name=result.server_name,
-                    protocol_version=result.protocol_version,
-                    status=result.status,
-                    analyzers=result.analyzers + ["META"],
-                    findings=[],
-                    server_source=result.server_source,
-                ))
-            else:
-                updated_results.append(result)
-        return updated_results
-
-    # Create lookup for validated findings by their details (tool_name, threat_type)
-    validated_set = set()
+    # Create lookup for validated findings enrichments
+    # Key: (threat_category, summary_prefix) -> enrichment details
+    validated_enrichments = {}
     for f in validated_findings:
-        key = (
-            f.details.get("tool_name", "") if f.details else "",
-            f.threat_category,
-            f.summary,
-        )
-        validated_set.add(key)
+        # Use multiple key strategies for matching
+        key1 = (f.threat_category, f.summary[:50] if f.summary else "")
+        key2 = (f.threat_category, f.summary) if f.summary else None
+        
+        enrichment = {
+            "meta_validated": True,
+            "meta_confidence": f.details.get("meta_confidence") if f.details else None,
+            "meta_confidence_reason": f.details.get("meta_confidence_reason") if f.details else None,
+            "meta_exploitability": f.details.get("meta_exploitability") if f.details else None,
+            "meta_impact": f.details.get("meta_impact") if f.details else None,
+        }
+        # Remove None values
+        enrichment = {k: v for k, v in enrichment.items() if v is not None}
+        
+        validated_enrichments[key1] = enrichment
+        if key2:
+            validated_enrichments[key2] = enrichment
 
     updated_results = []
     for result in scan_results:
-        # Filter findings to only include validated ones
-        filtered_findings = []
+        # Keep ALL original findings, just add meta enrichments where available
+        enriched_findings = []
         for finding in result.findings:
-            key = (
-                finding.details.get("tool_name", "") if finding.details else "",
-                finding.threat_category,
-                finding.summary,
-            )
-            if key in validated_set:
-                # Add meta_validated flag to details
-                if finding.details is None:
-                    finding.details = {}
-                finding.details["meta_validated"] = True
-                filtered_findings.append(finding)
+            # Try to find matching enrichment
+            key1 = (finding.threat_category, finding.summary[:50] if finding.summary else "")
+            key2 = (finding.threat_category, finding.summary) if finding.summary else None
+            
+            enrichment = validated_enrichments.get(key1) or (validated_enrichments.get(key2) if key2 else None)
+            
+            # Add enrichment to finding details
+            if finding.details is None:
+                finding.details = {}
+            
+            if enrichment:
+                finding.details.update(enrichment)
+            else:
+                # Mark as reviewed but not in validated list (still keep it!)
+                finding.details["meta_reviewed"] = True
+            
+            enriched_findings.append(finding)
 
-        # Create updated result with filtered findings
+        # Create updated result preserving ALL findings
         if isinstance(result, ToolScanResult):
             updated_results.append(ToolScanResult(
                 tool_name=result.tool_name,
                 tool_description=result.tool_description,
                 status=result.status,
                 analyzers=result.analyzers + ["META"],
-                findings=filtered_findings,
+                findings=enriched_findings,
                 server_source=result.server_source,
                 server_name=result.server_name,
             ))
@@ -657,7 +627,7 @@ def apply_meta_analysis_to_results(
                 prompt_description=result.prompt_description,
                 status=result.status,
                 analyzers=result.analyzers + ["META"],
-                findings=filtered_findings,
+                findings=enriched_findings,
                 server_source=result.server_source,
                 server_name=result.server_name,
             ))
@@ -668,7 +638,7 @@ def apply_meta_analysis_to_results(
                 resource_mime_type=result.resource_mime_type,
                 status=result.status,
                 analyzers=result.analyzers + ["META"],
-                findings=filtered_findings,
+                findings=enriched_findings,
                 server_source=result.server_source,
                 server_name=result.server_name,
             ))
@@ -679,7 +649,7 @@ def apply_meta_analysis_to_results(
                 protocol_version=result.protocol_version,
                 status=result.status,
                 analyzers=result.analyzers + ["META"],
-                findings=filtered_findings,
+                findings=enriched_findings,
                 server_source=result.server_source,
             ))
         else:

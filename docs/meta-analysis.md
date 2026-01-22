@@ -141,7 +141,7 @@ When meta-analysis is enabled, findings include additional metadata:
 | resources | ✅ |
 | instructions | ✅ |
 | static | ✅ |
-| behavioral | ✅ |
+
 
 ## Best Practices
 

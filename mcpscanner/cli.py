@@ -122,7 +122,7 @@ def _create_auth_with_headers(
 
 
 def _build_config(
-    selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None
+    selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None, enable_meta: bool = False
 ) -> Config:
     api_key = os.environ.get("MCP_SCANNER_API_KEY", "")
     llm_api_key = os.environ.get("MCP_SCANNER_LLM_API_KEY", "")
@@ -132,18 +132,21 @@ def _build_config(
     llm_timeout = os.environ.get("MCP_SCANNER_LLM_TIMEOUT")
     endpoint_url = endpoint_url or _get_endpoint_from_env()
 
+    # LLM config needed for LLM analyzer, behavioral analyzer, OR meta-analyzer
+    needs_llm = (AnalyzerEnum.LLM in selected_analyzers or 
+                 AnalyzerEnum.BEHAVIORAL in selected_analyzers or 
+                 enable_meta)
+
     config_params = {
         "api_key": api_key if AnalyzerEnum.API in selected_analyzers else "",
         "endpoint_url": endpoint_url,
-        "llm_provider_api_key": (
-            llm_api_key if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIORAL in selected_analyzers) else ""
-        ),
-        "llm_model": llm_model if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIORAL in selected_analyzers) else "",
+        "llm_provider_api_key": llm_api_key if needs_llm else "",
+        "llm_model": llm_model if needs_llm else "",
     }
 
-    if llm_base_url:
+    if llm_base_url and needs_llm:
         config_params["llm_base_url"] = llm_base_url
-    if llm_api_version:
+    if llm_api_version and needs_llm:
         config_params["llm_api_version"] = llm_api_version
     if llm_timeout:
         config_params["llm_timeout"] = float(llm_timeout)
@@ -1187,7 +1190,7 @@ async def main():
         # Handle static file scanning subcommand (matches 'prompts' and 'resources' pattern)
         if args.cmd == "static":
             
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             
             # Build analyzer list
             analyzers = []
@@ -1270,7 +1273,7 @@ async def main():
             results = await results_to_json(all_results)
         
         elif args.cmd == "remote":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             # Parse custom headers and create auth
             custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
@@ -1291,7 +1294,7 @@ async def main():
             results = await results_to_json(results_raw)
 
         elif args.cmd == "stdio":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             env_dict = {}
             for item in args.stdio_env or []:
@@ -1330,7 +1333,7 @@ async def main():
             results = await results_to_json(results_raw)
 
         elif args.cmd == "config":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             results_raw = await scanner.scan_mcp_config_file(
@@ -1352,7 +1355,7 @@ async def main():
             results = await results_to_json(results_raw)
 
         elif args.cmd == "known-configs":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             results_by_cfg = await scanner.scan_well_known_mcp_configs(
@@ -1386,7 +1389,7 @@ async def main():
             results = await results_to_json(flattened)
 
         elif args.cmd == "prompts":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             # Parse custom headers and create auth
             custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
@@ -1445,7 +1448,7 @@ async def main():
                 ]
 
         elif args.cmd == "resources":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             # Parse custom headers and create auth
             custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
@@ -1511,7 +1514,7 @@ async def main():
                 ]
 
         elif args.cmd == "instructions":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
 
@@ -1654,7 +1657,7 @@ async def main():
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             env_dict = {}
             for item in args.stdio_env or []:
@@ -1693,7 +1696,7 @@ async def main():
             results = await results_to_json(results_raw)
 
         elif args.scan_known_configs or args.config_path:
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             if args.config_path:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
@@ -1761,7 +1764,7 @@ async def main():
             else:
                 # Run the security scan against a server URL
                 if args.bearer_token:
-                    cfg = _build_config(selected_analyzers)
+                    cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
                     scanner = Scanner(cfg, rules_dir=args.rules_path)
                     results_raw = await scanner.scan_remote_server_tools(
                         args.server_url,
@@ -1769,7 +1772,7 @@ async def main():
                         analyzers=selected_analyzers,
                     )
                 else:
-                    cfg = _build_config(selected_analyzers, endpoint_url=args.endpoint_url)
+                    cfg = _build_config(selected_analyzers, endpoint_url=args.endpoint_url, enable_meta=enable_meta)
                     scanner = Scanner(cfg, rules_dir=args.rules_path)
                     auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                     results_raw = await scanner.scan_remote_server_tools(

@@ -60,6 +60,7 @@ class MetaAnalysisResult:
     Attributes:
         validated_findings: Findings confirmed as true positives with enriched data.
         false_positives: Findings identified as likely false positives.
+        missed_threats: NEW threats found by meta-analyzer that other analyzers missed.
         priority_order: Ordered list of finding indices by priority.
         correlations: Groups of related findings.
         recommendations: Actionable recommendations for remediation.
@@ -67,6 +68,7 @@ class MetaAnalysisResult:
     """
     validated_findings: List[Dict[str, Any]] = field(default_factory=list)
     false_positives: List[Dict[str, Any]] = field(default_factory=list)
+    missed_threats: List[Dict[str, Any]] = field(default_factory=list)
     priority_order: List[int] = field(default_factory=list)
     correlations: List[Dict[str, Any]] = field(default_factory=list)
     recommendations: List[Dict[str, Any]] = field(default_factory=list)
@@ -77,6 +79,7 @@ class MetaAnalysisResult:
         return {
             "validated_findings": self.validated_findings,
             "false_positives": self.false_positives,
+            "missed_threats": self.missed_threats,
             "priority_order": self.priority_order,
             "correlations": self.correlations,
             "recommendations": self.recommendations,
@@ -85,6 +88,7 @@ class MetaAnalysisResult:
                 "total_original": len(self.validated_findings) + len(self.false_positives),
                 "validated_count": len(self.validated_findings),
                 "false_positive_count": len(self.false_positives),
+                "missed_threats_count": len(self.missed_threats),
                 "recommendations_count": len(self.recommendations),
             }
         }
@@ -127,6 +131,42 @@ class MetaAnalysisResult:
             )
             findings.append(finding)
         return findings
+    
+    def get_missed_threats(self) -> List[SecurityFinding]:
+        """Get missed threats as SecurityFinding objects.
+        
+        These are NEW threats found by meta-analyzer that other analyzers missed.
+        
+        Returns:
+            List[SecurityFinding]: New threats detected by meta-analysis.
+        """
+        findings = []
+        for threat_data in self.missed_threats:
+            details = {
+                "meta_detected": True,
+                "detection_reason": threat_data.get("detection_reason", ""),
+                "tool_name": threat_data.get("tool_name", ""),
+            }
+            if "confidence" in threat_data:
+                details["meta_confidence"] = threat_data["confidence"]
+            
+            finding = SecurityFinding(
+                severity=threat_data.get("severity", "HIGH"),
+                summary=threat_data.get("summary", "Threat detected by meta-analysis"),
+                threat_category=threat_data.get("threat_category", "UNKNOWN"),
+                analyzer="META",
+                details=details,
+            )
+            findings.append(finding)
+        return findings
+    
+    def get_all_findings(self) -> List[SecurityFinding]:
+        """Get all findings (validated + missed threats).
+        
+        Returns:
+            List[SecurityFinding]: Combined validated findings and missed threats.
+        """
+        return self.get_validated_findings() + self.get_missed_threats()
 
 
 class LLMMetaAnalyzer:
@@ -381,6 +421,7 @@ Respond with JSON containing your analysis."""
             self.logger.info(
                 f"Meta-analysis complete: {len(result.validated_findings)} validated, "
                 f"{len(result.false_positives)} false positives, "
+                f"{len(result.missed_threats)} missed threats detected, "
                 f"{len(result.recommendations)} recommendations"
             )
             
@@ -498,6 +539,7 @@ Please provide your meta-analysis as a JSON object with the structure defined in
             result = MetaAnalysisResult(
                 validated_findings=json_data.get("validated_findings", []),
                 false_positives=json_data.get("false_positives", []),
+                missed_threats=json_data.get("missed_threats", []),
                 priority_order=json_data.get("priority_order", []),
                 correlations=json_data.get("correlations", []),
                 recommendations=json_data.get("recommendations", []),
