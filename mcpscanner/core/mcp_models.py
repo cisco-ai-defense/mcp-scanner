@@ -21,7 +21,7 @@ and related data structures.
 """
 
 from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ServerSignature(BaseModel):
@@ -47,10 +47,28 @@ class StdioServer(BaseModel):
 class RemoteServer(BaseModel):
     """Configuration for remote MCP servers."""
 
+    model_config = ConfigDict(extra="allow")
+
     url: str
     headers: Optional[Dict[str, str]] = None
     env: Optional[Dict[str, str]] = None
     type: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_url_field(cls, data: Any) -> Any:
+        """Normalize different URL field names to 'url'.
+        
+        MCP configs may use 'url', 'Url', or 'serverUrl'.
+        """
+        if isinstance(data, dict):
+            # Check for alternative URL field names
+            if "url" not in data:
+                if "Url" in data:
+                    data["url"] = data.pop("Url")
+                elif "serverUrl" in data:
+                    data["url"] = data.pop("serverUrl")
+        return data
 
 
 class MCPConfig(BaseModel):

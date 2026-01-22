@@ -978,13 +978,14 @@ class Scanner:
             await self._close_mcp_session(client_context, session)
 
     async def _get_stdio_session(
-        self, server_config: StdioServer, timeout: int = 30
+        self, server_config: StdioServer, timeout: int = 30, errlog: Any = None
     ) -> Tuple[Any, Any]:
         """Get a stdio session for the given server configuration.
 
         Args:
             server_config: The stdio server configuration
             timeout: Connection timeout in seconds
+            errlog: Optional file-like object for stderr redirection (defaults to sys.stderr)
 
         Returns:
             Tuple of (client_context, session)
@@ -1032,7 +1033,9 @@ class Scanner:
             )
 
             # Create client context and session with proper error handling
-            client_context = stdio_client(server_params)
+            # Pass errlog for stderr redirection (helps avoid JSON corruption from startup messages)
+            import sys
+            client_context = stdio_client(server_params, errlog=errlog if errlog else sys.stderr)
 
             # Use asyncio.wait_for for timeout instead of asyncio.timeout
             try:
@@ -1117,6 +1120,7 @@ class Scanner:
         server_config: StdioServer,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
+        errlog: Any = None,
     ) -> List[ToolScanResult]:
         """Scan tools from a stdio MCP server.
 
@@ -1124,6 +1128,7 @@ class Scanner:
             server_config: The stdio server configuration
             analyzers: List of analyzers to use
             timeout: Connection timeout in seconds
+            errlog: Optional file-like object for stderr redirection
 
         Returns:
             List[ToolScanResult]: List of tool scan results
@@ -1145,7 +1150,7 @@ class Scanner:
             async def connect_and_scan():
                 nonlocal client_context, session
                 client_context, session = await self._get_stdio_session(
-                    server_config, timeout
+                    server_config, timeout, errlog
                 )
 
                 # List all tools
@@ -1184,6 +1189,7 @@ class Scanner:
         tool_name: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
+        errlog: Any = None,
     ) -> ToolScanResult:
         """Scan a specific tool on a stdio MCP server.
 
@@ -1192,6 +1198,7 @@ class Scanner:
             tool_name (str): The name of the tool to scan.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
             timeout (Optional[int]): Timeout for the connection.
+            errlog: Optional file-like object for stderr redirection.
 
         Returns:
             ToolScanResult: The result of the scan.
@@ -1213,7 +1220,7 @@ class Scanner:
         session = None
         try:
             client_context, session = await self._get_stdio_session(
-                server_config, timeout
+                server_config, timeout, errlog
             )
 
             # List all tools and find the target tool
