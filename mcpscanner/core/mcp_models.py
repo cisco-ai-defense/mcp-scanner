@@ -57,17 +57,19 @@ class RemoteServer(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def normalize_url_field(cls, data: Any) -> Any:
-        """Normalize different URL field names to 'url'.
+        """Normalize different URL field names to 'url' (case-insensitive).
         
-        MCP configs may use 'url', 'Url', or 'serverUrl'.
+        MCP configs may use 'url', 'Url', 'URL', 'serverUrl', 'serverURL', etc.
         """
         if isinstance(data, dict):
-            # Check for alternative URL field names
+            # Check if 'url' already exists (exact match)
             if "url" not in data:
-                if "Url" in data:
-                    data["url"] = data.pop("Url")
-                elif "serverUrl" in data:
-                    data["url"] = data.pop("serverUrl")
+                # Find any key that matches 'url' or 'serverurl' case-insensitively
+                for key in list(data.keys()):
+                    key_lower = key.lower()
+                    if key_lower == "url" or key_lower == "serverurl":
+                        data["url"] = data.pop(key)
+                        break
         return data
 
 
