@@ -957,6 +957,11 @@ async def main():
         help="Arguments passed to the stdio command (space-separated)",
     )
     p_stdio.add_argument(
+        "--stdio-arg",
+        action="append",
+        help="Single argument passed to the stdio command; can be repeated for multiple args",
+    )
+    p_stdio.add_argument(
         "--stdio-env",
         action="append",
         default=[],
@@ -1065,7 +1070,7 @@ async def main():
     parser.add_argument(
         "--stdio-arg",
         action="append",
-        help="[Deprecated] Repeatable single arg; use --stdio-args instead",
+        help="Single argument passed to the stdio command; can be repeated for multiple args (recommended for special characters)",
     )
     parser.add_argument(
         "--stdio-env",
@@ -1302,8 +1307,7 @@ async def main():
                     k, v = item.split("=", 1)
                     env_dict[k] = v
             stdio_args = list(args.stdio_args or [])
-            if getattr(args, "stdio_arg", None):
-                print("[warning] --stdio-arg is deprecated; use --stdio-args")
+            if args.stdio_arg:
                 stdio_args.extend(args.stdio_arg)
             stdio = StdioServer(
                 command=args.stdio_command,
@@ -1666,7 +1670,6 @@ async def main():
                     env_dict[k] = v
             stdio_args = list(args.stdio_args or [])
             if args.stdio_arg:
-                print("[warning] --stdio-arg is deprecated; use --stdio-args")
                 stdio_args.extend(args.stdio_arg)
             stdio = StdioServer(
                 command=args.stdio_command,
