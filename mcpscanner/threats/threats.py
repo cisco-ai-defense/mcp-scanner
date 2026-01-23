@@ -194,6 +194,15 @@ class ThreatMapping:
             "aisubtech_name": "Goal Manipulation (Tools, Prompts, Resources)",
             "description": "Detect tampering with the intended purpose of a tool, prompt, or resource to steer the LLM toward attacker-defined objectives. Includes code with injection points in tool chaining, prompt composition, or control-flow templates.",
         },
+        "AGENT MASQUERADING": {
+            "scanner_category": "AGENT MASQUERADING",
+            "severity": "HIGH",
+            "aitech": "AITech-3.1",
+            "aitech_name": "Identity Manipulation",
+            "aisubtech": "AISubtech-3.1.2",
+            "aisubtech_name": "Agent Masquerading",
+            "description": "Masquerading as a legitimate agent or MCP-registered service to inject malicious instructions, responses, or outputs that other agents, services, or users treat as trusted. This attack exploits the assumption of authenticity within multi-agent systems and protocol-mediated toolchains, enabling actors to bypass safeguards and influence downstream behavior.",
+        },
         
         # Data Exfiltration & Access Threats
         "DATA EXFILTRATION": {
@@ -232,6 +241,15 @@ class ThreatMapping:
             "aisubtech_name": "Unsafe System / Browser / File Exec",
             "description": "Detect unauthorized reading from or writing to arbitrary resources such as files, URLs, APIs, databases, or local storage via tool or resource misuse. Includes path traversal attacks.",
         },
+        "WEAK ACCESS CONTROLS": {
+            "scanner_category": "WEAK ACCESS CONTROLS",
+            "severity": "HIGH",
+            "aitech": "AITech-14.1",
+            "aitech_name": "Misconfiguration",
+            "aisubtech": "AISubtech-14.1.2",
+            "aisubtech_name": "Weak Access Controls",
+            "description": "Weak, missing, or misconfigured permissions, authentication mechanisms, and access measures that fail to adequately prevent security breaches, unauthorized access, or data leakage.",
+        },
         
         # Execution & Payload Threats
         "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION": {
@@ -252,6 +270,24 @@ class ThreatMapping:
             "aisubtech_name": "Backdoors and Trojans",
             "description": "Hidden malicious logic embedded in code or decorators, allowing persistent unauthorized access or control over MCP behavior.",
         },
+        "SAME-ORIGIN POLICY BYPASS": {
+            "scanner_category": "SAME-ORIGIN POLICY BYPASS",
+            "severity": "HIGH",
+            "aitech": "AITech-4.3",
+            "aitech_name": "Bypassing Security Mechanisms",
+            "aisubtech": "AISubtech-4.3.4",
+            "aisubtech_name": "Same-Origin Policy (SOP) Bypass",
+            "description": "Subverting security mechanisms designed to isolate web resources, primarily the Same-Origin Policy (SOP), within an AI agent's architecture in order to trick the AI agent or its execution environment into making unauthorized requests, sharing sensitive data, or executing actions across different trust boundaries (e.g., distinct domains, protocols, or services).",
+        },
+        "CROSS-ORIGIN SECURITY BYPASS": {
+            "scanner_category": "CROSS-ORIGIN SECURITY BYPASS",
+            "severity": "HIGH",
+            "aitech": "AITech-4.3",
+            "aitech_name": "Bypassing Security Mechanisms",
+            "aisubtech": "AISubtech-4.3.6",
+            "aisubtech_name": "Cross-Origin Security Bypass",
+            "description": "Subverting security mechanisms designed to isolate web resources, primarily the Same-Origin Policy (SOP), within an AI agent's architecture in order to trick the AI agent or its execution environment into making unauthorized requests, sharing sensitive data, or executing actions across different trust boundaries (e.g., distinct domains, protocols, or services).",
+        },
         "DEFENSE EVASION": {
             "scanner_category": "DEFENSE EVASION",
             "severity": "LOW",
@@ -269,6 +305,15 @@ class ThreatMapping:
             "aisubtech": "AISubtech-13.1.1",
             "aisubtech_name": "Compute Exhaustion",
             "description": "Overloading the MCP server (via repeated tool invocations or large payloads) to degrade performance or cause denial of service. Tool repeatedly processes large files or calls itself recursively without rate limits or break conditions.",
+        },
+        "AUTOMATED FRAUD CONTENT GENERATION": {
+            "scanner_category": "AUTOMATED FRAUD CONTENT GENERATION",
+            "severity": "HIGH",
+            "aitech": "AITech-18.1",
+            "aitech_name": "Financial and Fraud-Related Harm",
+            "aisubtech": "AISubtech-18.1.1",
+            "aisubtech_name": "Automated Generation of Unsolicited / Fraud Content",
+            "description": "Automating generation of large volumes of unsolicited or fraudulent content (phishing, fake offers, spam emails/messages, impersonation or manipulation of trust) to deceive people or solicit funds, credentials, personal and confidential information, or other valuables.",
         },
         
         # General Behavioral & Metadata Threats
