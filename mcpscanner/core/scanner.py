@@ -54,8 +54,9 @@ from ..utils.command_utils import (
     resolve_executable_path,
 )
 from .analyzers.api_analyzer import ApiAnalyzer
-from .analyzers.base import BaseAnalyzer
+from .analyzers.base import BaseAnalyzer, SecurityFinding
 from .analyzers.llm_analyzer import LLMAnalyzer
+from .analyzers.meta_analyzer import LLMMetaAnalyzer, MetaAnalysisResult
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .auth import (
@@ -126,6 +127,17 @@ class Scanner:
         )
         self._custom_analyzers = custom_analyzers or []
 
+        # Initialize meta-analyzer (optional, requires LLM API key)
+        # Meta-analyzer is controlled via CLI --enable-meta flag, not env vars
+        self._meta_analyzer = None
+        try:
+            is_bedrock = config.llm_model and "bedrock/" in config.llm_model
+            if config.llm_provider_api_key or is_bedrock:
+                self._meta_analyzer = LLMMetaAnalyzer(config)
+                logger.debug("Meta-analyzer initialized")
+        except Exception as e:
+            logger.debug(f"Meta-analyzer not initialized: {e}")
+
         # Debug logging for analyzer initialization
         active_analyzers = []
         if self._api_analyzer:
@@ -136,6 +148,8 @@ class Scanner:
             active_analyzers.append("LLM")
         if self._behavioral_analyzer:
             active_analyzers.append("Behavioral")
+        if self._meta_analyzer:
+            active_analyzers.append("META")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -146,6 +160,216 @@ class Scanner:
             List[BaseAnalyzer]: List of custom analyzers.
         """
         return self._custom_analyzers
+
+    def has_meta_analyzer(self) -> bool:
+        """Check if meta-analyzer is available.
+        
+        Returns:
+            bool: True if meta-analyzer is initialized and not disabled.
+        """
+        return self._meta_analyzer is not None
+
+    async def run_meta_analysis(
+        self,
+        scan_results: List[ScanResult],
+        original_content: str = "",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> List[SecurityFinding]:
+        """Run meta-analysis on accumulated findings from scan results.
+        
+        Returns validated findings as List[SecurityFinding] - same format as 
+        other analyzers (API, YARA, LLM). False positives are filtered out.
+        
+        Meta-analysis provides:
+        - False positive identification and filtering
+        - Priority ranking of findings
+        - Enriched details (confidence, exploitability, impact)
+        
+        Requirements:
+        - Meta-analyzer must be initialized (LLM API key configured)
+        - At least 2 different analyzers must have been used
+        - MCP_SCANNER_DISABLE_META_ANALYZER must not be set to 'true'
+        
+        Args:
+            scan_results: List of ScanResult objects from previous scans
+            original_content: Original scanned content for context
+            context: Additional context about the scan
+            
+        Returns:
+            List[SecurityFinding]: Validated findings only (false positives removed).
+            Returns original findings if meta-analysis cannot be performed.
+        """
+        # Collect all findings and tool info from scan results
+        all_findings: List[SecurityFinding] = []
+        analyzers_used: List[str] = []
+        tools_info: List[Dict[str, Any]] = []
+        
+        for result in scan_results:
+            all_findings.extend(result.findings)
+            
+            # Extract tool/item info for context
+            if hasattr(result, 'tool_name'):
+                tools_info.append({
+                    "name": result.tool_name,
+                    "description": getattr(result, 'tool_description', ''),
+                    "type": "tool",
+                    "is_safe": result.is_safe,
+                    "finding_count": len(result.findings),
+                })
+            elif hasattr(result, 'prompt_name'):
+                tools_info.append({
+                    "name": result.prompt_name,
+                    "description": getattr(result, 'prompt_description', ''),
+                    "type": "prompt",
+                    "is_safe": result.is_safe,
+                    "finding_count": len(result.findings),
+                })
+            elif hasattr(result, 'resource_uri'):
+                tools_info.append({
+                    "name": result.resource_uri,
+                    "description": getattr(result, 'resource_name', ''),
+                    "type": "resource",
+                    "is_safe": result.is_safe,
+                    "finding_count": len(result.findings),
+                })
+            
+            for analyzer in result.analyzers:
+                if isinstance(analyzer, str):
+                    if analyzer.upper() not in [a.upper() for a in analyzers_used]:
+                        analyzers_used.append(analyzer.upper())
+                else:
+                    analyzer_name = analyzer.value.upper() if hasattr(analyzer, 'value') else str(analyzer).upper()
+                    if analyzer_name not in [a.upper() for a in analyzers_used]:
+                        analyzers_used.append(analyzer_name)
+
+        if not self._meta_analyzer:
+            logger.debug("Meta-analyzer not available - returning original findings")
+            return all_findings
+
+        if not all_findings:
+            logger.debug("No findings to analyze")
+            return []
+
+        # Build tool content for meta-analyzer (names + descriptions)
+        tool_content_lines = []
+        for tool in tools_info:
+            status = "SAFE" if tool["is_safe"] else f"UNSAFE ({tool['finding_count']} findings)"
+            tool_content_lines.append(f"- {tool['name']}: {tool['description']} [{status}]")
+        tool_content = "\n".join(tool_content_lines)
+        
+        # Combine with any provided original_content
+        full_content = original_content or ""
+        if tool_content:
+            full_content = f"## Scanned Tools/Items ({len(tools_info)} total)\n\n{tool_content}\n\n{full_content}"
+
+        # Build context from scan results
+        scan_context = context or {}
+        scan_context["analyzers_used"] = analyzers_used
+        scan_context["total_findings"] = len(all_findings)
+        scan_context["scan_results_count"] = len(scan_results)
+        scan_context["tools_count"] = len(tools_info)
+        scan_context["safe_count"] = sum(1 for t in tools_info if t["is_safe"])
+        scan_context["unsafe_count"] = sum(1 for t in tools_info if not t["is_safe"])
+
+        logger.info(
+            f"Running meta-analysis on {len(all_findings)} findings from {len(analyzers_used)} analyzers"
+        )
+
+        try:
+            meta_result = await self._meta_analyzer.analyze_findings(
+                findings=all_findings,
+                original_content=full_content,
+                context=scan_context,
+                analyzers_used=analyzers_used,
+            )
+            
+            # Build set of false positive indices to filter out
+            fp_indices = set()
+            for fp in meta_result.false_positives:
+                if "_index" in fp:
+                    fp_indices.add(fp["_index"])
+            
+            # Keep all original findings EXCEPT those marked as false positives
+            # This is the conservative approach: only remove explicit FPs
+            filtered_findings = []
+            for i, finding in enumerate(all_findings):
+                if i not in fp_indices:
+                    # Mark as meta-reviewed
+                    if finding.details is None:
+                        finding.details = {}
+                    finding.details["meta_reviewed"] = True
+                    filtered_findings.append(finding)
+            
+            # Add missed threats (new detections from meta-analyzer)
+            missed_threats = meta_result.get_missed_threats()
+            all_meta_findings = filtered_findings + missed_threats
+            
+            logger.info(
+                f"Meta-analysis complete: {len(filtered_findings)} kept, "
+                f"{len(fp_indices)} false positives filtered, "
+                f"{len(missed_threats)} missed threats detected"
+            )
+            
+            return all_meta_findings
+            
+        except Exception as e:
+            logger.error(f"Meta-analysis failed: {e}")
+            return all_findings
+
+    async def run_meta_analysis_full(
+        self,
+        scan_results: List[ScanResult],
+        original_content: str = "",
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[MetaAnalysisResult]:
+        """Run meta-analysis and return full result with all details.
+        
+        Use this if you need access to false_positives, recommendations,
+        correlations, etc. For just validated findings, use run_meta_analysis().
+        
+        Args:
+            scan_results: List of ScanResult objects from previous scans
+            original_content: Original scanned content for context
+            context: Additional context about the scan
+            
+        Returns:
+            MetaAnalysisResult with all details, or None if cannot be performed.
+        """
+        all_findings: List[SecurityFinding] = []
+        analyzers_used: List[str] = []
+        
+        for result in scan_results:
+            all_findings.extend(result.findings)
+            for analyzer in result.analyzers:
+                if isinstance(analyzer, str):
+                    if analyzer.upper() not in [a.upper() for a in analyzers_used]:
+                        analyzers_used.append(analyzer.upper())
+                else:
+                    analyzer_name = analyzer.value.upper() if hasattr(analyzer, 'value') else str(analyzer).upper()
+                    if analyzer_name not in [a.upper() for a in analyzers_used]:
+                        analyzers_used.append(analyzer_name)
+
+        if not self._meta_analyzer:
+            return None
+
+        if not all_findings:
+            return MetaAnalysisResult(
+                overall_risk_assessment={"risk_level": "SAFE", "summary": "No findings"}
+            )
+
+        scan_context = context or {}
+        scan_context["analyzers_used"] = analyzers_used
+
+        try:
+            return await self._meta_analyzer.analyze_findings(
+                findings=all_findings,
+                original_content=original_content,
+                context=scan_context,
+                analyzers_used=analyzers_used,
+            )
+        except Exception as e:
+            logger.error(f"Meta-analysis failed: {e}")
+            return None
 
     def _validate_analyzer_requirements(
         self, requested_analyzers: List[AnalyzerEnum]
@@ -991,6 +1215,7 @@ class Scanner:
         """
         client_context = None
         session = None
+        devnull = None
 
         try:
             logger.debug(f"Creating stdio client for command: {server_config.command}")
@@ -1032,7 +1257,10 @@ class Scanner:
             )
 
             # Create client context and session with proper error handling
-            client_context = stdio_client(server_params)
+            # Redirect stderr to devnull to prevent MCP server startup messages
+            # from corrupting the JSON-RPC communication on stdout
+            devnull = open(os.devnull, 'w')
+            client_context = stdio_client(server_params, errlog=devnull)
 
             # Use asyncio.wait_for for timeout instead of asyncio.timeout
             try:
@@ -1068,6 +1296,8 @@ class Scanner:
             logger.error(
                 f"Timeout connecting to stdio server {server_config.command} after {timeout}s"
             )
+            if devnull:
+                devnull.close()
             raise MCPConnectionError(
                 f"Timeout connecting to stdio MCP server with command {server_config.command}. "
                 f"Server took longer than {timeout} seconds to start."
@@ -1087,6 +1317,8 @@ class Scanner:
                     await client_context.__aexit__(None, None, None)
                 except:
                     pass
+            if devnull:
+                devnull.close()
             raise MCPConnectionError(
                 f"Connection cancelled for stdio MCP server with command {server_config.command}. "
                 f"This may indicate the server failed to start properly."
@@ -1106,6 +1338,8 @@ class Scanner:
                     await client_context.__aexit__(None, None, None)
                 except:
                     pass
+            if devnull:
+                devnull.close()
             raise MCPConnectionError(
                 f"Unable to connect to stdio MCP server with command {server_config.command}. "
                 f"Please verify the command is correct and executable. "

@@ -76,6 +76,20 @@ class MCPScannerConstants:
         "MCP_SCANNER_ENV_LLM_API_VERSION_NAME", "MCP_SCANNER_LLM_API_VERSION"
     )
 
+    # Meta-Analyzer Environment Variables
+    ENV_META_LLM_API_KEY: str = os.getenv(
+        "MCP_SCANNER_ENV_META_LLM_API_KEY_NAME", "MCP_SCANNER_META_LLM_API_KEY"
+    )
+    ENV_META_LLM_MODEL: str = os.getenv(
+        "MCP_SCANNER_ENV_META_LLM_MODEL_NAME", "MCP_SCANNER_META_LLM_MODEL"
+    )
+    ENV_META_LLM_BASE_URL: str = os.getenv(
+        "MCP_SCANNER_ENV_META_LLM_BASE_URL_NAME", "MCP_SCANNER_META_LLM_BASE_URL"
+    )
+    ENV_META_LLM_API_VERSION: str = os.getenv(
+        "MCP_SCANNER_ENV_META_LLM_API_VERSION_NAME", "MCP_SCANNER_META_LLM_API_VERSION"
+    )
+
     # AWS Environment Variables
     ENV_AWS_REGION: str = os.getenv(
         "MCP_SCANNER_ENV_AWS_REGION_NAME", "AWS_REGION"

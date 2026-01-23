@@ -26,6 +26,7 @@ from .api_analyzer import ApiAnalyzer
 from .base import BaseAnalyzer, SecurityFinding
 from .behavioral import BehavioralCodeAnalyzer, AlignmentOrchestrator
 from .llm_analyzer import LLMAnalyzer
+from .meta_analyzer import LLMMetaAnalyzer, MetaAnalysisResult
 from .yara_analyzer import YaraAnalyzer
 
 __all__ = [
@@ -34,6 +35,8 @@ __all__ = [
     "ApiAnalyzer",
     "YaraAnalyzer",
     "LLMAnalyzer",
+    "LLMMetaAnalyzer",
+    "MetaAnalysisResult",
     "BehavioralCodeAnalyzer",
     "AlignmentOrchestrator",
 ]

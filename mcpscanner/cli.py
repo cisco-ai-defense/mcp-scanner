@@ -51,6 +51,8 @@ from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
 from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
+from mcpscanner.core.analyzers.meta_analyzer import LLMMetaAnalyzer
+from mcpscanner.core.result import apply_meta_analysis_to_results
 
 logger = get_logger(__name__)
 
@@ -120,7 +122,7 @@ def _create_auth_with_headers(
 
 
 def _build_config(
-    selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None
+    selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None, enable_meta: bool = False
 ) -> Config:
     api_key = os.environ.get("MCP_SCANNER_API_KEY", "")
     llm_api_key = os.environ.get("MCP_SCANNER_LLM_API_KEY", "")
@@ -130,18 +132,21 @@ def _build_config(
     llm_timeout = os.environ.get("MCP_SCANNER_LLM_TIMEOUT")
     endpoint_url = endpoint_url or _get_endpoint_from_env()
 
+    # LLM config needed for LLM analyzer, behavioral analyzer, OR meta-analyzer
+    needs_llm = (AnalyzerEnum.LLM in selected_analyzers or 
+                 AnalyzerEnum.BEHAVIORAL in selected_analyzers or 
+                 enable_meta)
+
     config_params = {
         "api_key": api_key if AnalyzerEnum.API in selected_analyzers else "",
         "endpoint_url": endpoint_url,
-        "llm_provider_api_key": (
-            llm_api_key if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIORAL in selected_analyzers) else ""
-        ),
-        "llm_model": llm_model if (AnalyzerEnum.LLM in selected_analyzers or AnalyzerEnum.BEHAVIORAL in selected_analyzers) else "",
+        "llm_provider_api_key": llm_api_key if needs_llm else "",
+        "llm_model": llm_model if needs_llm else "",
     }
 
-    if llm_base_url:
+    if llm_base_url and needs_llm:
         config_params["llm_base_url"] = llm_base_url
-    if llm_api_version:
+    if llm_api_version and needs_llm:
         config_params["llm_api_version"] = llm_api_version
     if llm_timeout:
         config_params["llm_timeout"] = float(llm_timeout)
@@ -952,6 +957,11 @@ async def main():
         help="Arguments passed to the stdio command (space-separated)",
     )
     p_stdio.add_argument(
+        "--stdio-arg",
+        action="append",
+        help="Single argument passed to the stdio command; can be repeated for multiple args",
+    )
+    p_stdio.add_argument(
         "--stdio-env",
         action="append",
         default=[],
@@ -1060,7 +1070,7 @@ async def main():
     parser.add_argument(
         "--stdio-arg",
         action="append",
-        help="[Deprecated] Repeatable single arg; use --stdio-args instead",
+        help="Single argument passed to the stdio command; can be repeated for multiple args (recommended for special characters)",
     )
     parser.add_argument(
         "--stdio-env",
@@ -1098,8 +1108,13 @@ async def main():
     )
     parser.add_argument(
         "--analyzer-filter",
-        choices=["api_analyzer", "yara_analyzer", "llm_analyzer", "behavioral_analyzer"],
+        choices=["api_analyzer", "yara_analyzer", "llm_analyzer", "behavioral_analyzer", "meta_analyzer"],
         help="Filter results by specific analyzer",
+    )
+    parser.add_argument(
+        "--enable-meta",
+        action="store_true",
+        help="Enable meta-analysis to filter false positives and prioritize findings (requires 2+ analyzers)",
     )
     parser.add_argument(
         "--severity-filter",
@@ -1172,12 +1187,15 @@ async def main():
         os.environ["MCP_SCANNER_LLM_API_KEY"] = args.llm_api_key
     if args.llm_timeout:
         os.environ["MCP_SCANNER_LLM_TIMEOUT"] = str(args.llm_timeout)
+    
+    # Check if meta-analysis should run (CLI flag only)
+    enable_meta = args.enable_meta
 
     try:
         # Handle static file scanning subcommand (matches 'prompts' and 'resources' pattern)
         if args.cmd == "static":
             
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             
             # Build analyzer list
             analyzers = []
@@ -1260,7 +1278,7 @@ async def main():
             results = await results_to_json(all_results)
         
         elif args.cmd == "remote":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             # Parse custom headers and create auth
             custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
@@ -1268,10 +1286,20 @@ async def main():
             results_raw = await scanner.scan_remote_server_tools(
                 args.server_url, auth=auth, analyzers=selected_analyzers
             )
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(results_raw)
+                results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
             results = await results_to_json(results_raw)
 
         elif args.cmd == "stdio":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             env_dict = {}
             for item in args.stdio_env or []:
@@ -1279,8 +1307,7 @@ async def main():
                     k, v = item.split("=", 1)
                     env_dict[k] = v
             stdio_args = list(args.stdio_args or [])
-            if getattr(args, "stdio_arg", None):
-                print("[warning] --stdio-arg is deprecated; use --stdio-args")
+            if args.stdio_arg:
                 stdio_args.extend(args.stdio_arg)
             stdio = StdioServer(
                 command=args.stdio_command,
@@ -1292,27 +1319,47 @@ async def main():
                 scan_result = await scanner.scan_stdio_server_tool(
                     stdio, args.stdio_tool, analyzers=selected_analyzers
                 )
-                results = await results_to_json([scan_result])
+                results_raw = [scan_result]
             else:
-                scan_results = await scanner.scan_stdio_server_tools(
+                results_raw = await scanner.scan_stdio_server_tools(
                     stdio, analyzers=selected_analyzers
                 )
-                results = await results_to_json(scan_results)
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(results_raw)
+                results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
+            results = await results_to_json(results_raw)
 
         elif args.cmd == "config":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-            scan_results = await scanner.scan_mcp_config_file(
+            results_raw = await scanner.scan_mcp_config_file(
                 args.config_path,
                 analyzers=selected_analyzers,
                 auth=auth,
                 expand_vars_default=args.expand_vars,
             )
-            results = await results_to_json(scan_results)
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(results_raw)
+                results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
+            results = await results_to_json(results_raw)
 
         elif args.cmd == "known-configs":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             results_by_cfg = await scanner.scan_well_known_mcp_configs(
@@ -1323,16 +1370,30 @@ async def main():
             if args.raw:
                 output = {}
                 for cfg_path, scan_results in results_by_cfg.items():
+                    # Run meta-analysis if enabled
+                    if enable_meta and scanner.has_meta_analyzer():
+                        validated_findings = await scanner.run_meta_analysis(scan_results)
+                        scan_results = apply_meta_analysis_to_results(scan_results, validated_findings)
                     output[cfg_path] = await results_to_json(scan_results)
                 print(json.dumps(output, indent=2))
                 return
             flattened = []
             for scan_results in results_by_cfg.values():
                 flattened.extend(scan_results)
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(flattened)
+                flattened = apply_meta_analysis_to_results(flattened, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
             results = await results_to_json(flattened)
 
         elif args.cmd == "prompts":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             # Parse custom headers and create auth
             custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
@@ -1391,7 +1452,7 @@ async def main():
                 ]
 
         elif args.cmd == "resources":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             # Parse custom headers and create auth
             custom_headers = _parse_custom_headers(getattr(args, 'custom_headers', None))
@@ -1457,7 +1518,7 @@ async def main():
                 ]
 
         elif args.cmd == "instructions":
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
 
@@ -1600,7 +1661,7 @@ async def main():
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             env_dict = {}
             for item in args.stdio_env or []:
@@ -1609,7 +1670,6 @@ async def main():
                     env_dict[k] = v
             stdio_args = list(args.stdio_args or [])
             if args.stdio_arg:
-                print("[warning] --stdio-arg is deprecated; use --stdio-args")
                 stdio_args.extend(args.stdio_arg)
             stdio = StdioServer(
                 command=args.stdio_command,
@@ -1621,25 +1681,45 @@ async def main():
                 scan_result = await scanner.scan_stdio_server_tool(
                     stdio, args.stdio_tool, analyzers=selected_analyzers
                 )
-                results = await results_to_json([scan_result])
+                results_raw = [scan_result]
             else:
-                scan_results = await scanner.scan_stdio_server_tools(
+                results_raw = await scanner.scan_stdio_server_tools(
                     stdio, analyzers=selected_analyzers
                 )
-                results = await results_to_json(scan_results)
+            
+            # Run meta-analysis if enabled
+            if enable_meta and scanner.has_meta_analyzer():
+                if args.verbose:
+                    print("🔍 Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(results_raw)
+                results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                if args.verbose:
+                    print(f"✅ Meta-analysis complete")
+            
+            results = await results_to_json(results_raw)
 
         elif args.scan_known_configs or args.config_path:
-            cfg = _build_config(selected_analyzers)
+            cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             if args.config_path:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-                scan_results = await scanner.scan_mcp_config_file(
+                results_raw = await scanner.scan_mcp_config_file(
                     args.config_path,
                     analyzers=selected_analyzers,
                     auth=auth,
                     expand_vars_default=args.expand_vars,
                 )
-                results = await results_to_json(scan_results)
+                
+                # Run meta-analysis if enabled
+                if enable_meta and scanner.has_meta_analyzer():
+                    if args.verbose:
+                        print("🔍 Running meta-analysis to filter false positives...")
+                    validated_findings = await scanner.run_meta_analysis(results_raw)
+                    results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                    if args.verbose:
+                        print(f"✅ Meta-analysis complete")
+                
+                results = await results_to_json(results_raw)
             else:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                 results_by_cfg = await scanner.scan_well_known_mcp_configs(
@@ -1650,6 +1730,10 @@ async def main():
                 if args.raw:
                     output = {}
                     for cfg_path, scan_results in results_by_cfg.items():
+                        # Run meta-analysis if enabled
+                        if enable_meta and scanner.has_meta_analyzer():
+                            validated_findings = await scanner.run_meta_analysis(scan_results)
+                            scan_results = apply_meta_analysis_to_results(scan_results, validated_findings)
                         output[cfg_path] = await results_to_json(scan_results)
                     print(json.dumps(output, indent=2))
                     return
@@ -1663,6 +1747,16 @@ async def main():
                         )
                         result.server_source = f"{config_name}"
                     flattened.extend(scan_results)
+                
+                # Run meta-analysis if enabled
+                if enable_meta and scanner.has_meta_analyzer():
+                    if args.verbose:
+                        print("🔍 Running meta-analysis to filter false positives...")
+                    validated_findings = await scanner.run_meta_analysis(flattened)
+                    flattened = apply_meta_analysis_to_results(flattened, validated_findings)
+                    if args.verbose:
+                        print(f"✅ Meta-analysis complete")
+                
                 results = await results_to_json(flattened)
 
         else:
@@ -1673,22 +1767,31 @@ async def main():
             else:
                 # Run the security scan against a server URL
                 if args.bearer_token:
-                    cfg = _build_config(selected_analyzers)
+                    cfg = _build_config(selected_analyzers, enable_meta=enable_meta)
                     scanner = Scanner(cfg, rules_dir=args.rules_path)
                     results_raw = await scanner.scan_remote_server_tools(
                         args.server_url,
                         auth=Auth.bearer(args.bearer_token),
                         analyzers=selected_analyzers,
                     )
-                    results = await results_to_json(results_raw)
                 else:
-                    cfg = _build_config(selected_analyzers, endpoint_url=args.endpoint_url)
+                    cfg = _build_config(selected_analyzers, endpoint_url=args.endpoint_url, enable_meta=enable_meta)
                     scanner = Scanner(cfg, rules_dir=args.rules_path)
                     auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                     results_raw = await scanner.scan_remote_server_tools(
                         args.server_url, auth=auth, analyzers=selected_analyzers
                     )
-                    results = await results_to_json(results_raw)
+                
+                # Run meta-analysis if enabled
+                if enable_meta and scanner.has_meta_analyzer():
+                    if args.verbose:
+                        print("🔍 Running meta-analysis to filter false positives...")
+                    validated_findings = await scanner.run_meta_analysis(results_raw)
+                    results_raw = apply_meta_analysis_to_results(results_raw, validated_findings)
+                    if args.verbose:
+                        print(f"✅ Meta-analysis complete")
+                
+                results = await results_to_json(results_raw)
 
     except Exception as e:
         print(f"Error during scanning: {e}", file=sys.stderr)

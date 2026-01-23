@@ -548,6 +548,116 @@ def format_results_as_json(
     return json.dumps({"scan_results": results}, indent=2)
 
 
+def apply_meta_analysis_to_results(
+    scan_results: List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]],
+    validated_findings: List[SecurityFinding],
+) -> List[Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]]:
+    """Apply meta-analysis to scan results by enriching findings with validation info.
+    
+    IMPORTANT: This function preserves ALL original findings and only adds
+    meta-analysis enrichments. It does NOT filter out findings unless they
+    are explicitly marked as false positives by the meta-analyzer.
+    
+    Args:
+        scan_results: Original scan results from analyzers
+        validated_findings: Validated findings from meta-analysis with enrichments
+        
+    Returns:
+        Updated scan results with meta-analysis enrichments added to findings
+    """
+    # Create lookup for validated findings enrichments
+    # Key: (threat_category, summary_prefix) -> enrichment details
+    validated_enrichments = {}
+    for f in validated_findings:
+        # Use multiple key strategies for matching
+        key1 = (f.threat_category, f.summary[:50] if f.summary else "")
+        key2 = (f.threat_category, f.summary) if f.summary else None
+        
+        enrichment = {
+            "meta_validated": True,
+            "meta_confidence": f.details.get("meta_confidence") if f.details else None,
+            "meta_confidence_reason": f.details.get("meta_confidence_reason") if f.details else None,
+            "meta_exploitability": f.details.get("meta_exploitability") if f.details else None,
+            "meta_impact": f.details.get("meta_impact") if f.details else None,
+        }
+        # Remove None values
+        enrichment = {k: v for k, v in enrichment.items() if v is not None}
+        
+        validated_enrichments[key1] = enrichment
+        if key2:
+            validated_enrichments[key2] = enrichment
+
+    updated_results = []
+    for result in scan_results:
+        # Keep ALL original findings, just add meta enrichments where available
+        enriched_findings = []
+        for finding in result.findings:
+            # Try to find matching enrichment
+            key1 = (finding.threat_category, finding.summary[:50] if finding.summary else "")
+            key2 = (finding.threat_category, finding.summary) if finding.summary else None
+            
+            enrichment = validated_enrichments.get(key1) or (validated_enrichments.get(key2) if key2 else None)
+            
+            # Add enrichment to finding details
+            if finding.details is None:
+                finding.details = {}
+            
+            if enrichment:
+                finding.details.update(enrichment)
+            else:
+                # Mark as reviewed but not in validated list (still keep it!)
+                finding.details["meta_reviewed"] = True
+            
+            enriched_findings.append(finding)
+
+        # Create updated result preserving ALL findings
+        if isinstance(result, ToolScanResult):
+            updated_results.append(ToolScanResult(
+                tool_name=result.tool_name,
+                tool_description=result.tool_description,
+                status=result.status,
+                analyzers=result.analyzers + ["META"],
+                findings=enriched_findings,
+                server_source=result.server_source,
+                server_name=result.server_name,
+            ))
+        elif isinstance(result, PromptScanResult):
+            updated_results.append(PromptScanResult(
+                prompt_name=result.prompt_name,
+                prompt_description=result.prompt_description,
+                status=result.status,
+                analyzers=result.analyzers + ["META"],
+                findings=enriched_findings,
+                server_source=result.server_source,
+                server_name=result.server_name,
+            ))
+        elif isinstance(result, ResourceScanResult):
+            updated_results.append(ResourceScanResult(
+                resource_uri=result.resource_uri,
+                resource_name=result.resource_name,
+                resource_mime_type=result.resource_mime_type,
+                status=result.status,
+                analyzers=result.analyzers + ["META"],
+                findings=enriched_findings,
+                server_source=result.server_source,
+                server_name=result.server_name,
+            ))
+        elif isinstance(result, InstructionsScanResult):
+            updated_results.append(InstructionsScanResult(
+                instructions=result.instructions,
+                server_name=result.server_name,
+                protocol_version=result.protocol_version,
+                status=result.status,
+                analyzers=result.analyzers + ["META"],
+                findings=enriched_findings,
+                server_source=result.server_source,
+            ))
+        else:
+            updated_results.append(result)
+
+    return updated_results
+
+
 def format_results_by_analyzer(
     scan_result: Union[ToolScanResult, PromptScanResult, ResourceScanResult, InstructionsScanResult]
 ) -> str:

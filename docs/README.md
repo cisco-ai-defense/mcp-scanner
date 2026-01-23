@@ -6,6 +6,7 @@ This directory contains detailed documentation for the MCP Scanner SDK.
 
 - **[Architecture](architecture.md)** - System architecture, components, and data models
 - **[Behavioral Scanning](behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
+- **[Meta-Analysis](meta-analysis.md)** - Second-pass LLM analysis to filter false positives and prioritize findings
 - **[LLM Providers](llm-providers.md)** - Configuration guide for all LLM providers (OpenAI, Azure, AWS Bedrock, etc.)
 - **[MCP Threats Taxonomy](mcp-threats-taxonomy.md)** - Complete AITech/AISubtech threat taxonomy
 - **[Authentication](authentication.md)** - OAuth setup, explicit auth control, and security configuration

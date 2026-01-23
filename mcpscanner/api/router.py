@@ -39,6 +39,7 @@ from ..core.result import (
     InstructionsScanResult,
     get_highest_severity,
     group_findings_by_analyzer,
+    apply_meta_analysis_to_results,
 )
 from ..core.scanner import Scanner, ScannerFactory
 from ..utils.logging_config import get_logger
@@ -389,6 +390,14 @@ async def scan_tool_endpoint(
                 f"No analyzers ran for tool '{request.tool_name}' - check analyzer configuration"
             )
 
+        # Run meta-analysis if enabled
+        if request.enable_meta and scanner.has_meta_analyzer():
+            logger.debug("Running meta-analysis to filter false positives...")
+            validated_findings = await scanner.run_meta_analysis([result])
+            results_list = apply_meta_analysis_to_results([result], validated_findings)
+            result = results_list[0] if results_list else result
+            logger.debug("Meta-analysis complete")
+
         api_result = _convert_scanner_result_to_tool_api_result(result, scanner)
 
         if request.output_format == OutputFormat.RAW:
@@ -464,6 +473,13 @@ async def scan_all_tools_endpoint(
             http_headers=http_headers,
         )
         logger.debug(f"Scanner completed - scanned {len(results)} tools")
+
+        # Run meta-analysis if enabled
+        if request.enable_meta and scanner.has_meta_analyzer():
+            logger.debug("Running meta-analysis to filter false positives...")
+            validated_findings = await scanner.run_meta_analysis(results)
+            results = apply_meta_analysis_to_results(results, validated_findings)
+            logger.debug("Meta-analysis complete")
 
         api_results = [
             _convert_scanner_result_to_tool_api_result(res, scanner) for res in results
@@ -550,6 +566,14 @@ async def scan_prompt_endpoint(
         )
         logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
 
+        # Run meta-analysis if enabled
+        if request.enable_meta and scanner.has_meta_analyzer():
+            logger.debug("Running meta-analysis to filter false positives...")
+            validated_findings = await scanner.run_meta_analysis([result])
+            results_list = apply_meta_analysis_to_results([result], validated_findings)
+            result = results_list[0] if results_list else result
+            logger.debug("Meta-analysis complete")
+
         # Convert result to API format using helper function
         grouped_findings = _group_findings_for_api(result, scanner)
 
@@ -612,6 +636,13 @@ async def scan_all_prompts_endpoint(
             http_headers=http_headers,
         )
         logger.debug(f"Scanner completed - scanned {len(results)} prompts")
+
+        # Run meta-analysis if enabled
+        if request.enable_meta and scanner.has_meta_analyzer():
+            logger.debug("Running meta-analysis to filter false positives...")
+            validated_findings = await scanner.run_meta_analysis(results)
+            results = apply_meta_analysis_to_results(results, validated_findings)
+            logger.debug("Meta-analysis complete")
 
         # Convert results to API format
         prompt_results = []
@@ -691,6 +722,14 @@ async def scan_resource_endpoint(
         )
         logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
 
+        # Run meta-analysis if enabled
+        if request.enable_meta and scanner.has_meta_analyzer() and result.status == "completed":
+            logger.debug("Running meta-analysis to filter false positives...")
+            validated_findings = await scanner.run_meta_analysis([result])
+            results_list = apply_meta_analysis_to_results([result], validated_findings)
+            result = results_list[0] if results_list else result
+            logger.debug("Meta-analysis complete")
+
         # Convert result to API format using helper function
         if result.status == "completed":
             grouped_findings = _group_findings_for_api(result, scanner)
@@ -761,6 +800,17 @@ async def scan_all_resources_endpoint(
             allowed_mime_types=allowed_mime_types,
         )
         logger.debug(f"Scanner completed - scanned {len(results)} resources")
+
+        # Run meta-analysis if enabled
+        if request.enable_meta and scanner.has_meta_analyzer():
+            completed_results = [r for r in results if r.status == "completed"]
+            if completed_results:
+                logger.debug("Running meta-analysis to filter false positives...")
+                validated_findings = await scanner.run_meta_analysis(completed_results)
+                updated_results = apply_meta_analysis_to_results(completed_results, validated_findings)
+                # Merge back with non-completed results
+                results = updated_results + [r for r in results if r.status != "completed"]
+                logger.debug("Meta-analysis complete")
 
         # Convert results to API format
         resource_results = []
@@ -845,6 +895,14 @@ async def scan_instructions_endpoint(
             http_headers=http_headers,
         )
         logger.debug(f"Scanner completed - scanned instructions from server")
+
+        # Run meta-analysis if enabled
+        if request.enable_meta and scanner.has_meta_analyzer() and result.status == "completed":
+            logger.debug("Running meta-analysis to filter false positives...")
+            validated_findings = await scanner.run_meta_analysis([result])
+            results_list = apply_meta_analysis_to_results([result], validated_findings)
+            result = results_list[0] if results_list else result
+            logger.debug("Meta-analysis complete")
 
         # Convert result to API format using helper function
         if result.status == "completed":

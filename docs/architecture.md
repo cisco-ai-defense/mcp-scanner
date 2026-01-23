@@ -14,6 +14,7 @@ The MCP Scanner is organized into the following components:
 - **YaraAnalyzer**: Handles YARA pattern matching for detecting known malicious patterns and signatures.
 - **LLMAnalyzer**: Advanced AI-powered analysis using configurable LLM models for sophisticated threat detection.
 - **BehavioralCodeAnalyzer**: LLM-powered behavioral analysis with cross-file dataflow tracking, alignment checking, and comprehensive threat taxonomy mapping (AITech/AISubtech).
+- **LLMMetaAnalyzer**: Second-pass LLM analysis that reviews findings from other analyzers to filter false positives, prioritize by risk, correlate related findings, and provide actionable recommendations. Enabled via `--enable-meta` CLI flag or `enable_meta` API parameter.
 
 ## Utility Methods
 

@@ -200,6 +200,8 @@ class ReportGenerator:
                 self.requested_analyzer_keys.add("llm_analyzer")
             elif analyzer.upper() == "BEHAVIORAL":
                 self.requested_analyzer_keys.add("behavioral_analyzer")
+            elif analyzer.upper() == "META":
+                self.requested_analyzer_keys.add("meta_analyzer")
 
     def format_output(
         self,
@@ -804,6 +806,7 @@ class ReportGenerator:
                 "api_analyzer": {"total": 0, "with_findings": 0},
                 "yara_analyzer": {"total": 0, "with_findings": 0},
                 "llm_analyzer": {"total": 0, "with_findings": 0},
+                "meta_analyzer": {"total": 0, "with_findings": 0},
             },
         }
 
