@@ -1,0 +1,11 @@
+{
+  "name": "mcp-scanner",
+  "description": "Security scanning for MCP servers using YARA rules, LLM analysis, and Cisco AI Defense. Detect prompt injection, tool poisoning, and other threats in MCP tools, prompts, and resources.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Cisco AI Defense"
+  },
+  "repository": "https://github.com/cisco-ai-defense/mcp-scanner",
+  "license": "Apache-2.0",
+  "keywords": ["security", "mcp", "scanning", "yara", "threat-detection"]
+}
