@@ -43,6 +43,12 @@ dev = [
     "pre-commit>=3.6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/cisco-ai-defense/mcp-scanner"
+Repository = "https://github.com/cisco-ai-defense/mcp-scanner"
+Documentation = "https://github.com/cisco-ai-defense/mcp-scanner#readme"
+Issues = "https://github.com/cisco-ai-defense/mcp-scanner/issues"
+
 [project.scripts]
 mcp-scanner = "mcpscanner.cli:cli_entry_point"
 mcp-scanner-api = "mcpscanner.server:main"
