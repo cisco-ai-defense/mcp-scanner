@@ -21,8 +21,9 @@ import pytest
 
 class TestTypes:
     """Test type inference functionality."""
-    
+
     def test_types_module_exists(self):
         """Test that types module can be imported."""
         from mcpscanner.core.static_analysis import types
+
         assert types is not None

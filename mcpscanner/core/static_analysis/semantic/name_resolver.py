@@ -81,7 +81,7 @@ class Scope:
 
 class NameResolver:
     """Resolves names to their definitions.
-    
+
     REVERSED APPROACH: Tracks which names are influenced by MCP entry point parameters.
     """
 
@@ -117,7 +117,7 @@ class NameResolver:
 
     def _visit_node(self, node: ast.AST) -> None:
         """Visit a node and its children with proper scope tracking.
-        
+
         Args:
             node: AST node to visit
         """
@@ -141,55 +141,55 @@ class NameResolver:
             # Visit children for other nodes
             for child in ast.iter_child_nodes(node):
                 self._visit_node(child)
-    
+
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         """Visit function with proper scope management.
-        
+
         Args:
             node: Function definition node
         """
         # Define function in current scope
         self.current_scope.define(node.name, node)
-        
+
         # Create and enter new scope for function body
         func_scope = Scope(parent=self.current_scope)
         self.current_scope.children.append(func_scope)
         old_scope = self.current_scope
         self.current_scope = func_scope
-        
+
         # Define parameters in function scope
         for arg in node.args.args:
             is_mcp_param = arg.arg in self.parameter_names
             func_scope.define(arg.arg, arg, is_param=is_mcp_param)
             if is_mcp_param:
                 self.param_influenced.add(arg.arg)
-        
+
         # Visit function body
         for child in node.body:
             self._visit_node(child)
-        
+
         # Exit function scope
         self.current_scope = old_scope
-    
+
     def _visit_class(self, node: ast.ClassDef) -> None:
         """Visit class with proper scope management.
-        
+
         Args:
             node: Class definition node
         """
         # Define class in current scope
         self.current_scope.define(node.name, node)
-        
+
         # Create and enter new scope for class body
         class_scope = Scope(parent=self.current_scope)
         self.current_scope.children.append(class_scope)
         old_scope = self.current_scope
         self.current_scope = class_scope
-        
+
         # Visit class body
         for child in node.body:
             self._visit_node(child)
-        
+
         # Exit class scope
         self.current_scope = old_scope
 
@@ -228,7 +228,7 @@ class NameResolver:
         """
         # Check if RHS uses parameter-influenced variables
         rhs_uses_params = self._expr_uses_params(node.value)
-        
+
         for target in node.targets:
             if isinstance(target, ast.Name):
                 self.current_scope.define(target.id, node, is_param=rhs_uses_params)
@@ -237,7 +237,9 @@ class NameResolver:
             elif isinstance(target, ast.Tuple):
                 for elt in target.elts:
                     if isinstance(elt, ast.Name):
-                        self.current_scope.define(elt.id, node, is_param=rhs_uses_params)
+                        self.current_scope.define(
+                            elt.id, node, is_param=rhs_uses_params
+                        )
                         if rhs_uses_params:
                             self.param_influenced.add(elt.id)
 
