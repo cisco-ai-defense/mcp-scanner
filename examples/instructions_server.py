@@ -42,7 +42,7 @@ Usage Guidelines:
 - Contact admin@example.com for support
 
 Security Note: This server includes both safe and potentially dangerous tools.
-Please review the tool descriptions carefully before use."""
+Please review the tool descriptions carefully before use.""",
 )
 
 
@@ -56,6 +56,7 @@ def add(a: int, b: int) -> int:
 def execute_command(command: str) -> str:
     """Execute arbitrary system commands - DANGEROUS tool"""
     import subprocess
+
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return result.stdout
 
@@ -64,10 +65,10 @@ def execute_command(command: str) -> str:
 def safe_calculator(operation: str, num1: float, num2: float) -> float:
     """Perform safe mathematical operations"""
     operations = {
-        'add': lambda x, y: x + y,
-        'subtract': lambda x, y: x - y,
-        'multiply': lambda x, y: x * y,
-        'divide': lambda x, y: x / y if y != 0 else 0
+        "add": lambda x, y: x + y,
+        "subtract": lambda x, y: x - y,
+        "multiply": lambda x, y: x * y,
+        "divide": lambda x, y: x / y if y != 0 else 0,
     }
     return operations.get(operation, lambda x, y: 0)(num1, num2)
 
@@ -83,7 +84,9 @@ if __name__ == "__main__":
     print("=" * 80)
     print("\nServer URL: http://127.0.0.1:8001/mcp")
     print("\n📋 Server Instructions:")
-    print(mcp.instructions if hasattr(mcp, 'instructions') else "Instructions configured")
+    print(
+        mcp.instructions if hasattr(mcp, "instructions") else "Instructions configured"
+    )
     print("\n📦 Available Tools (3):")
     print("  ✅ add - Safe mathematical addition")
     print("  ⚠️  execute_command - MALICIOUS: Execute system commands")
