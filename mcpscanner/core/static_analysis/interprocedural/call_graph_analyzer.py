@@ -39,7 +39,9 @@ class CallGraph:
         self.calls: List[tuple[str, str]] = []  # (caller, callee) pairs
         self.mcp_entry_points: Set[str] = set()  # MCP decorated functions
 
-    def add_function(self, name: str, node: Any, file_path: Path, is_mcp_entry: bool = False) -> None:
+    def add_function(
+        self, name: str, node: Any, file_path: Path, is_mcp_entry: bool = False
+    ) -> None:
         """Add a function definition.
 
         Args:
@@ -84,7 +86,7 @@ class CallGraph:
 
 class CallGraphAnalyzer:
     """Performs cross-file analysis for MCP servers.
-    
+
     REVERSED APPROACH: Tracks parameter flow from MCP entry points through
     the entire codebase across multiple files.
     """
@@ -108,21 +110,23 @@ class CallGraphAnalyzer:
         try:
             analyzer.parse()
             self.analyzers[file_path] = analyzer
-            
+
             # Run type analysis
             type_analyzer = TypeAnalyzer(analyzer)
             type_analyzer.analyze()
             self.type_analyzers[file_path] = type_analyzer
-            
+
             # Extract function definitions and MCP entry points
             self._extract_python_functions(file_path, analyzer)
-            
+
             # Extract imports
             self._extract_imports(file_path, analyzer)
         except Exception as e:
             self.logger.debug(f"Skipping unparseable file {file_path}: {e}")
 
-    def _extract_python_functions(self, file_path: Path, analyzer: PythonParser) -> None:
+    def _extract_python_functions(
+        self, file_path: Path, analyzer: PythonParser
+    ) -> None:
         """Extract function definitions and class methods from Python file.
 
         Args:
@@ -131,14 +135,14 @@ class CallGraphAnalyzer:
         """
         # Get AST
         tree = analyzer.get_ast()
-        
+
         # Extract top-level functions only (not methods inside classes)
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 # Check if it's an MCP entry point
                 is_mcp = self._is_mcp_entry_point(node)
                 self.call_graph.add_function(node.name, node, file_path, is_mcp)
-        
+
         # Extract class methods
         for node in tree.body:
             if isinstance(node, ast.ClassDef):
@@ -147,7 +151,9 @@ class CallGraphAnalyzer:
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         # Add as ClassName.method_name
                         method_full_name = f"{class_name}.{item.name}"
-                        self.call_graph.add_function(method_full_name, item, file_path, is_mcp_entry=False)
+                        self.call_graph.add_function(
+                            method_full_name, item, file_path, is_mcp_entry=False
+                        )
 
     def _is_mcp_entry_point(self, func_def: ast.FunctionDef) -> bool:
         """Check if function is an MCP entry point.
@@ -161,9 +167,9 @@ class CallGraphAnalyzer:
         for decorator in func_def.decorator_list:
             decorator_name = self._get_decorator_name(decorator)
             # Support custom variable names: @hello_mcp.tool(), @jira_mcp.tool(), etc.
-            if '.' in decorator_name:
-                parts = decorator_name.rsplit('.', 1)
-                if len(parts) == 2 and parts[1] in ['tool', 'prompt', 'resource']:
+            if "." in decorator_name:
+                parts = decorator_name.rsplit(".", 1)
+                if len(parts) == 2 and parts[1] in ["tool", "prompt", "resource"]:
                     return True
         return False
 
@@ -178,13 +184,13 @@ class CallGraphAnalyzer:
         """
         if isinstance(decorator, ast.Call):
             decorator = decorator.func
-        
+
         if isinstance(decorator, ast.Attribute):
             if isinstance(decorator.value, ast.Name):
                 return f"{decorator.value.id}.{decorator.attr}"
         elif isinstance(decorator, ast.Name):
             return decorator.id
-        
+
         return ""
 
     def _extract_imports(self, file_path: Path, analyzer: PythonParser) -> None:
@@ -196,7 +202,7 @@ class CallGraphAnalyzer:
         """
         imports = analyzer.get_imports()
         imported_files = []
-        
+
         for import_node in imports:
             if isinstance(import_node, ast.Import):
                 for alias in import_node.names:
@@ -210,7 +216,7 @@ class CallGraphAnalyzer:
                     imported_file = self._resolve_python_import(file_path, module_name)
                     if imported_file:
                         imported_files.append(imported_file)
-        
+
         self.import_map[file_path] = imported_files
 
     def _resolve_python_import(self, from_file: Path, module_name: str) -> Path | None:
@@ -225,21 +231,21 @@ class CallGraphAnalyzer:
         """
         module_parts = module_name.split(".")
         current_dir = from_file.parent
-        
+
         # Try relative to current file
         for i in range(len(module_parts), 0, -1):
             potential_path = current_dir / "/".join(module_parts[:i])
-            
+
             # Try as file
             py_file = potential_path.with_suffix(".py")
             if py_file.exists():
                 return py_file
-            
+
             # Try as package
             init_file = potential_path / "__init__.py"
             if init_file.exists():
                 return init_file
-        
+
         return None
 
     def build_call_graph(self) -> CallGraph:
@@ -262,13 +268,15 @@ class CallGraphAnalyzer:
             analyzer: Python analyzer
         """
         tree = analyzer.get_ast()
-        
+
         # Extract calls from top-level functions
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 caller_name = f"{file_path}::{node.name}"
-                self._extract_calls_from_function(file_path, node, caller_name, analyzer)
-        
+                self._extract_calls_from_function(
+                    file_path, node, caller_name, analyzer
+                )
+
         # Extract calls from class methods
         for node in tree.body:
             if isinstance(node, ast.ClassDef):
@@ -276,17 +284,19 @@ class CallGraphAnalyzer:
                 for item in node.body:
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         caller_name = f"{file_path}::{class_name}.{item.name}"
-                        self._extract_calls_from_function(file_path, item, caller_name, analyzer)
-    
+                        self._extract_calls_from_function(
+                            file_path, item, caller_name, analyzer
+                        )
+
     def _extract_calls_from_function(
-        self, 
-        file_path: Path, 
-        func_node: ast.FunctionDef, 
+        self,
+        file_path: Path,
+        func_node: ast.FunctionDef,
         caller_name: str,
-        analyzer: PythonParser
+        analyzer: PythonParser,
     ) -> None:
         """Extract calls from a single function.
-        
+
         Args:
             file_path: File path
             func_node: Function AST node
@@ -297,10 +307,10 @@ class CallGraphAnalyzer:
         for node in ast.walk(func_node):
             if isinstance(node, ast.Call):
                 callee_name = analyzer.get_call_name(node)
-                
+
                 # Try to resolve to full name
                 full_callee = self._resolve_call_target(file_path, callee_name)
-                
+
                 if full_callee:
                     self.call_graph.add_call(caller_name, full_callee)
                 else:
@@ -318,7 +328,7 @@ class CallGraphAnalyzer:
             Full qualified name or None
         """
         # Handle method calls (e.g., 'processor.process' or 'DataProcessor.process')
-        if '.' in call_name:
+        if "." in call_name:
             # Use type analyzer to resolve instance.method() to ClassName.method
             if file_path in self.type_analyzers:
                 resolved = self.type_analyzers[file_path].resolve_method_call(call_name)
@@ -328,35 +338,35 @@ class CallGraphAnalyzer:
                         if func_name.endswith(f"::{resolved}"):
                             if func_name.startswith(str(file_path)):
                                 return func_name
-            
+
             # Try to match ClassName.method_name directly
             for func_name in self.call_graph.functions.keys():
                 if func_name.endswith(f"::{call_name}"):
                     if func_name.startswith(str(file_path)):
                         return func_name
-            
+
             # Try to match just the method part (e.g., 'DataProcessor.process')
-            parts = call_name.split('.')
+            parts = call_name.split(".")
             if len(parts) >= 2:
-                class_method = '.'.join(parts[-2:])  # Get last two parts
+                class_method = ".".join(parts[-2:])  # Get last two parts
                 for func_name in self.call_graph.functions.keys():
                     if func_name.endswith(f"::{class_method}"):
                         if func_name.startswith(str(file_path)):
                             return func_name
-        
+
         # Check if it's a regular function defined in the same file
         for func_name in self.call_graph.functions.keys():
             if func_name.endswith(f"::{call_name}"):
                 if func_name.startswith(str(file_path)):
                     return func_name
-        
+
         # Check imported files
         if file_path in self.import_map:
             for imported_file in self.import_map[file_path]:
                 potential_name = f"{imported_file}::{call_name}"
                 if potential_name in self.call_graph.functions:
                     return potential_name
-        
+
         return None
 
     def get_reachable_functions(self, start_func: str) -> List[str]:
@@ -371,84 +381,88 @@ class CallGraphAnalyzer:
         reachable = set()
         to_visit = [start_func]
         visited = set()
-        
+
         while to_visit:
             current = to_visit.pop()
             if current in visited:
                 continue
-            
+
             visited.add(current)
             reachable.add(current)
-            
+
             # Add all callees
             callees = self.call_graph.get_callees(current)
             for callee in callees:
                 if callee not in visited:
                     to_visit.append(callee)
-        
+
         return list(reachable)
 
-    def get_reachable_from_entry_point(
-        self, entry_point: str
-    ) -> Set[str]:
+    def get_reachable_from_entry_point(self, entry_point: str) -> Set[str]:
         """Get all functions reachable from an MCP entry point.
-        
+
         Args:
             entry_point: MCP entry point function name
-            
+
         Returns:
             Set of reachable function names
         """
         # Get all functions reachable from entry point
         reachable = self.get_reachable_functions(entry_point)
-        
+
         return set(reachable)
-    
+
     def analyze_parameter_flow_across_files(
         self, entry_point: str, param_names: List[str]
     ) -> Dict[str, Any]:
         """Analyze how parameters flow across files from an entry point.
-        
+
         Args:
             entry_point: MCP entry point function name
             param_names: Parameter names to track
-            
+
         Returns:
             Dictionary with cross-file flow information
         """
         # Get all reachable functions
         reachable = self.get_reachable_functions(entry_point)
-        
+
         # Track parameter-influenced functions (simplified heuristic)
         param_influenced_funcs = set()
         cross_file_flows = []
-        
+
         for func_name in reachable:
             if func_name == entry_point:
                 continue
-            
+
             # Check if this function is called from entry point or influenced functions
             for caller, callee in self.call_graph.calls:
-                if callee == func_name and (caller == entry_point or caller in param_influenced_funcs):
+                if callee == func_name and (
+                    caller == entry_point or caller in param_influenced_funcs
+                ):
                     param_influenced_funcs.add(func_name)
-                    
+
                     # Extract file information
                     caller_file = caller.split("::")[0] if "::" in caller else "unknown"
                     callee_file = callee.split("::")[0] if "::" in callee else "unknown"
-                    
+
                     if caller_file != callee_file:
-                        cross_file_flows.append({
-                            "from_function": caller,
-                            "to_function": callee,
-                            "from_file": caller_file,
-                            "to_file": callee_file,
-                        })
-        
+                        cross_file_flows.append(
+                            {
+                                "from_function": caller,
+                                "to_function": callee,
+                                "from_file": caller_file,
+                                "to_file": callee_file,
+                            }
+                        )
+
         return {
             "reachable_functions": reachable,
             "param_influenced_functions": list(param_influenced_funcs),
             "cross_file_flows": cross_file_flows,
-            "total_files_involved": len(set(f.split("::")[0] for f in reachable if "::" in f)),
+            "total_files_involved": len(
+                set(f.split("::")[0] for f in reachable if "::" in f)
+            ),
         }
 
     def get_all_files(self) -> List[Path]:

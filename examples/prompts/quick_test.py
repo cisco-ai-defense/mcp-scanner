@@ -48,8 +48,7 @@ async def main():
 
     try:
         results = await scanner.scan_remote_server_prompts(
-            server_url,
-            analyzers=[AnalyzerEnum.LLM, AnalyzerEnum.YARA]
+            server_url, analyzers=[AnalyzerEnum.LLM, AnalyzerEnum.YARA]
         )
 
         print(f"✅ Scanned {len(results)} prompts\n")
@@ -61,7 +60,9 @@ async def main():
 
             if not result.is_safe:
                 for finding in result.findings:
-                    print(f"   [{finding.analyzer}] {finding.severity}: {finding.summary}")
+                    print(
+                        f"   [{finding.analyzer}] {finding.severity}: {finding.summary}"
+                    )
             print()
 
         # Summary
@@ -72,6 +73,7 @@ async def main():
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
 
 

@@ -56,8 +56,10 @@ async def test_scan_prompt():
             print(f"   Status: {result['status']}")
             print(f"   Safe: {result['is_safe']}")
             print(f"\n   Findings:")
-            for analyzer, data in result['findings'].items():
-                print(f"      {analyzer}: {data['severity']} - {data['threat_summary']}")
+            for analyzer, data in result["findings"].items():
+                print(
+                    f"      {analyzer}: {data['severity']} - {data['threat_summary']}"
+                )
         else:
             print(f"❌ Error: {response.status_code}")
             print(response.text)
@@ -85,8 +87,8 @@ async def test_scan_all_prompts():
             print(f"   Safe: {result['safe_prompts']}")
             print(f"   Unsafe: {result['unsafe_prompts']}")
             print(f"\n   Prompts:")
-            for prompt in result['prompts']:
-                status = "✅ SAFE" if prompt['is_safe'] else "⚠️  UNSAFE"
+            for prompt in result["prompts"]:
+                status = "✅ SAFE" if prompt["is_safe"] else "⚠️  UNSAFE"
                 print(f"      {status} {prompt['prompt_name']}")
         else:
             print(f"❌ Error: {response.status_code}")
@@ -111,7 +113,7 @@ async def test_scan_resource():
         response = await client.post(
             f"{BASE_URL}/scan-resource",
             json=payload,
-            params={"allowed_mime_types": ["text/plain", "text/html"]}
+            params={"allowed_mime_types": ["text/plain", "text/html"]},
         )
 
         if response.status_code == 200:
@@ -122,8 +124,10 @@ async def test_scan_resource():
             print(f"   Status: {result['status']}")
             print(f"   Safe: {result['is_safe']}")
             print(f"\n   Findings:")
-            for analyzer, data in result['findings'].items():
-                print(f"      {analyzer}: {data['severity']} - {data['threat_summary']}")
+            for analyzer, data in result["findings"].items():
+                print(
+                    f"      {analyzer}: {data['severity']} - {data['threat_summary']}"
+                )
         else:
             print(f"❌ Error: {response.status_code}")
             print(response.text)
@@ -146,7 +150,7 @@ async def test_scan_all_resources():
         response = await client.post(
             f"{BASE_URL}/scan-all-resources",
             json=payload,
-            params={"allowed_mime_types": ["text/plain", "text/html"]}
+            params={"allowed_mime_types": ["text/plain", "text/html"]},
         )
 
         if response.status_code == 200:
@@ -157,12 +161,16 @@ async def test_scan_all_resources():
             print(f"   Safe: {result['safe_resources']}")
             print(f"   Unsafe: {result['unsafe_resources']}")
             print(f"\n   Resources:")
-            for resource in result['resources']:
-                if resource['status'] == 'completed':
-                    status = "✅ SAFE" if resource['is_safe'] else "⚠️  UNSAFE"
-                    print(f"      {status} {resource['resource_name']} ({resource['resource_mime_type']})")
+            for resource in result["resources"]:
+                if resource["status"] == "completed":
+                    status = "✅ SAFE" if resource["is_safe"] else "⚠️  UNSAFE"
+                    print(
+                        f"      {status} {resource['resource_name']} ({resource['resource_mime_type']})"
+                    )
                 else:
-                    print(f"      ⏭️  SKIPPED {resource['resource_name']} ({resource['status']})")
+                    print(
+                        f"      ⏭️  SKIPPED {resource['resource_name']} ({resource['status']})"
+                    )
         else:
             print(f"❌ Error: {response.status_code}")
             print(response.text)
@@ -187,6 +195,7 @@ async def main():
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
 
 

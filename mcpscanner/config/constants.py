@@ -77,9 +77,7 @@ class MCPScannerConstants:
     )
 
     # AWS Environment Variables
-    ENV_AWS_REGION: str = os.getenv(
-        "MCP_SCANNER_ENV_AWS_REGION_NAME", "AWS_REGION"
-    )
+    ENV_AWS_REGION: str = os.getenv("MCP_SCANNER_ENV_AWS_REGION_NAME", "AWS_REGION")
     ENV_AWS_ACCESS_KEY_ID: str = os.getenv(
         "MCP_SCANNER_ENV_AWS_ACCESS_KEY_ID_NAME", "AWS_ACCESS_KEY_ID"
     )
@@ -89,9 +87,7 @@ class MCPScannerConstants:
     ENV_AWS_SESSION_TOKEN: str = os.getenv(
         "MCP_SCANNER_ENV_AWS_SESSION_TOKEN_NAME", "AWS_SESSION_TOKEN"
     )
-    ENV_AWS_PROFILE: str = os.getenv(
-        "MCP_SCANNER_ENV_AWS_PROFILE_NAME", "AWS_PROFILE"
-    )
+    ENV_AWS_PROFILE: str = os.getenv("MCP_SCANNER_ENV_AWS_PROFILE_NAME", "AWS_PROFILE")
 
     # Default Configuration File Paths
     DEFAULT_ENV_FILE: str = os.getenv("MCP_SCANNER_DEFAULT_ENV_FILE", ".env")
@@ -120,14 +116,16 @@ class MCPScannerConstants:
     DEFAULT_LLM_BASE_URL: str = os.getenv("MCP_SCANNER_LLM_BASE_URL", None)
     DEFAULT_LLM_API_VERSION: str = os.getenv("MCP_SCANNER_LLM_API_VERSION", None)
     DEFAULT_LLM_TIMEOUT: int = int(os.getenv("MCP_SCANNER_LLM_TIMEOUT", "30"))
-    
+
     # LLM Prompt Configuration
     PROMPT_LENGTH_THRESHOLD: int = int(
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
     )
     LLM_MAX_RETRIES: int = int(os.getenv("MCP_SCANNER_LLM_MAX_RETRIES", "3"))
-    LLM_RETRY_BASE_DELAY: float = float(os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0"))
-    
+    LLM_RETRY_BASE_DELAY: float = float(
+        os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0")
+    )
+
     # Behavioral Analyzer File Size Limits
     MAX_FILE_SIZE_BYTES: int = int(
         os.getenv("MCP_SCANNER_MAX_FILE_SIZE_BYTES", "1000000")  # 1MB default
@@ -166,14 +164,30 @@ class MCPScannerConstants:
 
     # Behavioral Analyzer Prompt Limits
     # These control how much context is included in alignment verification prompts
-    BEHAVIORAL_MAX_OPERATIONS_PER_PARAM: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_OPERATIONS_PER_PARAM", "10"))
-    BEHAVIORAL_MAX_FUNCTION_CALLS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_FUNCTION_CALLS", "20"))
-    BEHAVIORAL_MAX_ASSIGNMENTS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_ASSIGNMENTS", "15"))
-    BEHAVIORAL_MAX_CROSS_FILE_CALLS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_CROSS_FILE_CALLS", "10"))
-    BEHAVIORAL_MAX_REACHABLE_FILES: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHABLE_FILES", "5"))
-    BEHAVIORAL_MAX_CONSTANTS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_CONSTANTS", "10"))
-    BEHAVIORAL_MAX_STRING_LITERALS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_STRING_LITERALS", "15"))
-    BEHAVIORAL_MAX_REACHES_CALLS: int = int(os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHES_CALLS", "10"))
+    BEHAVIORAL_MAX_OPERATIONS_PER_PARAM: int = int(
+        os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_OPERATIONS_PER_PARAM", "10")
+    )
+    BEHAVIORAL_MAX_FUNCTION_CALLS: int = int(
+        os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_FUNCTION_CALLS", "20")
+    )
+    BEHAVIORAL_MAX_ASSIGNMENTS: int = int(
+        os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_ASSIGNMENTS", "15")
+    )
+    BEHAVIORAL_MAX_CROSS_FILE_CALLS: int = int(
+        os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_CROSS_FILE_CALLS", "10")
+    )
+    BEHAVIORAL_MAX_REACHABLE_FILES: int = int(
+        os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHABLE_FILES", "5")
+    )
+    BEHAVIORAL_MAX_CONSTANTS: int = int(
+        os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_CONSTANTS", "10")
+    )
+    BEHAVIORAL_MAX_STRING_LITERALS: int = int(
+        os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_STRING_LITERALS", "15")
+    )
+    BEHAVIORAL_MAX_REACHES_CALLS: int = int(
+        os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHES_CALLS", "10")
+    )
 
     # OAuth Configuration
     OAUTH_CLIENT_NAME: str = os.getenv(

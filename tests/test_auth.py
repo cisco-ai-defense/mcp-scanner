@@ -368,8 +368,7 @@ class TestAPIAuthConfig:
         from mcpscanner.core.auth import APIAuthConfig
 
         auth_config = APIAuthConfig(
-            auth_type=AuthType.BEARER,
-            bearer_token="test_bearer_token"
+            auth_type=AuthType.BEARER, bearer_token="test_bearer_token"
         )
 
         assert auth_config.auth_type == AuthType.BEARER
@@ -384,7 +383,7 @@ class TestAPIAuthConfig:
         auth_config = APIAuthConfig(
             auth_type=AuthType.APIKEY,
             api_key="test_api_key",
-            api_key_header="X-API-Key"
+            api_key_header="X-API-Key",
         )
 
         assert auth_config.auth_type == AuthType.APIKEY
@@ -400,7 +399,7 @@ class TestAPIAuthConfig:
             auth_type=AuthType.APIKEY,
             bearer_token="bearer_token",
             api_key="api_key_value",
-            api_key_header="Custom-Header"
+            api_key_header="Custom-Header",
         )
 
         assert auth_config.auth_type == AuthType.APIKEY
@@ -415,9 +414,7 @@ class TestAuthAPIKey:
     def test_auth_creation_api_key(self):
         """Test creating Auth with API key type."""
         auth = Auth(
-            enabled=True,
-            auth_type=AuthType.APIKEY,
-            bearer_token="api_key_token"
+            enabled=True, auth_type=AuthType.APIKEY, bearer_token="api_key_token"
         )
 
         assert auth.enabled is True
@@ -429,9 +426,7 @@ class TestAuthAPIKey:
     def test_auth_api_key_properties(self):
         """Test API key auth properties and methods."""
         auth = Auth(
-            enabled=True,
-            auth_type=AuthType.APIKEY,
-            bearer_token="test_api_key"
+            enabled=True, auth_type=AuthType.APIKEY, bearer_token="test_api_key"
         )
 
         assert auth.enabled is True
@@ -442,9 +437,7 @@ class TestAuthAPIKey:
     def test_auth_api_key_disabled(self):
         """Test API key auth when disabled."""
         auth = Auth(
-            enabled=False,
-            auth_type=AuthType.APIKEY,
-            bearer_token="test_api_key"
+            enabled=False, auth_type=AuthType.APIKEY, bearer_token="test_api_key"
         )
 
         assert auth.enabled is False
@@ -458,9 +451,7 @@ class TestAuthAPIKey:
         # Note: This would require adding an api_key class method to Auth
         # Similar to oauth() and bearer() methods
         auth = Auth(
-            enabled=True,
-            auth_type=AuthType.APIKEY,
-            bearer_token="test_api_key"
+            enabled=True, auth_type=AuthType.APIKEY, bearer_token="test_api_key"
         )
 
         assert auth.enabled is True
@@ -500,9 +491,7 @@ class TestAPIKeyAuthNegativeFlows:
         from mcpscanner.core.auth import APIAuthConfig
 
         auth_config = APIAuthConfig(
-            auth_type=AuthType.APIKEY,
-            api_key=None,
-            api_key_header="X-API-Key"
+            auth_type=AuthType.APIKEY, api_key=None, api_key_header="X-API-Key"
         )
 
         assert auth_config.auth_type == AuthType.APIKEY
@@ -514,9 +503,7 @@ class TestAPIKeyAuthNegativeFlows:
         from mcpscanner.core.auth import APIAuthConfig
 
         auth_config = APIAuthConfig(
-            auth_type=AuthType.APIKEY,
-            api_key="test_key",
-            api_key_header=""
+            auth_type=AuthType.APIKEY, api_key="test_key", api_key_header=""
         )
 
         assert auth_config.auth_type == AuthType.APIKEY
@@ -528,9 +515,7 @@ class TestAPIKeyAuthNegativeFlows:
         from mcpscanner.core.auth import APIAuthConfig
 
         auth_config = APIAuthConfig(
-            auth_type=AuthType.APIKEY,
-            api_key="test_key",
-            api_key_header=None
+            auth_type=AuthType.APIKEY, api_key="test_key", api_key_header=None
         )
 
         assert auth_config.auth_type == AuthType.APIKEY
@@ -544,7 +529,7 @@ class TestAPIKeyAuthNegativeFlows:
             auth_type=AuthType.APIKEY,
             bearer_token="api_key_value",
             client_id="should_be_ignored",
-            client_secret="should_also_be_ignored"
+            client_secret="should_also_be_ignored",
         )
 
         assert auth.type == AuthType.APIKEY

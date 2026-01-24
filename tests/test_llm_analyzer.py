@@ -152,9 +152,7 @@ class TestLLMAnalyzer:
 
         analysis = {"is_malicious": False, "risk_score": 10, "severity": "Low"}
 
-        findings = analyzer._create_findings_from_threat_analysis(
-            analysis, "safe_tool"
-        )
+        findings = analyzer._create_findings_from_threat_analysis(analysis, "safe_tool")
 
         assert len(findings) == 0
 

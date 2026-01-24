@@ -21,24 +21,31 @@ import pytest
 
 class TestInterprocedural:
     """Test interprocedural analysis functionality."""
-    
+
     def test_interprocedural_module_exists(self):
         """Test that interprocedural module can be imported."""
         from mcpscanner.core.static_analysis import interprocedural
+
         assert interprocedural is not None
-    
+
     def test_call_graph_analyzer_importable(self):
         """Test that call graph analyzer can be imported."""
         try:
-            from mcpscanner.core.static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
+            from mcpscanner.core.static_analysis.interprocedural.call_graph_analyzer import (
+                CallGraphAnalyzer,
+            )
+
             assert CallGraphAnalyzer is not None
         except (ImportError, AttributeError):
             pytest.skip("Call graph analyzer structure needs verification")
-    
+
     def test_cross_file_analyzer_importable(self):
         """Test that cross file analyzer can be imported."""
         try:
-            from mcpscanner.core.static_analysis.interprocedural.cross_file_analyzer import CrossFileAnalyzer
+            from mcpscanner.core.static_analysis.interprocedural.cross_file_analyzer import (
+                CrossFileAnalyzer,
+            )
+
             assert CrossFileAnalyzer is not None
         except (ImportError, AttributeError):
             pytest.skip("Cross file analyzer structure needs verification")

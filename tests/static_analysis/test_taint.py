@@ -21,16 +21,18 @@ import pytest
 
 class TestTaint:
     """Test taint analysis functionality."""
-    
+
     def test_taint_module_exists(self):
         """Test that taint module can be imported."""
         from mcpscanner.core.static_analysis import taint
+
         assert taint is not None
-    
+
     def test_taint_tracker_importable(self):
         """Test that taint tracker can be imported."""
         try:
             from mcpscanner.core.static_analysis.taint.tracker import TaintTracker
+
             assert TaintTracker is not None
         except (ImportError, AttributeError):
             pytest.skip("Taint tracker structure needs verification")

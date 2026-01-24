@@ -114,14 +114,18 @@ class TestApiAnalyzer:
         assert findings[0].severity == "HIGH"
         assert findings[0].analyzer == "API"
         assert findings[0].threat_category == "PROMPT INJECTION"
-        assert findings[0].details["threat_type"] == "PROMPT_INJECTION"  # Original classification
+        assert (
+            findings[0].details["threat_type"] == "PROMPT_INJECTION"
+        )  # Original classification
         assert "prompt injection" in findings[0].summary.lower()
 
         # Check second finding (HARASSMENT)
         assert findings[1].severity == "MEDIUM"
         assert findings[1].analyzer == "API"
         assert findings[1].threat_category == "SOCIAL ENGINEERING"
-        assert findings[1].details["threat_type"] == "HARASSMENT"  # Original classification
+        assert (
+            findings[1].details["threat_type"] == "HARASSMENT"
+        )  # Original classification
         assert "harassment" in findings[1].summary.lower()
 
     @respx.mock
@@ -141,7 +145,9 @@ class TestApiAnalyzer:
 
         assert len(findings) == 1
         assert findings[0].details["tool_name"] == "test_tool"
-        assert findings[0].details["threat_type"] == "SECURITY_VIOLATION"  # Original classification
+        assert (
+            findings[0].details["threat_type"] == "SECURITY_VIOLATION"
+        )  # Original classification
         assert findings[0].threat_category == "SECURITY VIOLATION"
         assert findings[0].severity == "HIGH"
 
@@ -221,12 +227,15 @@ class TestApiAnalyzer:
 
         # SECURITY_VIOLATION -> SECURITY VIOLATION (HIGH)
         assert finding_by_type["SECURITY_VIOLATION"].severity == "HIGH"
-        assert finding_by_type["SECURITY_VIOLATION"].threat_category == "SECURITY VIOLATION"
-        
+        assert (
+            finding_by_type["SECURITY_VIOLATION"].threat_category
+            == "SECURITY VIOLATION"
+        )
+
         # PROMPT_INJECTION -> PROMPT INJECTION (HIGH)
         assert finding_by_type["PROMPT_INJECTION"].severity == "HIGH"
         assert finding_by_type["PROMPT_INJECTION"].threat_category == "PROMPT INJECTION"
-        
+
         # HARASSMENT, HATE_SPEECH, PROFANITY, SOCIAL_DIVISION_AND_POLARIZATION -> SOCIAL ENGINEERING (MEDIUM)
         assert finding_by_type["HARASSMENT"].severity == "MEDIUM"
         assert finding_by_type["HARASSMENT"].threat_category == "SOCIAL ENGINEERING"
@@ -235,17 +244,31 @@ class TestApiAnalyzer:
         assert finding_by_type["PROFANITY"].severity == "MEDIUM"
         assert finding_by_type["PROFANITY"].threat_category == "SOCIAL ENGINEERING"
         assert finding_by_type["SOCIAL_DIVISION_AND_POLARIZATION"].severity == "MEDIUM"
-        assert finding_by_type["SOCIAL_DIVISION_AND_POLARIZATION"].threat_category == "SOCIAL ENGINEERING"
-        
+        assert (
+            finding_by_type["SOCIAL_DIVISION_AND_POLARIZATION"].threat_category
+            == "SOCIAL ENGINEERING"
+        )
+
         # SEXUAL_CONTENT_AND_EXPLOITATION, VIOLENCE_AND_PUBLIC_SAFETY_THREATS -> MALICIOUS BEHAVIOR (MEDIUM)
         assert finding_by_type["SEXUAL_CONTENT_AND_EXPLOITATION"].severity == "MEDIUM"
-        assert finding_by_type["SEXUAL_CONTENT_AND_EXPLOITATION"].threat_category == "MALICIOUS BEHAVIOR"
-        assert finding_by_type["VIOLENCE_AND_PUBLIC_SAFETY_THREATS"].severity == "MEDIUM"
-        assert finding_by_type["VIOLENCE_AND_PUBLIC_SAFETY_THREATS"].threat_category == "MALICIOUS BEHAVIOR"
-        
+        assert (
+            finding_by_type["SEXUAL_CONTENT_AND_EXPLOITATION"].threat_category
+            == "MALICIOUS BEHAVIOR"
+        )
+        assert (
+            finding_by_type["VIOLENCE_AND_PUBLIC_SAFETY_THREATS"].severity == "MEDIUM"
+        )
+        assert (
+            finding_by_type["VIOLENCE_AND_PUBLIC_SAFETY_THREATS"].threat_category
+            == "MALICIOUS BEHAVIOR"
+        )
+
         # CODE_DETECTION -> SUSPICIOUS CODE EXECUTION (LOW)
         assert finding_by_type["CODE_DETECTION"].severity == "LOW"
-        assert finding_by_type["CODE_DETECTION"].threat_category == "SUSPICIOUS CODE EXECUTION"
+        assert (
+            finding_by_type["CODE_DETECTION"].threat_category
+            == "SUSPICIOUS CODE EXECUTION"
+        )
 
     @respx.mock
     @pytest.mark.asyncio
@@ -389,7 +412,9 @@ class TestApiAnalyzer:
 
         # Verify finding details
         assert finding.details["tool_name"] == "test_tool"
-        assert finding.details["threat_type"] == "PROMPT_INJECTION"  # Original classification
+        assert (
+            finding.details["threat_type"] == "PROMPT_INJECTION"
+        )  # Original classification
         assert (
             finding.details["evidence"] == "PROMPT_INJECTION detected in tool content"
         )

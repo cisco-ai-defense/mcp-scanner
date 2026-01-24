@@ -51,7 +51,7 @@ The MCP Scanner maps all detected threats to the MCP Taxonomy, which provides a 
 ### Core Threats Referenced
 
 | Technique ID | Technique Name | Sub-Technique ID | Sub-Technique Name | Description |
-|--------------|----------------|------------------|--------------------|-----------| 
+|--------------|----------------|------------------|--------------------|-----------|
 | AITech-1.1 | Direct Prompt Injection | AISubtech-1.1.1 | Instruction Manipulation (Direct Prompt Injection) | Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming. |
 | AITech-8.2 | Data Exfiltration / Exposure | AISubtech-8.2.3 | Data Exfiltration via Agent Tooling | Unintentional and/or unauthorized exposure or exfiltration of sensitive information, such as private or sensitive data, intellectual property, and proprietary algorithms through exploitation of agent tools, integrations, or capabilities. |
 | AITech-9.1 | Model or Agentic System Manipulation | AISubtech-9.1.1 | Code Execution | Autonomously generating, interpreting, or executing code, leading to unsolicited or unauthorized code execution targeted to large language models (LLMs), or agentic frameworks, systems (including MCP, A2A) often include integrated code interpreter or tool execution components. |

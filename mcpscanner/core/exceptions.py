@@ -37,6 +37,7 @@ Example:
 
 class MCPScannerError(Exception):
     """Base exception for all MCP Scanner errors."""
+
     pass
 
 
@@ -49,6 +50,7 @@ class MCPConnectionError(MCPScannerError):
     - Server not reachable
     - Connection timeout
     """
+
     pass
 
 
@@ -62,6 +64,7 @@ class MCPAuthenticationError(MCPConnectionError):
     The server requires authentication via OAuth or Bearer token.
     Use the --bearer-token flag or configure OAuth.
     """
+
     pass
 
 
@@ -72,4 +75,5 @@ class MCPServerNotFoundError(MCPConnectionError):
     - HTTP 404 Not Found
     - Invalid URL or endpoint path
     """
+
     pass

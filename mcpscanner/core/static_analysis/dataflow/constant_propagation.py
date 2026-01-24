@@ -27,6 +27,7 @@ from ..parser.python_parser import PythonParser
 
 class ValueKind(Enum):
     """Kind of symbolic value."""
+
     LITERAL = "literal"
     SYMBOLIC = "symbolic"
     NOT_CONST = "not_const"
@@ -35,19 +36,20 @@ class ValueKind(Enum):
 @dataclass
 class SymbolicValue:
     """Represents a value that may be constant or symbolic."""
+
     kind: ValueKind
     value: Any = None
     expr: ast.AST | None = None
     dependencies: set[str] | None = None
-    
+
     def is_constant(self) -> bool:
         """Check if this is a concrete constant."""
         return self.kind == ValueKind.LITERAL
-    
+
     def is_symbolic(self) -> bool:
         """Check if this is a symbolic expression."""
         return self.kind == ValueKind.SYMBOLIC
-    
+
     def __repr__(self) -> str:
         """String representation."""
         if self.kind == ValueKind.LITERAL:
@@ -90,68 +92,62 @@ class ConstantPropagationAnalysis:
         for n in ast.walk(node):
             if isinstance(n, ast.Assign):
                 rhs_value = self._eval_expr(n.value)
-                
+
                 for target in n.targets:
                     if isinstance(target, ast.Name):
                         self.symbolic_values[target.id] = rhs_value
-                        
+
                         if rhs_value.is_constant():
                             self.constants[target.id] = rhs_value.value
 
     def _eval_expr(self, node: ast.AST) -> SymbolicValue:
         """Evaluate an expression to a symbolic value.
-        
+
         Args:
             node: AST node
-            
+
         Returns:
             Symbolic value
         """
         if isinstance(node, ast.Constant):
             return SymbolicValue(kind=ValueKind.LITERAL, value=node.value)
-        
+
         elif isinstance(node, ast.Name):
             if node.id in self.symbolic_values:
                 return self.symbolic_values[node.id]
             else:
                 return SymbolicValue(
-                    kind=ValueKind.SYMBOLIC,
-                    expr=node,
-                    dependencies={node.id}
+                    kind=ValueKind.SYMBOLIC, expr=node, dependencies={node.id}
                 )
-        
+
         elif isinstance(node, ast.BinOp):
             left_val = self._eval_expr(node.left)
             right_val = self._eval_expr(node.right)
-            
+
             if left_val.is_constant() and right_val.is_constant():
                 result = self._compute_binop(node.op, left_val.value, right_val.value)
                 if result is not None:
                     return SymbolicValue(kind=ValueKind.LITERAL, value=result)
-            
+
             deps = set()
             if left_val.dependencies:
                 deps.update(left_val.dependencies)
             if right_val.dependencies:
                 deps.update(right_val.dependencies)
-            
-            return SymbolicValue(
-                kind=ValueKind.SYMBOLIC,
-                expr=node,
-                dependencies=deps
-            )
-        
+
+            return SymbolicValue(kind=ValueKind.SYMBOLIC, expr=node, dependencies=deps)
+
         else:
             return SymbolicValue(kind=ValueKind.NOT_CONST)
-    
+
     def _compute_binop(self, op: ast.operator, left: Any, right: Any) -> Any:
         """Compute a binary operation on constants.
-        
+
         Args:
             op: Operator
             left: Left operand value
             right: Right operand value
-            
+
         Returns:
             Result or None
         """
@@ -170,7 +166,7 @@ class ConstantPropagationAnalysis:
                 return left % right if right != 0 else None
         except (TypeError, ValueError, ZeroDivisionError):
             return None
-        
+
         return None
 
     def _eval_binop(self, binop: ast.BinOp) -> Any:

@@ -44,6 +44,7 @@ from .dataflow.forward_analysis import ForwardDataflowAnalysis
 @dataclass
 class FunctionContext:
     """Complete context for a function."""
+
     # Required fields (no defaults)
     name: str
     decorator_types: List[str]
@@ -59,52 +60,95 @@ class FunctionContext:
     has_subprocess_calls: bool
     has_eval_exec: bool
     has_dangerous_imports: bool
-    
+
     # Optional fields (with defaults)
-    decorator_params: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Decorator parameters (name, description, tags, meta)
+    decorator_params: Dict[str, Dict[str, Any]] = field(
+        default_factory=dict
+    )  # Decorator parameters (name, description, tags, meta)
     docstring: Optional[str] = None
     parameters: List[Dict[str, Any]] = field(default_factory=list)
     return_type: Optional[str] = None
     line_number: int = 0
-    
+
     # Cross-file analysis
-    cross_file_calls: List[Dict[str, Any]] = field(default_factory=list)  # Calls to functions in other files
-    reachable_functions: List[str] = field(default_factory=list)  # All functions reachable from this entry point
-    
+    cross_file_calls: List[Dict[str, Any]] = field(
+        default_factory=list
+    )  # Calls to functions in other files
+    reachable_functions: List[str] = field(
+        default_factory=list
+    )  # All functions reachable from this entry point
+
     # High-value security indicators
-    string_literals: List[str] = field(default_factory=list)  # All string literals in function
-    return_expressions: List[str] = field(default_factory=list)  # What the function returns
-    exception_handlers: List[Dict[str, Any]] = field(default_factory=list)  # Exception handling details
-    env_var_access: List[str] = field(default_factory=list)  # Environment variable accesses
-    
+    string_literals: List[str] = field(
+        default_factory=list
+    )  # All string literals in function
+    return_expressions: List[str] = field(
+        default_factory=list
+    )  # What the function returns
+    exception_handlers: List[Dict[str, Any]] = field(
+        default_factory=list
+    )  # Exception handling details
+    env_var_access: List[str] = field(
+        default_factory=list
+    )  # Environment variable accesses
+
     # State manipulation
-    global_writes: List[Dict[str, Any]] = field(default_factory=list)  # global var = value
-    attribute_access: List[Dict[str, Any]] = field(default_factory=list)  # self.attr or obj.attr
-    
+    global_writes: List[Dict[str, Any]] = field(
+        default_factory=list
+    )  # global var = value
+    attribute_access: List[Dict[str, Any]] = field(
+        default_factory=list
+    )  # self.attr or obj.attr
+
     # Dataflow facts
     dataflow_summary: Dict[str, Any] = field(default_factory=dict)
 
 
 class ContextExtractor:
     """Extracts comprehensive code context by analyzing Abstract Syntax Trees.
-    
+
     This class traverses Python ASTs (created by ast.parse()) to extract
     rich context information including dataflow, taint tracking, and behavioral
     patterns for security analysis.
     """
-    
+
     # Configurable security pattern lists (can be overridden)
-    DEFAULT_FILE_PATTERNS = ["open", "read", "write", "Path", "file", "os.remove", "os.unlink", "shutil"]
-    DEFAULT_NETWORK_PATTERNS = ["requests", "urllib", "http", "socket", "post", "get", "fetch", "axios"]
-    DEFAULT_SUBPROCESS_PATTERNS = ["subprocess", "os.system", "os.popen", "shell", "exec", "eval"]
+    DEFAULT_FILE_PATTERNS = [
+        "open",
+        "read",
+        "write",
+        "Path",
+        "file",
+        "os.remove",
+        "os.unlink",
+        "shutil",
+    ]
+    DEFAULT_NETWORK_PATTERNS = [
+        "requests",
+        "urllib",
+        "http",
+        "socket",
+        "post",
+        "get",
+        "fetch",
+        "axios",
+    ]
+    DEFAULT_SUBPROCESS_PATTERNS = [
+        "subprocess",
+        "os.system",
+        "os.popen",
+        "shell",
+        "exec",
+        "eval",
+    ]
 
     def __init__(
-        self, 
-        source_code: str, 
+        self,
+        source_code: str,
         file_path: str = "unknown.py",
         file_patterns: List[str] = None,
         network_patterns: List[str] = None,
-        subprocess_patterns: List[str] = None
+        subprocess_patterns: List[str] = None,
     ):
         """Initialize context extractor.
 
@@ -119,12 +163,18 @@ class ContextExtractor:
         self.file_path = Path(file_path)
         self.analyzer = PythonParser(self.file_path, source_code)
         self.const_prop = ConstantPropagationAnalysis(self.analyzer)
-        
+
         # Use provided patterns or defaults (convert to lowercase for case-insensitive matching)
-        self.file_patterns = [p.lower() for p in (file_patterns or self.DEFAULT_FILE_PATTERNS)]
-        self.network_patterns = [p.lower() for p in (network_patterns or self.DEFAULT_NETWORK_PATTERNS)]
-        self.subprocess_patterns = [p.lower() for p in (subprocess_patterns or self.DEFAULT_SUBPROCESS_PATTERNS)]
-        
+        self.file_patterns = [
+            p.lower() for p in (file_patterns or self.DEFAULT_FILE_PATTERNS)
+        ]
+        self.network_patterns = [
+            p.lower() for p in (network_patterns or self.DEFAULT_NETWORK_PATTERNS)
+        ]
+        self.subprocess_patterns = [
+            p.lower() for p in (subprocess_patterns or self.DEFAULT_SUBPROCESS_PATTERNS)
+        ]
+
         # Parse and analyze
         try:
             self.ast = self.analyzer.parse()
@@ -139,19 +189,19 @@ class ContextExtractor:
             List of function contexts
         """
         contexts = []
-        
+
         for node in ast.walk(self.ast):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            
+
             # Check for MCP decorators
             mcp_decorator = self._get_mcp_decorator(node)
             if not mcp_decorator:
                 continue
-            
+
             context = self._extract_function_context(node, mcp_decorator)
             contexts.append(context)
-        
+
         return contexts
 
     def _get_mcp_decorator(self, node: ast.FunctionDef) -> Optional[str]:
@@ -165,24 +215,24 @@ class ContextExtractor:
         """
         for decorator in node.decorator_list:
             decorator_name = self._get_decorator_name(decorator)
-            
+
             # Check if decorator matches pattern: <any_variable>.tool/prompt/resource
             # Examples: mcp.tool, hello_mcp.tool, my_server.prompt, etc.
-            if '.' in decorator_name:
+            if "." in decorator_name:
                 # Split on the last dot to get the method name
-                parts = decorator_name.rsplit('.', 1)
+                parts = decorator_name.rsplit(".", 1)
                 if len(parts) == 2:
                     method_name = parts[1].lower()
                     # Check if it's one of the MCP decorator methods
-                    if method_name in ['tool', 'prompt', 'resource']:
+                    if method_name in ["tool", "prompt", "resource"]:
                         return decorator_name
-            
+
             # Fallback: check if decorator name contains tool, prompt, or resource
             # This handles edge cases like direct function decorators
             decorator_lower = decorator_name.lower()
-            if decorator_lower in ['tool', 'prompt', 'resource']:
+            if decorator_lower in ["tool", "prompt", "resource"]:
                 return decorator_name
-        
+
         return None
 
     def _get_decorator_name(self, decorator: ast.expr) -> str:
@@ -196,37 +246,37 @@ class ContextExtractor:
         """
         if isinstance(decorator, ast.Call):
             decorator = decorator.func
-        
+
         if isinstance(decorator, ast.Attribute):
             if isinstance(decorator.value, ast.Name):
                 return f"{decorator.value.id}.{decorator.attr}"
         elif isinstance(decorator, ast.Name):
             return decorator.id
-        
+
         return ""
-    
+
     def _extract_decorator_params(self, decorator: ast.expr) -> dict[str, any]:
         """Extract parameters from decorator call.
-        
+
         Extracts explicit parameters like name, description, tags, meta from
         @mcp.tool(name="...", description="...", tags={...}, meta={...})
-        
+
         Args:
             decorator: Decorator node
-            
+
         Returns:
             Dictionary of decorator parameters
         """
         params = {}
-        
+
         if not isinstance(decorator, ast.Call):
             return params
-        
+
         # Extract keyword arguments
         for keyword in decorator.keywords:
             if keyword.arg is None:
                 continue
-                
+
             try:
                 # Handle different value types
                 if isinstance(keyword.value, ast.Constant):
@@ -254,7 +304,7 @@ class ContextExtractor:
             except Exception:
                 # Skip parameters we can't extract
                 continue
-        
+
         return params
 
     def _extract_function_context(
@@ -275,7 +325,7 @@ class ContextExtractor:
         parameters = self._extract_parameters(node)
         return_type = self._extract_return_type(node)
         line_number = node.lineno
-        
+
         # Decorators - extract both names and parameters
         decorator_types = [self._get_decorator_name(d) for d in node.decorator_list]
         decorator_params = {}
@@ -284,50 +334,52 @@ class ContextExtractor:
             dec_params = self._extract_decorator_params(decorator)
             if dec_params:
                 decorator_params[dec_name] = dec_params
-        
+
         # Override name and docstring if explicitly specified in decorator
         # This handles cases like @mcp.tool(name="custom_name", description="...")
         for dec_name, params in decorator_params.items():
-            if 'name' in params:
-                name = params['name']  # Use decorator name if specified
-            if 'description' in params and not docstring:
-                docstring = params['description']  # Use decorator description if no docstring
-        
+            if "name" in params:
+                name = params["name"]  # Use decorator name if specified
+            if "description" in params and not docstring:
+                docstring = params[
+                    "description"
+                ]  # Use decorator description if no docstring
+
         # Code structure
         imports = self._extract_imports(node)
         function_calls = self._extract_function_calls(node)
         assignments = self._extract_assignments(node)
         control_flow = self._analyze_control_flow(node)
-        
+
         # REVERSED APPROACH: Forward flow analysis from parameters
         parameter_flows = self._analyze_forward_flows(node, parameters)
-        
+
         # Constants
         constants = self._extract_constants(node)
-        
+
         # Variable dependencies
         var_deps = self._analyze_variable_dependencies(node)
-        
+
         # Behavioral patterns
         has_file_ops = self._has_file_operations(node)
         has_network_ops = self._has_network_operations(node)
         has_subprocess = self._has_subprocess_calls(node)
         has_eval_exec = self._has_eval_exec(node)
         has_dangerous_imports = len(imports) > 0  # LLM will analyze all imports
-        
+
         # Dataflow summary
         dataflow_summary = self._create_dataflow_summary(node)
-        
+
         # High-value security indicators
         string_literals = self._extract_string_literals(node)
         return_expressions = self._extract_return_expressions(node)
         exception_handlers = self._extract_exception_handlers(node)
         env_var_access = self._extract_env_var_access(node)
-        
+
         # State manipulation
         global_writes = self._extract_global_writes(node)
         attribute_access = self._extract_attribute_access(node)
-        
+
         return FunctionContext(
             name=name,
             decorator_types=decorator_types,
@@ -403,7 +455,7 @@ class ContextExtractor:
             List of import statements (both module-level and function-level)
         """
         imports = []
-        
+
         # First, extract module-level imports from the entire AST
         for child in ast.walk(self.ast):
             if isinstance(child, ast.Import):
@@ -421,7 +473,7 @@ class ContextExtractor:
                         import_stmt += f" as {alias.asname}"
                     if import_stmt not in imports:
                         imports.append(import_stmt)
-        
+
         # Then, extract function-level imports (if any)
         for child in ast.walk(node):
             if isinstance(child, ast.Import):
@@ -439,7 +491,7 @@ class ContextExtractor:
                         import_stmt += f" as {alias.asname}"
                     if import_stmt not in imports:
                         imports.append(import_stmt)
-        
+
         return imports
 
     def _extract_function_calls(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
@@ -460,7 +512,7 @@ class ContextExtractor:
                         args_list.append(ast.unparse(arg))
                     except (AttributeError, TypeError, ValueError):
                         args_list.append("<complex>")
-                
+
                 call_info = {
                     "name": self._get_call_name(child),
                     "args": args_list,
@@ -510,31 +562,33 @@ class ContextExtractor:
                             value_str = ast.unparse(child.value)
                         except (AttributeError, TypeError, ValueError):
                             value_str = "<complex>"
-                        
+
                         assign_info = {
                             "variable": target.id,
                             "value": value_str,
                             "line": child.lineno if hasattr(child, "lineno") else 0,
-                            "type": "assign"
+                            "type": "assign",
                         }
                         assignments.append(assign_info)
-            
+
             # Handle annotated assignments (x: int = y)
             elif isinstance(child, ast.AnnAssign):
                 if isinstance(child.target, ast.Name):
                     try:
-                        value_str = ast.unparse(child.value) if child.value else "<no value>"
+                        value_str = (
+                            ast.unparse(child.value) if child.value else "<no value>"
+                        )
                     except (AttributeError, TypeError, ValueError):
                         value_str = "<complex>"
-                    
+
                     assign_info = {
                         "variable": child.target.id,
                         "value": value_str,
                         "line": child.lineno if hasattr(child, "lineno") else 0,
-                        "type": "annotated_assign"
+                        "type": "annotated_assign",
                     }
                     assignments.append(assign_info)
-            
+
             # Handle augmented assignments (x += y, x -= y, etc.)
             elif isinstance(child, ast.AugAssign):
                 if isinstance(child.target, ast.Name):
@@ -544,15 +598,15 @@ class ContextExtractor:
                     except (AttributeError, TypeError, ValueError):
                         value_str = "<complex>"
                         op_str = "<unknown>"
-                    
+
                     assign_info = {
                         "variable": child.target.id,
                         "value": f"{op_str}= {value_str}",
                         "line": child.lineno if hasattr(child, "lineno") else 0,
-                        "type": "augmented_assign"
+                        "type": "augmented_assign",
                     }
                     assignments.append(assign_info)
-            
+
             # Handle named expressions / walrus operator (x := y)
             elif isinstance(child, ast.NamedExpr):
                 if isinstance(child.target, ast.Name):
@@ -560,15 +614,15 @@ class ContextExtractor:
                         value_str = ast.unparse(child.value)
                     except (AttributeError, TypeError, ValueError):
                         value_str = "<complex>"
-                    
+
                     assign_info = {
                         "variable": child.target.id,
                         "value": value_str,
                         "line": child.lineno if hasattr(child, "lineno") else 0,
-                        "type": "named_expr"
+                        "type": "named_expr",
                     }
                     assignments.append(assign_info)
-        
+
         return assignments
 
     def _analyze_control_flow(self, node: ast.FunctionDef) -> Dict[str, Any]:
@@ -584,8 +638,10 @@ class ContextExtractor:
         has_for = any(isinstance(n, (ast.For, ast.AsyncFor)) for n in ast.walk(node))
         has_while = any(isinstance(n, ast.While) for n in ast.walk(node))
         has_try = any(isinstance(n, ast.Try) for n in ast.walk(node))
-        has_match = any(isinstance(n, ast.Match) for n in ast.walk(node))  # Python 3.10+ pattern matching
-        
+        has_match = any(
+            isinstance(n, ast.Match) for n in ast.walk(node)
+        )  # Python 3.10+ pattern matching
+
         return {
             "has_conditionals": has_if or has_match,
             "has_loops": has_for or has_while,
@@ -608,10 +664,10 @@ class ContextExtractor:
         try:
             # Extract parameter names
             param_names = [p["name"] for p in parameters]
-            
+
             if not param_names:
                 return []
-            
+
             # PERFORMANCE FIX: Create a new analyzer with ONLY this function's AST
             # instead of the entire file. This makes the CFG much smaller and faster.
             try:
@@ -619,28 +675,30 @@ class ContextExtractor:
             except (AttributeError, TypeError, ValueError) as e:
                 self.logger.error(f"Failed to unparse function AST: {e}")
                 return []
-            
+
             func_analyzer = PythonParser(self.file_path, func_source)
             func_analyzer.parse()
-            
+
             # Create forward flow tracker with the function-specific analyzer
             tracker = ForwardDataflowAnalysis(func_analyzer, param_names)
-            
+
             # Analyze flows from parameters
             flows = tracker.analyze_forward_flows()
-            
+
             # Convert to serializable format
             flow_data = []
             for flow in flows:
-                flow_data.append({
-                    "parameter": flow.parameter_name,
-                    "operations": flow.operations,
-                    "reaches_calls": flow.reaches_calls,
-                    "reaches_assignments": flow.reaches_assignments,
-                    "reaches_returns": flow.reaches_returns,
-                    "reaches_external": flow.reaches_external,
-                })
-            
+                flow_data.append(
+                    {
+                        "parameter": flow.parameter_name,
+                        "operations": flow.operations,
+                        "reaches_calls": flow.reaches_calls,
+                        "reaches_assignments": flow.reaches_assignments,
+                        "reaches_returns": flow.reaches_returns,
+                        "reaches_external": flow.reaches_external,
+                    }
+                )
+
             return flow_data
         except Exception as e:
             self.logger.error(f"Forward flow analysis failed: {e}")
@@ -660,7 +718,9 @@ class ContextExtractor:
             constants[var_name] = value
         return constants
 
-    def _analyze_variable_dependencies(self, node: ast.FunctionDef) -> Dict[str, List[str]]:
+    def _analyze_variable_dependencies(
+        self, node: ast.FunctionDef
+    ) -> Dict[str, List[str]]:
         """Analyze variable dependencies.
 
         Args:
@@ -670,7 +730,7 @@ class ContextExtractor:
             Dictionary mapping variables to their dependencies
         """
         dependencies = {}
-        
+
         for child in ast.walk(node):
             # Handle regular assignments (x = y)
             if isinstance(child, ast.Assign):
@@ -681,7 +741,7 @@ class ContextExtractor:
                             if isinstance(name_node, ast.Name):
                                 deps.append(name_node.id)
                         dependencies[target.id] = deps
-            
+
             # Handle annotated assignments (x: int = y)
             elif isinstance(child, ast.AnnAssign):
                 if isinstance(child.target, ast.Name) and child.value:
@@ -690,7 +750,7 @@ class ContextExtractor:
                         if isinstance(name_node, ast.Name):
                             deps.append(name_node.id)
                     dependencies[child.target.id] = deps
-            
+
             # Handle augmented assignments (x += y)
             elif isinstance(child, ast.AugAssign):
                 if isinstance(child.target, ast.Name):
@@ -699,7 +759,7 @@ class ContextExtractor:
                         if isinstance(name_node, ast.Name):
                             deps.append(name_node.id)
                     dependencies[child.target.id] = deps
-            
+
             # Handle named expressions (x := y)
             elif isinstance(child, ast.NamedExpr):
                 if isinstance(child.target, ast.Name):
@@ -708,7 +768,7 @@ class ContextExtractor:
                         if isinstance(name_node, ast.Name):
                             deps.append(name_node.id)
                     dependencies[child.target.id] = deps
-        
+
         return dependencies
 
     def _has_file_operations(self, node: ast.FunctionDef) -> bool:
@@ -785,8 +845,12 @@ class ContextExtractor:
             Dataflow summary
         """
         return {
-            "total_statements": len([n for n in ast.walk(node) if isinstance(n, ast.stmt)]),
-            "total_expressions": len([n for n in ast.walk(node) if isinstance(n, ast.expr)]),
+            "total_statements": len(
+                [n for n in ast.walk(node) if isinstance(n, ast.stmt)]
+            ),
+            "total_expressions": len(
+                [n for n in ast.walk(node) if isinstance(n, ast.expr)]
+            ),
             "complexity": self._calculate_complexity(node),
         }
 
@@ -806,13 +870,13 @@ class ContextExtractor:
             elif isinstance(child, ast.BoolOp):
                 complexity += len(child.values) - 1
         return complexity
-    
+
     def _extract_string_literals(self, node: ast.FunctionDef) -> List[str]:
         """Extract all string literals from function.
-        
+
         Args:
             node: Function definition node
-            
+
         Returns:
             List of string literals
         """
@@ -824,13 +888,13 @@ class ContextExtractor:
                 if literal and literal not in literals:
                     literals.append(literal)
         return literals[:20]  # Limit to 20 strings
-    
+
     def _extract_return_expressions(self, node: ast.FunctionDef) -> List[str]:
         """Extract return expressions from function.
-        
+
         Args:
             node: Function definition node
-            
+
         Returns:
             List of return expression strings
         """
@@ -843,13 +907,15 @@ class ContextExtractor:
                 except Exception:
                     returns.append("<unparseable>")
         return returns
-    
-    def _extract_exception_handlers(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
+
+    def _extract_exception_handlers(
+        self, node: ast.FunctionDef
+    ) -> List[Dict[str, Any]]:
         """Extract exception handling details.
-        
+
         Args:
             node: Function definition node
-            
+
         Returns:
             List of exception handler info
         """
@@ -858,19 +924,22 @@ class ContextExtractor:
             if isinstance(child, ast.ExceptHandler):
                 handler_info = {
                     "line": child.lineno,
-                    "exception_type": ast.unparse(child.type) if child.type else "Exception",
+                    "exception_type": (
+                        ast.unparse(child.type) if child.type else "Exception"
+                    ),
                     "has_body": len(child.body) > 0,
-                    "is_silent": len(child.body) == 1 and isinstance(child.body[0], ast.Pass)
+                    "is_silent": len(child.body) == 1
+                    and isinstance(child.body[0], ast.Pass),
                 }
                 handlers.append(handler_info)
         return handlers
-    
+
     def _extract_env_var_access(self, node: ast.FunctionDef) -> List[str]:
         """Extract environment variable accesses.
-        
+
         Args:
             node: Function definition node
-            
+
         Returns:
             List of env var access patterns
         """
@@ -887,7 +956,7 @@ class ContextExtractor:
                     elif isinstance(child.func.value, ast.Name):
                         # os.getenv
                         call_name = f"{child.func.value.id}.{child.func.attr}"
-                
+
                 if "environ" in call_name or "getenv" in call_name:
                     # Try to get the key name
                     if child.args and isinstance(child.args[0], ast.Constant):
@@ -895,26 +964,26 @@ class ContextExtractor:
                         env_accesses.append(f"{call_name}('{key}')")
                     else:
                         env_accesses.append(call_name)
-        
+
         return env_accesses
-    
+
     def _extract_global_writes(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
         """Extract global variable writes.
-        
+
         Args:
             node: Function definition node
-            
+
         Returns:
             List of global write operations
         """
         global_writes = []
         global_vars = set()
-        
+
         # First, find all global declarations
         for child in ast.walk(node):
             if isinstance(child, ast.Global):
                 global_vars.update(child.names)
-        
+
         # Then find assignments to those globals
         for child in ast.walk(node):
             if isinstance(child, ast.Assign):
@@ -924,26 +993,28 @@ class ContextExtractor:
                             value_str = ast.unparse(child.value)[:100]
                         except Exception:
                             value_str = "<complex>"
-                        
-                        global_writes.append({
-                            "variable": target.id,
-                            "value": value_str,
-                            "line": child.lineno
-                        })
-        
+
+                        global_writes.append(
+                            {
+                                "variable": target.id,
+                                "value": value_str,
+                                "line": child.lineno,
+                            }
+                        )
+
         return global_writes
-    
+
     def _extract_attribute_access(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
         """Extract attribute access patterns (self.attr, obj.attr).
-        
+
         Args:
             node: Function definition node
-            
+
         Returns:
             List of attribute access operations
         """
         attribute_ops = []
-        
+
         for child in ast.walk(node):
             # Attribute writes: self.attr = value or obj.attr = value
             if isinstance(child, ast.Assign):
@@ -952,46 +1023,50 @@ class ContextExtractor:
                         obj_name = ""
                         if isinstance(target.value, ast.Name):
                             obj_name = target.value.id
-                        
+
                         try:
                             value_str = ast.unparse(child.value)[:100]
                         except Exception:
                             value_str = "<complex>"
-                        
-                        attribute_ops.append({
-                            "type": "write",
-                            "object": obj_name,
-                            "attribute": target.attr,
-                            "value": value_str,
-                            "line": child.lineno
-                        })
-            
+
+                        attribute_ops.append(
+                            {
+                                "type": "write",
+                                "object": obj_name,
+                                "attribute": target.attr,
+                                "value": value_str,
+                                "line": child.lineno,
+                            }
+                        )
+
             # Attribute reads: x = self.attr or obj.attr
             elif isinstance(child, ast.Attribute):
                 obj_name = ""
                 if isinstance(child.value, ast.Name):
                     obj_name = child.value.id
-                
+
                 # Only track interesting objects (self, class instances, etc.)
-                if obj_name and obj_name not in ['str', 'int', 'list', 'dict']:
-                    attribute_ops.append({
-                        "type": "read",
-                        "object": obj_name,
-                        "attribute": child.attr,
-                        "line": child.lineno
-                    })
-        
+                if obj_name and obj_name not in ["str", "int", "list", "dict"]:
+                    attribute_ops.append(
+                        {
+                            "type": "read",
+                            "object": obj_name,
+                            "attribute": child.attr,
+                            "line": child.lineno,
+                        }
+                    )
+
         # Deduplicate and limit
         seen = set()
         unique_ops = []
         for op in attribute_ops:
-            key = (op['type'], op['object'], op['attribute'])
+            key = (op["type"], op["object"], op["attribute"])
             if key not in seen:
                 seen.add(key)
                 unique_ops.append(op)
                 if len(unique_ops) >= 20:
                     break
-        
+
         return unique_ops
 
     def to_json(self, contexts: List[FunctionContext]) -> str:
@@ -1005,27 +1080,29 @@ class ContextExtractor:
         """
         data = []
         for ctx in contexts:
-            data.append({
-                "name": ctx.name,
-                "decorator_types": ctx.decorator_types,
-                "docstring": ctx.docstring,
-                "parameters": ctx.parameters,
-                "return_type": ctx.return_type,
-                "line_number": ctx.line_number,
-                "imports": ctx.imports,
-                "function_calls": ctx.function_calls,
-                "assignments": ctx.assignments,
-                "control_flow": ctx.control_flow,
-                "taint_sources": ctx.taint_sources,
-                "taint_sinks": ctx.taint_sinks,
-                "taint_flows": ctx.taint_flows,
-                "constants": ctx.constants,
-                "variable_dependencies": ctx.variable_dependencies,
-                "has_file_operations": ctx.has_file_operations,
-                "has_network_operations": ctx.has_network_operations,
-                "has_subprocess_calls": ctx.has_subprocess_calls,
-                "has_eval_exec": ctx.has_eval_exec,
-                "has_dangerous_imports": ctx.has_dangerous_imports,
-                "dataflow_summary": ctx.dataflow_summary,
-            })
+            data.append(
+                {
+                    "name": ctx.name,
+                    "decorator_types": ctx.decorator_types,
+                    "docstring": ctx.docstring,
+                    "parameters": ctx.parameters,
+                    "return_type": ctx.return_type,
+                    "line_number": ctx.line_number,
+                    "imports": ctx.imports,
+                    "function_calls": ctx.function_calls,
+                    "assignments": ctx.assignments,
+                    "control_flow": ctx.control_flow,
+                    "taint_sources": ctx.taint_sources,
+                    "taint_sinks": ctx.taint_sinks,
+                    "taint_flows": ctx.taint_flows,
+                    "constants": ctx.constants,
+                    "variable_dependencies": ctx.variable_dependencies,
+                    "has_file_operations": ctx.has_file_operations,
+                    "has_network_operations": ctx.has_network_operations,
+                    "has_subprocess_calls": ctx.has_subprocess_calls,
+                    "has_eval_exec": ctx.has_eval_exec,
+                    "has_dangerous_imports": ctx.has_dangerous_imports,
+                    "dataflow_summary": ctx.dataflow_summary,
+                }
+            )
         return json.dumps(data, indent=2)

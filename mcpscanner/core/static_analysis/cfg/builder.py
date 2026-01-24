@@ -159,7 +159,7 @@ class DataFlowAnalyzer(Generic[T]):
             cfg.add_edge(current, exit_node)
 
             return exit_node
-        
+
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # Build CFG for function body
             entry = cfg.create_node(node, "func_entry")
@@ -271,19 +271,22 @@ class DataFlowAnalyzer(Generic[T]):
 
         worklist = list(self.cfg.nodes)
         in_worklist = {node.id for node in worklist}
-        
+
         iteration_count = 0
         max_iterations = len(self.cfg.nodes) * 100  # Safety limit
 
         while worklist:
             iteration_count += 1
-            
+
             # Safety check to prevent infinite loops
             if iteration_count > max_iterations:
                 import logging
-                logging.getLogger(__name__).warning(f"Dataflow analysis exceeded max iterations ({max_iterations}), stopping early")
+
+                logging.getLogger(__name__).warning(
+                    f"Dataflow analysis exceeded max iterations ({max_iterations}), stopping early"
+                )
                 break
-            
+
             node = worklist.pop(0)
             in_worklist.discard(node.id)
 

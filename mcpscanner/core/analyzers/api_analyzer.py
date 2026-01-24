@@ -129,7 +129,7 @@ class ApiAnalyzer(BaseAnalyzer):
 
         api_url = self._config.get_api_url(self._INSPECT_ENDPOINT)
         headers = self._get_headers()
-        
+
         # Try with rules first, then without if API key has pre-configured rules
         include_rules = True
         try:
@@ -141,14 +141,16 @@ class ApiAnalyzer(BaseAnalyzer):
                     json=payload,
                     timeout=self._DEFAULT_TIMEOUT,
                 )
-                
+
                 # Check for pre-configured rules error and retry without rules
                 if response.status_code == 400:
                     try:
                         error_json = response.json()
                         error_msg = error_json.get("message", "")
                         if "already has rules configured" in error_msg:
-                            self.logger.debug("API key has pre-configured rules, retrying without enabled_rules")
+                            self.logger.debug(
+                                "API key has pre-configured rules, retrying without enabled_rules"
+                            )
                             payload = self._get_payload(content, include_rules=False)
                             response = await client.post(
                                 api_url,
@@ -178,7 +180,7 @@ class ApiAnalyzer(BaseAnalyzer):
                 for classification in classifications:
                     # Use centralized threat mapping (includes severity)
                     threat_info = API_THREAT_MAPPING.get(classification)
-                    
+
                     if threat_info:
                         # Severity already included in threat_info mapping
                         mapping = {
@@ -209,4 +211,3 @@ class ApiAnalyzer(BaseAnalyzer):
             raise
 
         return findings
-

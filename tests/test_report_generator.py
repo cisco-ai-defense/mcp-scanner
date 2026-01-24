@@ -85,7 +85,9 @@ class TestReportGenerator:
             SecurityFinding(SeverityLevel.HIGH, "Test finding", "YARA", "test_category")
         ]
         results = [
-            ToolScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings)
+            ToolScanResult(
+                "tool1", "Tool 1 description", "completed", ["YARA"], findings
+            )
         ]
         dict_results = convert_scan_results_to_dict(results)
         scan_data = {
@@ -119,7 +121,9 @@ class TestReportGenerator:
             )
         ]
         results = [
-            ToolScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings),
+            ToolScanResult(
+                "tool1", "Tool 1 description", "completed", ["YARA"], findings
+            ),
             ToolScanResult("tool2", "Tool 2 description", "completed", [], []),
         ]
 
@@ -203,8 +207,12 @@ class TestReportGenerator:
             SecurityFinding(SeverityLevel.MEDIUM, "Finding 2", "API", "test_category")
         ]
         results = [
-            ToolScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings1),
-            ToolScanResult("tool2", "Tool 2 description", "completed", ["API"], findings2),
+            ToolScanResult(
+                "tool1", "Tool 1 description", "completed", ["YARA"], findings1
+            ),
+            ToolScanResult(
+                "tool2", "Tool 2 description", "completed", ["API"], findings2
+            ),
         ]
 
         dict_results = convert_scan_results_to_dict(results)
@@ -499,7 +507,9 @@ class TestResultsToJson:
             )
         ]
         results = [
-            ToolScanResult("tool1", "Tool 1 description", "completed", ["YARA"], findings),
+            ToolScanResult(
+                "tool1", "Tool 1 description", "completed", ["YARA"], findings
+            ),
             ToolScanResult("tool2", "Tool 2 description", "completed", [], []),
         ]
 
@@ -524,7 +534,9 @@ class TestResultsToJson:
     @pytest.mark.asyncio
     async def test_results_to_json_with_error(self):
         """Test converting results with error to JSON."""
-        result = ToolScanResult("failed_tool", "Failed tool description", "failed", [], [])
+        result = ToolScanResult(
+            "failed_tool", "Failed tool description", "failed", [], []
+        )
         json_results = await results_to_json([result])
 
         assert len(json_results) == 1
@@ -859,22 +871,18 @@ class TestPromptAndResourceResults:
                 "A prompt that attempts injection",
                 "completed",
                 ["LLM"],
-                findings
+                findings,
             ),
-            PromptScanResult(
-                "safe_prompt",
-                "A safe prompt",
-                "completed",
-                [],
-                []
-            ),
+            PromptScanResult("safe_prompt", "A safe prompt", "completed", [], []),
         ]
 
         json_results = await results_to_json(results)
 
         assert len(json_results) == 2
         assert json_results[0]["prompt_name"] == "malicious_prompt"
-        assert json_results[0]["prompt_description"] == "A prompt that attempts injection"
+        assert (
+            json_results[0]["prompt_description"] == "A prompt that attempts injection"
+        )
         assert json_results[0]["item_type"] == "prompt"
         assert json_results[0]["status"] == "completed"
         assert json_results[0]["is_safe"] is False
@@ -901,15 +909,10 @@ class TestPromptAndResourceResults:
                 "text/html",
                 "completed",
                 ["LLM"],
-                findings
+                findings,
             ),
             ResourceScanResult(
-                "file://test/safe.txt",
-                "safe.txt",
-                "text/plain",
-                "completed",
-                [],
-                []
+                "file://test/safe.txt", "safe.txt", "text/plain", "completed", [], []
             ),
         ]
 
@@ -941,25 +944,36 @@ class TestPromptAndResourceResults:
         )
 
         results = [
-            ToolScanResult("test_tool", "Test tool", "completed", ["YARA"], [tool_finding]),
-            PromptScanResult("test_prompt", "Test prompt", "completed", ["LLM"], [prompt_finding]),
-            ResourceScanResult("file://test.txt", "test.txt", "text/plain", "completed", ["LLM"], [resource_finding]),
+            ToolScanResult(
+                "test_tool", "Test tool", "completed", ["YARA"], [tool_finding]
+            ),
+            PromptScanResult(
+                "test_prompt", "Test prompt", "completed", ["LLM"], [prompt_finding]
+            ),
+            ResourceScanResult(
+                "file://test.txt",
+                "test.txt",
+                "text/plain",
+                "completed",
+                ["LLM"],
+                [resource_finding],
+            ),
         ]
 
         json_results = await results_to_json(results)
 
         assert len(json_results) == 3
-        
+
         # Check tool result
         assert json_results[0]["item_type"] == "tool"
         assert json_results[0]["tool_name"] == "test_tool"
         assert "tool_description" in json_results[0]
-        
+
         # Check prompt result
         assert json_results[1]["item_type"] == "prompt"
         assert json_results[1]["prompt_name"] == "test_prompt"
         assert "prompt_description" in json_results[1]
-        
+
         # Check resource result
         assert json_results[2]["item_type"] == "resource"
         assert json_results[2]["resource_uri"] == "file://test.txt"

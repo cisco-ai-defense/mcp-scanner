@@ -21,9 +21,10 @@
 import pytest
 
 # Skip all tests if CodeContextExtractor is not available
-pytest.skip("CodeContextExtractor tests require full static analysis implementation", allow_module_level=True)
-
-
+pytest.skip(
+    "CodeContextExtractor tests require full static analysis implementation",
+    allow_module_level=True,
+)
 
 
 # Test cases with different variable names for FastMCP instance
@@ -95,17 +96,13 @@ def custom_prompt(text: str) -> str:
 '''
 
 
-
-
 class TestCustomVariableMCPDetection:
     """Test cases for detecting MCP decorators with custom variable names."""
-
 
     def test_detect_hello_mcp_variable(self):
         """Test detection of @hello_mcp.tool() decorator."""
         extractor = CodeContextExtractor(CUSTOM_VARIABLE_TOOL, "test.py")
         contexts = extractor.extract_mcp_function_contexts()
-
 
         assert len(contexts) == 2
         assert contexts[0].name == "hello"
@@ -113,12 +110,10 @@ class TestCustomVariableMCPDetection:
         assert "hello_mcp.tool" in contexts[0].decorator_types
         assert "hello_mcp.tool" in contexts[1].decorator_types
 
-
     def test_detect_my_server_variable(self):
         """Test detection of @my_server.prompt() and @my_server.resource() decorators."""
         extractor = CodeContextExtractor(MY_SERVER_VARIABLE, "test.py")
         contexts = extractor.extract_mcp_function_contexts()
-
 
         assert len(contexts) == 2
         assert contexts[0].name == "create_prompt"
@@ -126,86 +121,69 @@ class TestCustomVariableMCPDetection:
         assert "my_server.prompt" in contexts[0].decorator_types
         assert "my_server.resource" in contexts[1].decorator_types
 
-
     def test_detect_api_variable(self):
         """Test detection of @api.tool() decorator."""
         extractor = CodeContextExtractor(API_VARIABLE, "test.py")
         contexts = extractor.extract_mcp_function_contexts()
 
-
         assert len(contexts) == 1
         assert contexts[0].name == "fetch_data"
         assert "api.tool" in contexts[0].decorator_types
-
 
     def test_detect_mixed_variables(self):
         """Test detection of multiple MCP instances with different variable names."""
         extractor = CodeContextExtractor(MIXED_DECORATORS, "test.py")
         contexts = extractor.extract_mcp_function_contexts()
 
-
         assert len(contexts) == 3
-
 
         # Check standard_tool with mcp.tool
         standard_tool = next(ctx for ctx in contexts if ctx.name == "standard_tool")
         assert "mcp.tool" in standard_tool.decorator_types
 
-
         # Check custom_tool with custom_mcp.tool
         custom_tool = next(ctx for ctx in contexts if ctx.name == "custom_tool")
         assert "custom_mcp.tool" in custom_tool.decorator_types
 
-
         # Check custom_prompt with custom_mcp.prompt
         custom_prompt = next(ctx for ctx in contexts if ctx.name == "custom_prompt")
         assert "custom_mcp.prompt" in custom_prompt.decorator_types
-
 
     def test_docstrings_extracted_correctly(self):
         """Test that docstrings are correctly extracted with custom variable names."""
         extractor = CodeContextExtractor(CUSTOM_VARIABLE_TOOL, "test.py")
         contexts = extractor.extract_mcp_function_contexts()
 
-
         assert len(contexts) == 2
         assert "greets the provided name" in contexts[0].docstring
         assert "Adds two numbers" in contexts[1].docstring
-
 
     def test_parameters_extracted_correctly(self):
         """Test that parameters are correctly extracted with custom variable names."""
         extractor = CodeContextExtractor(CUSTOM_VARIABLE_TOOL, "test.py")
         contexts = extractor.extract_mcp_function_contexts()
 
-
         # hello function
         assert len(contexts[0].parameters) == 1
         assert contexts[0].parameters[0]["name"] == "name"
         assert contexts[0].parameters[0]["type"] == "str"
-
 
         # add function
         assert len(contexts[1].parameters) == 2
         assert contexts[1].parameters[0]["name"] == "a"
         assert contexts[1].parameters[1]["name"] == "b"
 
-
     def test_return_types_extracted_correctly(self):
         """Test that return types are correctly extracted with custom variable names."""
         extractor = CodeContextExtractor(CUSTOM_VARIABLE_TOOL, "test.py")
         contexts = extractor.extract_mcp_function_contexts()
 
-
         assert contexts[0].return_type == "str"
         assert contexts[1].return_type == "int"
 
 
-
-
 class TestBackwardCompatibility:
     """Test that standard @mcp.tool() decorators still work."""
-
 
     def test_standard_mcp_variable_still_works(self):
         """Test that @mcp.tool() still works (backward compatibility)."""
@@ -220,12 +198,9 @@ def standard_function(x: int) -> int:
         extractor = CodeContextExtractor(code, "test.py")
         contexts = extractor.extract_mcp_function_contexts()
 
-
         assert len(contexts) == 1
         assert contexts[0].name == "standard_function"
         assert "mcp.tool" in contexts[0].decorator_types
-
-
 
 
 if __name__ == "__main__":
