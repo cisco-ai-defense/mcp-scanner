@@ -22,12 +22,13 @@ This module contains the unified scanner class that combines API and YARA analyz
 import asyncio
 import json
 import logging as stdlib_logging
-import warnings
-from typing import Any, Dict, List, Optional, Tuple, Callable
-import httpx
 import os
 import shlex
 import shutil
+import sys
+import warnings
+from typing import Any, Dict, List, Optional, Tuple, Callable
+import httpx
 
 # MCP client imports
 from mcp.client.session import ClientSession
@@ -1034,7 +1035,6 @@ class Scanner:
 
             # Create client context and session with proper error handling
             # Pass errlog for stderr redirection (helps avoid JSON corruption from startup messages)
-            import sys
             client_context = stdio_client(server_params, errlog=errlog if errlog else sys.stderr)
 
             # Use asyncio.wait_for for timeout instead of asyncio.timeout
