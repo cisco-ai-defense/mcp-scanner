@@ -35,9 +35,9 @@ def print_separator(title=""):
     if title:
         print(f"\n{'=' * 70}")
         print(f"  {title}")
-        print('=' * 70)
+        print("=" * 70)
     else:
-        print('=' * 70)
+        print("=" * 70)
 
 
 def print_result(result, index=None):
@@ -56,7 +56,7 @@ def print_result(result, index=None):
         for finding in result.findings:
             print(f"      [{finding.analyzer}] {finding.severity}: {finding.summary}")
             if finding.details:
-                threat_type = finding.details.get('threat_type', 'Unknown')
+                threat_type = finding.details.get("threat_type", "Unknown")
                 print(f"         Threat Type: {threat_type}")
 
 
@@ -77,8 +77,7 @@ async def test_stdio_server():
 
     # Configure stdio server
     server_config = StdioServer(
-        command="python3",
-        args=[str(Path(__file__).parent / "stdio_prompt_server.py")]
+        command="python3", args=[str(Path(__file__).parent / "stdio_prompt_server.py")]
     )
 
     print(f"\nServer Command: {server_config.command} {' '.join(server_config.args)}")
@@ -105,9 +104,7 @@ async def test_stdio_server():
     try:
         # Scan all prompts
         results = await scanner.scan_stdio_server_prompts(
-            server_config,
-            analyzers=analyzers,
-            timeout=30
+            server_config, analyzers=analyzers, timeout=30
         )
 
         print(f"\n✅ Successfully scanned {len(results)} prompts")
@@ -130,6 +127,7 @@ async def test_stdio_server():
     except Exception as e:
         print(f"\n❌ Error scanning stdio server: {e}")
         import traceback
+
         traceback.print_exc()
         return None
 
@@ -175,8 +173,7 @@ async def test_http_server():
     try:
         # Scan all prompts
         results = await scanner.scan_remote_server_prompts(
-            server_url,
-            analyzers=analyzers
+            server_url, analyzers=analyzers
         )
 
         print(f"\n✅ Successfully scanned {len(results)} prompts")
@@ -199,6 +196,7 @@ async def test_http_server():
     except Exception as e:
         print(f"\n❌ Error scanning HTTP server: {e}")
         import traceback
+
         traceback.print_exc()
         return None
 
@@ -223,9 +221,7 @@ async def test_specific_prompt():
 
     try:
         result = await scanner.scan_remote_server_prompt(
-            server_url,
-            prompt_name,
-            analyzers=[AnalyzerEnum.LLM]
+            server_url, prompt_name, analyzers=[AnalyzerEnum.LLM]
         )
 
         print("\n✅ Scan completed")
@@ -258,7 +254,9 @@ async def main():
         print(f"  LLM Model: {os.getenv('MCP_SCANNER_LLM_MODEL')}")
 
     if not has_api and not has_llm:
-        print("\n⚠️  Warning: No API keys configured. Only YARA analysis will be available.")
+        print(
+            "\n⚠️  Warning: No API keys configured. Only YARA analysis will be available."
+        )
 
     # Test 1: Stdio server
     stdio_results = await test_stdio_server()
@@ -270,7 +268,7 @@ async def main():
 
     response = input("\nIs the HTTP server running? (y/n): ").strip().lower()
 
-    if response == 'y':
+    if response == "y":
         http_results = await test_http_server()
 
         # Test 3: Specific prompt
