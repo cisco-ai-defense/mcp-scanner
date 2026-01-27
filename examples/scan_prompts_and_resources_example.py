@@ -172,8 +172,7 @@ async def scan_prompts_example():
     try:
         # Scan all prompts
         results = await scanner.scan_remote_server_prompts(
-            server_url,
-            analyzers=[AnalyzerEnum.LLM]
+            server_url, analyzers=[AnalyzerEnum.LLM]
         )
 
         # Display formatted results
@@ -182,6 +181,7 @@ async def scan_prompts_example():
     except Exception as e:
         print(f"\n❌ Error scanning prompts: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -214,7 +214,7 @@ async def scan_resources_example():
         results = await scanner.scan_remote_server_resources(
             server_url,
             analyzers=[AnalyzerEnum.LLM],
-            allowed_mime_types=["text/plain", "text/html"]
+            allowed_mime_types=["text/plain", "text/html"],
         )
 
         # Display formatted results
@@ -223,6 +223,7 @@ async def scan_resources_example():
     except Exception as e:
         print(f"\n❌ Error scanning resources: {e}")
         import traceback
+
         traceback.print_exc()
 
 
@@ -248,9 +249,7 @@ async def scan_specific_prompt_example():
 
     try:
         result = await scanner.scan_remote_server_prompt(
-            server_url,
-            prompt_name,
-            analyzers=[AnalyzerEnum.LLM]
+            server_url, prompt_name, analyzers=[AnalyzerEnum.LLM]
         )
 
         # Display single result
@@ -287,7 +286,7 @@ async def scan_specific_resource_example():
             server_url,
             resource_uri,
             analyzers=[AnalyzerEnum.LLM],
-            allowed_mime_types=["text/plain", "text/html"]
+            allowed_mime_types=["text/plain", "text/html"],
         )
 
         # Display single result

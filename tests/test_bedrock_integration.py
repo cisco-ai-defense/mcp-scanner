@@ -79,7 +79,10 @@ class TestBedrockAPIKeyAuthentication:
         # Verify API was called with correct parameters
         mock_completion.assert_called_once()
         call_args = mock_completion.call_args
-        assert call_args[1]["model"] == "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v2:0"
+        assert (
+            call_args[1]["model"]
+            == "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v2:0"
+        )
         assert call_args[1]["api_key"] == "bedrock-api-key-test123"
         assert call_args[1]["aws_region_name"] == "us-east-1"
 
@@ -139,7 +142,9 @@ class TestBedrockAWSProfileAuthentication:
         # Verify API was called with correct parameters
         mock_completion.assert_called_once()
         call_args = mock_completion.call_args
-        assert call_args[1]["model"] == "bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0"
+        assert (
+            call_args[1]["model"] == "bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0"
+        )
         assert "api_key" not in call_args[1]  # No API key
         assert call_args[1]["aws_region_name"] == "us-east-1"
         assert call_args[1]["aws_profile_name"] == "test-profile"
@@ -188,7 +193,9 @@ class TestBedrockSessionTokenAuthentication:
         mock_completion.assert_called_once()
         call_args = mock_completion.call_args
         assert call_args[1]["aws_region_name"] == "us-west-2"
-        assert call_args[1]["aws_session_token"] == "FwoGZXIvYXdzEBMaDBtest-session-token"
+        assert (
+            call_args[1]["aws_session_token"] == "FwoGZXIvYXdzEBMaDBtest-session-token"
+        )
 
 
 @pytest.mark.integration
@@ -259,7 +266,10 @@ class TestBedrockScannerIntegration:
 
         scanner = Scanner(config)
         assert scanner._llm_analyzer is not None
-        assert scanner._llm_analyzer._model == "bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0"
+        assert (
+            scanner._llm_analyzer._model
+            == "bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0"
+        )
 
     def test_scanner_initialization_with_bedrock_profile(self):
         """Test Scanner initializes correctly with AWS profile (no API key)."""
