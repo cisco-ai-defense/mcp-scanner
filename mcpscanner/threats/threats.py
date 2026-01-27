@@ -200,7 +200,7 @@ class ThreatMapping:
             "aitech": "AITech-3.1",
             "aitech_name": "Identity Manipulation",
             "aisubtech": "AISubtech-3.1.2",
-            "aisubtech_name": "Agent Masquerading",
+            "aisubtech_name": "Trusted Agent Spoofing",
             "description": "Masquerading as a legitimate agent or MCP-registered service to inject malicious instructions, responses, or outputs that other agents, services, or users treat as trusted. This attack exploits the assumption of authenticity within multi-agent systems and protocol-mediated toolchains, enabling actors to bypass safeguards and influence downstream behavior.",
         },
         
@@ -245,9 +245,9 @@ class ThreatMapping:
             "scanner_category": "WEAK ACCESS CONTROLS",
             "severity": "HIGH",
             "aitech": "AITech-14.1",
-            "aitech_name": "Misconfiguration",
+            "aitech_name": "Privilege Compromise",
             "aisubtech": "AISubtech-14.1.2",
-            "aisubtech_name": "Weak Access Controls",
+            "aisubtech_name": "Insufficient Access Controls",
             "description": "Weak, missing, or misconfigured permissions, authentication mechanisms, and access measures that fail to adequately prevent security breaches, unauthorized access, or data leakage.",
         },
         
@@ -285,7 +285,7 @@ class ThreatMapping:
             "aitech": "AITech-4.3",
             "aitech_name": "Bypassing Security Mechanisms",
             "aisubtech": "AISubtech-4.3.6",
-            "aisubtech_name": "Cross-Origin Security Bypass",
+            "aisubtech_name": "Cross-Origin Exploitation",
             "description": "Subverting security mechanisms designed to isolate web resources, primarily the Same-Origin Policy (SOP), within an AI agent's architecture in order to trick the AI agent or its execution environment into making unauthorized requests, sharing sensitive data, or executing actions across different trust boundaries (e.g., distinct domains, protocols, or services).",
         },
         "DEFENSE EVASION": {
@@ -312,7 +312,7 @@ class ThreatMapping:
             "aitech": "AITech-18.1",
             "aitech_name": "Financial and Fraud-Related Harm",
             "aisubtech": "AISubtech-18.1.1",
-            "aisubtech_name": "Automated Generation of Unsolicited / Fraud Content",
+            "aisubtech_name": "Spam / Scam / Social Engineering Generation",
             "description": "Automating generation of large volumes of unsolicited or fraudulent content (phishing, fake offers, spam emails/messages, impersonation or manipulation of trust) to deceive people or solicit funds, credentials, personal and confidential information, or other valuables.",
         },
         

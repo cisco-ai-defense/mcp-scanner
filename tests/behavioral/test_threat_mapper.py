@@ -225,7 +225,7 @@ class TestThreatMapper:
         assert threat["aitech"] == "AITech-3.1"
         assert threat["aitech_name"] == "Identity Manipulation"
         assert threat["aisubtech"] == "AISubtech-3.1.2"
-        assert threat["aisubtech_name"] == "Agent Masquerading"
+        assert threat["aisubtech_name"] == "Trusted Agent Spoofing"
         assert "masquerading" in threat["description"].lower()
     
     def test_weak_access_controls_threat_details(self):
@@ -236,9 +236,9 @@ class TestThreatMapper:
         
         assert threat["severity"] == "HIGH"
         assert threat["aitech"] == "AITech-14.1"
-        assert threat["aitech_name"] == "Misconfiguration"
+        assert threat["aitech_name"] == "Privilege Compromise"
         assert threat["aisubtech"] == "AISubtech-14.1.2"
-        assert threat["aisubtech_name"] == "Weak Access Controls"
+        assert threat["aisubtech_name"] == "Insufficient Access Controls"
         assert "access" in threat["description"].lower() or "authentication" in threat["description"].lower()
     
     def test_automated_fraud_content_generation_threat_details(self):
@@ -251,7 +251,7 @@ class TestThreatMapper:
         assert threat["aitech"] == "AITech-18.1"
         assert threat["aitech_name"] == "Financial and Fraud-Related Harm"
         assert threat["aisubtech"] == "AISubtech-18.1.1"
-        assert threat["aisubtech_name"] == "Automated Generation of Unsolicited / Fraud Content"
+        assert threat["aisubtech_name"] == "Spam / Scam / Social Engineering Generation"
         assert "fraud" in threat["description"].lower() or "phishing" in threat["description"].lower()
     
     def test_same_origin_policy_bypass_threat_details(self):
@@ -277,5 +277,5 @@ class TestThreatMapper:
         assert threat["aitech"] == "AITech-4.3"
         assert threat["aitech_name"] == "Bypassing Security Mechanisms"
         assert threat["aisubtech"] == "AISubtech-4.3.6"
-        assert threat["aisubtech_name"] == "Cross-Origin Security Bypass"
+        assert threat["aisubtech_name"] == "Cross-Origin Exploitation"
         assert "cross-origin" in threat["description"].lower() or "trust boundaries" in threat["description"].lower()
