@@ -74,8 +74,9 @@ class LLMAnalyzer(BaseAnalyzer):
 
         # Authentication strategy based on provider:
         # 1. Non-Bedrock providers (OpenAI, Anthropic, etc.): API key required
-        # 2. Bedrock with API key: Use Bedrock API key (MCP_SCANNER_LLM_API_KEY or AWS_BEARER_TOKEN_BEDROCK)
-        # 3. Bedrock without API key: Use AWS credentials (profile/IAM/session token)
+        # 2. Bedrock with API key: Use Bedrock API key (MCP_SCANNER_LLM_API_KEY)
+        # 3. Bedrock with bearer token: Use AWS_BEARER_TOKEN_BEDROCK for API gateway auth
+        # 4. Bedrock without API key: Use AWS credentials (profile/IAM/session token)
 
         if not is_bedrock:
             # Non-Bedrock providers always require API key
@@ -86,11 +87,15 @@ class LLMAnalyzer(BaseAnalyzer):
                 raise ValueError("LLM provider API key is required for LLM analyzer")
             self._api_key = config.llm_provider_api_key
         else:
-            # Bedrock: API key is optional (can use AWS credentials instead)
+            # Bedrock: Check for API key, then bearer token, then fall back to AWS credentials
             if hasattr(config, "llm_provider_api_key") and config.llm_provider_api_key:
-                # Use Bedrock API key authentication
+                # Use Bedrock API key authentication (MCP_SCANNER_LLM_API_KEY)
                 self._api_key = config.llm_provider_api_key
-                self.logger.debug("Bedrock: Using API key authentication")
+                self.logger.debug("Bedrock: Using API key authentication (MCP_SCANNER_LLM_API_KEY)")
+            elif hasattr(config, "aws_bearer_token_bedrock") and config.aws_bearer_token_bedrock:
+                # Use AWS Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK)
+                self._api_key = config.aws_bearer_token_bedrock
+                self.logger.debug("Bedrock: Using bearer token authentication (AWS_BEARER_TOKEN_BEDROCK)")
             else:
                 # Use AWS credentials (profile/IAM/session token)
                 self._api_key = None

@@ -87,7 +87,12 @@ class MCPScannerConstants:
     ENV_AWS_SESSION_TOKEN: str = os.getenv(
         "MCP_SCANNER_ENV_AWS_SESSION_TOKEN_NAME", "AWS_SESSION_TOKEN"
     )
-    ENV_AWS_PROFILE: str = os.getenv("MCP_SCANNER_ENV_AWS_PROFILE_NAME", "AWS_PROFILE")
+    ENV_AWS_PROFILE: str = os.getenv(
+        "MCP_SCANNER_ENV_AWS_PROFILE_NAME", "AWS_PROFILE"
+    )
+    ENV_AWS_BEARER_TOKEN_BEDROCK: str = os.getenv(
+        "MCP_SCANNER_ENV_AWS_BEARER_TOKEN_BEDROCK_NAME", "AWS_BEARER_TOKEN_BEDROCK"
+    )
 
     # Default Configuration File Paths
     DEFAULT_ENV_FILE: str = os.getenv("MCP_SCANNER_DEFAULT_ENV_FILE", ".env")

@@ -1042,9 +1042,18 @@ async def main():
     )
     p_stdio.add_argument(
         "--stdio-args",
-        nargs="*",
-        default=[],
-        help="Arguments passed to the stdio command (space-separated)",
+        type=str,
+        default="",
+        help="Arguments passed to the stdio command (comma-separated, e.g., '--from,mcp-server-fetch,mcp-server-fetch')",
+    )
+    p_stdio.add_argument(
+        "--stdio-arg",
+        action="append",
+        help="Repeatable single argument (e.g., --stdio-arg=--from --stdio-arg=pkg). More reliable than --stdio-args for complex package names.",
+    )
+    p_stdio.add_argument(
+        "--stderr-file",
+        help="Redirect server stderr to this file (useful for debugging startup messages that may corrupt JSON output)",
     )
     p_stdio.add_argument(
         "--stdio-env",
@@ -1149,14 +1158,18 @@ async def main():
     )
     parser.add_argument(
         "--stdio-args",
-        nargs="*",
-        default=[],
-        help="Arguments passed to the stdio command (space-separated)",
+        type=str,
+        default="",
+        help="Arguments passed to the stdio command (comma-separated, e.g., '--from,mcp-server-fetch,mcp-server-fetch')",
     )
     parser.add_argument(
         "--stdio-arg",
         action="append",
-        help="[Deprecated] Repeatable single arg; use --stdio-args instead",
+        help="Repeatable single argument (e.g., --stdio-arg=--from --stdio-arg=pkg). More reliable than --stdio-args for complex package names.",
+    )
+    parser.add_argument(
+        "--stderr-file",
+        help="Redirect server stderr to this file (useful for debugging startup messages that may corrupt JSON output)",
     )
     parser.add_argument(
         "--stdio-env",
@@ -1402,26 +1415,39 @@ async def main():
                 if "=" in item:
                     k, v = item.split("=", 1)
                     env_dict[k] = v
-            stdio_args = list(args.stdio_args or [])
+            # Parse comma-separated --stdio-args and/or repeated --stdio-arg
+            stdio_args = []
+            if args.stdio_args:
+                stdio_args.extend([a for a in args.stdio_args.split(",") if a])
             if getattr(args, "stdio_arg", None):
-                print("[warning] --stdio-arg is deprecated; use --stdio-args")
                 stdio_args.extend(args.stdio_arg)
+            
+            # Handle stderr redirection
+            stderr_file = getattr(args, "stderr_file", None)
+            errlog = None
+            if stderr_file:
+                errlog = open(stderr_file, "w")
+            
             stdio = StdioServer(
                 command=args.stdio_command,
                 args=stdio_args,
                 env=env_dict or None,
                 expand_vars=args.expand_vars,
             )
-            if args.stdio_tool:
-                scan_result = await scanner.scan_stdio_server_tool(
-                    stdio, args.stdio_tool, analyzers=selected_analyzers
-                )
-                results = await results_to_json([scan_result])
-            else:
-                scan_results = await scanner.scan_stdio_server_tools(
-                    stdio, analyzers=selected_analyzers
-                )
-                results = await results_to_json(scan_results)
+            try:
+                if args.stdio_tool:
+                    scan_result = await scanner.scan_stdio_server_tool(
+                        stdio, args.stdio_tool, analyzers=selected_analyzers, errlog=errlog
+                    )
+                    results = await results_to_json([scan_result])
+                else:
+                    scan_results = await scanner.scan_stdio_server_tools(
+                        stdio, analyzers=selected_analyzers, errlog=errlog
+                    )
+                    results = await results_to_json(scan_results)
+            finally:
+                if errlog:
+                    errlog.close()
 
         elif args.cmd == "config":
             cfg = _build_config(selected_analyzers)
@@ -1792,26 +1818,39 @@ async def main():
                 if "=" in item:
                     k, v = item.split("=", 1)
                     env_dict[k] = v
-            stdio_args = list(args.stdio_args or [])
+            # Parse comma-separated --stdio-args and/or repeated --stdio-arg
+            stdio_args = []
+            if args.stdio_args:
+                stdio_args.extend([a for a in args.stdio_args.split(",") if a])
             if args.stdio_arg:
-                print("[warning] --stdio-arg is deprecated; use --stdio-args")
                 stdio_args.extend(args.stdio_arg)
+            
+            # Handle stderr redirection
+            stderr_file = getattr(args, "stderr_file", None)
+            errlog = None
+            if stderr_file:
+                errlog = open(stderr_file, "w")
+            
             stdio = StdioServer(
                 command=args.stdio_command,
                 args=stdio_args,
                 env=env_dict or None,
                 expand_vars=args.expand_vars,
             )
-            if args.stdio_tool:
-                scan_result = await scanner.scan_stdio_server_tool(
-                    stdio, args.stdio_tool, analyzers=selected_analyzers
-                )
-                results = await results_to_json([scan_result])
-            else:
-                scan_results = await scanner.scan_stdio_server_tools(
-                    stdio, analyzers=selected_analyzers
-                )
-                results = await results_to_json(scan_results)
+            try:
+                if args.stdio_tool:
+                    scan_result = await scanner.scan_stdio_server_tool(
+                        stdio, args.stdio_tool, analyzers=selected_analyzers, errlog=errlog
+                    )
+                    results = await results_to_json([scan_result])
+                else:
+                    scan_results = await scanner.scan_stdio_server_tools(
+                        stdio, analyzers=selected_analyzers, errlog=errlog
+                    )
+                    results = await results_to_json(scan_results)
+            finally:
+                if errlog:
+                    errlog.close()
 
         elif args.scan_known_configs or args.config_path:
             cfg = _build_config(selected_analyzers)
@@ -1890,7 +1929,7 @@ async def main():
             if getattr(args, "stdio_arg", None):
                 label_args.extend(args.stdio_arg)
             if getattr(args, "stdio_args", None):
-                label_args.extend(args.stdio_args)
+                label_args.extend([a for a in args.stdio_args.split(",") if a])
             server_label = f"stdio:{args.stdio_command} {' '.join(label_args)}".strip()
         elif hasattr(args, "cmd") and args.cmd == "config":
             server_label = args.config_path
@@ -1909,7 +1948,7 @@ async def main():
             if getattr(args, "stdio_arg", None):
                 label_args.extend(args.stdio_arg)
             if getattr(args, "stdio_args", None):
-                label_args.extend(args.stdio_args)
+                label_args.extend([a for a in args.stdio_args.split(",") if a])
             server_label = f"stdio:{args.stdio_command} {' '.join(label_args)}".strip()
         elif args.config_path:
             server_label = args.config_path
@@ -2007,7 +2046,7 @@ async def main():
             if args.stdio_arg:
                 label_args.extend(args.stdio_arg)
             if args.stdio_args:
-                label_args.extend(args.stdio_args)
+                label_args.extend([a for a in args.stdio_args.split(",") if a])
             server_label = f"stdio:{args.stdio_command} {' '.join(label_args)}".strip()
         elif args.config_path:
             server_label = args.config_path

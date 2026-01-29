@@ -55,6 +55,7 @@ class Config:
         aws_region_name: str = None,
         aws_session_token: str = None,
         aws_profile_name: str = None,
+        aws_bearer_token_bedrock: str = None,
         llm_timeout: float = None,
         oauth_client_id: str = None,
         oauth_client_secret: str = None,
@@ -78,6 +79,7 @@ class Config:
             aws_region_name (str, optional): AWS region name for Bedrock (e.g., 'us-east-1'). Falls back to AWS_REGION or AWS_DEFAULT_REGION env vars.
             aws_session_token (str, optional): AWS session token for temporary credentials. Falls back to AWS_SESSION_TOKEN env var.
             aws_profile_name (str, optional): AWS profile name from ~/.aws/credentials. Falls back to AWS_PROFILE env var.
+            aws_bearer_token_bedrock (str, optional): AWS Bedrock bearer token for API gateway authentication. Falls back to AWS_BEARER_TOKEN_BEDROCK env var.
             oauth_client_id (str, optional): OAuth client ID for authentication.
             oauth_client_secret (str, optional): OAuth client secret for authentication.
             oauth_token_url (str, optional): OAuth token URL for authentication.
@@ -109,6 +111,7 @@ class Config:
         )
         self._aws_session_token = aws_session_token or os.getenv("AWS_SESSION_TOKEN")
         self._aws_profile_name = aws_profile_name or os.getenv("AWS_PROFILE")
+        self._aws_bearer_token_bedrock = aws_bearer_token_bedrock or os.getenv("AWS_BEARER_TOKEN_BEDROCK")
 
         self._llm_timeout = llm_timeout or CONSTANTS.DEFAULT_LLM_TIMEOUT
         self._oauth_client_id = oauth_client_id
@@ -223,6 +226,15 @@ class Config:
             Optional[str]: The AWS profile name from ~/.aws/credentials.
         """
         return self._aws_profile_name
+
+    @property
+    def aws_bearer_token_bedrock(self) -> Optional[str]:
+        """Get the AWS Bedrock bearer token for API gateway authentication.
+
+        Returns:
+            Optional[str]: The AWS Bedrock bearer token.
+        """
+        return self._aws_bearer_token_bedrock
 
     @property
     def llm_timeout(self) -> float:
