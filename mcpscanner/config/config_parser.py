@@ -94,8 +94,12 @@ async def scan_mcp_config_file(path: str) -> MCPConfig:
                 try:
                     # Try to validate as either StdioServer or RemoteServer
                     if isinstance(server_config, dict):
-                        if "url" in server_config:
-                            # Try RemoteServer
+                        # Check for any URL field variant (case-insensitive)
+                        has_url = any(
+                            k.lower() in ("url", "serverurl") for k in server_config.keys()
+                        )
+                        if has_url:
+                            # Try RemoteServer (model_validator normalizes URL field)
                             RemoteServer.model_validate(server_config)
                             valid_servers[name] = server_config
                         elif "command" in server_config:
