@@ -32,6 +32,7 @@ from typing import Dict, Any, Optional
 # SECTION 1: THREAT DEFINITIONS
 # =============================================================================
 
+
 class ThreatMapping:
     """Mapping of threat names to MCP Taxonomy classifications with severity."""
 
@@ -44,7 +45,7 @@ class ThreatMapping:
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., \"Ignore previous instructions\").",
+            "description": 'Explicit attempts to override, replace, or modify the model\'s system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., "Ignore previous instructions").',
         },
         "DATA EXFILTRATION": {
             "scanner_category": "SECURITY VIOLATION",
@@ -85,7 +86,7 @@ class ThreatMapping:
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., \"Ignore previous instructions\").",
+            "description": 'Explicit attempts to override, replace, or modify the model\'s system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., "Ignore previous instructions").',
         },
         "CODE EXECUTION": {
             "scanner_category": "SUSPICIOUS CODE EXECUTION",
@@ -174,7 +175,6 @@ class ThreatMapping:
             "aisubtech_name": "Template Injection (e.g., SSTI)",
             "description": "Injecting malicious template syntax into dynamically rendered prompts or server-side templates to execute arbitrary code. MCP decorator or response generator uses f-strings or template engines with unvalidated input.",
         },
-
         # Tool Integrity Threats
         "TOOL POISONING": {
             "scanner_category": "TOOL POISONING",
@@ -194,7 +194,6 @@ class ThreatMapping:
             "aisubtech_name": "Goal Manipulation (Tools, Prompts, Resources)",
             "description": "Detect tampering with the intended purpose of a tool, prompt, or resource to steer the LLM toward attacker-defined objectives. Includes code with injection points in tool chaining, prompt composition, or control-flow templates.",
         },
-
         # Data Exfiltration & Access Threats
         "DATA EXFILTRATION": {
             "scanner_category": "DATA EXFILTRATION",
@@ -232,7 +231,6 @@ class ThreatMapping:
             "aisubtech_name": "Unsafe System / Browser / File Exec",
             "description": "Detect unauthorized reading from or writing to arbitrary resources such as files, URLs, APIs, databases, or local storage via tool or resource misuse. Includes path traversal attacks.",
         },
-
         # Execution & Payload Threats
         "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION": {
             "scanner_category": "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION",
@@ -270,7 +268,6 @@ class ThreatMapping:
             "aisubtech_name": "Compute Exhaustion",
             "description": "Overloading the MCP server (via repeated tool invocations or large payloads) to degrade performance or cause denial of service. Tool repeatedly processes large files or calls itself recursively without rate limits or break conditions.",
         },
-
         # General Behavioral & Metadata Threats
         "GENERAL DESCRIPTION-CODE MISMATCH": {
             "scanner_category": "GENERAL DESCRIPTION-CODE MISMATCH",
@@ -293,7 +290,7 @@ class ThreatMapping:
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Explicit attempts to override, replace, or modify the model's system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., \"Ignore previous instructions\").",
+            "description": 'Explicit attempts to override, replace, or modify the model\'s system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., "Ignore previous instructions").',
         },
         "HARASSMENT": {
             "scanner_category": "SOCIAL ENGINEERING",
@@ -369,75 +366,6 @@ class ThreatMapping:
         },
     }
 
-    # Readiness Analyzer Threats (Operational Issues)
-    # Note: These focus on production reliability, NOT security vulnerabilities
-    # Ported from MCP Readiness Scanner project (github.com/nik-kale/mcp-readiness-scanner)
-    READINESS_THREATS = {
-        "MISSING_TIMEOUT_GUARD": {
-            "scanner_category": "OPERATIONAL_READINESS",
-            "severity": "HIGH",
-            "aitech": "AITech-OP-1",
-            "aitech_name": "Operational Reliability",
-            "aisubtech": "AISubtech-OP-1.1",
-            "aisubtech_name": "Missing Timeout Guard",
-            "description": "Tool does not specify a timeout, potentially causing indefinite hangs when external services become unresponsive.",
-        },
-        "UNSAFE_RETRY_LOOP": {
-            "scanner_category": "OPERATIONAL_READINESS",
-            "severity": "HIGH",
-            "aitech": "AITech-OP-1",
-            "aitech_name": "Operational Reliability",
-            "aisubtech": "AISubtech-OP-1.2",
-            "aisubtech_name": "Unsafe Retry Loop",
-            "description": "Retry logic may cause resource exhaustion or infinite loops without proper backoff, limits, or circuit breakers.",
-        },
-        "SILENT_FAILURE_PATH": {
-            "scanner_category": "OPERATIONAL_READINESS",
-            "severity": "MEDIUM",
-            "aitech": "AITech-OP-2",
-            "aitech_name": "Error Handling",
-            "aisubtech": "AISubtech-OP-2.1",
-            "aisubtech_name": "Silent Failure Path",
-            "description": "Tool may fail without properly surfacing errors to agents, leading to incorrect assumptions about operation success.",
-        },
-        "MISSING_ERROR_SCHEMA": {
-            "scanner_category": "OPERATIONAL_READINESS",
-            "severity": "MEDIUM",
-            "aitech": "AITech-OP-2",
-            "aitech_name": "Error Handling",
-            "aisubtech": "AISubtech-OP-2.2",
-            "aisubtech_name": "Missing Error Schema",
-            "description": "Tool lacks structured error responses for programmatic handling. Agents cannot reliably interpret and handle failures.",
-        },
-        "OVERLOADED_TOOL_SCOPE": {
-            "scanner_category": "OPERATIONAL_READINESS",
-            "severity": "HIGH",
-            "aitech": "AITech-OP-3",
-            "aitech_name": "Tool Design",
-            "aisubtech": "AISubtech-OP-3.1",
-            "aisubtech_name": "Overloaded Tool Scope",
-            "description": "Tool has too many capabilities, reducing reliability, predictability, and making testing difficult.",
-        },
-        "NO_OBSERVABILITY_HOOKS": {
-            "scanner_category": "OPERATIONAL_READINESS",
-            "severity": "LOW",
-            "aitech": "AITech-OP-4",
-            "aitech_name": "Observability",
-            "aisubtech": "AISubtech-OP-4.1",
-            "aisubtech_name": "No Observability Hooks",
-            "description": "Tool lacks logging, metrics, or tracing integration, making debugging production issues extremely difficult.",
-        },
-        "NON_DETERMINISTIC_RESPONSE": {
-            "scanner_category": "OPERATIONAL_READINESS",
-            "severity": "INFO",
-            "aitech": "AITech-OP-5",
-            "aitech_name": "Response Consistency",
-            "aisubtech": "AISubtech-OP-5.1",
-            "aisubtech_name": "Non-Deterministic Response",
-            "description": "Tool response format or content varies unpredictably, making agent parsing fragile and unreliable.",
-        },
-    }
-
     @classmethod
     def get_threat_mapping(cls, analyzer: str, threat_name: str) -> Dict[str, Any]:
         """
@@ -454,11 +382,10 @@ class ThreatMapping:
             ValueError: If analyzer or threat_name is not found
         """
         analyzer_map = {
-            'llm': cls.LLM_THREATS,
-            'yara': cls.YARA_THREATS,
-            'ai_defense': cls.AI_DEFENSE_THREATS,
-            'behavioral': cls.BEHAVIORAL_THREATS,
-            'readiness': cls.READINESS_THREATS,
+            "llm": cls.LLM_THREATS,
+            "yara": cls.YARA_THREATS,
+            "ai_defense": cls.AI_DEFENSE_THREATS,
+            "behavioral": cls.BEHAVIORAL_THREATS,
         }
 
         analyzer_lower = analyzer.lower()
@@ -469,7 +396,9 @@ class ThreatMapping:
         threat_upper = threat_name.upper()
 
         if threat_upper not in threats:
-            raise ValueError(f"Unknown threat '{threat_name}' for analyzer '{analyzer}'")
+            raise ValueError(
+                f"Unknown threat '{threat_name}' for analyzer '{analyzer}'"
+            )
 
         return threats[threat_upper]
 
@@ -477,6 +406,7 @@ class ThreatMapping:
 # =============================================================================
 # SECTION 2: SIMPLIFIED MAPPINGS & HELPER FUNCTIONS
 # =============================================================================
+
 
 def _create_simple_mapping(threats_dict):
     """Create simplified mapping with threat_category, threat_type, and severity."""

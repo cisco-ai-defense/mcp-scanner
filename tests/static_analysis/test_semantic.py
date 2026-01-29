@@ -21,24 +21,31 @@ import pytest
 
 class TestSemantic:
     """Test semantic analysis functionality."""
-    
+
     def test_semantic_module_exists(self):
         """Test that semantic module can be imported."""
         from mcpscanner.core.static_analysis import semantic
+
         assert semantic is not None
-    
+
     def test_name_resolver_importable(self):
         """Test that name resolver can be imported."""
         try:
-            from mcpscanner.core.static_analysis.semantic.name_resolver import NameResolver
+            from mcpscanner.core.static_analysis.semantic.name_resolver import (
+                NameResolver,
+            )
+
             assert NameResolver is not None
         except (ImportError, AttributeError):
             pytest.skip("Name resolver structure needs verification")
-    
+
     def test_type_analyzer_importable(self):
         """Test that type analyzer can be imported."""
         try:
-            from mcpscanner.core.static_analysis.semantic.type_analyzer import TypeAnalyzer
+            from mcpscanner.core.static_analysis.semantic.type_analyzer import (
+                TypeAnalyzer,
+            )
+
             assert TypeAnalyzer is not None
         except (ImportError, AttributeError):
             pytest.skip("Type analyzer structure needs verification")
