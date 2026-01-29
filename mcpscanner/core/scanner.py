@@ -65,6 +65,7 @@ from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
+from .analyzers.readiness import ReadinessAnalyzer
 from .auth import (
     Auth,
     AuthType,
@@ -137,6 +138,8 @@ class Scanner:
         self._behavioral_analyzer = (
             BehavioralCodeAnalyzer(config) if config.llm_provider_api_key else None
         )
+        # Readiness analyzer always available (no API keys needed)
+        self._readiness_analyzer = ReadinessAnalyzer()
         self._custom_analyzers = custom_analyzers or []
 
         # Debug logging for analyzer initialization
@@ -149,6 +152,8 @@ class Scanner:
             active_analyzers.append("LLM")
         if self._behavioral_analyzer:
             active_analyzers.append("Behavioral")
+        if self._readiness_analyzer:
+            active_analyzers.append("Readiness")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -195,6 +200,12 @@ class Scanner:
         if AnalyzerEnum.YARA in requested_analyzers and not self._yara_analyzer:
             missing_requirements.append(
                 "YARA analyzer requested but failed to initialize"
+            )
+
+        # READINESS analyzer should always be available since it doesn't require API keys
+        if AnalyzerEnum.READINESS in requested_analyzers and not self._readiness_analyzer:
+            missing_requirements.append(
+                "Readiness analyzer requested but failed to initialize"
             )
 
         if missing_requirements:
@@ -328,6 +339,24 @@ class Scanner:
             logger.warning(
                 f"LLM scan requested for tool \"'{name}'\" but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
+
+        if AnalyzerEnum.READINESS in analyzers and self._readiness_analyzer:
+            # Run READINESS analysis on the complete tool definition
+            try:
+                # Pass the parsed tool data for comprehensive heuristic checks
+                readiness_context = {
+                    "tool_name": name,
+                    "content_type": "tool_definition",
+                    "tool_definition": tool_data,
+                }
+                readiness_findings = await self._readiness_analyzer.analyze(
+                    tool_json, readiness_context
+                )
+                for finding in readiness_findings:
+                    finding.analyzer = "READINESS"
+                all_findings.extend(readiness_findings)
+            except Exception as e:
+                logger.error(f'Readiness analysis failed: tool="{name}", error="{e}"')
 
         # Run custom analyzers
         custom_analyzer_names = []

@@ -1,0 +1,19 @@
+{
+  "name": "recursive_processor",
+  "description": "Processes data and may call recursive_processor again to handle nested items. This tool calls itself until completion.",
+  "timeout": 30000,
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "data": {
+        "type": "object"
+      },
+      "depth": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": ["data"]
+  }
+}
+
