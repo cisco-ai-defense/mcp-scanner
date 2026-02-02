@@ -34,6 +34,7 @@ from .base import BaseAnalyzer, SecurityFinding
 
 class SecurityError(Exception):
     """Custom exception for security violations in LLM prompts."""
+
     pass
 
 
@@ -73,24 +74,34 @@ class LLMAnalyzer(BaseAnalyzer):
 
         # Authentication strategy based on provider:
         # 1. Non-Bedrock providers (OpenAI, Anthropic, etc.): API key required
-        # 2. Bedrock with API key: Use Bedrock API key (MCP_SCANNER_LLM_API_KEY or AWS_BEARER_TOKEN_BEDROCK)
-        # 3. Bedrock without API key: Use AWS credentials (profile/IAM/session token)
+        # 2. Bedrock with API key: Use Bedrock API key (MCP_SCANNER_LLM_API_KEY)
+        # 3. Bedrock with bearer token: Use AWS_BEARER_TOKEN_BEDROCK for API gateway auth
+        # 4. Bedrock without API key: Use AWS credentials (profile/IAM/session token)
 
         if not is_bedrock:
             # Non-Bedrock providers always require API key
-            if not hasattr(config, "llm_provider_api_key") or not config.llm_provider_api_key:
+            if (
+                not hasattr(config, "llm_provider_api_key")
+                or not config.llm_provider_api_key
+            ):
                 raise ValueError("LLM provider API key is required for LLM analyzer")
             self._api_key = config.llm_provider_api_key
         else:
-            # Bedrock: API key is optional (can use AWS credentials instead)
+            # Bedrock: Check for API key, then bearer token, then fall back to AWS credentials
             if hasattr(config, "llm_provider_api_key") and config.llm_provider_api_key:
-                # Use Bedrock API key authentication
+                # Use Bedrock API key authentication (MCP_SCANNER_LLM_API_KEY)
                 self._api_key = config.llm_provider_api_key
-                self.logger.debug("Bedrock: Using API key authentication")
+                self.logger.debug("Bedrock: Using API key authentication (MCP_SCANNER_LLM_API_KEY)")
+            elif hasattr(config, "aws_bearer_token_bedrock") and config.aws_bearer_token_bedrock:
+                # Use AWS Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK)
+                self._api_key = config.aws_bearer_token_bedrock
+                self.logger.debug("Bedrock: Using bearer token authentication (AWS_BEARER_TOKEN_BEDROCK)")
             else:
                 # Use AWS credentials (profile/IAM/session token)
                 self._api_key = None
-                self.logger.debug("Bedrock: Using AWS credentials (profile/IAM/session)")
+                self.logger.debug(
+                    "Bedrock: Using AWS credentials (profile/IAM/session)"
+                )
 
         # Store configuration for per-request usage
         self._base_url = config.llm_base_url
@@ -311,7 +322,7 @@ class LLMAnalyzer(BaseAnalyzer):
                 # Create specific findings for each detected threat
                 for threat_name in primary_threats:
                     threat_info = LLM_THREAT_MAPPING.get(threat_name)
-                    
+
                     if threat_info:
                         category = threat_info["threat_category"]
                         display_name = threat_info["threat_type"]

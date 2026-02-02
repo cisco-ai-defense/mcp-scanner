@@ -10,6 +10,7 @@ This directory contains detailed documentation for the MCP Scanner SDK.
 - **[MCP Threats Taxonomy](mcp-threats-taxonomy.md)** - Complete AITech/AISubtech threat taxonomy
 - **[Authentication](authentication.md)** - OAuth setup, explicit auth control, and security configuration
 - **[Programmatic Usage](programmatic-usage.md)** - Examples and advanced programmatic usage
+- **[Static Scanning](static-scanning.md)** - Offline/CI-CD scanning mode for pre-generated JSON files
 - **[API Reference](api-reference.md)** - Complete REST API documentation and examples
 - **[Output Formats](output-formats.md)** - Detailed output format options and filtering
 

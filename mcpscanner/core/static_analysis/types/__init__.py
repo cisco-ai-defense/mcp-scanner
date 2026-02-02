@@ -24,6 +24,7 @@ from typing import Any
 
 class Severity(Enum):
     """Severity levels for findings."""
+
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -32,6 +33,7 @@ class Severity(Enum):
 
 class AnalysisMode(Enum):
     """Analysis modes for rules."""
+
     SEARCH = "search"
     TAINT = "taint"
     DATAFLOW = "dataflow"
@@ -40,6 +42,7 @@ class AnalysisMode(Enum):
 @dataclass
 class Position:
     """Source code position."""
+
     line: int
     column: int
     offset: int = 0
@@ -48,6 +51,7 @@ class Position:
 @dataclass
 class Range:
     """Source code range."""
+
     start: Position
     end: Position
 
@@ -55,6 +59,7 @@ class Range:
 @dataclass
 class MetaVariable:
     """Metavariable binding."""
+
     name: str
     value: Any
     range: Range
@@ -63,6 +68,7 @@ class MetaVariable:
 @dataclass
 class Pattern:
     """Pattern definition in a rule."""
+
     pattern_str: str
     is_ellipsis: bool = False
     is_deep: bool = False
@@ -79,6 +85,7 @@ class Pattern:
 @dataclass
 class Propagator:
     """Custom taint propagator specification."""
+
     pattern: Pattern
     from_arg: str
     to_arg: str | None = None
@@ -88,6 +95,7 @@ class Propagator:
 @dataclass
 class TaintSpec:
     """Taint analysis specification."""
+
     sources: list[Pattern] = field(default_factory=list)
     sinks: list[Pattern] = field(default_factory=list)
     sanitizers: list[Pattern] = field(default_factory=list)
@@ -96,6 +104,7 @@ class TaintSpec:
 
 class BooleanOperator(Enum):
     """Boolean operators for pattern formulas."""
+
     AND = "and"
     OR = "or"
     NOT = "not"
@@ -105,6 +114,7 @@ class BooleanOperator(Enum):
 @dataclass
 class PatternFormula:
     """Boolean formula of patterns."""
+
     operator: BooleanOperator
     patterns: list[Pattern] = field(default_factory=list)
     subformulas: list["PatternFormula"] = field(default_factory=list)
@@ -113,6 +123,7 @@ class PatternFormula:
 @dataclass
 class Rule:
     """Security rule definition."""
+
     id: str
     meta: dict[str, Any]
     mode: AnalysisMode
@@ -144,6 +155,7 @@ class Rule:
 @dataclass
 class Match:
     """A match found by a rule."""
+
     rule_id: str
     file_path: Path
     range: Range
@@ -168,9 +180,11 @@ class Match:
                 name: {"value": str(mv.value), "range": self._range_to_dict(mv.range)}
                 for name, mv in self.metavars.items()
             },
-            "taint_flow": [self._range_to_dict(r) for r in self.taint_flow]
-            if self.taint_flow
-            else None,
+            "taint_flow": (
+                [self._range_to_dict(r) for r in self.taint_flow]
+                if self.taint_flow
+                else None
+            ),
             "fix": self.fix,
         }
 
@@ -186,6 +200,7 @@ class Match:
 @dataclass
 class ScanResult:
     """Result of a scan operation."""
+
     matches: list[Match] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     files_scanned: int = 0

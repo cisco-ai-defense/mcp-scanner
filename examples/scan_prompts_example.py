@@ -50,8 +50,7 @@ async def scan_remote_server_prompts_example():
     try:
         # Scan all prompts with both API and LLM analyzers
         results = await scanner.scan_remote_server_prompts(
-            server_url,
-            analyzers=[AnalyzerEnum.API, AnalyzerEnum.LLM]
+            server_url, analyzers=[AnalyzerEnum.API, AnalyzerEnum.LLM]
         )
 
         print(f"Found {len(results)} prompts\n")
@@ -67,7 +66,9 @@ async def scan_remote_server_prompts_example():
             if not result.is_safe:
                 print(f"  ⚠️  Found {len(result.findings)} security findings:")
                 for finding in result.findings:
-                    print(f"    - [{finding.severity}] {finding.summary} (Analyzer: {finding.analyzer})")
+                    print(
+                        f"    - [{finding.severity}] {finding.summary} (Analyzer: {finding.analyzer})"
+                    )
             else:
                 print("  ✅ No security issues detected")
             print()
@@ -94,9 +95,7 @@ async def scan_specific_prompt_example():
     try:
         # Scan a specific prompt
         result = await scanner.scan_remote_server_prompt(
-            server_url,
-            prompt_name,
-            analyzers=[AnalyzerEnum.API, AnalyzerEnum.LLM]
+            server_url, prompt_name, analyzers=[AnalyzerEnum.API, AnalyzerEnum.LLM]
         )
 
         print(f"Prompt: {result.prompt_name}")
@@ -134,25 +133,26 @@ async def scan_stdio_server_prompts_example():
 
     # Example stdio server configuration
     server_config = StdioServer(
-        command="uvx",
-        args=["--from", "mcp-server-fetch", "mcp-server-fetch"]
+        command="uvx", args=["--from", "mcp-server-fetch", "mcp-server-fetch"]
     )
 
-    print(f"Scanning prompts from stdio server: {server_config.command} {' '.join(server_config.args)}\n")
+    print(
+        f"Scanning prompts from stdio server: {server_config.command} {' '.join(server_config.args)}\n"
+    )
 
     try:
         # Scan all prompts from stdio server
         results = await scanner.scan_stdio_server_prompts(
-            server_config,
-            analyzers=[AnalyzerEnum.API, AnalyzerEnum.LLM],
-            timeout=60
+            server_config, analyzers=[AnalyzerEnum.API, AnalyzerEnum.LLM], timeout=60
         )
 
         print(f"Found {len(results)} prompts\n")
 
         for result in results:
             status_icon = "✅" if result.is_safe else "⚠️"
-            print(f"{status_icon} {result.prompt_name}: {result.prompt_description[:50]}...")
+            print(
+                f"{status_icon} {result.prompt_name}: {result.prompt_description[:50]}..."
+            )
             if not result.is_safe:
                 print(f"   Found {len(result.findings)} security findings")
             print()
@@ -201,7 +201,9 @@ def main():
     print()
 
     # Check for required environment variables
-    if not os.getenv("MCP_SCANNER_API_KEY") and not os.getenv("MCP_SCANNER_LLM_API_KEY"):
+    if not os.getenv("MCP_SCANNER_API_KEY") and not os.getenv(
+        "MCP_SCANNER_LLM_API_KEY"
+    ):
         print("⚠️  Warning: No API keys configured")
         print("Set MCP_SCANNER_API_KEY and/or MCP_SCANNER_LLM_API_KEY")
         print()

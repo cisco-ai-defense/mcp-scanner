@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.0.3"
+version = "4.1.0"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
@@ -42,6 +42,12 @@ dev = [
     "mypy>=1.8.0",
     "pre-commit>=3.6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cisco-ai-defense/mcp-scanner"
+Repository = "https://github.com/cisco-ai-defense/mcp-scanner"
+Documentation = "https://github.com/cisco-ai-defense/mcp-scanner#readme"
+Issues = "https://github.com/cisco-ai-defense/mcp-scanner/issues"
 
 [project.scripts]
 mcp-scanner = "mcpscanner.cli:cli_entry_point"
