@@ -17,5 +17,21 @@
 """Taint tracking analysis for security vulnerabilities."""
 
 from .tracker import ShapeEnvironment, Taint, TaintStatus
+from .patterns import (
+    TAINT_PATTERNS,
+    get_sinks_for_language,
+    get_all_sinks_for_language,
+    get_sanitizers_for_language,
+    is_sink,
+)
 
-__all__ = ["ShapeEnvironment", "Taint", "TaintStatus"]
+__all__ = [
+    "ShapeEnvironment",
+    "Taint",
+    "TaintStatus",
+    "TAINT_PATTERNS",
+    "get_sinks_for_language",
+    "get_all_sinks_for_language",
+    "get_sanitizers_for_language",
+    "is_sink",
+]

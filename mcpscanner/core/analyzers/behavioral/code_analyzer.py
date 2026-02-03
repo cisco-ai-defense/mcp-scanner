@@ -34,6 +34,7 @@ from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ...static_analysis.context_extractor import ContextExtractor
+from ...static_analysis.native_analyzer import NativeAnalyzer
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
@@ -199,8 +200,38 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.logger.error(f"Behavioural analysis failed: {e}", exc_info=True)
             return []
 
+    def _find_source_files(self, directory: str) -> List[str]:
+        """Find all supported source files in a directory.
+
+        Supports Python, TypeScript, and JavaScript files.
+
+        Args:
+            directory: Directory path to search
+
+        Returns:
+            List of source file paths
+        """
+        source_files = []
+        path = Path(directory)
+
+        # Supported extensions
+        extensions = {".py", ".pyw", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+
+        for ext in extensions:
+            for source_file in path.rglob(f"*{ext}"):
+                # Skip __pycache__, node_modules, and hidden directories
+                file_str = str(source_file)
+                if (
+                    "__pycache__" not in file_str
+                    and "node_modules" not in file_str
+                    and not any(part.startswith(".") for part in source_file.parts)
+                ):
+                    source_files.append(file_str)
+
+        return sorted(source_files)
+
     def _find_python_files(self, directory: str) -> List[str]:
-        """Find all Python files in a directory.
+        """Find all Python files in a directory (legacy method).
 
         Args:
             directory: Directory path to search
@@ -211,9 +242,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         python_files = []
         path = Path(directory)
 
-        # Recursively find all .py files
         for py_file in path.rglob("*.py"):
-            # Skip __pycache__ and hidden directories
             if "__pycache__" not in str(py_file) and not any(
                 part.startswith(".") for part in py_file.parts
             ):
@@ -261,10 +290,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     async def _analyze_source_code(
         self, source_code: str, context: Dict[str, Any]
     ) -> List[SecurityFinding]:
-        """Analyze Python source code for MCP docstring mismatches.
+        """Analyze source code for docstring/behavior mismatches.
+
+        Supports Python, TypeScript, and JavaScript. Uses ContextExtractor for
+        MCP-decorated Python functions, falls back to NativeAnalyzer when:
+        - ContextExtractor fails (syntax errors, unsupported patterns)
+        - No MCP decorators found but analysis is still needed
+        - Non-Python files (TypeScript/JavaScript)
 
         Args:
-            source_code: Python source code to analyze
+            source_code: Source code to analyze
             context: Analysis context with file_path
 
         Returns:
@@ -272,27 +307,77 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """
         file_path = context.get("file_path", "unknown")
         findings = []
+        func_contexts = []
+
+        # Determine file type
+        file_ext = Path(file_path).suffix.lower()
+        is_python = file_ext in {".py", ".pyw"}
+        is_js_ts = file_ext in {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
 
         try:
-            # Use context extractor for complete analysis
-            extractor = ContextExtractor(source_code, file_path)
-            mcp_contexts = extractor.extract_mcp_function_contexts()
+            if is_python:
+                # Try primary ContextExtractor first (for MCP-decorated functions)
+                try:
+                    extractor = ContextExtractor(source_code, file_path)
+                    func_contexts = extractor.extract_mcp_function_contexts()
+                    if func_contexts:
+                        self.logger.debug(
+                            f"Found {len(func_contexts)} MCP functions in {file_path}"
+                        )
+                except Exception as e:
+                    self.logger.debug(
+                        f"ContextExtractor failed for {file_path}: {e}, using NativeAnalyzer"
+                    )
+                    func_contexts = []
 
-            if not mcp_contexts:
-                self.logger.debug(f"No MCP functions found in {file_path}")
+                # Fallback to NativeAnalyzer if no MCP functions found or extractor failed
+                if not func_contexts:
+                    self.logger.debug(
+                        f"No MCP functions found in {file_path}, using NativeAnalyzer fallback"
+                    )
+                    native_analyzer = NativeAnalyzer(source_code, file_path)
+                    func_contexts = native_analyzer.extract_all_function_contexts()
+                    if func_contexts:
+                        self.logger.debug(
+                            f"NativeAnalyzer extracted {len(func_contexts)} functions from {file_path}"
+                        )
+
+            elif is_js_ts:
+                # Use NativeAnalyzer for TypeScript/JavaScript
+                self.logger.debug(f"Using NativeAnalyzer for JS/TS file: {file_path}")
+                native_analyzer = NativeAnalyzer(source_code, file_path)
+                func_contexts = native_analyzer.extract_all_function_contexts()
+                if func_contexts:
+                    self.logger.debug(
+                        f"NativeAnalyzer extracted {len(func_contexts)} functions from {file_path}"
+                    )
+
+            else:
+                # Try NativeAnalyzer for unknown file types (it will detect language)
+                self.logger.debug(f"Unknown file type {file_path}, trying NativeAnalyzer")
+                native_analyzer = NativeAnalyzer(source_code, file_path)
+                result = native_analyzer.analyze()
+                if result.success:
+                    func_contexts = result.functions
+                    self.logger.debug(
+                        f"NativeAnalyzer detected {result.language}, extracted {len(func_contexts)} functions"
+                    )
+
+            if not func_contexts:
+                self.logger.debug(f"No functions found in {file_path}")
                 return findings
 
-            self.logger.debug(f"Found {len(mcp_contexts)} MCP functions in {file_path}")
+            self.logger.debug(f"Analyzing {len(func_contexts)} functions in {file_path}")
 
             # Enrich with cross-file context if available
             if context.get("cross_file_analyzer"):
-                for func_context in mcp_contexts:
+                for func_context in func_contexts:
                     self._enrich_with_cross_file_context(
                         func_context, file_path, context["cross_file_analyzer"]
                     )
 
-            # Analyze each MCP entry point using alignment orchestrator
-            for func_context in mcp_contexts:
+            # Analyze each function using alignment orchestrator (sends to LLM)
+            for func_context in func_contexts:
                 # Check function source size (configurable via constants)
                 func_source_size = (
                     len(func_context.source) if hasattr(func_context, "source") else 0
