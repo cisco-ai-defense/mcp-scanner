@@ -232,11 +232,12 @@ def dangerous_function():
         assert result.success is True
         func = result.functions[0]
 
-        # These should all be False - LLM determines security relevance
-        assert func.has_file_operations is False
+        # Security operations are now detected via taint patterns
+        # open() is detected as file operation, subprocess.run as subprocess, eval as eval
+        assert func.has_file_operations is True
         assert func.has_network_operations is False
-        assert func.has_subprocess_calls is False
-        assert func.has_eval_exec is False
+        assert func.has_subprocess_calls is True
+        assert func.has_eval_exec is True
 
         # But the calls ARE extracted for LLM to analyze
         call_names = [c["name"] for c in func.function_calls]
