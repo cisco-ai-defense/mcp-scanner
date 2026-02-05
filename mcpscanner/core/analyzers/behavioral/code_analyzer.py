@@ -376,35 +376,50 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         func_context, file_path, context["cross_file_analyzer"]
                     )
 
-            # Analyze each function using alignment orchestrator (sends to LLM)
-            for func_context in func_contexts:
-                # Check function source size (configurable via constants)
-                func_source_size = (
-                    len(func_context.source) if hasattr(func_context, "source") else 0
+            # Use batched analysis for efficiency (reduces LLM calls)
+            # Batch size of 5 functions per LLM request
+            use_batching = context.get("use_batching", True)
+            batch_size = context.get("batch_size", 5)
+
+            if use_batching and len(func_contexts) > 1:
+                self.logger.debug(f"Using batched analysis with batch_size={batch_size}")
+                batch_results = await self.alignment_orchestrator.check_alignment_batch(
+                    func_contexts, batch_size=batch_size
                 )
-                func_line_count = (
-                    func_context.line_count
-                    if hasattr(func_context, "line_count")
-                    else 0
-                )
-
-                if func_source_size > MCPScannerConstants.MAX_FUNCTION_SIZE_BYTES:
-                    self.logger.warning(
-                        f"Large function detected: {func_context.name} "
-                        f"({func_source_size:,} bytes, {func_line_count} lines) - prompt may be oversized"
-                    )
-                elif func_line_count > 500:
-                    self.logger.debug(
-                        f"Long function: {func_context.name} ({func_line_count} lines)"
-                    )
-
-                result = await self.alignment_orchestrator.check_alignment(func_context)
-
-                if result:
-                    analysis, ctx = result
+                for analysis, ctx in batch_results:
                     finding = self._create_security_finding(analysis, ctx, file_path)
                     if finding:
                         findings.append(finding)
+            else:
+                # Fallback to individual analysis
+                for func_context in func_contexts:
+                    # Check function source size (configurable via constants)
+                    func_source_size = (
+                        len(func_context.source) if hasattr(func_context, "source") else 0
+                    )
+                    func_line_count = (
+                        func_context.line_count
+                        if hasattr(func_context, "line_count")
+                        else 0
+                    )
+
+                    if func_source_size > MCPScannerConstants.MAX_FUNCTION_SIZE_BYTES:
+                        self.logger.warning(
+                            f"Large function detected: {func_context.name} "
+                            f"({func_source_size:,} bytes, {func_line_count} lines) - prompt may be oversized"
+                        )
+                    elif func_line_count > 500:
+                        self.logger.debug(
+                            f"Long function: {func_context.name} ({func_line_count} lines)"
+                        )
+
+                    result = await self.alignment_orchestrator.check_alignment(func_context)
+
+                    if result:
+                        analysis, ctx = result
+                        finding = self._create_security_finding(analysis, ctx, file_path)
+                        if finding:
+                            findings.append(finding)
 
         except Exception as e:
             self.logger.error(f"Analysis failed for {file_path}: {e}", exc_info=True)

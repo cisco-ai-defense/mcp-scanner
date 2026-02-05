@@ -27,7 +27,7 @@ This is the entry point for all alignment verification operations.
 """
 
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .....config.config import Config
 from ....static_analysis.context_extractor import FunctionContext
@@ -200,6 +200,96 @@ class AlignmentOrchestrator:
             self.logger.error(f"Alignment check failed for {func_context.name}: {e}")
             self.stats["skipped_error"] += 1
             return None
+
+    async def check_alignment_batch(
+        self, func_contexts: List[FunctionContext], batch_size: int = 5
+    ) -> List[Tuple[Dict[str, Any], FunctionContext]]:
+        """Check alignment for multiple functions in batched LLM calls.
+
+        This method batches multiple functions into single LLM requests to reduce
+        API calls and improve scanning speed.
+
+        Args:
+            func_contexts: List of function contexts to analyze
+            batch_size: Number of functions per LLM request (default: 5)
+
+        Returns:
+            List of (analysis_dict, func_context) tuples for detected mismatches
+        """
+        results = []
+        
+        # Process in batches
+        for i in range(0, len(func_contexts), batch_size):
+            batch = func_contexts[i:i + batch_size]
+            self.logger.debug(f"Processing batch of {len(batch)} functions")
+            
+            try:
+                # Build batched prompt
+                prompt = self.prompt_builder.build_batch_prompt(batch)
+                
+                # Query LLM
+                response = await self.llm_client.verify_alignment(prompt)
+                
+                # Parse batched response
+                batch_results = self.response_validator.validate_batch(response, len(batch))
+                
+                if not batch_results:
+                    self.logger.warning("Invalid batch response, falling back to individual analysis")
+                    # Fallback to individual analysis
+                    for func_context in batch:
+                        result = await self.check_alignment(func_context)
+                        if result:
+                            results.append(result)
+                    continue
+                
+                # Process each result in the batch
+                for idx, result in enumerate(batch_results):
+                    if idx >= len(batch):
+                        break
+                    
+                    func_context = batch[idx]
+                    self.stats["total_analyzed"] += 1
+                    
+                    if result and result.get("mismatch_detected"):
+                        self.stats["mismatches_detected"] += 1
+                        
+                        # Classify as threat or vulnerability
+                        threat_name = result.get("threat_name", "")
+                        if threat_name != "GENERAL DESCRIPTION-CODE MISMATCH":
+                            try:
+                                classification = await self.threat_vuln_classifier.classify_finding(
+                                    threat_name=result.get("threat_name", "UNKNOWN"),
+                                    severity=result.get("severity", "UNKNOWN"),
+                                    summary=result.get("summary", ""),
+                                    description_claims=result.get("description_claims", ""),
+                                    actual_behavior=result.get("actual_behavior", ""),
+                                    security_implications=result.get("security_implications", ""),
+                                    dataflow_evidence=result.get("dataflow_evidence", ""),
+                                )
+                                if classification:
+                                    result["threat_vulnerability_classification"] = classification["classification"]
+                                else:
+                                    result["threat_vulnerability_classification"] = "UNCLEAR"
+                            except Exception as e:
+                                self.logger.error(f"Classification failed: {e}")
+                                result["threat_vulnerability_classification"] = "UNCLEAR"
+                        
+                        results.append((result, func_context))
+                    else:
+                        self.stats["no_mismatch"] += 1
+                        
+            except Exception as e:
+                self.logger.error(f"Batch analysis failed: {e}, falling back to individual")
+                # Fallback to individual analysis
+                for func_context in batch:
+                    try:
+                        result = await self.check_alignment(func_context)
+                        if result:
+                            results.append(result)
+                    except Exception:
+                        pass
+        
+        return results
 
     def get_statistics(self) -> Dict[str, int]:
         """Get analysis statistics.
