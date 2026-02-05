@@ -441,6 +441,21 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """
         try:
             threat_name = analysis.get("threat_name", "").upper()
+            severity = analysis.get("severity", "").upper()
+
+            # For non-Python files, skip INFO severity and GENERAL DESCRIPTION-CODE MISMATCH
+            is_python = file_path.endswith(".py")
+            if not is_python:
+                if severity == "INFO":
+                    self.logger.debug(
+                        f"Skipping INFO finding for non-Python file: {file_path}"
+                    )
+                    return None
+                if threat_name == "GENERAL DESCRIPTION-CODE MISMATCH":
+                    self.logger.debug(
+                        f"Skipping GENERAL DESCRIPTION-CODE MISMATCH for non-Python file: {file_path}"
+                    )
+                    return None
 
             if not threat_name:
                 self.logger.warning(
