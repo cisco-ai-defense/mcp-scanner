@@ -2,6 +2,10 @@
 
 The Behavioral Code Analyzer is a source code analysis in MCP Scanner. It combines LLM-powered behavioral analysis with cross-file dataflow tracking, alignment checking to detect threats in MCP tools.
 
+## Supported Languages
+
+Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Rust, Ruby, PHP
+
 ## Overview
 
 The Behavioral Analyzer uses advanced program analysis techniques combined with LLM intelligence to detect behavioral mismatches between what a function claims to do (via its docstring) and what it actually does (via its implementation).
@@ -11,8 +15,11 @@ The Behavioral Analyzer uses advanced program analysis techniques combined with 
 ### Basic Usage
 
 ```bash
-# Scan a single Python file
+# Scan a single file (any supported language)
 mcp-scanner behavioral /path/to/mcp_server.py
+mcp-scanner behavioral /path/to/server.ts
+mcp-scanner behavioral /path/to/server.go
+mcp-scanner behavioral /path/to/McpService.java
 
 # Scan a directory
 mcp-scanner behavioral /path/to/mcp_servers/
