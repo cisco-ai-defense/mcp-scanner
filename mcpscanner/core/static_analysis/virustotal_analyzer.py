@@ -164,7 +164,22 @@ class VirusTotalAnalyzer:
         findings = []
         validated_files = []
 
+        # Scan counters for summary reporting
+        total_to_scan = len(binary_files)
+        count_scanned = 0
+        count_clean = 0
+        count_malicious = 0
+        count_not_found = 0
+        count_throttled = 0
+        count_failed = 0
+        stop_scanning = False
+
         for file_path_str in binary_files:
+            # Stop early if rate-limited or quota exceeded
+            if stop_scanning:
+                count_throttled += 1
+                continue
+
             try:
                 file_path = Path(file_path_str)
                 file_hash = self._calculate_sha256(file_path)
@@ -174,7 +189,19 @@ class VirusTotalAnalyzer:
                     "Checking file: %s (SHA256: %s)", relative_path, file_hash
                 )
 
-                vt_result, hash_found = self._query_virustotal(file_hash)
+                vt_result, hash_found, error_reason = self._query_virustotal(file_hash)
+
+                # Handle rate limiting / quota — stop scanning remaining files
+                if error_reason in ("rate_limit", "quota_exceeded", "auth_error"):
+                    count_throttled += 1
+                    stop_scanning = True
+                    continue
+
+                if error_reason:
+                    count_failed += 1
+                    continue
+
+                count_scanned += 1
 
                 if hash_found:
                     total = vt_result.get("total_engines", 0)
@@ -195,6 +222,7 @@ class VirusTotalAnalyzer:
                             total,
                         )
                         validated_files.append(relative_path)
+                        count_clean += 1
 
                     if vt_result.get("permalink"):
                         logger.info("Report: %s", vt_result["permalink"])
@@ -206,6 +234,7 @@ class VirusTotalAnalyzer:
                             vt_result=vt_result,
                         )
                         findings.append(finding)
+                        count_malicious += 1
 
                 elif self.upload_files:
                     logger.warning(
@@ -221,20 +250,57 @@ class VirusTotalAnalyzer:
                                 vt_result=vt_result,
                             )
                             findings.append(finding)
+                            count_malicious += 1
                         else:
                             validated_files.append(relative_path)
+                            count_clean += 1
+                    else:
+                        count_failed += 1
                 else:
-                    logger.warning(
-                        "Hash not found in VT database - upload disabled, cannot scan unknown file"
+                    count_not_found += 1
+                    logger.info(
+                        "Hash not found in VT database (upload disabled): %s",
+                        relative_path,
                     )
 
             except Exception as e:
                 logger.warning(
                     "VirusTotal scan failed for %s: %s", file_path_str, e
                 )
+                count_failed += 1
                 continue
 
+        # Log scan summary
+        logger.info(
+            "VirusTotal scan summary: %d/%d files scanned "
+            "(%d clean, %d malicious, %d not in VT, %d throttled/skipped, %d failed)",
+            count_scanned,
+            total_to_scan,
+            count_clean,
+            count_malicious,
+            count_not_found,
+            count_throttled,
+            count_failed,
+        )
+        if count_throttled > 0:
+            logger.warning(
+                "VirusTotal rate/quota limit hit: %d of %d files could not be scanned. "
+                "Free tier: 4 requests/min, 500 requests/day. "
+                "Consider upgrading your API key or scanning fewer files.",
+                count_throttled,
+                total_to_scan,
+            )
+
         self.validated_binary_files = validated_files
+        self.last_scan_summary = {
+            "total": total_to_scan,
+            "scanned": count_scanned,
+            "clean": count_clean,
+            "malicious": count_malicious,
+            "not_found": count_not_found,
+            "throttled": count_throttled,
+            "failed": count_failed,
+        }
         return findings
 
     def analyze_file(self, file_path: str) -> Optional[SecurityFinding]:
@@ -259,7 +325,7 @@ class VirusTotalAnalyzer:
 
             logger.info("Checking file: %s (SHA256: %s)", file_path, file_hash)
 
-            vt_result, hash_found = self._query_virustotal(file_hash)
+            vt_result, hash_found, _error = self._query_virustotal(file_hash)
 
             if hash_found and vt_result.get("malicious", 0) > 0:
                 return self._create_finding(
@@ -321,7 +387,9 @@ class VirusTotalAnalyzer:
             file_hash: SHA256 hash of the file
 
         Returns:
-            Tuple of (detection stats dictionary or None, hash_found boolean)
+            Tuple of (detection_stats_dict_or_None, hash_found_bool, error_reason_or_None).
+            error_reason is a string like "rate_limit", "quota_exceeded", "auth_error",
+            "api_error", or "request_error" when the lookup fails for a non-404 reason.
         """
         try:
             response = self.session.get(
@@ -329,7 +397,7 @@ class VirusTotalAnalyzer:
             )
 
             if response.status_code == 404:
-                return None, False
+                return None, False, None
 
             if response.status_code == 200:
                 data = response.json()
@@ -351,21 +419,41 @@ class VirusTotalAnalyzer:
                     .get("last_analysis_date"),
                     "permalink": gui_url,
                 }
-                return result, True
+                return result, True, None
 
             if response.status_code == 429:
                 logger.warning(
-                    "VirusTotal rate limit exceeded. Please wait before retrying."
+                    "VirusTotal API rate limit exceeded (HTTP 429). "
+                    "Free tier allows 4 requests/minute and 500 requests/day. "
+                    "Remaining files in this scan will be skipped."
                 )
-            else:
+                return None, False, "rate_limit"
+
+            if response.status_code == 204:
                 logger.warning(
-                    "VirusTotal API returned status %d", response.status_code
+                    "VirusTotal API quota exceeded (HTTP 204). "
+                    "Daily request limit reached. Remaining files will be skipped."
                 )
-            return None, False
+                return None, False, "quota_exceeded"
+
+            if response.status_code in (401, 403):
+                logger.error(
+                    "VirusTotal API authentication failed (HTTP %d). "
+                    "Check that VIRUSTOTAL_API_KEY is valid.",
+                    response.status_code,
+                )
+                return None, False, "auth_error"
+
+            logger.warning(
+                "VirusTotal API returned unexpected status %d for hash %s",
+                response.status_code,
+                file_hash,
+            )
+            return None, False, "api_error"
 
         except httpx.RequestError as e:
             logger.warning("VirusTotal API request failed: %s", e)
-            return None, False
+            return None, False, "request_error"
 
     def _upload_and_scan(
         self, file_path: Path, file_hash: str
