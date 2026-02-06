@@ -48,98 +48,23 @@ class VirusTotalAnalyzer:
     using the "Malware" threat category when malicious files are detected.
     """
 
-    # Binary file extensions to scan
-    BINARY_EXTENSIONS = {
-        # Images
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".gif",
-        ".bmp",
-        ".ico",
-        ".svg",
-        ".webp",
-        ".tiff",
-        # Documents
-        ".pdf",
-        ".doc",
-        ".docx",
-        ".xls",
-        ".xlsx",
-        ".ppt",
-        ".pptx",
-        # Archives
-        ".zip",
-        ".tar",
-        ".gz",
-        ".bz2",
-        ".7z",
-        ".rar",
-        ".tgz",
-        # Executables
-        ".exe",
-        ".dll",
-        ".so",
-        ".dylib",
-        ".bin",
-        ".com",
-        # Other binaries
-        ".wasm",
-        ".class",
-        ".jar",
-        ".war",
+    # Default binary file extensions to scan (used when none provided via config)
+    DEFAULT_BINARY_EXTENSIONS = {
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp", ".tiff",
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+        ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar", ".tgz",
+        ".exe", ".dll", ".so", ".dylib", ".bin", ".com",
+        ".wasm", ".class", ".jar", ".war",
     }
 
-    # Text/code extensions to EXCLUDE from scanning
-    EXCLUDED_EXTENSIONS = {
-        ".py",
-        ".js",
-        ".ts",
-        ".jsx",
-        ".tsx",
-        ".java",
-        ".c",
-        ".cpp",
-        ".h",
-        ".hpp",
-        ".go",
-        ".rs",
-        ".rb",
-        ".php",
-        ".swift",
-        ".kt",
-        ".cs",
-        ".vb",
-        ".md",
-        ".txt",
-        ".json",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".ini",
-        ".conf",
-        ".cfg",
-        ".xml",
-        ".html",
-        ".css",
-        ".scss",
-        ".sass",
-        ".less",
-        ".sh",
-        ".bash",
-        ".zsh",
-        ".fish",
-        ".ps1",
-        ".bat",
-        ".cmd",
-        ".sql",
-        ".graphql",
-        ".proto",
-        ".thrift",
-        ".rst",
-        ".org",
-        ".adoc",
-        ".tex",
+    # Default text/code extensions to exclude (used when none provided via config)
+    DEFAULT_EXCLUDED_EXTENSIONS = {
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h", ".hpp",
+        ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".cs", ".vb",
+        ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg",
+        ".xml", ".html", ".css", ".scss", ".sass", ".less",
+        ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+        ".sql", ".graphql", ".proto", ".thrift", ".rst", ".org", ".adoc", ".tex",
     }
 
     def __init__(
@@ -147,6 +72,8 @@ class VirusTotalAnalyzer:
         api_key: Optional[str] = None,
         enabled: bool = False,
         upload_files: bool = False,
+        binary_extensions: Optional[set] = None,
+        excluded_extensions: Optional[set] = None,
     ):
         """
         Initialize VirusTotal analyzer.
@@ -158,10 +85,18 @@ class VirusTotalAnalyzer:
             upload_files: If True, upload files to VT for scanning. If False (default),
                          only check existing hashes (more privacy-friendly).
                          Controlled by VIRUSTOTAL_UPLOAD_FILES constant.
+            binary_extensions: Set of binary file extensions to scan.
+                              Defaults from config/constants. Override via
+                              MCP_SCANNER_VT_BINARY_EXTENSIONS env var.
+            excluded_extensions: Set of text/code extensions to exclude.
+                               Defaults from config/constants. Override via
+                               MCP_SCANNER_VT_EXCLUDED_EXTENSIONS env var.
         """
         self.api_key = api_key
         self.enabled = enabled and api_key is not None
         self.upload_files = upload_files
+        self.binary_extensions = binary_extensions or self.DEFAULT_BINARY_EXTENSIONS
+        self.excluded_extensions = excluded_extensions or self.DEFAULT_EXCLUDED_EXTENSIONS
         self.validated_binary_files: List[str] = []
         self.base_url = "https://www.virustotal.com/api/v3"
         self.session = httpx.Client()
@@ -352,11 +287,11 @@ class VirusTotalAnalyzer:
         ext = path.suffix.lower()
 
         # Explicitly exclude text/code files
-        if ext in self.EXCLUDED_EXTENSIONS:
+        if ext in self.excluded_extensions:
             return False
 
         # Include known binary extensions
-        if ext in self.BINARY_EXTENSIONS:
+        if ext in self.binary_extensions:
             return True
 
         # For unknown extensions, default to not scanning

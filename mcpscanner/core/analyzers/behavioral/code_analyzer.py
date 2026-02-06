@@ -76,6 +76,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             api_key=config.virustotal_api_key,
             enabled=config.virustotal_enabled,
             upload_files=config.virustotal_upload_files,
+            binary_extensions=config.virustotal_binary_extensions,
+            excluded_extensions=config.virustotal_excluded_extensions,
         )
 
         self.logger.debug(
