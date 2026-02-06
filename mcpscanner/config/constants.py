@@ -194,6 +194,17 @@ class MCPScannerConstants:
         os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHES_CALLS", "10")
     )
 
+    # VirusTotal Configuration
+    ENV_VIRUSTOTAL_API_KEY: str = os.getenv(
+        "MCP_SCANNER_ENV_VIRUSTOTAL_API_KEY_NAME", "VIRUSTOTAL_API_KEY"
+    )
+    VIRUSTOTAL_ENABLED: bool = os.getenv(
+        "MCP_SCANNER_VIRUSTOTAL_ENABLED", "false"
+    ).lower() in ("true", "1", "yes")
+    VIRUSTOTAL_UPLOAD_FILES: bool = os.getenv(
+        "MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false"
+    ).lower() in ("true", "1", "yes")
+
     # OAuth Configuration
     OAUTH_CLIENT_NAME: str = os.getenv(
         "MCP_SCANNER_OAUTH_CLIENT_NAME", "MCP Scanner Client"
