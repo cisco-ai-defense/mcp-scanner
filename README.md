@@ -24,6 +24,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
+- **VirusTotal Binary Scanning**: Automatically detect malware in binary files (images, PDFs, executables, archives) bundled with MCP servers using VirusTotal hash lookups.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
@@ -41,6 +42,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - uv (Python package manager)
 - A valid Cisco AI Defense API Key (optional)
 - LLM Provider API Key (optional)
+- VirusTotal API Key (optional, for binary file malware scanning)
 
 ### Installing from PyPI
 
@@ -111,6 +113,23 @@ export MCP_SCANNER_LLM_MODEL="azure/gpt-4"
 export MCP_SCANNER_LLM_TIMEOUT=300
 ```
 Note: If you are using models from Azure Foundry, set the MCP_SCANNER_LLM_BASE_URL and MCP_SCANNER_LLM_MODEL environment variables, as Microsoft has deprecated the need for MCP_SCANNER_LLM_API_VERSION.
+
+#### VirusTotal Configuration (for binary file malware scanning)
+
+The VirusTotal analyzer scans binary files (images, PDFs, executables, archives) found in MCP server packages against VirusTotal's malware database using SHA256 hash lookups. It is automatically invoked during behavioral code scanning when enabled.
+
+```bash
+# VirusTotal API key (get one free at https://www.virustotal.com/)
+export VIRUSTOTAL_API_KEY="your_virustotal_api_key"
+
+# Explicitly enable/disable VirusTotal scanning (auto-enabled when API key is present)
+export MCP_SCANNER_VIRUSTOTAL_ENABLED=true
+
+# Optional: Upload unknown files to VirusTotal for scanning (default: false, privacy-friendly)
+export MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES=false
+```
+
+> **Note:** Without `VIRUSTOTAL_API_KEY`, binary files will not be scanned for malware. The analyzer only checks known binary file types and skips all code/text files.
 
 #### Using a Local LLM (No API Key Required)
 
@@ -343,11 +362,13 @@ mcp-scanner instructions --server-url https://your-server.com/mcp --bearer-token
 
 The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking.
 
+When scanning directories, the Behavioral Analyzer also automatically invokes the **VirusTotal analyzer** to scan any binary files (images, PDFs, executables, archives) for malware. If a binary file is flagged as malicious, a `MALWARE` finding is returned.
+
 ```bash
 # Scan a single Python file
 mcp-scanner behavioral /path/to/mcp_server.py
 
-# Scan a directory
+# Scan a directory (also scans binary files with VirusTotal if enabled)
 mcp-scanner behavioral /path/to/mcp_servers/
 
 # With specific output format

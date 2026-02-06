@@ -61,6 +61,10 @@ class Config:
         oauth_client_secret: str = None,
         oauth_token_url: str = None,
         oauth_scopes: List[str] = None,
+        virustotal_api_key: str = None,
+        virustotal_upload_files: bool = False,
+        virustotal_binary_extensions: set = None,
+        virustotal_excluded_extensions: set = None,
     ):
         """Initialize a new Config instance.
 
@@ -84,6 +88,10 @@ class Config:
             oauth_client_secret (str, optional): OAuth client secret for authentication.
             oauth_token_url (str, optional): OAuth token URL for authentication.
             oauth_scopes (List[str], optional): OAuth scopes for authentication.
+            virustotal_api_key (str, optional): VirusTotal API key for binary file scanning. Falls back to VIRUSTOTAL_API_KEY env var.
+            virustotal_upload_files (bool, optional): If True, upload unknown files to VT for scanning. Defaults to False.
+            virustotal_binary_extensions (set, optional): Binary file extensions to scan. Defaults from constants.
+            virustotal_excluded_extensions (set, optional): Text/code extensions to exclude. Defaults from constants.
         """
         self._api_key = api_key
         self._endpoint_url = endpoint_url
@@ -118,6 +126,23 @@ class Config:
         self._oauth_client_secret = oauth_client_secret
         self._oauth_token_url = oauth_token_url
         self._oauth_scopes = oauth_scopes
+
+        # VirusTotal configuration with environment variable fallback via constants
+        self._virustotal_api_key = virustotal_api_key or os.getenv(
+            CONSTANTS.ENV_VIRUSTOTAL_API_KEY
+        )
+        self._virustotal_enabled = CONSTANTS.VIRUSTOTAL_ENABLED or (
+            self._virustotal_api_key is not None
+        )
+        self._virustotal_upload_files = (
+            virustotal_upload_files or CONSTANTS.VIRUSTOTAL_UPLOAD_FILES
+        )
+        self._virustotal_binary_extensions = (
+            virustotal_binary_extensions or CONSTANTS.VIRUSTOTAL_BINARY_EXTENSIONS
+        )
+        self._virustotal_excluded_extensions = (
+            virustotal_excluded_extensions or CONSTANTS.VIRUSTOTAL_EXCLUDED_EXTENSIONS
+        )
 
     @property
     def api_key(self) -> str:
@@ -280,6 +305,57 @@ class Config:
             Optional[List[str]]: The OAuth scopes.
         """
         return self._oauth_scopes
+
+    @property
+    def virustotal_api_key(self) -> Optional[str]:
+        """Get the VirusTotal API key.
+
+        Returns:
+            Optional[str]: The VirusTotal API key for binary file scanning.
+        """
+        return self._virustotal_api_key
+
+    @property
+    def virustotal_enabled(self) -> bool:
+        """Get whether VirusTotal scanning is enabled.
+
+        Enabled when VIRUSTOTAL_ENABLED=true or when a VT API key is present.
+
+        Returns:
+            bool: True if VirusTotal scanning is enabled.
+        """
+        return self._virustotal_enabled
+
+    @property
+    def virustotal_upload_files(self) -> bool:
+        """Get whether to upload unknown files to VirusTotal.
+
+        Returns:
+            bool: True if unknown files should be uploaded for scanning.
+        """
+        return self._virustotal_upload_files
+
+    @property
+    def virustotal_binary_extensions(self) -> set:
+        """Get the set of binary file extensions to scan with VirusTotal.
+
+        Override via MCP_SCANNER_VT_BINARY_EXTENSIONS env var (comma-separated).
+
+        Returns:
+            set: Binary file extensions (e.g. {".exe", ".pdf", ".zip"}).
+        """
+        return self._virustotal_binary_extensions
+
+    @property
+    def virustotal_excluded_extensions(self) -> set:
+        """Get the set of text/code extensions excluded from VirusTotal scanning.
+
+        Override via MCP_SCANNER_VT_EXCLUDED_EXTENSIONS env var (comma-separated).
+
+        Returns:
+            set: Excluded extensions (e.g. {".py", ".js", ".md"}).
+        """
+        return self._virustotal_excluded_extensions
 
     @property
     def base_url(self) -> str:
