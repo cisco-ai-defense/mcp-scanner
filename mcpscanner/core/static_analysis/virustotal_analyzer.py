@@ -101,18 +101,26 @@ class VirusTotalAnalyzer:
         self.base_url = "https://www.virustotal.com/api/v3"
         self.session = httpx.Client()
 
-        if not self.api_key:
-            logger.warning("VirusTotal API key is missing!")
-
         if self.api_key:
             self.session.headers.update(
                 {"x-apikey": self.api_key, "Accept": "application/json"}
             )
+
+        # Log the resolved state so users understand what's happening
+        if self.api_key and not enabled:
             logger.info(
-                "VirusTotal API key configured (length: %d)", len(self.api_key)
+                "VirusTotal API key is present but scanning is explicitly disabled "
+                "via MCP_SCANNER_VIRUSTOTAL_ENABLED=false"
             )
-        else:
-            logger.warning("VirusTotal analyzer initialized without API key")
+        elif self.api_key and self.enabled:
+            logger.info(
+                "VirusTotal scanning enabled (API key length: %d)", len(self.api_key)
+            )
+        elif not self.api_key:
+            logger.debug(
+                "VirusTotal scanning disabled (no API key configured). "
+                "Set VIRUSTOTAL_API_KEY to enable binary file malware scanning."
+            )
 
     def find_binary_files(self, directory: str) -> List[str]:
         """

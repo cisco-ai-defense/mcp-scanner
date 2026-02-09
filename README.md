@@ -122,8 +122,10 @@ The VirusTotal analyzer scans binary files (images, PDFs, executables, archives)
 # VirusTotal API key (get one free at https://www.virustotal.com/)
 export VIRUSTOTAL_API_KEY="your_virustotal_api_key"
 
-# Explicitly enable/disable VirusTotal scanning (auto-enabled when API key is present)
-export MCP_SCANNER_VIRUSTOTAL_ENABLED=true
+# Optional: explicitly disable VirusTotal scanning even when API key is present.
+# When not set, scanning is auto-enabled if VIRUSTOTAL_API_KEY is configured.
+# Set to "false" to skip VT scanning without removing the API key (e.g. in CI).
+export MCP_SCANNER_VIRUSTOTAL_ENABLED=false
 
 # Optional: Upload unknown files to VirusTotal for scanning (default: false, privacy-friendly)
 export MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES=false
