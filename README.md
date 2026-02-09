@@ -131,7 +131,7 @@ export MCP_SCANNER_VIRUSTOTAL_ENABLED=false
 export MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES=false
 ```
 
-> **Note:** Without `VIRUSTOTAL_API_KEY`, binary files will not be scanned for malware. The analyzer only checks known binary file types and skips all code/text files.
+> **Note:** Without `VIRUSTOTAL_API_KEY`, files will not be scanned for malware. When enabled, the analyzer scans all files in the MCP server package (skipping `__pycache__` and hidden directories).
 
 #### Using a Local LLM (No API Key Required)
 

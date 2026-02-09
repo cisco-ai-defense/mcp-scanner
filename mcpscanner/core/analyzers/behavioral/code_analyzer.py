@@ -71,13 +71,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # Initialize alignment orchestrator (handles all LLM interaction)
         self.alignment_orchestrator = AlignmentOrchestrator(config)
 
-        # Initialize VirusTotal analyzer for binary file scanning
+        # Initialize VirusTotal analyzer for file scanning
         self.vt_analyzer = VirusTotalAnalyzer(
             api_key=config.virustotal_api_key,
             enabled=config.virustotal_enabled,
             upload_files=config.virustotal_upload_files,
-            binary_extensions=config.virustotal_binary_extensions,
-            excluded_extensions=config.virustotal_excluded_extensions,
         )
 
         self.logger.debug(

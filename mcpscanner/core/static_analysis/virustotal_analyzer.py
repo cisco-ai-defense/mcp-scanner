@@ -39,41 +39,19 @@ logger = logging.getLogger(__name__)
 
 class VirusTotalAnalyzer:
     """
-    Analyzer that checks binary files against VirusTotal using hash lookups.
+    Analyzer that checks files against VirusTotal using hash lookups.
 
-    Only scans binary file types (images, PDFs, executables, archives).
-    Excludes text-based code files (.py, .js, .md, .txt, .json, .yaml, etc.).
+    Scans all files in the target directory (skipping __pycache__ and hidden dirs).
 
     Returns SecurityFinding objects compatible with the existing analyzer framework,
     using the "Malware" threat category when malicious files are detected.
     """
-
-    # Default binary file extensions to scan (used when none provided via config)
-    DEFAULT_BINARY_EXTENSIONS = {
-        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp", ".tiff",
-        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-        ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar", ".tgz",
-        ".exe", ".dll", ".so", ".dylib", ".bin", ".com",
-        ".wasm", ".class", ".jar", ".war",
-    }
-
-    # Default text/code extensions to exclude (used when none provided via config)
-    DEFAULT_EXCLUDED_EXTENSIONS = {
-        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h", ".hpp",
-        ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".cs", ".vb",
-        ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg",
-        ".xml", ".html", ".css", ".scss", ".sass", ".less",
-        ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
-        ".sql", ".graphql", ".proto", ".thrift", ".rst", ".org", ".adoc", ".tex",
-    }
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         enabled: bool = False,
         upload_files: bool = False,
-        binary_extensions: Optional[set] = None,
-        excluded_extensions: Optional[set] = None,
     ):
         """
         Initialize VirusTotal analyzer.
@@ -85,18 +63,10 @@ class VirusTotalAnalyzer:
             upload_files: If True, upload files to VT for scanning. If False (default),
                          only check existing hashes (more privacy-friendly).
                          Controlled by VIRUSTOTAL_UPLOAD_FILES constant.
-            binary_extensions: Set of binary file extensions to scan.
-                              Defaults from config/constants. Override via
-                              MCP_SCANNER_VT_BINARY_EXTENSIONS env var.
-            excluded_extensions: Set of text/code extensions to exclude.
-                               Defaults from config/constants. Override via
-                               MCP_SCANNER_VT_EXCLUDED_EXTENSIONS env var.
         """
         self.api_key = api_key
         self.enabled = enabled and api_key is not None
         self.upload_files = upload_files
-        self.binary_extensions = binary_extensions or self.DEFAULT_BINARY_EXTENSIONS
-        self.excluded_extensions = excluded_extensions or self.DEFAULT_EXCLUDED_EXTENSIONS
         self.validated_binary_files: List[str] = []
         self.base_url = "https://www.virustotal.com/api/v3"
         self.session = httpx.Client()
@@ -122,32 +92,34 @@ class VirusTotalAnalyzer:
                 "Set VIRUSTOTAL_API_KEY to enable binary file malware scanning."
             )
 
-    def find_binary_files(self, directory: str) -> List[str]:
+    def find_scannable_files(self, directory: str) -> List[str]:
         """
-        Find all binary files in a directory that should be scanned.
+        Find all files in a directory that should be scanned.
+
+        Skips __pycache__ directories and hidden files/directories.
 
         Args:
             directory: Directory path to search
 
         Returns:
-            List of binary file paths
+            List of file paths to scan
         """
-        binary_files = []
+        scannable_files = []
         path = Path(directory)
 
         for file_path in path.rglob("*"):
-            if file_path.is_file() and self._is_binary_file(str(file_path)):
+            if file_path.is_file():
                 # Skip __pycache__ and hidden directories
                 if "__pycache__" not in str(file_path) and not any(
                     part.startswith(".") for part in file_path.parts
                 ):
-                    binary_files.append(str(file_path))
+                    scannable_files.append(str(file_path))
 
-        return sorted(binary_files)
+        return sorted(scannable_files)
 
     def analyze_directory(self, directory: str) -> List[SecurityFinding]:
         """
-        Scan all binary files in a directory using VirusTotal hash lookups.
+        Scan all files in a directory using VirusTotal hash lookups.
 
         Args:
             directory: Directory path containing files to scan
@@ -158,14 +130,14 @@ class VirusTotalAnalyzer:
         if not self.enabled:
             return []
 
-        binary_files = self.find_binary_files(directory)
-        if not binary_files:
-            logger.debug("No binary files found in %s", directory)
+        scannable_files = self.find_scannable_files(directory)
+        if not scannable_files:
+            logger.debug("No files found to scan in %s", directory)
             return []
 
         logger.info(
-            "Found %d binary file(s) to scan with VirusTotal in %s",
-            len(binary_files),
+            "Found %d file(s) to scan with VirusTotal in %s",
+            len(scannable_files),
             directory,
         )
 
@@ -173,7 +145,7 @@ class VirusTotalAnalyzer:
         validated_files = []
 
         # Scan counters for summary reporting
-        total_to_scan = len(binary_files)
+        total_to_scan = len(scannable_files)
         count_scanned = 0
         count_clean = 0
         count_malicious = 0
@@ -182,7 +154,7 @@ class VirusTotalAnalyzer:
         count_failed = 0
         stop_scanning = False
 
-        for file_path_str in binary_files:
+        for file_path_str in scannable_files:
             # Stop early if rate-limited or quota exceeded
             if stop_scanning:
                 count_throttled += 1
@@ -324,7 +296,7 @@ class VirusTotalAnalyzer:
         if not self.enabled:
             return None
 
-        if not self._is_binary_file(file_path):
+        if not self._should_scan_file(file_path):
             return None
 
         try:
@@ -347,9 +319,11 @@ class VirusTotalAnalyzer:
 
         return None
 
-    def _is_binary_file(self, file_path: str) -> bool:
+    def _should_scan_file(self, file_path: str) -> bool:
         """
-        Check if a file should be scanned (is binary, not code).
+        Check if a file should be scanned.
+
+        All files are scanned — no extension-based filtering.
 
         Args:
             file_path: Path to the file
@@ -357,19 +331,7 @@ class VirusTotalAnalyzer:
         Returns:
             True if file should be scanned
         """
-        path = Path(file_path)
-        ext = path.suffix.lower()
-
-        # Explicitly exclude text/code files
-        if ext in self.excluded_extensions:
-            return False
-
-        # Include known binary extensions
-        if ext in self.binary_extensions:
-            return True
-
-        # For unknown extensions, default to not scanning
-        return False
+        return True
 
     def _calculate_sha256(self, file_path: Path) -> str:
         """

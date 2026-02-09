@@ -63,8 +63,6 @@ class Config:
         oauth_scopes: List[str] = None,
         virustotal_api_key: str = None,
         virustotal_upload_files: bool = False,
-        virustotal_binary_extensions: set = None,
-        virustotal_excluded_extensions: set = None,
     ):
         """Initialize a new Config instance.
 
@@ -90,8 +88,6 @@ class Config:
             oauth_scopes (List[str], optional): OAuth scopes for authentication.
             virustotal_api_key (str, optional): VirusTotal API key for binary file scanning. Falls back to VIRUSTOTAL_API_KEY env var.
             virustotal_upload_files (bool, optional): If True, upload unknown files to VT for scanning. Defaults to False.
-            virustotal_binary_extensions (set, optional): Binary file extensions to scan. Defaults from constants.
-            virustotal_excluded_extensions (set, optional): Text/code extensions to exclude. Defaults from constants.
         """
         self._api_key = api_key
         self._endpoint_url = endpoint_url
@@ -139,12 +135,6 @@ class Config:
             self._virustotal_enabled = self._virustotal_api_key is not None
         self._virustotal_upload_files = (
             virustotal_upload_files or CONSTANTS.VIRUSTOTAL_UPLOAD_FILES
-        )
-        self._virustotal_binary_extensions = (
-            virustotal_binary_extensions or CONSTANTS.VIRUSTOTAL_BINARY_EXTENSIONS
-        )
-        self._virustotal_excluded_extensions = (
-            virustotal_excluded_extensions or CONSTANTS.VIRUSTOTAL_EXCLUDED_EXTENSIONS
         )
 
     @property
@@ -337,28 +327,6 @@ class Config:
             bool: True if unknown files should be uploaded for scanning.
         """
         return self._virustotal_upload_files
-
-    @property
-    def virustotal_binary_extensions(self) -> set:
-        """Get the set of binary file extensions to scan with VirusTotal.
-
-        Override via MCP_SCANNER_VT_BINARY_EXTENSIONS env var (comma-separated).
-
-        Returns:
-            set: Binary file extensions (e.g. {".exe", ".pdf", ".zip"}).
-        """
-        return self._virustotal_binary_extensions
-
-    @property
-    def virustotal_excluded_extensions(self) -> set:
-        """Get the set of text/code extensions excluded from VirusTotal scanning.
-
-        Override via MCP_SCANNER_VT_EXCLUDED_EXTENSIONS env var (comma-separated).
-
-        Returns:
-            set: Excluded extensions (e.g. {".py", ".js", ".md"}).
-        """
-        return self._virustotal_excluded_extensions
 
     @property
     def base_url(self) -> str:

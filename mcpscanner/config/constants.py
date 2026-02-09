@@ -210,35 +210,6 @@ class MCPScannerConstants:
         "MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false"
     ).lower() in ("true", "1", "yes")
 
-    # Default binary file extensions to scan with VirusTotal
-    # Override via MCP_SCANNER_VT_BINARY_EXTENSIONS (comma-separated, e.g. ".exe,.dll,.pdf")
-    _DEFAULT_BINARY_EXTENSIONS = {
-        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp", ".tiff",
-        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-        ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar", ".tgz",
-        ".exe", ".dll", ".so", ".dylib", ".bin", ".com",
-        ".wasm", ".class", ".jar", ".war",
-    }
-    VIRUSTOTAL_BINARY_EXTENSIONS: set = (
-        set(ext.strip() for ext in os.getenv("MCP_SCANNER_VT_BINARY_EXTENSIONS", "").split(",") if ext.strip())
-        or _DEFAULT_BINARY_EXTENSIONS
-    )
-
-    # Default text/code extensions to exclude from VirusTotal scanning
-    # Override via MCP_SCANNER_VT_EXCLUDED_EXTENSIONS (comma-separated, e.g. ".py,.js,.md")
-    _DEFAULT_EXCLUDED_EXTENSIONS = {
-        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h", ".hpp",
-        ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".cs", ".vb",
-        ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg",
-        ".xml", ".html", ".css", ".scss", ".sass", ".less",
-        ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
-        ".sql", ".graphql", ".proto", ".thrift", ".rst", ".org", ".adoc", ".tex",
-    }
-    VIRUSTOTAL_EXCLUDED_EXTENSIONS: set = (
-        set(ext.strip() for ext in os.getenv("MCP_SCANNER_VT_EXCLUDED_EXTENSIONS", "").split(",") if ext.strip())
-        or _DEFAULT_EXCLUDED_EXTENSIONS
-    )
-
     # OAuth Configuration
     OAUTH_CLIENT_NAME: str = os.getenv(
         "MCP_SCANNER_OAUTH_CLIENT_NAME", "MCP Scanner Client"
