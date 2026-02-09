@@ -198,9 +198,14 @@ class MCPScannerConstants:
     ENV_VIRUSTOTAL_API_KEY: str = os.getenv(
         "MCP_SCANNER_ENV_VIRUSTOTAL_API_KEY_NAME", "VIRUSTOTAL_API_KEY"
     )
-    VIRUSTOTAL_ENABLED: bool = os.getenv(
-        "MCP_SCANNER_VIRUSTOTAL_ENABLED", "false"
-    ).lower() in ("true", "1", "yes")
+    # Tri-state: True if explicitly enabled, False if explicitly disabled,
+    # None if not set (auto-enable when API key is present)
+    _VIRUSTOTAL_ENABLED_RAW: str = os.getenv("MCP_SCANNER_VIRUSTOTAL_ENABLED", "")
+    VIRUSTOTAL_ENABLED: bool = (
+        True if _VIRUSTOTAL_ENABLED_RAW.lower() in ("true", "1", "yes")
+        else False if _VIRUSTOTAL_ENABLED_RAW.lower() in ("false", "0", "no")
+        else None  # Not explicitly set — let Config decide based on API key
+    )
     VIRUSTOTAL_UPLOAD_FILES: bool = os.getenv(
         "MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false"
     ).lower() in ("true", "1", "yes")

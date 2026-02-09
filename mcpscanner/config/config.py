@@ -131,9 +131,12 @@ class Config:
         self._virustotal_api_key = virustotal_api_key or os.getenv(
             CONSTANTS.ENV_VIRUSTOTAL_API_KEY
         )
-        self._virustotal_enabled = CONSTANTS.VIRUSTOTAL_ENABLED or (
-            self._virustotal_api_key is not None
-        )
+        # Respect explicit enable/disable from env var (True/False).
+        # If not explicitly set (None), auto-enable when API key is present.
+        if CONSTANTS.VIRUSTOTAL_ENABLED is not None:
+            self._virustotal_enabled = CONSTANTS.VIRUSTOTAL_ENABLED
+        else:
+            self._virustotal_enabled = self._virustotal_api_key is not None
         self._virustotal_upload_files = (
             virustotal_upload_files or CONSTANTS.VIRUSTOTAL_UPLOAD_FILES
         )

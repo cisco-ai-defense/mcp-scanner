@@ -525,7 +525,7 @@ class VirusTotalAnalyzer:
                     )
 
                     if status == "completed":
-                        result, _ = self._query_virustotal(file_hash)
+                        result, _, _ = self._query_virustotal(file_hash)
                         if result and result.get("total_engines", 0) > 0:
                             logger.info(
                                 "Analysis complete: %d/%d vendors scanned",
@@ -551,7 +551,7 @@ class VirusTotalAnalyzer:
             logger.warning(
                 "Analysis still processing after %d seconds", max_retries * 10
             )
-            result, _ = self._query_virustotal(file_hash)
+            result, _, _ = self._query_virustotal(file_hash)
             return result
 
         except httpx.RequestError as e:
