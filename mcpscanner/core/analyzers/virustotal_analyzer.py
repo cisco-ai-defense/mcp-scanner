@@ -16,11 +16,16 @@
 """
 VirusTotal analyzer for scanning files using hash-based lookups and uploads.
 
-This analyzer scans files against VirusTotal's malware database.  It supports:
-  - Single-file scanning (hash lookup, with optional upload)
-  - Directory scanning (with configurable file limit)
-  - Inclusion list: known binary extensions are auto-included
-  - Exclusion list: known text/code extensions are skipped
+Three-tier file selection:
+  1. **Known text** (.md, .json, .yaml, …) → verify with magic bytes first.
+     Skip only if magic bytes confirm text; scan if magic says otherwise.
+  2. **Known dangerous** (scripts, executables, archives, macro docs, …
+     sourced from filesec.io) → always scan.
+  3. **Unknown / extensionless** → magic-byte check; scan if non-text.
+
+Dependencies:
+  - ``httpx`` – sync HTTP client (already a project dependency)
+  - ``puremagic`` – optional, for magic-byte checks
 
 Integration point: Registered as a main analyzer alongside YARA, LLM, etc.
 """
@@ -29,26 +34,171 @@ import hashlib
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 
 from ...threats.threats import ThreatMapping
 from .base import SecurityFinding
+from ...utils.file_magic import detect_magic
 
 logger = logging.getLogger(__name__)
 
+# =========================================================================
+# Extension classification sets (Section 2.1 of design doc)
+# =========================================================================
+
+# Extensions that are CONFIRMED plain text / data only.
+# NOT executable, NOT macro-capable, NOT used in attacker toolchains.
+# NOTE: .html, .htm, .svg, .xml are intentionally EXCLUDED from this set
+#       because they can carry scripts, phishing, and embedded content
+#       (see https://filesec.io/).
+_PURE_TEXT_EXTENSIONS: Set[str] = {
+    ".md", ".txt", ".rst", ".adoc", ".org", ".tex",     # prose
+    ".json", ".yaml", ".yml", ".toml", ".ini",           # config/data
+    ".cfg", ".conf", ".csv", ".tsv",                     # config/data
+    ".css", ".scss", ".sass", ".less",                   # stylesheets (no script)
+    ".graphql", ".proto", ".thrift",                     # schema
+    ".gitignore", ".gitattributes", ".editorconfig",     # dotfiles (config only)
+    ".env.example", ".dockerignore",                     # templates
+    ".lock",                                             # lockfiles
+}
+
+# Families that are never directly executable / malware carriers.
+# If magic bytes confirm the family matches, skip VT lookup.
+_TEXT_ONLY_FAMILIES: Set[str] = {"text"}
+
+# -----------------------------------------------------------------------
+# Known dangerous extensions — sourced from https://filesec.io/ +
+# standard binary/script formats.
+# -----------------------------------------------------------------------
+
+# Script & executable code (cross-platform)
+_KNOWN_DANGEROUS_SCRIPT: Set[str] = {
+    ".py", ".pyc", ".pyo", ".pyw", ".pyz", ".pyzw",     # Python (filesec.io)
+    ".js", ".jse", ".ts", ".jsx", ".tsx", ".mjs",        # JavaScript / JScript
+    ".sh", ".bash", ".zsh", ".fish",                     # Unix shell
+    ".ps1", ".bat", ".cmd",                              # Windows shell (filesec.io)
+    ".vb", ".vbs", ".vbe",                               # VBScript (filesec.io)
+    ".ws", ".wsf", ".wsh",                               # Windows Script Host (filesec.io)
+    ".hta",                                              # HTML Application (filesec.io)
+    ".sct",                                              # Scriptlet (filesec.io)
+    ".xsl",                                              # XSLT (filesec.io)
+    ".mof",                                              # Managed Object Format (filesec.io)
+    ".a3x",                                              # AutoIt compiled (filesec.io)
+    ".applescript", ".scpt",                             # macOS scripts (filesec.io)
+    ".service", ".timer",                                # systemd units (filesec.io)
+    ".rb", ".pl", ".php",                                # Server-side scripting
+    ".java", ".kt", ".cs", ".go", ".rs",                 # Compiled languages (source)
+    ".c", ".cpp", ".h", ".hpp", ".swift",                # Compiled languages (source)
+}
+
+# Native executables & libraries
+_KNOWN_DANGEROUS_EXECUTABLE: Set[str] = {
+    ".exe", ".dll", ".so", ".dylib", ".com",             # Standard binaries (filesec.io)
+    ".bin", ".ocx", ".cpl",                              # Windows executables (filesec.io)
+    ".scr", ".pif",                                      # Screensaver / PIF (filesec.io)
+    ".msi", ".msp", ".msix",                             # Windows installers (filesec.io)
+    ".appx", ".appxbundle", ".appinstaller",             # Windows app packages (filesec.io)
+    ".application", ".appref-ms",                        # ClickOnce (filesec.io)
+    ".gadget", ".ppkg",                                  # Windows gadgets/provisioning (filesec.io)
+    ".dmg", ".pkg",                                      # macOS installers (filesec.io)
+    ".deb", ".rpm", ".snap", ".flatpak",                 # Linux packages
+    ".apk", ".ipa", ".aab",                              # Mobile packages
+    ".wasm",                                             # WebAssembly
+    ".class", ".jar", ".war", ".ear", ".jnlp",          # Java (filesec.io)
+}
+
+# Archives & disk images
+_KNOWN_DANGEROUS_ARCHIVE: Set[str] = {
+    ".zip", ".7z", ".rar", ".tar", ".gz", ".bz2",       # Common archives (filesec.io)
+    ".xz", ".z", ".tgz", ".lz", ".lzma", ".zst",        # Compression
+    ".cab", ".arj", ".uue",                              # Legacy archives (filesec.io)
+    ".iso", ".img", ".dmg", ".daa",                      # Disk images (filesec.io)
+    ".vhd", ".vhdx", ".wim",                             # Virtual disks (filesec.io)
+}
+
+# Documents with macro / embedded content capability
+_KNOWN_DANGEROUS_DOCUMENT: Set[str] = {
+    # Office with macros (filesec.io)
+    ".doc", ".docm", ".dot", ".dotm",                    # Word
+    ".xls", ".xlsm", ".xlsb", ".xlam", ".xll",          # Excel (filesec.io)
+    ".xlt", ".xltm", ".xlm", ".slk",                    # Excel templates/macros
+    ".ppt", ".pptm", ".pps", ".ppsm",                   # PowerPoint (filesec.io)
+    ".pot", ".potm", ".sldm",                            # PowerPoint templates
+    ".pub", ".wbk", ".wiz", ".asd",                      # Other Office (filesec.io)
+    ".ppa", ".ppam",                                     # PowerPoint add-ins (filesec.io)
+    # Office without macros (still archive-based, can embed OLE)
+    ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp",
+    # Other document formats
+    ".pdf", ".rtf",                                      # (filesec.io)
+    ".chm",                                              # Compiled HTML Help (filesec.io)
+    ".hwpx",                                             # Hancom (filesec.io)
+}
+
+# Web / phishing vectors that can carry scripts or redirect
+_KNOWN_DANGEROUS_WEB: Set[str] = {
+    ".html", ".htm", ".mht", ".mhtml",                   # (filesec.io)
+    ".svg",                                              # (filesec.io -- script/phishing)
+    ".xml",                                              # Can contain XSLT/entities
+    ".eml",                                              # Email (filesec.io)
+    ".ics",                                              # Calendar invite (filesec.io)
+    ".url", ".website",                                  # URL shortcuts (filesec.io)
+    ".lnk",                                              # Windows shortcut (filesec.io)
+    ".scf",                                              # Shell Command File (filesec.io)
+    ".iqy",                                              # Excel Web Query (filesec.io)
+}
+
+# Windows-specific system files used in attacks
+_KNOWN_DANGEROUS_WINDOWS: Set[str] = {
+    ".reg",                                              # Registry (filesec.io)
+    ".msc",                                              # MMC snap-in (filesec.io)
+    ".diagcab",                                          # Diagnostic (filesec.io)
+    ".settingcontent-ms",                                # (filesec.io)
+    ".library-ms", ".searchConnector-ms",                # (filesec.io)
+    ".desktopthemepackfile", ".theme", ".themepack",     # (filesec.io)
+    ".msrcincident",                                     # (filesec.io)
+    ".oxps", ".xps",                                     # XPS documents (filesec.io)
+    ".bgi",                                              # BGInfo (filesec.io)
+    ".mam",                                              # Access macro (filesec.io)
+}
+
+# Font files (can contain exploitable parsers)
+_KNOWN_DANGEROUS_FONT: Set[str] = {
+    ".ttf", ".otf", ".woff", ".woff2", ".eot",
+}
+
+# Union for reference / test assertions
+_ALL_KNOWN_DANGEROUS: Set[str] = (
+    _KNOWN_DANGEROUS_SCRIPT
+    | _KNOWN_DANGEROUS_EXECUTABLE
+    | _KNOWN_DANGEROUS_ARCHIVE
+    | _KNOWN_DANGEROUS_DOCUMENT
+    | _KNOWN_DANGEROUS_WEB
+    | _KNOWN_DANGEROUS_WINDOWS
+    | _KNOWN_DANGEROUS_FONT
+)
+
+# =========================================================================
+# Rate-limit constants (VT free tier)
+# =========================================================================
+
+_VT_REQUESTS_PER_MINUTE = 4
+_VT_DAILY_CAP = 500
+
+
+# =========================================================================
+# Analyzer
+# =========================================================================
 
 class VirusTotalAnalyzer:
     """
     Analyzer that checks files against VirusTotal using hash lookups and uploads.
 
-    File selection logic (in order):
-      1. If extension is in the **exclusion** list → skip.
-      2. If extension is in the **inclusion** list → scan.
-      3. Files with unknown extensions are skipped.
-
-    Returns SecurityFinding objects using the "Malware" threat category.
+    Three-tier file selection:
+      1. Pure text extension → verify with magic bytes, skip if confirmed text.
+      2. Known dangerous extension → always scan.
+      3. Unknown / no extension → magic-byte check, scan if non-text.
     """
 
     def __init__(
@@ -68,26 +218,34 @@ class VirusTotalAnalyzer:
             enabled: Whether the analyzer is enabled.
             upload_files: If True, upload unknown files to VT for scanning.
             max_files: Max files to scan per directory (0 = unlimited, default 10).
-            inclusion_extensions: Binary extensions to always include for scanning.
-            exclusion_extensions: Text/code extensions to always exclude.
+            inclusion_extensions: Extra binary extensions to always include.
+            exclusion_extensions: Extra text extensions to always exclude.
         """
         self.api_key = api_key
         self.enabled = enabled and api_key is not None
         self.upload_files = upload_files
         self.max_files = max_files
-        self.inclusion_extensions = inclusion_extensions or set()
-        self.exclusion_extensions = exclusion_extensions or set()
+        # Merge caller-provided sets with the built-in classification
+        self._extra_inclusion = inclusion_extensions or set()
+        self._extra_exclusion = exclusion_extensions or set()
         self.validated_files: List[str] = []
         self.last_scan_summary: Dict[str, int] = {}
         self.base_url = "https://www.virustotal.com/api/v3"
         self.session = httpx.Client()
+
+        # Hash cache: sha256 → (result_dict | None, hash_found)
+        self._hash_cache: Dict[str, Tuple[Optional[Dict[str, Any]], bool]] = {}
+
+        # Rate-limit tracking
+        self._api_calls: int = 0
+        self._minute_window_start: float = 0.0
+        self._minute_calls: int = 0
 
         if self.api_key:
             self.session.headers.update(
                 {"x-apikey": self.api_key, "Accept": "application/json"}
             )
 
-        # Log the resolved state so users understand what's happening
         if self.api_key and not enabled:
             logger.info(
                 "VirusTotal API key is present but scanning is explicitly disabled "
@@ -131,7 +289,9 @@ class VirusTotalAnalyzer:
             file_hash = self._calculate_sha256(path)
             logger.info("Checking file: %s (SHA256: %s)", file_path, file_hash)
 
-            vt_result, hash_found, error_reason = self._query_virustotal(file_hash)
+            vt_result, hash_found, error_reason = self._query_virustotal_cached(
+                file_hash
+            )
 
             if error_reason:
                 logger.warning(
@@ -180,8 +340,8 @@ class VirusTotalAnalyzer:
         """
         Scan files in a directory using VirusTotal.
 
-        Applies inclusion/exclusion extension filtering.
-        Respects the configurable max_files limit.
+        Applies three-tier file selection, respects max_files limit,
+        and enforces per-minute / daily rate limits.
 
         Args:
             directory: Directory path containing files to scan.
@@ -210,8 +370,8 @@ class VirusTotalAnalyzer:
                 self.max_files,
                 self.max_files,
             )
-            skipped_files = scannable[self.max_files:]
-            scannable = scannable[:self.max_files]
+            skipped_files = scannable[self.max_files :]
+            scannable = scannable[: self.max_files]
         else:
             skipped_files = []
 
@@ -221,10 +381,9 @@ class VirusTotalAnalyzer:
             directory,
         )
 
-        findings = []
-        validated_files = []
+        findings: List[SecurityFinding] = []
+        validated_files: List[str] = []
 
-        # Scan counters
         count_scanned = 0
         count_clean = 0
         count_malicious = 0
@@ -248,7 +407,9 @@ class VirusTotalAnalyzer:
                     "Checking file: %s (SHA256: %s)", relative_path, file_hash
                 )
 
-                vt_result, hash_found, error_reason = self._query_virustotal(file_hash)
+                vt_result, hash_found, error_reason = (
+                    self._query_virustotal_cached(file_hash)
+                )
 
                 # Handle rate limiting / quota — stop scanning remaining files
                 if error_reason in ("rate_limit", "quota_exceeded", "auth_error"):
@@ -368,7 +529,76 @@ class VirusTotalAnalyzer:
         return findings
 
     # ------------------------------------------------------------------
-    # File selection
+    # Three-tier file selection (Section 2.2 of design doc)
+    # ------------------------------------------------------------------
+
+    def _should_scan_file(self, file_path: str) -> bool:
+        """
+        Three-tier file selection:
+
+          1. ext in _PURE_TEXT_EXTENSIONS → verify with magic bytes.
+             Skip only if magic confirms text; scan if magic disagrees.
+          2. ext in _ALL_KNOWN_DANGEROUS → always scan.
+          3. No extension / unknown extension → magic-byte check.
+             Scan if magic says non-text, skip otherwise.
+
+        Args:
+            file_path: Path to the file.
+
+        Returns:
+            True if the file should be scanned with VirusTotal.
+        """
+        ext = Path(file_path).suffix.lower()
+
+        # Also honour any caller-provided exclusion overrides
+        combined_text = _PURE_TEXT_EXTENSIONS | self._extra_exclusion
+
+        # Step 1: Pure text extension — verify with magic bytes
+        if ext in combined_text:
+            if self._magic_says_not_text(file_path):
+                logger.warning(
+                    "Extension mismatch: %s claims text but magic bytes disagree — scanning",
+                    file_path,
+                )
+                return True
+            return False
+
+        # Step 2: Known dangerous extension — always scan
+        combined_dangerous = _ALL_KNOWN_DANGEROUS | self._extra_inclusion
+        if ext in combined_dangerous:
+            return True
+
+        # Step 3: No extension
+        if not ext:
+            if self._magic_says_not_text(file_path):
+                return True
+            return False
+
+        # Step 4: Unknown extension — fall back to magic bytes
+        if self._magic_says_not_text(file_path):
+            return True
+        return False
+
+    def _magic_says_not_text(self, file_path: str) -> bool:
+        """
+        Check if magic bytes indicate the file is NOT text.
+
+        Returns:
+            True  → magic says non-text (scan it).
+            False → magic says text, no signature, or puremagic unavailable.
+        """
+        try:
+            result = detect_magic(file_path)
+            if result is None:
+                return False  # No signature found → likely text
+            if result.content_family in _TEXT_ONLY_FAMILIES:
+                return False  # Confirmed text
+            return True  # Magic disagrees — non-text content
+        except Exception:
+            return False  # Fail open — trust the extension
+
+    # ------------------------------------------------------------------
+    # File discovery
     # ------------------------------------------------------------------
 
     def _discover_files(self, directory: str) -> List[str]:
@@ -381,7 +611,7 @@ class VirusTotalAnalyzer:
         Returns:
             Sorted list of absolute file paths.
         """
-        files = []
+        files: List[str] = []
         path = Path(directory)
 
         for file_path in path.rglob("*"):
@@ -393,62 +623,88 @@ class VirusTotalAnalyzer:
 
         return sorted(files)
 
-    def _should_scan_file(self, file_path: str) -> bool:
-        """
-        Determine if a file should be scanned using extension-based filtering:
-
-          1. Extension in exclusion list → skip.
-          2. Extension in inclusion list → scan.
-          3. Unknown extension → skip (not in either list).
-
-        Args:
-            file_path: Path to the file.
-
-        Returns:
-            True if the file should be scanned.
-        """
-        ext = Path(file_path).suffix.lower()
-
-        # Step 1: exclusion list (fast path — skip known text/code)
-        if ext in self.exclusion_extensions:
-            return False
-
-        # Step 2: inclusion list (scan known binary formats)
-        if ext in self.inclusion_extensions:
-            return True
-
-        # Unknown extension — skip
-        return False
-
     # ------------------------------------------------------------------
-    # VirusTotal API
+    # VirusTotal API (with hash caching and rate limiting)
     # ------------------------------------------------------------------
 
     def _calculate_sha256(self, file_path: Path) -> str:
-        """
-        Calculate SHA256 hash of a file.
-
-        Args:
-            file_path: Path to the file.
-
-        Returns:
-            SHA256 hash as hex string.
-        """
+        """Calculate SHA256 hash of a file."""
         sha256_hash = hashlib.sha256()
         with open(file_path, "rb") as f:
             for byte_block in iter(lambda: f.read(4096), b""):
                 sha256_hash.update(byte_block)
         return sha256_hash.hexdigest()
 
-    def _query_virustotal(self, file_hash: str) -> tuple:
+    def _query_virustotal_cached(
+        self, file_hash: str
+    ) -> Tuple[Optional[Dict[str, Any]], bool, Optional[str]]:
+        """
+        Query VT with in-memory hash cache to avoid duplicate lookups.
+
+        Returns:
+            (result_dict | None, hash_found, error_reason | None)
+        """
+        if file_hash in self._hash_cache:
+            cached_result, cached_found = self._hash_cache[file_hash]
+            logger.debug("Cache hit for hash %s (found=%s)", file_hash, cached_found)
+            return cached_result, cached_found, None
+
+        # Enforce rate limits before making the API call
+        self._enforce_rate_limit()
+
+        result, found, error = self._query_virustotal(file_hash)
+
+        # Cache successful lookups (don't cache errors)
+        if error is None:
+            self._hash_cache[file_hash] = (result, found)
+
+        return result, found, error
+
+    def _enforce_rate_limit(self) -> None:
+        """
+        Enforce VT free-tier rate limits:
+          - 4 requests per minute
+          - 500 requests per day
+        """
+        now = time.monotonic()
+
+        # Daily cap
+        if self._api_calls >= _VT_DAILY_CAP:
+            logger.warning(
+                "VirusTotal daily cap reached (%d requests). "
+                "Remaining files will be skipped.",
+                _VT_DAILY_CAP,
+            )
+            return
+
+        # Per-minute window
+        if now - self._minute_window_start >= 60:
+            self._minute_window_start = now
+            self._minute_calls = 0
+
+        if self._minute_calls >= _VT_REQUESTS_PER_MINUTE:
+            wait = 60 - (now - self._minute_window_start)
+            if wait > 0:
+                logger.info(
+                    "Rate limit: waiting %.1fs before next VT request "
+                    "(4 req/min free tier)",
+                    wait,
+                )
+                time.sleep(wait)
+            self._minute_window_start = time.monotonic()
+            self._minute_calls = 0
+
+        self._api_calls += 1
+        self._minute_calls += 1
+
+    def _query_virustotal(
+        self, file_hash: str
+    ) -> Tuple[Optional[Dict[str, Any]], bool, Optional[str]]:
         """
         Query VirusTotal API for file hash.
 
-        Args:
-            file_hash: SHA256 hash of the file.
-
         Returns:
-            Tuple of (detection_stats_dict_or_None, hash_found_bool, error_reason_or_None).
+            (detection_stats_dict | None, hash_found, error_reason | None)
         """
         try:
             response = self.session.get(
@@ -520,10 +776,6 @@ class VirusTotalAnalyzer:
         """
         Upload file to VirusTotal for scanning and poll for results.
 
-        Args:
-            file_path: Path to the file to upload.
-            file_hash: SHA256 hash of the file.
-
         Returns:
             Dictionary with detection stats or None if upload failed.
         """
@@ -536,6 +788,8 @@ class VirusTotalAnalyzer:
                     file_size,
                 )
                 return None
+
+            self._enforce_rate_limit()
 
             with open(file_path, "rb") as f:
                 files = {"file": (file_path.name, f)}
@@ -564,6 +818,7 @@ class VirusTotalAnalyzer:
             max_retries = 6
             for attempt in range(max_retries):
                 time.sleep(10)
+                self._enforce_rate_limit()
 
                 analysis_response = self.session.get(
                     f"{self.base_url}/analyses/{analysis_id}", timeout=10
@@ -629,30 +884,17 @@ class VirusTotalAnalyzer:
         """
         Create a SecurityFinding for a malicious file.
 
-        Args:
-            file_path: Relative path to the file.
-            file_hash: SHA256 hash of the file.
-            vt_result: VirusTotal scan results.
-
-        Returns:
-            SecurityFinding object with Malware threat category.
+        Severity: HIGH if detection ratio >= 0.1, MEDIUM otherwise.
         """
         malicious_count = vt_result.get("malicious", 0)
         total_engines = vt_result.get("total_engines", 0)
 
-        # Determine severity based on detection ratio
         if total_engines > 0:
             detection_ratio = malicious_count / total_engines
-            if detection_ratio >= 0.3:
-                severity = "HIGH"
-            elif detection_ratio >= 0.1:
-                severity = "HIGH"
-            else:
-                severity = "MEDIUM"
+            severity = "HIGH" if detection_ratio >= 0.1 else "MEDIUM"
         else:
             severity = "MEDIUM"
 
-        # Get threat mapping from taxonomy
         threat_info = ThreatMapping.get_threat_mapping("virustotal", "MALWARE")
 
         summary = (
