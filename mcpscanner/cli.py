@@ -51,6 +51,7 @@ from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
 from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
+from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
 
 logger = get_logger(__name__)
 
@@ -158,6 +159,17 @@ def _build_config(
     if llm_timeout:
         config_params["llm_timeout"] = float(llm_timeout)
 
+    # VirusTotal configuration — pass API key so Config can wire it up;
+    # remaining VT settings (max_files, extensions, etc.) fall back to
+    # constants / env vars inside Config.__init__.
+    if AnalyzerEnum.VIRUSTOTAL in selected_analyzers:
+        vt_api_key = os.environ.get("VIRUSTOTAL_API_KEY", "")
+        if vt_api_key:
+            config_params["virustotal_api_key"] = vt_api_key
+        vt_upload = os.environ.get("MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "").lower()
+        if vt_upload == "true":
+            config_params["virustotal_upload_files"] = True
+
     return Config(**config_params)
 
 
@@ -170,7 +182,6 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
     Returns:
         List of formatted result dictionaries
     """
-    import os
     from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
 
     cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
@@ -993,6 +1004,37 @@ async def main():
         help="Bearer token for authentication",
     )
 
+    # VirusTotal subcommand - scan files/directories for malware
+    p_virustotal = subparsers.add_parser(
+        "virustotal",
+        help="Scan files or directories for malware using VirusTotal",
+    )
+    p_virustotal.add_argument(
+        "scan_path",
+        help="Path to a file or directory to scan with VirusTotal",
+    )
+    p_virustotal.add_argument(
+        "--output", "-o", help="Save scan results to a file"
+    )
+    p_virustotal.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_virustotal.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_virustotal.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_virustotal.add_argument(
+        "--format",
+        choices=[
+            "raw", "summary", "detailed", "by_tool",
+            "by_analyzer", "by_severity", "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+
     # Behavioral subcommand - scan local source code
     p_behavioral = subparsers.add_parser(
         "behavioral",
@@ -1112,7 +1154,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal (default: %(default)s)",
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
@@ -1212,6 +1254,7 @@ async def main():
             "yara_analyzer",
             "llm_analyzer",
             "behavioral_analyzer",
+            "virustotal_analyzer",
         ],
         help="Filter results by specific analyzer",
     )
@@ -1666,6 +1709,98 @@ async def main():
                 }
             ]
 
+        elif args.cmd == "virustotal":
+            # VirusTotal analyzer - scan files/directories for malware
+            from mcpscanner.config.config import Config
+            from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
+
+            scan_path = args.scan_path
+
+            vt_api_key = os.environ.get("VIRUSTOTAL_API_KEY", "")
+            if not vt_api_key:
+                print(
+                    "Error: VIRUSTOTAL_API_KEY environment variable is not set.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+            vt_enabled_env = os.environ.get("MCP_SCANNER_VIRUSTOTAL_ENABLED", "true").lower()
+            vt_enabled = vt_enabled_env != "false"
+            vt_upload = os.environ.get("MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false").lower() == "true"
+
+            analyzer = VirusTotalAnalyzer(
+                api_key=vt_api_key,
+                enabled=vt_enabled,
+                upload_files=vt_upload,
+                max_files=CONSTANTS.VIRUSTOTAL_MAX_FILES,
+                inclusion_extensions=CONSTANTS.VIRUSTOTAL_INCLUSION_EXTENSIONS,
+                exclusion_extensions=CONSTANTS.VIRUSTOTAL_EXCLUSION_EXTENSIONS,
+            )
+
+            if os.path.isfile(scan_path):
+                finding = analyzer.analyze_file(scan_path)
+                findings = [finding] if finding else []
+            elif os.path.isdir(scan_path):
+                findings = analyzer.analyze_directory(scan_path)
+            else:
+                print(f"Error: Path does not exist: {scan_path}", file=sys.stderr)
+                sys.exit(1)
+
+            # Format results to match Scanner output structure
+            results = []
+            if findings:
+                for finding in findings:
+                    file_path = finding.details.get("file_path", scan_path) if finding.details else scan_path
+                    analyzer_finding = {
+                        "severity": finding.severity,
+                        "threat_summary": finding.summary,
+                        "threat_names": [finding.threat_category],
+                        "total_findings": 1,
+                        "mcp_taxonomies": [],
+                    }
+                    # Add MCP taxonomy if available
+                    if finding.details:
+                        taxonomy = {}
+                        for key in ("aitech", "aitech_name", "aisubtech", "aisubtech_name", "taxonomy_description"):
+                            if key in finding.details:
+                                taxonomy[key.replace("taxonomy_description", "description")] = finding.details[key]
+                        if taxonomy:
+                            analyzer_finding["mcp_taxonomies"].append(taxonomy)
+
+                    results.append({
+                        "tool_name": file_path,
+                        "tool_description": f"VirusTotal scan of {os.path.basename(file_path)}",
+                        "status": "completed",
+                        "is_safe": False,
+                        "findings": {"virustotal_analyzer": analyzer_finding},
+                    })
+            else:
+                results.append({
+                    "tool_name": scan_path,
+                    "tool_description": f"VirusTotal scan of {os.path.basename(scan_path)}",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {},
+                })
+
+            # Add scan summary if directory scan
+            if os.path.isdir(scan_path) and analyzer.last_scan_summary:
+                summary = analyzer.last_scan_summary
+                logger.info(
+                    "VT scan summary: %d scanned, %d clean, %d malicious, %d not found",
+                    summary.get("scanned", 0),
+                    summary.get("clean", 0),
+                    summary.get("malicious", 0),
+                    summary.get("not_found", 0),
+                )
+
+            # Save output if requested
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2)
+                if args.verbose:
+                    print(f"Results saved to {args.output}")
+
         elif args.cmd == "behavioral":
             # Behavioral analyzer - scan local source code
             # This follows the same pattern as other analyzers but operates on source files
@@ -1719,7 +1854,6 @@ async def main():
                     if func_findings[0].details
                     else source_path
                 )
-                import os
 
                 display_name = (
                     os.path.basename(source_file)
@@ -1939,6 +2073,8 @@ async def main():
             server_label = args.server_url
         elif hasattr(args, "cmd") and args.cmd == "resources":
             server_label = args.server_url
+        elif hasattr(args, "cmd") and args.cmd == "virustotal":
+            server_label = f"virustotal:{args.scan_path}"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:

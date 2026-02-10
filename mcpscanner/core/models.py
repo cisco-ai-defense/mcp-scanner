@@ -58,6 +58,7 @@ class AnalyzerEnum(str, Enum):
     YARA = "yara"
     LLM = "llm"
     BEHAVIORAL = "behavioral"
+    VIRUSTOTAL = "virustotal"
 
 
 class AnalysisContext(BaseModel):

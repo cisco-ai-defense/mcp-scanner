@@ -35,7 +35,6 @@ from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ...static_analysis.context_extractor import ContextExtractor
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
-from ...static_analysis.virustotal_analyzer import VirusTotalAnalyzer
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 
@@ -71,18 +70,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # Initialize alignment orchestrator (handles all LLM interaction)
         self.alignment_orchestrator = AlignmentOrchestrator(config)
 
-        # Initialize VirusTotal analyzer for file scanning
-        self.vt_analyzer = VirusTotalAnalyzer(
-            api_key=config.virustotal_api_key,
-            enabled=config.virustotal_enabled,
-            upload_files=config.virustotal_upload_files,
-        )
-
         self.logger.debug(
             "BehavioralCodeAnalyzer initialized with alignment verification"
         )
-        if self.vt_analyzer.enabled:
-            self.logger.debug("VirusTotal binary file scanning enabled")
 
     async def analyze(
         self, content: str, context: Dict[str, Any]
@@ -102,14 +92,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # Check if content is a directory
             if os.path.isdir(content):
                 self.logger.debug(f"Scanning directory: {content}")
-
-                # Scan binary files with VirusTotal for malware detection
-                vt_findings = self.vt_analyzer.analyze_directory(content)
-                if vt_findings:
-                    self.logger.warning(
-                        f"VirusTotal detected {len(vt_findings)} malicious binary file(s)"
-                    )
-                    all_findings.extend(vt_findings)
 
                 python_files = self._find_python_files(content)
                 self.logger.debug(

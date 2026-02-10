@@ -210,6 +210,51 @@ class MCPScannerConstants:
         "MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false"
     ).lower() in ("true", "1", "yes")
 
+    # Maximum number of files to scan per directory (0 = unlimited).
+    # Override via MCP_SCANNER_VT_MAX_FILES env var.
+    VIRUSTOTAL_MAX_FILES: int = int(
+        os.getenv("MCP_SCANNER_VT_MAX_FILES", "10")
+    )
+
+    # Inclusion list: known binary/non-text extensions that should always be scanned.
+    # Files matching these extensions are auto-included for VT scanning.
+    # Override via MCP_SCANNER_VT_INCLUSION_EXTENSIONS (comma-separated).
+    _DEFAULT_VT_INCLUSION_EXTENSIONS = {
+        # Executables & libraries
+        ".exe", ".dll", ".so", ".dylib", ".bin", ".com", ".msi", ".apk", ".deb", ".rpm",
+        # Archives
+        ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar", ".tgz", ".xz", ".cab",
+        # Documents (can contain macros/exploits)
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".rtf",
+        # Images
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp", ".tiff",
+        # Java / WebAssembly
+        ".jar", ".war", ".ear", ".class", ".wasm",
+        # Scripts that could be malicious payloads
+        ".scr", ".pif", ".hta", ".vbs", ".wsf",
+    }
+    VIRUSTOTAL_INCLUSION_EXTENSIONS: set = (
+        set(ext.strip() for ext in os.getenv("MCP_SCANNER_VT_INCLUSION_EXTENSIONS", "").split(",") if ext.strip())
+        or _DEFAULT_VT_INCLUSION_EXTENSIONS
+    )
+
+    # Exclusion list: known text/code extensions to skip from VT scanning.
+    # Files matching these are excluded before magic-byte detection.
+    # Override via MCP_SCANNER_VT_EXCLUSION_EXTENSIONS (comma-separated).
+    _DEFAULT_VT_EXCLUSION_EXTENSIONS = {
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h", ".hpp",
+        ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".cs", ".vb", ".scala", ".lua",
+        ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg",
+        ".xml", ".html", ".css", ".scss", ".sass", ".less", ".csv", ".tsv",
+        ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+        ".sql", ".graphql", ".proto", ".thrift", ".rst", ".org", ".adoc", ".tex",
+        ".lock", ".sum", ".mod",
+    }
+    VIRUSTOTAL_EXCLUSION_EXTENSIONS: set = (
+        set(ext.strip() for ext in os.getenv("MCP_SCANNER_VT_EXCLUSION_EXTENSIONS", "").split(",") if ext.strip())
+        or _DEFAULT_VT_EXCLUSION_EXTENSIONS
+    )
+
     # OAuth Configuration
     OAUTH_CLIENT_NAME: str = os.getenv(
         "MCP_SCANNER_OAUTH_CLIENT_NAME", "MCP Scanner Client"

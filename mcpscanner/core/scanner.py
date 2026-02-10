@@ -65,6 +65,7 @@ from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
+from .analyzers.virustotal_analyzer import VirusTotalAnalyzer
 from .auth import (
     Auth,
     AuthType,
@@ -137,6 +138,18 @@ class Scanner:
         self._behavioral_analyzer = (
             BehavioralCodeAnalyzer(config) if config.llm_provider_api_key else None
         )
+        self._vt_analyzer = (
+            VirusTotalAnalyzer(
+                api_key=config.virustotal_api_key,
+                enabled=config.virustotal_enabled,
+                upload_files=config.virustotal_upload_files,
+                max_files=config.virustotal_max_files,
+                inclusion_extensions=config.virustotal_inclusion_extensions,
+                exclusion_extensions=config.virustotal_exclusion_extensions,
+            )
+            if config.virustotal_enabled
+            else None
+        )
         self._custom_analyzers = custom_analyzers or []
 
         # Debug logging for analyzer initialization
@@ -149,6 +162,8 @@ class Scanner:
             active_analyzers.append("LLM")
         if self._behavioral_analyzer:
             active_analyzers.append("Behavioral")
+        if self._vt_analyzer:
+            active_analyzers.append("VirusTotal")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -189,6 +204,14 @@ class Scanner:
         ):
             missing_requirements.append(
                 "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
+            )
+
+        if (
+            AnalyzerEnum.VIRUSTOTAL in requested_analyzers
+            and not self._vt_analyzer
+        ):
+            missing_requirements.append(
+                "VirusTotal analyzer requested but VIRUSTOTAL_API_KEY not configured or scanning is disabled"
             )
 
         # YARA analyzer should always be available since it doesn't require API keys
