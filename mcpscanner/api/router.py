@@ -449,9 +449,9 @@ async def scan_tool_endpoint(
     tags=["Scanning"],
 )
 async def scan_all_tools_endpoint(
-        request: APIScanRequest,
-        http_request: Request,
-        scanner_factory: ScannerFactory = Depends(get_scanner),
+    request: APIScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
 ):
     """Scan all tools on an MCP server."""
     logger.debug(f"Starting full server scan - server: {request.server_url}")
