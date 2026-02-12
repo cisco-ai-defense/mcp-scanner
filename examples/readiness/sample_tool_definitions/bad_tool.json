@@ -1,0 +1,47 @@
+{
+  "name": "do_everything",
+  "description": "A general purpose tool that can do anything. It can create, read, write, update, delete, list, and execute operations on any resource. Errors are ignored when possible.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string"
+      },
+      "target": {
+        "type": "string"
+      },
+      "options": {
+        "type": "object"
+      },
+      "data": {
+        "type": "string"
+      },
+      "format": {
+        "type": "string"
+      },
+      "mode": {
+        "type": "string"
+      },
+      "flags": {
+        "type": "array"
+      },
+      "timeout_override": {
+        "type": "integer"
+      },
+      "retry_override": {
+        "type": "integer"
+      },
+      "async_mode": {
+        "type": "boolean"
+      },
+      "callback_url": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object"
+      }
+    }
+  },
+  "maxRetries": -1
+}
+

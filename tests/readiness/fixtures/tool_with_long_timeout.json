@@ -1,0 +1,16 @@
+{
+  "name": "long_operation",
+  "description": "Performs a long-running database operation that processes data in batches",
+  "timeout": 600000,
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": ["query"]
+  }
+}
+

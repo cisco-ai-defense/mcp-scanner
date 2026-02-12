@@ -1,0 +1,16 @@
+{
+  "name": "database_query",
+  "description": "Opens a database connection and executes a query against the remote server",
+  "timeout": 30000,
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "sql": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "required": ["sql"]
+  }
+}
+
