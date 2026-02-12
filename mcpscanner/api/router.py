@@ -19,6 +19,11 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..core.auth import Auth
+from ..core.exceptions import (
+    MCPAuthenticationError,
+    MCPConnectionError,
+    MCPServerNotFoundError,
+)
 from ..core.models import (
     AllToolsScanResponse,
     APIScanRequest,
@@ -424,6 +429,15 @@ async def scan_tool_endpoint(
     except ValueError as e:
         logger.error(f"ValueError in tool scan: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
+    except MCPAuthenticationError as e:
+        logger.error(f"Authentication error in tool scan: {str(e)}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except MCPServerNotFoundError as e:
+        logger.error(f"Server not found in tool scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except MCPConnectionError as e:
+        logger.error(f"Connection error in tool scan: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in tool scan: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning tool: {str(e)}")
@@ -508,6 +522,15 @@ async def scan_all_tools_endpoint(
     except ValueError as e:
         logger.error(f"ValueError in full server scan: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
+    except MCPAuthenticationError as e:
+        logger.error(f"Authentication error in full server scan: {str(e)}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except MCPServerNotFoundError as e:
+        logger.error(f"Server not found in full server scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except MCPConnectionError as e:
+        logger.error(f"Connection error in full server scan: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in full server scan: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning tools: {str(e)}")
@@ -574,6 +597,15 @@ async def scan_prompt_endpoint(
     except ValueError as e:
         logger.error(f"ValueError in prompt scan: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
+    except MCPAuthenticationError as e:
+        logger.error(f"Authentication error in prompt scan: {str(e)}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except MCPServerNotFoundError as e:
+        logger.error(f"Server not found in prompt scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except MCPConnectionError as e:
+        logger.error(f"Connection error in prompt scan: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in prompt scan: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning prompt: {str(e)}")
@@ -651,6 +683,15 @@ async def scan_all_prompts_endpoint(
     except ValueError as e:
         logger.error(f"ValueError in prompt scan: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
+    except MCPAuthenticationError as e:
+        logger.error(f"Authentication error in prompt scan: {str(e)}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except MCPServerNotFoundError as e:
+        logger.error(f"Server not found in prompt scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except MCPConnectionError as e:
+        logger.error(f"Connection error in prompt scan: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in prompt scan: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning prompts: {str(e)}")
@@ -725,6 +766,15 @@ async def scan_resource_endpoint(
     except ValueError as e:
         logger.error(f"ValueError in resource scan: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
+    except MCPAuthenticationError as e:
+        logger.error(f"Authentication error in resource scan: {str(e)}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except MCPServerNotFoundError as e:
+        logger.error(f"Server not found in resource scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except MCPConnectionError as e:
+        logger.error(f"Connection error in resource scan: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in resource scan: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -827,6 +877,15 @@ async def scan_all_resources_endpoint(
     except ValueError as e:
         logger.error(f"ValueError in resource scan: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
+    except MCPAuthenticationError as e:
+        logger.error(f"Authentication error in resource scan: {str(e)}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except MCPServerNotFoundError as e:
+        logger.error(f"Server not found in resource scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except MCPConnectionError as e:
+        logger.error(f"Connection error in resource scan: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in resource scan: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -890,6 +949,15 @@ async def scan_instructions_endpoint(
     except ValueError as e:
         logger.error(f"ValueError in instructions scan: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e))
+    except MCPAuthenticationError as e:
+        logger.error(f"Authentication error in instructions scan: {str(e)}")
+        raise HTTPException(status_code=401, detail=str(e))
+    except MCPServerNotFoundError as e:
+        logger.error(f"Server not found in instructions scan: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except MCPConnectionError as e:
+        logger.error(f"Connection error in instructions scan: {str(e)}")
+        raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in instructions scan: {str(e)}", exc_info=True)
         raise HTTPException(
