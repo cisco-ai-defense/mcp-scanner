@@ -73,8 +73,7 @@ class TestApiAnalyzer:
                 "arguments": {
                     "content": content
                 }
-            },
-            "id": 1
+            }
         }
 
         assert payload == expected_payload
@@ -86,7 +85,7 @@ class TestApiAnalyzer:
         content = "This is safe content"
 
         # Mock API response for safe content (JSON-RPC 2.0 format)
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
@@ -112,7 +111,7 @@ class TestApiAnalyzer:
         content = "This is malicious content"
 
         # Mock API response for malicious content (JSON-RPC 2.0 format)
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -157,7 +156,7 @@ class TestApiAnalyzer:
         content = "Malicious content"
         context = {"tool_name": "test_tool"}
 
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
@@ -210,7 +209,7 @@ class TestApiAnalyzer:
         """Test analyze method with unknown classification."""
         content = "Test content"
 
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -251,7 +250,7 @@ class TestApiAnalyzer:
             "CODE_DETECTION",
         ]
 
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
@@ -317,7 +316,7 @@ class TestApiAnalyzer:
         """Test analyze method with HTTP error."""
         content = "Test content"
 
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(500, text="Internal Server Error")
         )
 
@@ -334,7 +333,7 @@ class TestApiAnalyzer:
         """Test analyze method with connection error."""
         content = "Test content"
 
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             side_effect=httpx.ConnectError("Connection failed")
         )
 
@@ -351,7 +350,7 @@ class TestApiAnalyzer:
         """Test analyze method with timeout error."""
         content = "Test content"
 
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             side_effect=httpx.TimeoutException("Request timeout")
         )
 
@@ -368,7 +367,7 @@ class TestApiAnalyzer:
         """Test analyze method with malformed JSON response."""
         content = "Test content"
 
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(200, text="Invalid JSON")
         )
 
@@ -382,7 +381,7 @@ class TestApiAnalyzer:
         content = "Test content"
 
         # Response missing 'classifications' field in result
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
@@ -406,7 +405,7 @@ class TestApiAnalyzer:
         content = "Test content"
         context = {"tool_name": "test_tool"}
 
-        mock_request = respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        mock_request = respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
@@ -446,8 +445,7 @@ class TestApiAnalyzer:
                 "arguments": {
                     "content": content
                 }
-            },
-            "id": 1
+            }
         }
         assert payload == expected_payload
 
@@ -474,7 +472,7 @@ class TestApiAnalyzer:
             "id": 1
         }
 
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(200, json=api_response)
         )
 
@@ -507,7 +505,7 @@ class TestApiAnalyzer:
         content = "Test content"
 
         # Mock JSON-RPC error response
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
@@ -544,8 +542,7 @@ class TestApiAnalyzer:
             "params": {
                 "uri": resource_uri,
                 "content": content
-            },
-            "id": 1
+            }
         }
 
         assert payload == expected_payload
@@ -561,7 +558,7 @@ class TestApiAnalyzer:
         }
 
         # Mock API response for safe resource content
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
@@ -591,7 +588,7 @@ class TestApiAnalyzer:
         }
 
         # Mock API response for path traversal detection
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
@@ -632,7 +629,7 @@ class TestApiAnalyzer:
         }
 
         # Mock API response for PII detection
-        respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
@@ -672,7 +669,7 @@ class TestApiAnalyzer:
             "resource_name": "test_resource"
         }
 
-        mock_request = respx.post("https://api.inspect.aidefense.aiteam.cisco.com/api/v1/inspect/mcp").mock(
+        mock_request = respx.post("https://us.api.inspect.aidefense.security.cisco.com/api/v1/inspect/mcp").mock(
             return_value=httpx.Response(
                 200, json={
                     "jsonrpc": "2.0",
