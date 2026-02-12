@@ -14,29 +14,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Analyzers package for MCP Scanner
+"""Readiness Analyzer package for MCP Scanner.
 
-This package contains different analyzers for scanning MCP tools:
-- Pattern-based analyzers (YARA, API)
-- LLM-based semantic analyzers
-- Behavioral code analyzers (static analysis + semantic alignment)
+This package contains analyzers for production readiness issues:
+- Heuristic-based static analysis (default, zero-dependency)
+- Optional OPA policy-based checks (requires OPA binary in PATH)
+- Optional LLM-based semantic analysis (requires API key)
 """
 
-from .api_analyzer import ApiAnalyzer
-from .base import BaseAnalyzer, SecurityFinding
-from .behavioral import BehavioralCodeAnalyzer, AlignmentOrchestrator
-from .llm_analyzer import LLMAnalyzer
-from .yara_analyzer import YaraAnalyzer
-from .readiness import ReadinessAnalyzer, ReadinessLLMJudge, OpaProvider
+from .readiness_analyzer import ReadinessAnalyzer
+from .llm_judge import ReadinessLLMJudge
+from .opa_provider import OpaProvider
 
 __all__ = [
-    "BaseAnalyzer",
-    "SecurityFinding",
-    "ApiAnalyzer",
-    "YaraAnalyzer",
-    "LLMAnalyzer",
-    "BehavioralCodeAnalyzer",
-    "AlignmentOrchestrator",
     "ReadinessAnalyzer",
     "ReadinessLLMJudge",
     "OpaProvider",
