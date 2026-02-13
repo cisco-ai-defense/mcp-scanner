@@ -340,15 +340,23 @@ mcp-scanner --raw instructions --server-url http://127.0.0.1:8000/mcp
 mcp-scanner instructions --server-url https://your-server.com/mcp --bearer-token "$TOKEN"
 ```
 
-#### Behavioral Code Scanning
+#### Behavioral Code Scanning (Multi-Language)
 
 The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking.
 
-```bash
-# Scan a single Python file
-mcp-scanner behavioral /path/to/mcp_server.py
+**Supported Languages:** Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Rust, Ruby, PHP
 
-# Scan a directory
+```bash
+# Scan a single file (any supported language)
+mcp-scanner behavioral /path/to/mcp_server.py
+mcp-scanner behavioral /path/to/server.ts
+mcp-scanner behavioral /path/to/server.go
+mcp-scanner behavioral /path/to/McpService.java
+mcp-scanner behavioral /path/to/server.kt
+mcp-scanner behavioral /path/to/Tools.cs
+mcp-scanner behavioral /path/to/server.rs
+
+# Scan a directory (auto-detects language by extension)
 mcp-scanner behavioral /path/to/mcp_servers/
 
 # With specific output format

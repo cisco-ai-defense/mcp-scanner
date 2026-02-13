@@ -28,6 +28,66 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "litellm>=1.77.0",
     "expandvars>=0.12.0",
+    "tree-sitter>=0.21.0",
+    "tree-sitter-python>=0.21.0",
+    "tree-sitter-javascript>=0.21.0",
+    "tree-sitter-typescript>=0.21.0",
+    "tree-sitter-go>=0.21.0",
+    "tree-sitter-java>=0.21.0",
+    "tree-sitter-kotlin>=0.21.0",
+    "tree-sitter-c-sharp>=0.21.0",
+    "tree-sitter-ruby>=0.21.0",
+    "tree-sitter-rust>=0.21.0",
+    "tree-sitter-php>=0.21.0",
+]
+
+[project.optional-dependencies]
+# Individual language support (use flexible version constraints)
+js = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-javascript>=0.21.0",
+    "tree-sitter-typescript>=0.21.0",
+]
+go = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-go>=0.21.0",
+]
+java = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-java>=0.21.0",
+]
+kotlin = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-kotlin>=0.21.0",
+]
+csharp = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-c-sharp>=0.21.0",
+]
+ruby = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-ruby>=0.21.0",
+]
+rust = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-rust>=0.21.0",
+]
+php = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-php>=0.21.0",
+]
+# All stable languages (excludes swift which has version issues)
+all-languages = [
+    "tree-sitter>=0.21.0",
+    "tree-sitter-javascript>=0.21.0",
+    "tree-sitter-typescript>=0.21.0",
+    "tree-sitter-go>=0.21.0",
+    "tree-sitter-java>=0.21.0",
+    "tree-sitter-kotlin>=0.21.0",
+    "tree-sitter-c-sharp>=0.21.0",
+    "tree-sitter-ruby>=0.21.0",
+    "tree-sitter-rust>=0.21.0",
+    "tree-sitter-php>=0.21.0",
 ]
 
 [dependency-groups]

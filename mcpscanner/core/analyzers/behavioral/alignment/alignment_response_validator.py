@@ -27,7 +27,7 @@ The validator:
 
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ...base import SecurityFinding
 from ....static_analysis.context_extractor import FunctionContext
@@ -197,3 +197,90 @@ class AlignmentResponseValidator:
         )
 
         return finding
+
+    def validate_batch(self, response: str, expected_count: int) -> Optional[List[Dict[str, Any]]]:
+        """Parse and validate batched alignment check response.
+
+        Args:
+            response: JSON array response from LLM
+            expected_count: Expected number of function results
+
+        Returns:
+            List of parsed alignment check results or None if invalid
+        """
+        if not response or not response.strip():
+            self.logger.warning("Empty batch response from LLM")
+            return None
+
+        try:
+            # Try to parse JSON
+            data = json.loads(response)
+
+            # Validate it's a list
+            if not isinstance(data, list):
+                self.logger.warning(f"Batch response is not a JSON array: {type(data)}")
+                # Try to extract from markdown
+                data = self._extract_json_array_from_markdown(response)
+                if not data:
+                    return None
+
+            # Validate each item in the array
+            results = []
+            for idx, item in enumerate(data):
+                if not isinstance(item, dict):
+                    self.logger.warning(f"Batch item {idx} is not a dict")
+                    results.append({"mismatch_detected": False})
+                    continue
+
+                # Check for required fields
+                if "mismatch_detected" not in item:
+                    # Default to no mismatch if field missing
+                    item["mismatch_detected"] = False
+
+                results.append(item)
+
+            # Pad with empty results if we got fewer than expected
+            while len(results) < expected_count:
+                results.append({"mismatch_detected": False})
+
+            self.logger.debug(f"Validated batch response with {len(results)} results")
+            return results
+
+        except json.JSONDecodeError as e:
+            self.logger.warning(f"Invalid JSON in batch response: {e}")
+            # Try to extract JSON array from markdown
+            return self._extract_json_array_from_markdown(response)
+        except Exception as e:
+            self.logger.error(f"Unexpected error validating batch response: {e}")
+            return None
+
+    def _extract_json_array_from_markdown(self, response: str) -> Optional[List[Dict[str, Any]]]:
+        """Try to extract JSON array from markdown code blocks.
+
+        Args:
+            response: Response that may contain markdown
+
+        Returns:
+            Parsed JSON array or None
+        """
+        try:
+            # Look for ```json ... ``` or ``` ... ```
+            if "```json" in response:
+                start = response.find("```json") + 7
+                end = response.find("```", start)
+                json_str = response[start:end].strip()
+            elif "```" in response:
+                start = response.find("```") + 3
+                end = response.find("```", start)
+                json_str = response[start:end].strip()
+            else:
+                return None
+
+            data = json.loads(json_str)
+            if isinstance(data, list):
+                return data
+
+        except Exception:
+            pass
+
+        return None
