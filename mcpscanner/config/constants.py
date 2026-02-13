@@ -54,6 +54,15 @@ class MCPScannerConstants:
         "MCP_SCANNER_API_ENDPOINT_INSPECT_CHAT", "inspect/chat"
     )
 
+    API_ENDPOINT_INSPECT_MCP: str = os.getenv(
+        "MCP_SCANNER_API_ENDPOINT_INSPECT_MCP", "api/v1/inspect/mcp"
+    )
+
+    API_BASE_URL_MCP: str = os.getenv(
+        "MCP_SCANNER_ENDPOINT_MCP",
+        "https://us.api.inspect.aidefense.security.cisco.com",
+    )
+
     # Server Configuration
     DEFAULT_SERVER_HOST: str = os.getenv("MCP_SCANNER_DEFAULT_HOST", "127.0.0.1")
     DEFAULT_SERVER_PORT: int = int(os.getenv("MCP_SCANNER_DEFAULT_PORT", "8000"))
