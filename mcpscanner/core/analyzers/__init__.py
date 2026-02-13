@@ -38,6 +38,7 @@ __all__ = [
     "LLMAnalyzer",
     "BehavioralCodeAnalyzer",
     "AlignmentOrchestrator",
+    "VirusTotalAnalyzer",
     "ReadinessAnalyzer",
     "ReadinessLLMJudge",
     "OpaProvider",

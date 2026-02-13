@@ -65,6 +65,7 @@ from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
+from .analyzers.virustotal_analyzer import VirusTotalAnalyzer
 from .analyzers.readiness import ReadinessAnalyzer
 from .auth import (
     Auth,
@@ -138,6 +139,18 @@ class Scanner:
         self._behavioral_analyzer = (
             BehavioralCodeAnalyzer(config) if config.llm_provider_api_key else None
         )
+        self._vt_analyzer = (
+            VirusTotalAnalyzer(
+                api_key=config.virustotal_api_key,
+                enabled=config.virustotal_enabled,
+                upload_files=config.virustotal_upload_files,
+                max_files=config.virustotal_max_files,
+                inclusion_extensions=config.virustotal_inclusion_extensions,
+                exclusion_extensions=config.virustotal_exclusion_extensions,
+            )
+            if config.virustotal_enabled
+            else None
+        )
         # Readiness analyzer always available (no API keys needed)
         self._readiness_analyzer = ReadinessAnalyzer()
         self._custom_analyzers = custom_analyzers or []
@@ -152,6 +165,8 @@ class Scanner:
             active_analyzers.append("LLM")
         if self._behavioral_analyzer:
             active_analyzers.append("Behavioral")
+        if self._vt_analyzer:
+            active_analyzers.append("VirusTotal")
         if self._readiness_analyzer:
             active_analyzers.append("Readiness")
         for analyzer in self._custom_analyzers:
