@@ -90,7 +90,6 @@ def example_tool(param: str) -> str:
         important_categories = [
             "DATA EXFILTRATION",
             "INJECTION ATTACKS",  # Plural to match BEHAVIORAL_THREATS
-            "GENERAL DESCRIPTION-CODE MISMATCH",  # Updated from DECEPTIVE BEHAVIOR
             "PROMPT INJECTION",
             "TOOL POISONING",
             "GOAL MANIPULATION",  # Updated from TOOL SHADOWING
