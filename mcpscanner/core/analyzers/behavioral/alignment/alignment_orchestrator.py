@@ -137,31 +137,28 @@ class AlignmentOrchestrator:
                 self.stats["mismatches_detected"] += 1
                 
                 # Step 5: Classify as threat or vulnerability (second alignment layer)
-                # Skip classification for INFO severity (documentation issues)
-                threat_name = result.get("threat_name", "")
-                if threat_name != "GENERAL DESCRIPTION-CODE MISMATCH":
-                    self.logger.debug(f"Classifying finding as threat or vulnerability for {func_context.name}")
-                    try:
-                        classification = await self.threat_vuln_classifier.classify_finding(
-                            threat_name=result.get("threat_name", "UNKNOWN"),
-                            severity=result.get("severity", "UNKNOWN"),
-                            summary=result.get("summary", ""),
-                            description_claims=result.get("description_claims", ""),
-                            actual_behavior=result.get("actual_behavior", ""),
-                            security_implications=result.get("security_implications", ""),
-                            dataflow_evidence=result.get("dataflow_evidence", "")
-                        )
-                        if classification:
-                            # Add just the classification value to the result
-                            result["threat_vulnerability_classification"] = classification['classification']
-                            self.logger.debug(f"Classified as {classification['classification']} with {classification['confidence']} confidence")
-                        else:
-                            self.logger.warning(f"Failed to classify finding for {func_context.name}")
-                            result["threat_vulnerability_classification"] = "UNCLEAR"
-                    except Exception as e:
-                        self.logger.error(f"Classification failed for {func_context.name}: {e}", exc_info=True)
-                        # Continue without classification - mark as UNCLEAR
+                self.logger.debug(f"Classifying finding as threat or vulnerability for {func_context.name}")
+                try:
+                    classification = await self.threat_vuln_classifier.classify_finding(
+                        threat_name=result.get("threat_name", "UNKNOWN"),
+                        severity=result.get("severity", "UNKNOWN"),
+                        summary=result.get("summary", ""),
+                        description_claims=result.get("description_claims", ""),
+                        actual_behavior=result.get("actual_behavior", ""),
+                        security_implications=result.get("security_implications", ""),
+                        dataflow_evidence=result.get("dataflow_evidence", "")
+                    )
+                    if classification:
+                        # Add just the classification value to the result
+                        result["threat_vulnerability_classification"] = classification['classification']
+                        self.logger.debug(f"Classified as {classification['classification']} with {classification['confidence']} confidence")
+                    else:
+                        self.logger.warning(f"Failed to classify finding for {func_context.name}")
                         result["threat_vulnerability_classification"] = "UNCLEAR"
+                except Exception as e:
+                    self.logger.error(f"Classification failed for {func_context.name}: {e}", exc_info=True)
+                    # Continue without classification - mark as UNCLEAR
+                    result["threat_vulnerability_classification"] = "UNCLEAR"
                 
                 return (result, func_context)
             else:

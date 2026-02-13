@@ -270,17 +270,6 @@ class ThreatMapping:
             "aisubtech_name": "Compute Exhaustion",
             "description": "Overloading the MCP server (via repeated tool invocations or large payloads) to degrade performance or cause denial of service. Tool repeatedly processes large files or calls itself recursively without rate limits or break conditions.",
         },
-        
-        # General Behavioral & Metadata Threats
-        "GENERAL DESCRIPTION-CODE MISMATCH": {
-            "scanner_category": "GENERAL DESCRIPTION-CODE MISMATCH",
-            "severity": "INFO",
-            "aitech": "AITech-12.1",
-            "aitech_name": "Tool Exploitation",
-            "aisubtech": "AISubtech-12.1.2",
-            "aisubtech_name": "Tool Poisoning",
-            "description": "General behavioral mismatch category for non-security issues like missing docstrings with safe code implementation. Only receives INFO severity when there's no security implication - purely documentation quality issues.",
-        },
     }
     
     # AI Defense API Analyzer Threats

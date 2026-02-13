@@ -169,8 +169,7 @@ class TestThreatMapper:
             "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION",
             "BACKDOOR",
             "DEFENSE EVASION",
-            "RESOURCE EXHAUSTION",
-            "GENERAL DESCRIPTION-CODE MISMATCH"
+            "RESOURCE EXHAUSTION"
         ]
         
         for threat_name, threat_data in behavioral_threats.items():
@@ -184,8 +183,8 @@ class TestThreatMapper:
         
         behavioral_threats = ThreatMapping.BEHAVIORAL_THREATS
         
-        # Should have at least 14 threat categories (comprehensive taxonomy)
-        assert len(behavioral_threats) >= 14, f"Expected at least 14 threats, got {len(behavioral_threats)}"
+        # Should have at least 13 threat categories (comprehensive taxonomy)
+        assert len(behavioral_threats) >= 13, f"Expected at least 13 threats, got {len(behavioral_threats)}"
     
     def test_data_exfiltration_threat_details(self):
         """Test specific details of DATA EXFILTRATION threat."""
