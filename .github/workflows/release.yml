@@ -1,9 +1,9 @@
-name: "Publish to PyPi"
+name: Publish to PyPI
 
 on:
   push:
     tags:
-      - '*.*.*'
+      - "*.*.*"
 
 permissions:
   contents: read
@@ -12,22 +12,26 @@ jobs:
   pypi-publish:
     name: upload release to PyPI
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
     environment:
       name: pypi
       url: https://pypi.org/p/cisco-ai-mcp-scanner
     permissions:
       id-token: write
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6.7.0
-      - name: Install Python 3.13
-        run: uv python install 3.13
+        uses: actions/checkout@v6
+
+      - name: Install the latest version of uv and set the Python 3.13
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --locked --no-dev
+
       - name: Build
         run: uv build
+
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
