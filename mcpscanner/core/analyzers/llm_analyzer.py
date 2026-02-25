@@ -300,7 +300,7 @@ class LLMAnalyzer(BaseAnalyzer):
                 # Generate threat summary for all findings
                 display_names = []
                 for threat_name in primary_threats:
-                    threat_info = LLM_THREAT_MAPPING.get(threat_name)
+                    threat_info = LLM_THREAT_MAPPING.get(threat_name) or LLM_THREAT_MAPPING.get(threat_name.replace("_", " "))
                     if threat_info:
                         display_names.append(threat_info["threat_type"])
 
@@ -311,7 +311,7 @@ class LLMAnalyzer(BaseAnalyzer):
 
                 # Create specific findings for each detected threat
                 for threat_name in primary_threats:
-                    threat_info = LLM_THREAT_MAPPING.get(threat_name)
+                    threat_info = LLM_THREAT_MAPPING.get(threat_name) or LLM_THREAT_MAPPING.get(threat_name.replace("_", " "))
 
                     if threat_info:
                         category = threat_info["threat_category"]
