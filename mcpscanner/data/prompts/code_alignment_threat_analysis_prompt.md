@@ -1015,7 +1015,6 @@ Respond with ONLY a valid JSON object:
   - `HIGH`: Clear mismatch with strong dataflow evidence
   - `MEDIUM`: Likely mismatch but some ambiguity in intent
   - `LOW`: Possible mismatch but could be legitimate
-- **Note**: Severity (HIGH/MEDIUM/LOW) will be automatically determined by the threat classification system based on the `threat_name` you provide. You do NOT need to specify severity.
 - **summary**: Brief one-sentence description of the mismatch
 - **threat_name**: REQUIRED when mismatch_detected is true. Must be ONE of these 14 exact values:
   1. `"PROMPT INJECTION"` - Malicious manipulation of tool metadata or hidden instructions
@@ -1069,7 +1068,7 @@ Respond with ONLY a valid JSON object:
 }
 ```
 
-**Example 3: Missing Documentation with Safe Implementation (Will Get INFO Severity)**
+**Example 3: Missing Documentation with Safe Implementation**
 ```json
 {
   "mismatch_detected": true,
@@ -1083,7 +1082,7 @@ Respond with ONLY a valid JSON object:
   "dataflow_evidence": "Parameter 'text' flows to str.format() at line 3, result returned at line 4. All operations are safe string manipulations."
 }
 ```
-**Note**: This example receives INFO severity because there's NO tool description (missing docstring) BUT the code implementation is GOOD (safe, no security issues). This is purely a documentation quality issue, not a security threat.
+**Note**: This example is flagged because there's NO tool description (missing docstring) BUT the code implementation is GOOD (safe, no security issues). This is purely a documentation quality issue, not a security threat.
 
 ## Critical Guidelines
 

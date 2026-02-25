@@ -291,16 +291,6 @@ class LLMAnalyzer(BaseAnalyzer):
         overall_risk = threat_analysis.get("overall_risk", "SAFE")
 
         if overall_risk != "SAFE":
-            # Normalize severity levels based on overall risk
-            severity_map = {
-                "HIGH": "HIGH",
-                "MEDIUM": "MEDIUM",
-                "LOW": "LOW",
-                "SAFE": "SAFE",
-                "UNKNOWN": "UNKNOWN",
-            }
-            normalized_severity = severity_map.get(overall_risk, "UNKNOWN")
-
             primary_threats = threat_analysis.get("primary_threats", [])
 
             # Only create findings if malicious content is detected AND primary threats are specified
@@ -326,17 +316,20 @@ class LLMAnalyzer(BaseAnalyzer):
                     if threat_info:
                         category = threat_info["threat_category"]
                         display_name = threat_info["threat_type"]
+                        # Use severity from centralized threat mapping
+                        severity = threat_info["severity"]
                     else:
                         # Handle unknown threats by using the threat name itself
                         category = threat_name
                         display_name = threat_name.lower().replace("_", " ")
+                        severity = "UNKNOWN"
 
                     # Skip creating findings only for explicitly SAFE classifications
                     if category == "SAFE":
                         continue
 
                     finding = SecurityFinding(
-                        severity=normalized_severity,
+                        severity=severity,
                         summary=threat_summary,
                         analyzer="LLM",
                         threat_category=category,
