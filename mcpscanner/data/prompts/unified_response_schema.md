@@ -25,9 +25,7 @@ All analyzers (API, YARA, LLM) will return security findings with this unified s
 ## Standardized Fields
 
 ### 1. **severity** (Required)
-- **HIGH**: Critical security threats requiring immediate attention
-- **MEDIUM**: Moderate security concerns that should be reviewed
-- **LOW**: Minor issues or potential concerns
+Determined automatically from centralized threat mappings in `threats.py` based on the detected threat type.
 
 ### 2. **confidence** (Required)
 - **HIGH**: Very confident in the finding (>80% certainty)
@@ -77,21 +75,14 @@ Confidence HIGH for exact matches
 
 ### LLM Analyzer Mapping
 ```
-CRITICAL -> HIGH severity
-HIGH -> HIGH severity
-MEDIUM -> MEDIUM severity
-LOW -> LOW severity
-
-Risk levels mapped to confidence:
->80% certainty -> HIGH confidence
-50-80% certainty -> MEDIUM confidence
-<50% certainty -> LOW confidence
+Severity determined from LLM_THREAT_MAPPING in threats.py based on detected threat_name
+Each threat type has a fixed severity defined centrally
 ```
 
 ## Benefits of Unified Schema
 
 1. **Consistency**: All analyzers return the same field structure
-2. **Clarity**: Standardized severity and confidence levels
+2. **Clarity**: Severity determined from centralized threat mappings
 3. **Compatibility**: Easy to process and display results
 4. **Extensibility**: New analyzers can easily adopt this format
 5. **User Experience**: No confusion about different field names or values

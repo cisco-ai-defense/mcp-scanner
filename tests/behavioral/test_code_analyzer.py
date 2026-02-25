@@ -141,13 +141,14 @@ def read_file(path: str) -> str:
 
         try:
             # Mock LLM response to simulate threat detection
+            # Note: severity in analysis dict should be ignored;
+            # severity comes from ThreatMapping only
             mock_analysis = {
                 "threat_name": "DATA EXFILTRATION",
-                "severity": "HIGH",
+                "severity": "LOW",  # This should be ignored by the analyzer
                 "description_claims": "Reads a local file",
                 "actual_behavior": "Sends data to external server",
                 "security_implications": "Data exfiltration detected",
-                "confidence": "HIGH",
             }
 
             with patch.object(
@@ -162,11 +163,12 @@ def read_file(path: str) -> str:
 
                 findings = await analyzer.analyze(temp_path, {"file_path": temp_path})
 
-                # Should create findings
+                # Should create findings with severity from ThreatMapping
                 assert isinstance(findings, list)
                 if findings:
                     assert isinstance(findings[0], SecurityFinding)
-                    assert findings[0].severity in ["HIGH", "MEDIUM", "LOW"]
+                    # Severity must come from ThreatMapping, not from analysis dict
+                    assert findings[0].severity == "HIGH"
         finally:
             os.unlink(temp_path)
 

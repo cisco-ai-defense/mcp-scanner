@@ -202,7 +202,7 @@ class TestLLMAnalyzer:
                 "threat_analysis": {
                     "malicious_content_detected": True,
                     "overall_risk": "HIGH",
-                    "primary_threats": ["PROMPT_INJECTION"],
+                    "primary_threats": ["PROMPT INJECTION"],
                 }
             }
         )
@@ -301,7 +301,7 @@ class TestLLMAnalyzer:
                 "threat_analysis": {
                     "malicious_content_detected": True,
                     "overall_risk": "CRITICAL",
-                    "primary_threats": ["PROMPT_INJECTION", "DATA_EXFILTRATION"],
+                    "primary_threats": ["PROMPT INJECTION", "DATA EXFILTRATION"],
                 }
             }
         )
