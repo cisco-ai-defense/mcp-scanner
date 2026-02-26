@@ -30,8 +30,8 @@ from ..types import Position, Range
 class BaseParser(ABC):
     """Base class for language-specific source code parsers.
 
-    This follows the parser abstraction pattern used in tools like
-    Semgrep, where each language has its own parser implementation.
+    This follows a parser abstraction pattern where each language
+    has its own parser implementation.
     """
 
     def __init__(self, file_path: Path, source_code: str) -> None:
