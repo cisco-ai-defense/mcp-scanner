@@ -133,7 +133,9 @@ async def demo_different_models():
                     else:
                         emoji = "⚪"
 
-                    print(f"     {j}. {emoji} [{finding.severity}] Risk: {risk_score}/100")
+                    print(
+                        f"     {j}. {emoji} [{finding.severity}] Risk: {risk_score}/100"
+                    )
                     print(f"        Type: {risk_type}")
                     print(f"        Summary: {finding.summary[:80]}...")
             else:

@@ -21,11 +21,14 @@ import pytest
 
 class TestResponseValidator:
     """Test response validation functionality."""
-    
+
     def test_validator_module_exists(self):
         """Test that response validator module exists."""
         try:
-            from mcpscanner.core.analyzers.behavioral.alignment import alignment_response_validator
+            from mcpscanner.core.analyzers.behavioral.alignment import (
+                alignment_response_validator,
+            )
+
             assert alignment_response_validator is not None
         except ImportError:
             pytest.skip("Response validator module structure needs verification")

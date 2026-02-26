@@ -63,7 +63,7 @@ class SecurityFinding:
         self.threat_category = threat_category
         self.analyzer = analyzer
         self.details = details or {}
-        
+
         # Enrich with MCP Taxonomy information
         self.mcp_taxonomy = self._get_mcp_taxonomy()
 
@@ -85,10 +85,10 @@ class SecurityFinding:
 
         normalized = level.upper()
         return normalized if normalized in valid_levels else default
-    
+
     def _get_mcp_taxonomy(self) -> Optional[Dict[str, Any]]:
         """Get MCP Taxonomy classification for this finding.
-        
+
         Returns:
             Dictionary with MCP Taxonomy information or None if not found.
         """
@@ -100,10 +100,10 @@ class SecurityFinding:
                 "API": "ai_defense",
                 "BEHAVIORAL": "behavioral",
             }
-            
+
             # Check if this is a built-in analyzer
             analyzer_key = analyzer_map.get(self.analyzer.upper())
-            
+
             # If not a built-in analyzer, check if it's a custom analyzer using AI Defense classifications
             # Custom analyzers that use AI Defense threat types should have threat_type in details
             if not analyzer_key and self.details and "threat_type" in self.details:
@@ -116,10 +116,10 @@ class SecurityFinding:
                 except ValueError:
                     # Not an AI Defense threat, return None
                     return None
-            
+
             if not analyzer_key:
                 return None
-            
+
             # For all analyzers, try to use threat_type from details for accurate taxonomy lookup
             threat_name = self.threat_category
             if self.details:
@@ -133,10 +133,10 @@ class SecurityFinding:
                     rule_threat_type = raw_response.get("threat_type", "")
                     if rule_threat_type:
                         threat_name = rule_threat_type
-            
+
             if not threat_name:
                 return None
-            
+
             # Look up in threat mapping
             mapping = ThreatMapping.get_threat_mapping(analyzer_key, threat_name)
             return {
