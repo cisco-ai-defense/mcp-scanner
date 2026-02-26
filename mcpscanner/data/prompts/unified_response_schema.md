@@ -24,15 +24,7 @@ All analyzers (API, YARA, LLM) will return security findings with this unified s
 
 ## Standardized Fields
 
-### 1. **severity** (Required)
-Determined automatically from centralized threat mappings in `threats.py` based on the detected threat type.
-
-### 2. **confidence** (Required)
-- **HIGH**: Very confident in the finding (>80% certainty)
-- **MEDIUM**: Moderately confident (50-80% certainty)
-- **LOW**: Low confidence, potential false positive (<50% certainty)
-
-### 3. **threat_category** (Required)
+### 1. **threat_category** (Required)
 Standardized threat categories across all analyzers:
 - **PROMPT_INJECTION**: Malicious prompt manipulation
 - **DATA_EXFILTRATION**: Unauthorized data access/transmission
@@ -75,14 +67,13 @@ Confidence HIGH for exact matches
 
 ### LLM Analyzer Mapping
 ```
-Severity determined from LLM_THREAT_MAPPING in threats.py based on detected threat_name
-Each threat type has a fixed severity defined centrally
+Threat types mapped to standardized categories
 ```
 
 ## Benefits of Unified Schema
 
 1. **Consistency**: All analyzers return the same field structure
-2. **Clarity**: Severity determined from centralized threat mappings
+2. **Clarity**: Standardized threat categorization across analyzers
 3. **Compatibility**: Easy to process and display results
 4. **Extensibility**: New analyzers can easily adopt this format
 5. **User Experience**: No confusion about different field names or values

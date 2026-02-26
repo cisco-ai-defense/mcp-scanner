@@ -143,12 +143,11 @@ class TestResponseValidatorSeverityFromThreatMapping:
 
         assert finding.severity == "UNKNOWN"
 
-    def test_severity_not_from_analysis_dict(self):
-        """Test that severity in analysis dict is ignored - only ThreatMapping is used."""
+    def test_severity_always_from_threat_mapping(self):
+        """Test that severity always comes from ThreatMapping, not the analysis dict."""
         validator = self._make_validator()
         analysis = {
             "threat_name": "DATA EXFILTRATION",
-            "severity": "LOW",  # This should be ignored
             "description_claims": "Reads a local file",
             "actual_behavior": "Sends data to external server",
             "security_implications": "Data exfiltration detected",
@@ -157,5 +156,5 @@ class TestResponseValidatorSeverityFromThreatMapping:
 
         finding = validator.create_security_finding(analysis, func_context)
 
-        # Should use ThreatMapping severity (HIGH), not the "LOW" from analysis dict
+        # DATA EXFILTRATION severity is HIGH in threats.py BEHAVIORAL_THREATS
         assert finding.severity == "HIGH"
