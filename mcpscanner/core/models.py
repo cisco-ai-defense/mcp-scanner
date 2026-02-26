@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator
 from .auth import APIAuthConfig, AuthType
 
+
 class OutputFormat(str, Enum):
     """Available output formats."""
 
@@ -57,6 +58,7 @@ class AnalyzerEnum(str, Enum):
     YARA = "yara"
     LLM = "llm"
     BEHAVIORAL = "behavioral"
+    READINESS = "readiness"
 
 
 class AnalysisContext(BaseModel):
@@ -219,9 +221,7 @@ class ScanSummary(BaseModel):
     total_tools_scanned: int = Field(
         0, ge=0, description="Total number of tools scanned"
     )
-    total_findings: int = Field(
-        0, ge=0, description="Total security findings found"
-    )
+    total_findings: int = Field(0, ge=0, description="Total security findings found")
     high_severity_count: int = Field(
         0, ge=0, description="Number of high severity security findings"
     )
@@ -265,7 +265,6 @@ class ErrorInfo(BaseModel):
         if not v or not v.strip():
             raise ValueError("Field cannot be empty")
         return v.strip()
-
 
 
 class APIScanRequest(BaseModel):

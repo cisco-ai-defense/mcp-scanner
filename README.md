@@ -1,5 +1,12 @@
 # MCP Scanner
 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![PyPI](https://img.shields.io/pypi/v/cisco-ai-mcp-scanner.svg)](https://pypi.org/project/cisco-ai-mcp-scanner/)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?logo=discord&logoColor=white)](https://discord.com/invite/nKWtDcXxtx)
+[![Cisco AI Defense](https://img.shields.io/badge/Cisco-AI%20Defense-049fd9?logo=cisco&logoColor=white)](https://www.cisco.com/site/us/en/products/security/ai-defense/index.html)
+[![AI Security and Safety Framework](https://img.shields.io/badge/AI%20Security-Framework-orange)](https://learn-cloudsecurity.cisco.com/ai-security-framework)
+
 A Python tool for scanning MCP (Model Context Protocol) servers and tools for potential security findings. The MCP Scanner combines Cisco AI Defense inspect API, YARA rules and LLM-as-a-judge to detect malicious MCP tools.
 
 ## Overview
@@ -15,8 +22,10 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
+- **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
-- **Behavioural Code Scannig**: Scan Source code of MCP servers for finding threats.
+- **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
+- **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
 - **Custom Endpoints**: Configure the API endpoint to support any Cisco AI Defense environments.
@@ -216,12 +225,11 @@ asyncio.run(main())
 - **stdio**: launch and scan a stdio MCP server. Requires `--stdio-command`; accepts `--stdio-args`, `--stdio-env`, optional `--stdio-tool`.
 - **config**: scan servers from a specific MCP config file. Requires `--config-path`; optional `--bearer-token`.
 - **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
-- **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`.
-- **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`.
-- **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
-- **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`, `--header`.
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
+- **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
+- **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
+- **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
 
@@ -378,6 +386,68 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
 
+#### Scan Static/Offline Files (CI/CD Mode)
+
+The `static` subcommand allows you to scan pre-generated JSON files without connecting to a live MCP server. This is ideal for CI/CD pipelines, air-gapped environments, or reproducible security checks.
+
+```bash
+# Scan tools from a static JSON file
+mcp-scanner --analyzers yara static --tools /path/to/tools-list.json
+
+# Scan with multiple analyzers
+mcp-scanner --analyzers yara,llm static --tools /path/to/tools-list.json
+
+# Scan prompts from a static JSON file
+mcp-scanner --analyzers llm static --prompts /path/to/prompts-list.json
+
+# Scan resources from a static JSON file
+mcp-scanner --analyzers llm static --resources /path/to/resources-list.json
+
+# Scan all three types at once with detailed output
+mcp-scanner \
+  --analyzers yara,llm,api \
+  --format detailed \
+  static \
+  --tools /path/to/tools-list.json \
+  --prompts /path/to/prompts-list.json \
+  --resources /path/to/resources-list.json
+
+# CI/CD example: YARA-only scan (no API keys needed)
+mcp-scanner --analyzers yara --format summary static --tools output/tools.json
+```
+
+**Expected JSON Format:**
+```json
+{
+  "tools": [
+    {
+      "name": "tool_name",
+      "description": "Tool description",
+      "inputSchema": { "type": "object", "properties": {} }
+    }
+  ]
+}
+```
+
+For more details, see [Static Scanning Documentation](docs/static-scanning.md) and [examples/static_scanning_example.py](examples/static_scanning_example.py).
+
+#### Readiness Scanning
+
+The Readiness Analyzer checks MCP tools for production readiness issues using 20 heuristic rules. It requires no API keys and focuses on operational reliability: timeouts, retries, error handling, and more.
+
+```bash
+# Readiness-only scan (no API keys required)
+mcp-scanner --analyzers readiness --server-url http://localhost:8000/mcp
+
+# Combined security + readiness scan
+mcp-scanner --analyzers yara,readiness --server-url http://localhost:8000/mcp
+
+# Detailed readiness output
+mcp-scanner --analyzers readiness --detailed --server-url http://localhost:8000/mcp
+```
+
+See [Readiness Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/readiness-scanning.md) for complete technical details.
+
 ### API Server Usage
 
 The API server provides a REST interface to the MCP scanner functionality, allowing you to integrate security scanning into web applications, CI/CD pipelines, or other services. It exposes the same scanning capabilities as the CLI tool but through HTTP endpoints.
@@ -476,6 +546,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 - **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration
 - **[Programmatic Usage](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/programmatic-usage.md)** - Programmatic usage examples and advanced usage
+- **[Static Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/static-scanning.md)** - Offline/CI-CD scanning mode
 - **[API Reference](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md)** - Complete REST API documentation
 - **[Output Formats](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/output-formats.md)** - Detailed output format options
 

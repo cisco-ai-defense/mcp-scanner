@@ -544,7 +544,9 @@ async def test_get_mcp_session_connection_error(config):
     with patch("mcpscanner.core.scanner.sse_client") as mock_sse_client:
         mock_context = AsyncMock()
         # Simulate a connection error that will be caught and converted
-        mock_context.__aenter__.side_effect = Exception("nodename nor servname provided")
+        mock_context.__aenter__.side_effect = Exception(
+            "nodename nor servname provided"
+        )
         mock_sse_client.return_value = mock_context
 
         with pytest.raises(MCPConnectionError, match="Unable to connect to MCP server"):
@@ -637,7 +639,9 @@ async def test_scan_stdio_server_tools_no_command(config):
     scanner = Scanner(config)
 
     # The scanner will try to connect before validating command, so we expect MCPConnectionError
-    with pytest.raises(MCPConnectionError, match="Unable to connect to stdio MCP server"):
+    with pytest.raises(
+        MCPConnectionError, match="Unable to connect to stdio MCP server"
+    ):
         await scanner.scan_stdio_server_tools(
             server_config, analyzers=[AnalyzerEnum.YARA]
         )
@@ -789,18 +793,19 @@ async def test_get_mcp_session_401_unauthorized_streamable_http(config):
         # Create a mock HTTPStatusError with 401
         class MockHTTPStatusError(Exception):
             def __init__(self):
-                super().__init__("Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0'")
+                super().__init__(
+                    "Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0'"
+                )
 
         # BaseExceptionGroup with 401 error (simulates what MCP library does)
-        error_group = BaseExceptionGroup(
-            "unhandled errors",
-            [MockHTTPStatusError()]
-        )
+        error_group = BaseExceptionGroup("unhandled errors", [MockHTTPStatusError()])
 
         mock_context.__aenter__.side_effect = error_group
         mock_client.return_value = mock_context
 
-        with pytest.raises(MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"):
+        with pytest.raises(
+            MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"
+        ):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0")
 
 
@@ -815,18 +820,19 @@ async def test_get_mcp_session_401_unauthorized_via_exception_group(config):
         # Create a mock HTTPStatusError
         class MockHTTPStatusError(Exception):
             def __init__(self):
-                super().__init__("Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0/sse'")
+                super().__init__(
+                    "Client error '401 Unauthorized' for url 'https://api.mcpanalytics.ai/auth0/sse'"
+                )
 
         # BaseExceptionGroup with 401 error
-        error_group = BaseExceptionGroup(
-            "unhandled errors",
-            [MockHTTPStatusError()]
-        )
+        error_group = BaseExceptionGroup("unhandled errors", [MockHTTPStatusError()])
 
         mock_context.__aenter__.side_effect = error_group
         mock_sse_client.return_value = mock_context
 
-        with pytest.raises(MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"):
+        with pytest.raises(
+            MCPAuthenticationError, match="Authentication failed.*OAuth or Bearer token"
+        ):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0/sse")
 
 
@@ -840,17 +846,18 @@ async def test_get_mcp_session_403_forbidden(config):
 
         class MockHTTPStatusError(Exception):
             def __init__(self):
-                super().__init__("Client error '403 Forbidden' for url 'https://api.mcpanalytics.ai/auth0'")
+                super().__init__(
+                    "Client error '403 Forbidden' for url 'https://api.mcpanalytics.ai/auth0'"
+                )
 
-        error_group = BaseExceptionGroup(
-            "unhandled errors",
-            [MockHTTPStatusError()]
-        )
+        error_group = BaseExceptionGroup("unhandled errors", [MockHTTPStatusError()])
 
         mock_context.__aenter__.side_effect = error_group
         mock_client.return_value = mock_context
 
-        with pytest.raises(MCPAuthenticationError, match="Access denied.*authentication credentials"):
+        with pytest.raises(
+            MCPAuthenticationError, match="Access denied.*authentication credentials"
+        ):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/auth0")
 
 
@@ -864,17 +871,19 @@ async def test_get_mcp_session_404_not_found(config):
 
         class MockHTTPStatusError(Exception):
             def __init__(self):
-                super().__init__("Client error '404 Not Found' for url 'https://api.mcpanalytics.ai/nonexistent'")
+                super().__init__(
+                    "Client error '404 Not Found' for url 'https://api.mcpanalytics.ai/nonexistent'"
+                )
 
-        error_group = BaseExceptionGroup(
-            "unhandled errors",
-            [MockHTTPStatusError()]
-        )
+        error_group = BaseExceptionGroup("unhandled errors", [MockHTTPStatusError()])
 
         mock_context.__aenter__.side_effect = error_group
         mock_client.return_value = mock_context
 
-        with pytest.raises(MCPServerNotFoundError, match="MCP server endpoint not found.*verify the URL"):
+        with pytest.raises(
+            MCPServerNotFoundError,
+            match="MCP server endpoint not found.*verify the URL",
+        ):
             await scanner._get_mcp_session("https://api.mcpanalytics.ai/nonexistent")
 
 
@@ -892,7 +901,7 @@ def test_prompt_scan_result_creation():
         prompt_description="A test prompt",
         status="completed",
         analyzers=[AnalyzerEnum.API],
-        findings=[]
+        findings=[],
     )
 
     assert result.prompt_name == "test_prompt"
@@ -909,7 +918,7 @@ def test_prompt_scan_result_with_findings():
         summary="Test finding",
         analyzer="API",
         threat_category="MALICIOUS_CODE",
-        details={}
+        details={},
     )
 
     result = PromptScanResult(
@@ -917,7 +926,7 @@ def test_prompt_scan_result_with_findings():
         prompt_description="An unsafe prompt",
         status="completed",
         analyzers=[AnalyzerEnum.API],
-        findings=[finding]
+        findings=[finding],
     )
 
     assert result.is_safe is False
@@ -932,7 +941,7 @@ def test_prompt_scan_result_failed_status():
         prompt_description="A failed prompt scan",
         status="failed",
         analyzers=[],
-        findings=[]
+        findings=[],
     )
 
     assert result.status == "failed"
@@ -950,7 +959,7 @@ def test_resource_scan_result_creation():
         resource_mime_type="text/plain",
         status="completed",
         analyzers=[AnalyzerEnum.API],
-        findings=[]
+        findings=[],
     )
 
     assert result.resource_uri == "file://test/file.txt"
@@ -968,7 +977,7 @@ def test_resource_scan_result_with_findings():
         summary="Malicious content detected",
         analyzer="LLM",
         threat_category="XSS",
-        details={"threat_type": "XSS"}
+        details={"threat_type": "XSS"},
     )
 
     result = ResourceScanResult(
@@ -977,7 +986,7 @@ def test_resource_scan_result_with_findings():
         resource_mime_type="text/html",
         status="completed",
         analyzers=[AnalyzerEnum.LLM],
-        findings=[finding]
+        findings=[finding],
     )
 
     assert result.is_safe is False
@@ -993,7 +1002,7 @@ def test_resource_scan_result_skipped_status():
         resource_mime_type="application/octet-stream",
         status="skipped",
         analyzers=[],
-        findings=[]
+        findings=[],
     )
 
     assert result.status == "skipped"
@@ -1008,7 +1017,7 @@ def test_resource_scan_result_failed_status():
         resource_mime_type="text/plain",
         status="failed",
         analyzers=[],
-        findings=[]
+        findings=[],
     )
 
     assert result.status == "failed"
