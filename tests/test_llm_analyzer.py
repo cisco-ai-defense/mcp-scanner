@@ -152,9 +152,7 @@ class TestLLMAnalyzer:
 
         analysis = {"is_malicious": False, "risk_score": 10, "severity": "Low"}
 
-        findings = analyzer._create_findings_from_threat_analysis(
-            analysis, "safe_tool"
-        )
+        findings = analyzer._create_findings_from_threat_analysis(analysis, "safe_tool")
 
         assert len(findings) == 0
 
@@ -167,7 +165,7 @@ class TestLLMAnalyzer:
             "threat_analysis": {
                 "malicious_content_detected": True,
                 "overall_risk": "HIGH",
-                "primary_threats": ["DATA_EXFILTRATION", "TOOL_POISONING"],
+                "primary_threats": ["DATA EXFILTRATION", "TOOL POISONING"],
             }
         }
 
@@ -181,13 +179,13 @@ class TestLLMAnalyzer:
         exfil_finding = findings[0]
         assert exfil_finding.severity == "HIGH"
         assert exfil_finding.analyzer == "LLM"
-        assert exfil_finding.threat_category == "DATA_EXFILTRATION"
+        assert exfil_finding.threat_category == "SECURITY VIOLATION"
         assert "malicious_tool" in exfil_finding.details["tool_name"]
 
         # Check tool poisoning finding
         poison_finding = findings[1]
         assert poison_finding.severity == "HIGH"
-        assert poison_finding.threat_category == "TOOL_POISONING"
+        assert poison_finding.threat_category == "SUSPICIOUS CODE EXECUTION"
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
@@ -204,7 +202,7 @@ class TestLLMAnalyzer:
                 "threat_analysis": {
                     "malicious_content_detected": True,
                     "overall_risk": "HIGH",
-                    "primary_threats": ["PROMPT_INJECTION"],
+                    "primary_threats": ["PROMPT INJECTION"],
                 }
             }
         )
@@ -303,7 +301,7 @@ class TestLLMAnalyzer:
                 "threat_analysis": {
                     "malicious_content_detected": True,
                     "overall_risk": "CRITICAL",
-                    "primary_threats": ["PROMPT_INJECTION", "DATA_EXFILTRATION"],
+                    "primary_threats": ["PROMPT INJECTION", "DATA EXFILTRATION"],
                 }
             }
         )
@@ -316,13 +314,11 @@ class TestLLMAnalyzer:
 
         assert len(findings) == 2
 
-        # Check that all finding types are present
+        # Check that all finding types are present (categories come from LLM_THREAT_MAPPING)
         threat_categories = {v.threat_category for v in findings}
-        assert "PROMPT_INJECTION" in threat_categories
-        assert "DATA_EXFILTRATION" in threat_categories
+        assert "PROMPT INJECTION" in threat_categories
+        assert "SECURITY VIOLATION" in threat_categories
 
-        # Check severity distribution
+        # Check severity - all severities come from threats.py mapping
         severities = {v.severity for v in findings}
-        assert (
-            "UNKNOWN" in severities
-        )  # CRITICAL is not in severity map, defaults to UNKNOWN
+        assert "HIGH" in severities

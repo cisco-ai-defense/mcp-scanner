@@ -34,6 +34,7 @@ from .base import BaseAnalyzer, SecurityFinding
 
 class SecurityError(Exception):
     """Custom exception for security violations in LLM prompts."""
+
     pass
 
 
@@ -73,24 +74,34 @@ class LLMAnalyzer(BaseAnalyzer):
 
         # Authentication strategy based on provider:
         # 1. Non-Bedrock providers (OpenAI, Anthropic, etc.): API key required
-        # 2. Bedrock with API key: Use Bedrock API key (MCP_SCANNER_LLM_API_KEY or AWS_BEARER_TOKEN_BEDROCK)
-        # 3. Bedrock without API key: Use AWS credentials (profile/IAM/session token)
+        # 2. Bedrock with API key: Use Bedrock API key (MCP_SCANNER_LLM_API_KEY)
+        # 3. Bedrock with bearer token: Use AWS_BEARER_TOKEN_BEDROCK for API gateway auth
+        # 4. Bedrock without API key: Use AWS credentials (profile/IAM/session token)
 
         if not is_bedrock:
             # Non-Bedrock providers always require API key
-            if not hasattr(config, "llm_provider_api_key") or not config.llm_provider_api_key:
+            if (
+                not hasattr(config, "llm_provider_api_key")
+                or not config.llm_provider_api_key
+            ):
                 raise ValueError("LLM provider API key is required for LLM analyzer")
             self._api_key = config.llm_provider_api_key
         else:
-            # Bedrock: API key is optional (can use AWS credentials instead)
+            # Bedrock: Check for API key, then bearer token, then fall back to AWS credentials
             if hasattr(config, "llm_provider_api_key") and config.llm_provider_api_key:
-                # Use Bedrock API key authentication
+                # Use Bedrock API key authentication (MCP_SCANNER_LLM_API_KEY)
                 self._api_key = config.llm_provider_api_key
-                self.logger.debug("Bedrock: Using API key authentication")
+                self.logger.debug("Bedrock: Using API key authentication (MCP_SCANNER_LLM_API_KEY)")
+            elif hasattr(config, "aws_bearer_token_bedrock") and config.aws_bearer_token_bedrock:
+                # Use AWS Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK)
+                self._api_key = config.aws_bearer_token_bedrock
+                self.logger.debug("Bedrock: Using bearer token authentication (AWS_BEARER_TOKEN_BEDROCK)")
             else:
                 # Use AWS credentials (profile/IAM/session token)
                 self._api_key = None
-                self.logger.debug("Bedrock: Using AWS credentials (profile/IAM/session)")
+                self.logger.debug(
+                    "Bedrock: Using AWS credentials (profile/IAM/session)"
+                )
 
         # Store configuration for per-request usage
         self._base_url = config.llm_base_url
@@ -277,69 +288,57 @@ class LLMAnalyzer(BaseAnalyzer):
         findings = []
 
         threat_analysis = analysis_result.get("threat_analysis", {})
-        overall_risk = threat_analysis.get("overall_risk", "SAFE")
+        primary_threats = threat_analysis.get("primary_threats", [])
 
-        if overall_risk != "SAFE":
-            # Normalize severity levels based on overall risk
-            severity_map = {
-                "HIGH": "HIGH",
-                "MEDIUM": "MEDIUM",
-                "LOW": "LOW",
-                "SAFE": "SAFE",
-                "UNKNOWN": "UNKNOWN",
-            }
-            normalized_severity = severity_map.get(overall_risk, "UNKNOWN")
+        # Only create findings if malicious content is detected AND primary threats are specified
+        if primary_threats and threat_analysis.get(
+            "malicious_content_detected", False
+        ):
+            # Generate threat summary for all findings
+            display_names = []
+            for threat_name in primary_threats:
+                threat_info = LLM_THREAT_MAPPING.get(threat_name)
+                if threat_info:
+                    display_names.append(threat_info["threat_type"])
 
-            primary_threats = threat_analysis.get("primary_threats", [])
+            if len(display_names) == 1:
+                threat_summary = f"Detected 1 threat: {display_names[0]}"
+            else:
+                threat_summary = f"Detected {len(display_names)} threats: {', '.join(display_names)}"
 
-            # Only create findings if malicious content is detected AND primary threats are specified
-            if primary_threats and threat_analysis.get(
-                "malicious_content_detected", False
-            ):
-                # Generate threat summary for all findings
-                display_names = []
-                for threat_name in primary_threats:
-                    threat_info = LLM_THREAT_MAPPING.get(threat_name)
-                    if threat_info:
-                        display_names.append(threat_info["threat_type"])
+            # Create specific findings for each detected threat
+            for threat_name in primary_threats:
+                threat_info = LLM_THREAT_MAPPING.get(threat_name)
 
-                if len(display_names) == 1:
-                    threat_summary = f"Detected 1 threat: {display_names[0]}"
+                if threat_info:
+                    category = threat_info["threat_category"]
+                    display_name = threat_info["threat_type"]
+                    # Use severity from centralized threat mapping
+                    severity = threat_info["severity"]
                 else:
-                    threat_summary = f"Detected {len(display_names)} threats: {', '.join(display_names)}"
+                    # Handle unknown threats by using the threat name itself
+                    category = threat_name
+                    display_name = threat_name.lower().replace("_", " ")
+                    severity = "UNKNOWN"
 
-                # Create specific findings for each detected threat
-                for threat_name in primary_threats:
-                    threat_info = LLM_THREAT_MAPPING.get(threat_name)
-                    
-                    if threat_info:
-                        category = threat_info["threat_category"]
-                        display_name = threat_info["threat_type"]
-                    else:
-                        # Handle unknown threats by using the threat name itself
-                        category = threat_name
-                        display_name = threat_name.lower().replace("_", " ")
+                # Skip creating findings only for explicitly SAFE classifications
+                if category == "SAFE":
+                    continue
 
-                    # Skip creating findings only for explicitly SAFE classifications
-                    if category == "SAFE":
-                        continue
-
-                    finding = SecurityFinding(
-                        severity=normalized_severity,
-                        summary=threat_summary,
-                        analyzer="LLM",
-                        threat_category=category,
-                        details={
-                            "tool_name": tool_name,
-                            "threat_type": threat_name,  # Original name for taxonomy lookup
-                            "evidence": f"{display_name} detected in tool content",
-                            "raw_response": analysis_result,
-                            "primary_threats": primary_threats,
-                        },
-                    )
-                    findings.append(finding)
-            # If no malicious content detected or no threats specified, return empty findings (SAFE)
-
+                finding = SecurityFinding(
+                    severity=severity,
+                    summary=threat_summary,
+                    analyzer="LLM",
+                    threat_category=category,
+                    details={
+                        "tool_name": tool_name,
+                        "threat_type": threat_name,  # Original name for taxonomy lookup
+                        "evidence": f"{display_name} detected in tool content",
+                        "raw_response": analysis_result,
+                        "primary_threats": primary_threats,
+                    },
+                )
+                findings.append(finding)
         return findings
 
     async def analyze(

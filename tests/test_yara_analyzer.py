@@ -92,16 +92,11 @@ async def test_yara_analyzer_with_matches():
         findings = await analyzer.analyze("This content matches a rule")
 
         assert len(findings) == 1
-        assert (
-            findings[0].severity == "UNKNOWN"
-        )  # Default for unmapped threat types
+        assert findings[0].severity == "UNKNOWN"  # Default for unmapped threat types
         assert findings[0].summary == "Detected 1 threat: test rule"
         assert findings[0].analyzer == "YARA"
         assert findings[0].details["raw_response"]["rule"] == "test_rule"
-        assert (
-            findings[0].details["raw_response"]["description"]
-            == "Test description"
-        )
+        assert findings[0].details["raw_response"]["description"] == "Test description"
 
 
 @pytest.mark.asyncio

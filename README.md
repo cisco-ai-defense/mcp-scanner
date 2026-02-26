@@ -1,5 +1,12 @@
 # MCP Scanner
 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![PyPI](https://img.shields.io/pypi/v/cisco-ai-mcp-scanner.svg)](https://pypi.org/project/cisco-ai-mcp-scanner/)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?logo=discord&logoColor=white)](https://discord.com/invite/nKWtDcXxtx)
+[![Cisco AI Defense](https://img.shields.io/badge/Cisco-AI%20Defense-049fd9?logo=cisco&logoColor=white)](https://www.cisco.com/site/us/en/products/security/ai-defense/index.html)
+[![AI Security and Safety Framework](https://img.shields.io/badge/AI%20Security-Framework-orange)](https://learn-cloudsecurity.cisco.com/ai-security-framework)
+
 A Python tool for scanning MCP (Model Context Protocol) servers and tools for potential security findings. The MCP Scanner combines Cisco AI Defense inspect API, YARA rules and LLM-as-a-judge to detect malicious MCP tools.
 
 ## Overview
@@ -15,6 +22,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
+- **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
@@ -400,6 +408,23 @@ mcp-scanner --analyzers yara --format summary static --tools output/tools.json
 ```
 
 For more details, see [Static Scanning Documentation](docs/static-scanning.md) and [examples/static_scanning_example.py](examples/static_scanning_example.py).
+
+#### Readiness Scanning
+
+The Readiness Analyzer checks MCP tools for production readiness issues using 20 heuristic rules. It requires no API keys and focuses on operational reliability: timeouts, retries, error handling, and more.
+
+```bash
+# Readiness-only scan (no API keys required)
+mcp-scanner --analyzers readiness --server-url http://localhost:8000/mcp
+
+# Combined security + readiness scan
+mcp-scanner --analyzers yara,readiness --server-url http://localhost:8000/mcp
+
+# Detailed readiness output
+mcp-scanner --analyzers readiness --detailed --server-url http://localhost:8000/mcp
+```
+
+See [Readiness Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/readiness-scanning.md) for complete technical details.
 
 ### API Server Usage
 

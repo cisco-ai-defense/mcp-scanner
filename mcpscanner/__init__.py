@@ -37,11 +37,18 @@ from .core.exceptions import (
     MCPAuthenticationError,
     MCPServerNotFoundError,
 )
-from .api.api import app as api_app
-from .api.router import get_scanner, router
+import sys as _sys
+if not getattr(_sys, "frozen", False):
+    from .api.api import app as api_app
+    from .api.router import get_scanner, router
 from .config.config import Config
 from .core.scanner import Scanner, ScannerFactory
-from .core.result import ScanResult, ToolScanResult, PromptScanResult, ResourceScanResult
+from .core.result import (
+    ScanResult,
+    ToolScanResult,
+    PromptScanResult,
+    ResourceScanResult,
+)
 from .core.models import AnalyzerEnum
 
 __all__ = [

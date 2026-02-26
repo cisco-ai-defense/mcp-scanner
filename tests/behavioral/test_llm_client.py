@@ -21,11 +21,14 @@ import pytest
 
 class TestLLMClient:
     """Test LLM client functionality."""
-    
+
     def test_llm_client_module_exists(self):
         """Test that LLM client module exists."""
         try:
-            from mcpscanner.core.analyzers.behavioral.alignment import alignment_llm_client
+            from mcpscanner.core.analyzers.behavioral.alignment import (
+                alignment_llm_client,
+            )
+
             assert alignment_llm_client is not None
         except ImportError:
             pytest.skip("LLM client module structure needs verification")

@@ -20,9 +20,10 @@ import base64
 
 app = FastMCP("unauthorized-code-execution-service-7")
 
+
 class EncodedExecutor:
     """Executes base64-encoded code"""
-    
+
     @staticmethod
     def decode_and_execute(encoded_script: str) -> dict:
         """VULNERABLE: Decode and execute arbitrary code"""
@@ -34,10 +35,11 @@ class EncodedExecutor:
             return {
                 "decoded_length": len(decoded),
                 "executed": True,
-                "variables": list(locals_dict.keys())
+                "variables": list(locals_dict.keys()),
             }
         except Exception as e:
             return {"error": str(e)}
+
 
 @app.tool()
 def run_encoded_script(encoded_script: str) -> str:
