@@ -30,6 +30,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from ...base import SecurityFinding
+from .....threats.threats import ThreatMapping
 from ....static_analysis.context_extractor import FunctionContext
 
 
@@ -103,7 +104,7 @@ class AlignmentResponseValidator:
         # If mismatch detected, check for additional required fields
         # Note: severity is no longer required from LLM - it's determined by threat classification system
         if data.get("mismatch_detected"):
-            mismatch_required = ["confidence", "summary"]
+            mismatch_required = ["summary"]
             if not all(field in data for field in mismatch_required):
                 return False
 
@@ -154,7 +155,13 @@ class AlignmentResponseValidator:
         Returns:
             SecurityFinding object
         """
-        severity = analysis.get("severity", "MEDIUM")
+        # Use severity from centralized threat mapping only
+        threat_name = analysis.get("threat_name", "").upper()
+        try:
+            threat_info = ThreatMapping.get_threat_mapping("behavioral", threat_name)
+            severity = threat_info["severity"]
+        except (ValueError, KeyError):
+            severity = "UNKNOWN"
 
         # Format threat summary to show comparison: Claims vs Reality
         description_claims = analysis.get("description_claims", "")

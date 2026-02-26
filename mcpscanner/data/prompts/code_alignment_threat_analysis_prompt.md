@@ -984,12 +984,6 @@ You receive comprehensive analysis including **AST** (code structure, nodes, dec
 
 **Example**: `filepath` parameter → `open(filepath)` (file sink) → `requests.post()` (network sink) = data exfiltration
 
-## Confidence Levels
-
-- **HIGH**: Clear mismatch with strong dataflow evidence
-- **MEDIUM**: Likely mismatch but some ambiguity in intent
-- **LOW**: Possible mismatch but could be legitimate
-
 ## Required Output Format
 
 Respond with ONLY a valid JSON object:
@@ -997,7 +991,6 @@ Respond with ONLY a valid JSON object:
 ```json
 {
   "mismatch_detected": true|false,
-  "confidence": "HIGH|MEDIUM|LOW",
   "summary": "Brief one-sentence description of the mismatch",
   "threat_name": "PROMPT INJECTION|INJECTION ATTACKS|TEMPLATE INJECTION|TOOL POISONING|GOAL MANIPULATION|DATA EXFILTRATION|UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS|UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS|ARBITRARY RESOURCE READ/WRITE|UNAUTHORIZED OR UNSOLICITED CODE EXECUTION|BACKDOOR|DEFENSE EVASION|RESOURCE EXHAUSTION|GENERAL DESCRIPTION-CODE MISMATCH",
   "mismatch_type": "hidden_behavior|inadequate_security|undisclosed_operations|privilege_abuse",
@@ -1011,11 +1004,6 @@ Respond with ONLY a valid JSON object:
 **Field Instructions:**
 
 - **mismatch_detected**: `true` if there is a clear discrepancy between docstring and implementation, OR if malicious code is detected regardless of docstring quality
-- **confidence**: How certain you are about the mismatch:
-  - `HIGH`: Clear mismatch with strong dataflow evidence
-  - `MEDIUM`: Likely mismatch but some ambiguity in intent
-  - `LOW`: Possible mismatch but could be legitimate
-- **Note**: Severity (HIGH/MEDIUM/LOW) will be automatically determined by the threat classification system based on the `threat_name` you provide. You do NOT need to specify severity.
 - **summary**: Brief one-sentence description of the mismatch
 - **threat_name**: REQUIRED when mismatch_detected is true. Must be ONE of these 14 exact values:
   1. `"PROMPT INJECTION"` - Malicious manipulation of tool metadata or hidden instructions
@@ -1043,7 +1031,6 @@ Respond with ONLY a valid JSON object:
 ```json
 {
   "mismatch_detected": true,
-  "confidence": "HIGH",
   "summary": "Function claims to read files locally but secretly exfiltrates contents to external server",
   "threat_name": "DATA EXFILTRATION",
   "mismatch_type": "hidden_behavior",
@@ -1058,7 +1045,6 @@ Respond with ONLY a valid JSON object:
 ```json
 {
   "mismatch_detected": true,
-  "confidence": "HIGH",
   "summary": "Function claims to be a safe calculator but passes user input directly to shell execution",
   "threat_name": "INJECTION ATTACKS",
   "mismatch_type": "inadequate_security",
@@ -1069,11 +1055,10 @@ Respond with ONLY a valid JSON object:
 }
 ```
 
-**Example 3: Missing Documentation with Safe Implementation (Will Get INFO Severity)**
+**Example 3: Missing Documentation with Safe Implementation**
 ```json
 {
   "mismatch_detected": true,
-  "confidence": "LOW",
   "summary": "Function has no docstring but implementation is safe and straightforward",
   "threat_name": "GENERAL DESCRIPTION-CODE MISMATCH",
   "mismatch_type": "undisclosed_operations",
@@ -1083,13 +1068,13 @@ Respond with ONLY a valid JSON object:
   "dataflow_evidence": "Parameter 'text' flows to str.format() at line 3, result returned at line 4. All operations are safe string manipulations."
 }
 ```
-**Note**: This example receives INFO severity because there's NO tool description (missing docstring) BUT the code implementation is GOOD (safe, no security issues). This is purely a documentation quality issue, not a security threat.
+**Note**: This example is flagged because there's NO tool description (missing docstring) BUT the code implementation is GOOD (safe, no security issues). This is purely a documentation quality issue, not a security threat.
 
 ## Critical Guidelines
 
 1. **FLAG THREATS, NOT VULNERABILITIES** - Only report deliberate malicious behavior (threats), not accidental security bugs (vulnerabilities)
-2. **Report HIGH confidence mismatches** where the docstring clearly doesn't match the implementation AND shows malicious intent
-3. **Handle missing/sparse docstrings**: If there is NO docstring or only a minimal docstring, BUT the code contains DELIBERATE malicious operations (data exfiltration, backdoors, etc.), still flag it as a threat with HIGH confidence
+2. **Report clear mismatches** where the docstring clearly doesn't match the implementation AND shows malicious intent
+3. **Handle missing/sparse docstrings**: If there is NO docstring or only a minimal docstring, BUT the code contains DELIBERATE malicious operations (data exfiltration, backdoors, etc.), still flag it as a threat
 4. **Use comprehensive analysis artifacts** - cite specific operations, control flow paths, AST nodes, dataflow evidence, and line numbers from the analysis provided
 5. **Focus on malicious intent** - explain why the behavior is deliberately harmful, not just poorly coded
 6. **Be precise** - distinguish between legitimate operations, coding mistakes (vulnerabilities), and hidden malicious behavior (threats)
