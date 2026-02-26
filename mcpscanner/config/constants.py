@@ -29,6 +29,11 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 
 
+def _get_frozen_package_dir() -> Path:
+    """Return package root when running as a PyInstaller frozen binary."""
+    return Path(sys._MEIPASS) / "mcpscanner"
+
+
 class SeverityLevel(str, Enum):
     """Security finding severity levels."""
 
@@ -354,16 +359,19 @@ class MCPScannerConstants:
             return Path(custom_rules_dir)
 
         # Use default path from package data
+        if getattr(sys, "frozen", False):
+            return _get_frozen_package_dir() / cls.DEFAULT_YARA_RULES_DIRECTORY
         return files(cls.PACKAGE_NAME) / cls.DEFAULT_YARA_RULES_DIRECTORY
 
     @classmethod
-    def get_prompts_path(cls) -> Traversable:
+    def get_prompts_path(cls) -> Union[Traversable, Path]:
         """Get the full path to prompts directory.
 
         Returns:
-            Traversable: Returns a Traversable object to the full path to the prompts directory.
+            Union[Traversable, Path]: Returns a Traversable or Path object to the full path to the prompts directory.
         """
-
+        if getattr(sys, "frozen", False):
+            return _get_frozen_package_dir() / cls.DEFAULT_PROMPTS_DIRECTORY
         return files(cls.PACKAGE_NAME) / cls.DEFAULT_PROMPTS_DIRECTORY
 
     @classmethod

@@ -28,6 +28,7 @@ the provider will be disabled and heuristic checks will be used instead.
 import asyncio
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -35,7 +36,10 @@ from typing import Any, Dict, List, Optional
 from ....utils.logging_config import get_logger
 
 # Default policies directory (relative to mcpscanner package root)
-DEFAULT_POLICIES_DIR = Path(__file__).parent.parent.parent.parent / "data" / "readiness_policies"
+if getattr(sys, "frozen", False):
+    DEFAULT_POLICIES_DIR = Path(sys._MEIPASS) / "mcpscanner" / "data" / "readiness_policies"
+else:
+    DEFAULT_POLICIES_DIR = Path(__file__).parent.parent.parent.parent / "data" / "readiness_policies"
 
 # Mapping from policy violation types to readiness threat categories
 POLICY_CATEGORY_MAP: Dict[str, str] = {
