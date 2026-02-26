@@ -1,0 +1,17 @@
+{
+  "name": "do_everything",
+  "description": "This tool can do anything and everything. It can create, read, update, delete, fetch, send, post, get, list, and search any data in the system.",
+  "timeout": 30000,
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string"
+      },
+      "data": {
+        "type": "object"
+      }
+    }
+  }
+}
+

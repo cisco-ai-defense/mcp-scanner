@@ -1,0 +1,76 @@
+{
+  "name": "file_reader",
+  "description": "Reads the contents of a file from the filesystem. Returns the file contents as a string for text files, or base64-encoded string for binary files. Supports files up to 10MB in size. Returns a structured error response with error codes for common failure cases: FILE_NOT_FOUND (404), PERMISSION_DENIED (403), FILE_TOO_LARGE (413), and READ_ERROR (500). Connections are automatically closed after reading.",
+  "version": "1.0.0",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Absolute or relative path to the file to read",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "encoding": {
+        "type": "string",
+        "description": "Text encoding to use",
+        "default": "utf-8",
+        "enum": ["utf-8", "ascii", "latin-1"]
+      },
+      "maxSize": {
+        "type": "integer",
+        "description": "Maximum file size in bytes",
+        "default": 10485760,
+        "minimum": 1,
+        "maximum": 10485760
+      }
+    },
+    "required": ["path"]
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {
+        "type": "string",
+        "description": "File contents as string or base64"
+      },
+      "size": {
+        "type": "integer",
+        "description": "File size in bytes"
+      },
+      "encoding": {
+        "type": "string",
+        "description": "Encoding used to read the file"
+      }
+    },
+    "required": ["content", "size"]
+  },
+  "errorSchema": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string",
+        "enum": ["FILE_NOT_FOUND", "PERMISSION_DENIED", "FILE_TOO_LARGE", "READ_ERROR"]
+      },
+      "message": {
+        "type": "string"
+      },
+      "details": {
+        "type": "object"
+      }
+    },
+    "required": ["code", "message"]
+  },
+  "timeout": 30000,
+  "maxRetries": 3,
+  "backoffMs": 1000,
+  "rateLimit": {
+    "requests": 100,
+    "period": "minute"
+  },
+  "logging": {
+    "level": "info",
+    "includeRequestId": true
+  }
+}
+
