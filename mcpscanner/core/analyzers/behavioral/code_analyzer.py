@@ -357,8 +357,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 self.logger.warning(f"Unknown threat name '{threat_name}': {e}")
                 return None
 
-            # Use LLM severity if available, otherwise use mapping default
-            severity = analysis.get("severity", threat_info["severity"]).upper()
+            # Use severity from centralized threat mapping only
+            severity = threat_info["severity"]
 
             # Build threat summary from analysis
             description_claims = analysis.get("description_claims", "")
