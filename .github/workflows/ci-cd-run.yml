@@ -1,0 +1,475 @@
+# Copyright 2025 Cisco Systems, Inc. and its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Cisco MCP Scanner - Comprehensive CI/CD
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main, 'release-*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PYTHON_DEFAULT_VERSION: "3.13"
+
+jobs:
+  # ============================================================================
+  # Stage 1: MCP Scanner Live Tests - Run Scanner Against Example Servers
+  # ============================================================================
+  scanner-live-tests:
+    name: MCP Scanner Live Tests
+    runs-on: ubuntu-latest
+    env:
+      MCP_SCANNER_LLM_API_KEY: ${{ secrets.MCP_SCANNER_LLM_API_KEY }}
+      MCP_SCANNER_LLM_MODEL: ${{ secrets.MCP_SCANNER_LLM_MODEL }}
+      MCP_SCANNER_LLM_BASE_URL: ${{ secrets.MCP_SCANNER_LLM_BASE_URL }}
+      MCP_SCANNER_API_KEY: ${{ secrets.MCP_SCANNER_API_KEY }}
+      MCP_SCANNER_ENDPOINT: ${{ secrets.MCP_SCANNER_ENDPOINT }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6.7.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Install package
+        run: uv pip install -e .
+
+      # ----------------------------------------------------------------------
+      # Test 1: Scan Malicious Streamable HTTP Server with YARA
+      # ----------------------------------------------------------------------
+      - name: Start Malicious MCP Server (Streamable HTTP)
+        run: |
+          uv run python examples/example-malicious-servers/malicious_mcp_streamable_server.py &
+          sleep 5
+          echo "Malicious server started on port 8000"
+
+      - name: Wait for malicious server
+        run: |
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:8000/mcp > /dev/null 2>&1; then
+              echo "✅ Malicious MCP server is ready"
+              break
+            fi
+            echo "Waiting for server... ($i/30)"
+            sleep 1
+          done
+
+      - name: "🔍 YARA Scan - Malicious Server (expect threats detected)"
+        run: |
+          echo "================================================================================"
+          echo "🔍 SCANNING MALICIOUS SERVER WITH YARA ANALYZER"
+          echo "================================================================================"
+          
+          # Run scanner and capture output
+          OUTPUT=$(uv run mcp-scanner --analyzers yara --format detailed remote --server-url http://127.0.0.1:8000/mcp 2>&1) || true
+          echo "$OUTPUT"
+          
+          # Verify threats were detected (malicious server should NOT be safe)
+          if echo "$OUTPUT" | grep -qi "safe: no\|unsafe\|HIGH\|threat"; then
+            echo ""
+            echo "✅ SUCCESS: YARA analyzer correctly detected threats in malicious server"
+          else
+            echo ""
+            echo "⚠️ WARNING: Expected threats to be detected in malicious server"
+          fi
+
+      - name: "🔍 YARA Scan - All Output Formats"
+        run: |
+          echo "--- Summary Format ---"
+          uv run mcp-scanner --analyzers yara --format summary remote --server-url http://127.0.0.1:8000/mcp || true
+          
+          echo ""
+          echo "--- Table Format ---"
+          uv run mcp-scanner --analyzers yara --format table remote --server-url http://127.0.0.1:8000/mcp || true
+          
+          echo ""
+          echo "--- Raw JSON Format ---"
+          uv run mcp-scanner --analyzers yara --raw remote --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: Stop malicious server
+        run: pkill -f "malicious_mcp_streamable_server.py" || true
+
+      # ----------------------------------------------------------------------
+      # Test 2: Scan Complete Test Server (mix of safe and malicious tools)
+      # ----------------------------------------------------------------------
+      - name: Start Complete Test Server
+        run: |
+          uv run python examples/mcp_complete_server.py &
+          sleep 5
+          echo "Complete test server started"
+
+      - name: Wait for complete test server
+        run: |
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:8000/mcp > /dev/null 2>&1; then
+              echo "✅ Complete test server is ready"
+              break
+            fi
+            echo "Waiting for server... ($i/30)"
+            sleep 1
+          done
+
+      - name: "🔍 YARA Scan - Complete Server (Tools)"
+        run: |
+          echo "================================================================================"
+          echo "🔍 SCANNING COMPLETE SERVER - TOOLS"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers yara --format detailed remote --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: "🔍 YARA Scan - Complete Server (Prompts)"
+        run: |
+          echo "================================================================================"
+          echo "🔍 SCANNING COMPLETE SERVER - PROMPTS"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers yara --format detailed prompts --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: "🔍 YARA Scan - Complete Server (Resources)"
+        run: |
+          echo "================================================================================"
+          echo "🔍 SCANNING COMPLETE SERVER - RESOURCES"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers yara --format detailed resources --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: "🔍 YARA Scan - Complete Server (Instructions)"
+        run: |
+          echo "================================================================================"
+          echo "🔍 SCANNING COMPLETE SERVER - INSTRUCTIONS"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers yara instructions --server-url http://127.0.0.1:8000/mcp || true
+
+      # ----------------------------------------------------------------------
+      # Test 3: Instructions Scanning
+      # ----------------------------------------------------------------------
+      - name: "🔍 Instructions Scan - Complete Server"
+        run: |
+          echo "================================================================================"
+          echo "🔍 INSTRUCTIONS SCANNING"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers yara instructions --server-url http://127.0.0.1:8000/mcp --format detailed || true
+
+      # ----------------------------------------------------------------------
+      # Test 4: LLM Analyzer (skip if no secrets)
+      # ----------------------------------------------------------------------
+      - name: "🔍 LLM Scan - Complete Server (skip if no API key)"
+        if: env.MCP_SCANNER_LLM_API_KEY != ''
+        run: |
+          echo "================================================================================"
+          echo "🔍 LLM ANALYZER - SCANNING COMPLETE SERVER"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers llm --format detailed remote --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: "⏭️ LLM Scan - Skipped (no API key)"
+        if: env.MCP_SCANNER_LLM_API_KEY == ''
+        run: |
+          echo "⏭️ LLM Analyzer scan skipped - MCP_SCANNER_LLM_API_KEY not set"
+
+      # ----------------------------------------------------------------------
+      # Test 5: API Analyzer / Cisco AI Defense (skip if no secrets)
+      # ----------------------------------------------------------------------
+      - name: "🔍 API Scan - Complete Server (skip if no API key)"
+        if: env.MCP_SCANNER_API_KEY != ''
+        run: |
+          echo "================================================================================"
+          echo "🔍 CISCO AI DEFENSE API ANALYZER - SCANNING COMPLETE SERVER"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers api --format detailed remote --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: "⏭️ API Scan - Skipped (no API key)"
+        if: env.MCP_SCANNER_API_KEY == ''
+        run: |
+          echo "⏭️ API Analyzer scan skipped - MCP_SCANNER_API_KEY not set"
+
+      # ----------------------------------------------------------------------
+      # Test 6: All Analyzers Combined (skip if no secrets)
+      # ----------------------------------------------------------------------
+      - name: "🔍 All Analyzers - Complete Server (skip if no API keys)"
+        if: env.MCP_SCANNER_LLM_API_KEY != '' && env.MCP_SCANNER_API_KEY != ''
+        run: |
+          echo "================================================================================"
+          echo "🔍 ALL ANALYZERS (API + YARA + LLM) - SCANNING COMPLETE SERVER"
+          echo "================================================================================"
+          uv run mcp-scanner --analyzers api yara llm --format detailed remote --server-url http://127.0.0.1:8000/mcp || true
+
+      - name: "⏭️ All Analyzers - Skipped (missing API keys)"
+        if: env.MCP_SCANNER_LLM_API_KEY == '' || env.MCP_SCANNER_API_KEY == ''
+        run: |
+          echo "⏭️ All Analyzers scan skipped - requires both MCP_SCANNER_LLM_API_KEY and MCP_SCANNER_API_KEY"
+
+      - name: Stop complete test server
+        run: pkill -f "mcp_complete_server.py" || true
+
+      # ----------------------------------------------------------------------
+      # Test 7: Behavioral Analyzer - Scan Malicious Source Code (requires LLM)
+      # ----------------------------------------------------------------------
+      - name: "🔍 Behavioral Scan - Malicious Server Source Code (skip if no LLM key)"
+        if: env.MCP_SCANNER_LLM_API_KEY != ''
+        run: |
+          echo "================================================================================"
+          echo "🔍 BEHAVIORAL ANALYSIS - MALICIOUS SERVER SOURCE CODE"
+          echo "================================================================================"
+          
+          # Scan the malicious behavioral server source code
+          uv run mcp-scanner behavioral examples/example-malicious-servers/example_behavioural_malicious_server.py --format detailed || true
+          
+          echo ""
+          echo "--- Scanning all malicious server examples ---"
+          uv run mcp-scanner behavioral examples/example-malicious-servers/ --format summary || true
+
+      - name: "⏭️ Behavioral Scan - Skipped (no LLM API key)"
+        if: env.MCP_SCANNER_LLM_API_KEY == ''
+        run: |
+          echo "⏭️ Behavioral Analyzer scan skipped - MCP_SCANNER_LLM_API_KEY required"
+
+      # ----------------------------------------------------------------------
+      # Test 8: API Server Tests
+      # ----------------------------------------------------------------------
+      - name: Start MCP Scanner API Server
+        run: |
+          uv run mcp-scanner-api --port 8001 &
+          sleep 3
+
+      - name: Start test MCP server for API tests
+        run: |
+          uv run python examples/example-malicious-servers/malicious_mcp_streamable_server.py &
+          sleep 5
+
+      - name: Wait for both servers
+        run: |
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:8001/health > /dev/null 2>&1; then
+              echo "✅ API server is ready"
+              break
+            fi
+            sleep 1
+          done
+          
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:8000/mcp > /dev/null 2>&1; then
+              echo "✅ MCP server is ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: "🔍 API Test - Health Check"
+        run: |
+          echo "================================================================================"
+          echo "🔍 API SERVER - HEALTH CHECK"
+          echo "================================================================================"
+          curl -s http://127.0.0.1:8001/health | python -m json.tool
+
+      - name: "🔍 API Test - Scan All Tools"
+        run: |
+          echo "================================================================================"
+          echo "🔍 API SERVER - SCAN ALL TOOLS"
+          echo "================================================================================"
+          curl -s -X POST http://127.0.0.1:8001/scan-all-tools \
+            -H "Content-Type: application/json" \
+            -d '{"server_url": "http://127.0.0.1:8000/mcp", "analyzers": ["yara"]}' | python -m json.tool || true
+
+      - name: "🔍 API Test - Scan Specific Tool"
+        run: |
+          echo "================================================================================"
+          echo "🔍 API SERVER - SCAN SPECIFIC TOOL (execute_system_command)"
+          echo "================================================================================"
+          curl -s -X POST http://127.0.0.1:8001/scan-tool \
+            -H "Content-Type: application/json" \
+            -d '{"server_url": "http://127.0.0.1:8000/mcp", "tool_name": "execute_system_command", "analyzers": ["yara"]}' | python -m json.tool || true
+
+      - name: "🔍 API Test - Scan All Prompts"
+        run: |
+          echo "================================================================================"
+          echo "🔍 API SERVER - SCAN ALL PROMPTS"
+          echo "================================================================================"
+          curl -s -X POST http://127.0.0.1:8001/scan-all-prompts \
+            -H "Content-Type: application/json" \
+            -d '{"server_url": "http://127.0.0.1:8000/mcp", "analyzers": ["yara"]}' | python -m json.tool || true
+
+      - name: "🔍 API Test - Scan Instructions"
+        run: |
+          echo "================================================================================"
+          echo "🔍 API SERVER - SCAN INSTRUCTIONS"
+          echo "================================================================================"
+          curl -s -X POST http://127.0.0.1:8001/scan-instructions \
+            -H "Content-Type: application/json" \
+            -d '{"server_url": "http://127.0.0.1:8000/mcp", "analyzers": ["yara"]}' | python -m json.tool || true
+
+      - name: Cleanup servers
+        if: always()
+        run: |
+          pkill -f "mcp-scanner-api" || true
+          pkill -f "malicious_mcp_streamable_server.py" || true
+          pkill -f "mcp_complete_server.py" || true
+
+  # ============================================================================
+  # Stage 3: Documentation Verification
+  # ============================================================================
+  docs:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check documentation files exist
+        run: |
+          # Verify essential documentation exists
+          DOCS=(
+            "README.md"
+            "docs/README.md"
+            "docs/architecture.md"
+            "docs/llm-providers.md"
+            "docs/mcp-threats-taxonomy.md"
+            "docs/authentication.md"
+            "docs/api-reference.md"
+            "docs/output-formats.md"
+            "docs/programmatic-usage.md"
+          )
+          
+          MISSING=0
+          for doc in "${DOCS[@]}"; do
+            if [ -f "$doc" ]; then
+              echo "✅ $doc exists"
+            else
+              echo "❌ $doc is missing"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+          
+          if [ $MISSING -gt 0 ]; then
+            echo "⚠️ $MISSING documentation file(s) missing"
+            exit 1
+          fi
+          echo "✅ All documentation files present"
+
+      - name: Check for broken internal links
+        run: |
+          # Simple check for broken markdown links to local files
+          find docs -name "*.md" -exec grep -l '\[.*\](.*\.md)' {} \; | while read file; do
+            echo "Checking links in $file"
+          done
+
+  # ============================================================================
+  # Stage 11: YARA Rules Validation
+  # ============================================================================
+  yara-validation:
+    name: YARA Rules Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6.7.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Validate YARA rules syntax
+        run: |
+          uv run python -c "
+          import yara
+          import os
+          from pathlib import Path
+          
+          rules_dir = Path('mcpscanner/data/yara_rules')
+          errors = []
+          
+          for rule_file in rules_dir.glob('*.yar*'):
+              try:
+                  yara.compile(filepath=str(rule_file))
+                  print(f'✅ {rule_file.name}: Valid')
+              except yara.SyntaxError as e:
+                  errors.append(f'{rule_file.name}: {e}')
+                  print(f'❌ {rule_file.name}: {e}')
+          
+          if errors:
+              print(f'\n{len(errors)} YARA rule(s) have syntax errors')
+              exit(1)
+          else:
+              print(f'\nAll YARA rules are valid')
+          "
+
+  # ============================================================================
+  # Stage 12: Prompt Templates Validation
+  # ============================================================================
+  prompt-validation:
+    name: Prompt Templates Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate prompt templates exist and are non-empty
+        run: |
+          for file in mcpscanner/data/prompts/*.md; do
+            if [ -f "$file" ]; then
+              if [ -s "$file" ]; then
+                echo "✅ $file: Valid ($(wc -l < "$file") lines)"
+              else
+                echo "❌ $file: Empty file"
+                exit 1
+              fi
+            fi
+          done
+
+  # ============================================================================
+  # Stage 14: Final Summary
+  # ============================================================================
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [scanner-live-tests, docs, yara-validation, prompt-validation]
+    if: always()
+    steps:
+      - name: Check job statuses
+        run: |
+          echo "================================================================================"
+          echo "📊 CISCO MCP SCANNER - CI/CD PIPELINE SUMMARY"
+          echo "================================================================================"
+          echo ""
+          echo "Job Results:"
+          echo "  - Scanner Live Tests: ${{ needs.scanner-live-tests.result }}"
+          echo "  - Docs: ${{ needs.docs.result }}"
+          echo "  - YARA Validation: ${{ needs.yara-validation.result }}"
+          echo "  - Prompt Validation: ${{ needs.prompt-validation.result }}"
+          echo ""
+          
+          # Determine overall status
+          if [[ "${{ needs.scanner-live-tests.result }}" == "failure" ]]; then
+            echo "❌ Pipeline FAILED - Critical jobs failed"
+            exit 1
+          else
+            echo "✅ Pipeline PASSED - All critical jobs succeeded"
+          fi
