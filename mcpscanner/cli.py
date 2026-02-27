@@ -2052,6 +2052,8 @@ async def main():
             server_label = args.config_path
         elif args.scan_known_configs:
             server_label = "well-known-configs"
+        elif hasattr(args, "cmd") and args.cmd == "behavioral":
+            server_label = f"behavioral:{args.source_path}"
 
         # Handle prompts, resources, and instructions with detailed view
         if hasattr(args, "cmd") and args.cmd == "prompts":
