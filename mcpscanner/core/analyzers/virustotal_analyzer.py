@@ -650,7 +650,9 @@ class VirusTotalAnalyzer:
             return cached_result, cached_found, None
 
         # Enforce rate limits before making the API call
-        self._enforce_rate_limit()
+        rate_limit_signal = self._enforce_rate_limit()
+        if rate_limit_signal:
+            return None, False, rate_limit_signal
 
         result, found, error = self._query_virustotal(file_hash)
 
@@ -660,11 +662,15 @@ class VirusTotalAnalyzer:
 
         return result, found, error
 
-    def _enforce_rate_limit(self) -> None:
+    def _enforce_rate_limit(self) -> Optional[str]:
         """
         Enforce VT free-tier rate limits:
           - 4 requests per minute
           - 500 requests per day
+
+        Returns:
+            None if the request may proceed, or a string signal
+            ("daily_cap_reached") when the daily quota is exhausted.
         """
         now = time.monotonic()
 
@@ -675,7 +681,7 @@ class VirusTotalAnalyzer:
                 "Remaining files will be skipped.",
                 _VT_DAILY_CAP,
             )
-            return
+            return "daily_cap_reached"
 
         # Per-minute window
         if now - self._minute_window_start >= 60:
@@ -696,6 +702,7 @@ class VirusTotalAnalyzer:
 
         self._api_calls += 1
         self._minute_calls += 1
+        return None
 
     def _query_virustotal(
         self, file_hash: str
@@ -789,7 +796,10 @@ class VirusTotalAnalyzer:
                 )
                 return None
 
-            self._enforce_rate_limit()
+            rate_limit_signal = self._enforce_rate_limit()
+            if rate_limit_signal:
+                logger.warning("Rate limit reached before upload: %s", rate_limit_signal)
+                return None
 
             with open(file_path, "rb") as f:
                 files = {"file": (file_path.name, f)}
@@ -818,7 +828,10 @@ class VirusTotalAnalyzer:
             max_retries = 6
             for attempt in range(max_retries):
                 time.sleep(10)
-                self._enforce_rate_limit()
+                rate_limit_signal = self._enforce_rate_limit()
+                if rate_limit_signal:
+                    logger.warning("Rate limit reached during poll: %s", rate_limit_signal)
+                    return None
 
                 analysis_response = self.session.get(
                     f"{self.base_url}/analyses/{analysis_id}", timeout=10
@@ -838,7 +851,10 @@ class VirusTotalAnalyzer:
                     )
 
                     if status == "completed":
-                        result, _, _ = self._query_virustotal(file_hash)
+                        result, _, error = self._query_virustotal_cached(file_hash)
+                        if error:
+                            logger.warning("Post-upload lookup failed: %s", error)
+                            return None
                         if result and result.get("total_engines", 0) > 0:
                             logger.info(
                                 "Analysis complete: %d/%d vendors scanned",
@@ -864,7 +880,10 @@ class VirusTotalAnalyzer:
             logger.warning(
                 "Analysis still processing after %d seconds", max_retries * 10
             )
-            result, _, _ = self._query_virustotal(file_hash)
+            result, _, error = self._query_virustotal_cached(file_hash)
+            if error:
+                logger.warning("Post-upload lookup failed: %s", error)
+                return None
             return result
 
         except httpx.RequestError as e:

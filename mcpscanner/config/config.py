@@ -130,9 +130,11 @@ class Config:
         self._oauth_scopes = oauth_scopes
 
         # VirusTotal configuration with environment variable fallback via constants
-        self._virustotal_api_key = virustotal_api_key or os.getenv(
+        # Treat empty string as None to avoid enabling VT with a blank key
+        _raw_vt_key = virustotal_api_key or os.getenv(
             CONSTANTS.ENV_VIRUSTOTAL_API_KEY
         )
+        self._virustotal_api_key = _raw_vt_key if _raw_vt_key else None
         # Respect explicit enable/disable from env var (True/False).
         # If not explicitly set (None), auto-enable when API key is present.
         if CONSTANTS.VIRUSTOTAL_ENABLED is not None:

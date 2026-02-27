@@ -1780,7 +1780,15 @@ async def main():
                     "tool_description": f"VirusTotal scan of {os.path.basename(scan_path)}",
                     "status": "completed",
                     "is_safe": True,
-                    "findings": {},
+                    "findings": {
+                        "virustotal_analyzer": {
+                            "severity": "SAFE",
+                            "threat_summary": "No threats detected",
+                            "threat_names": [],
+                            "total_findings": 0,
+                            "mcp_taxonomies": [],
+                        }
+                    },
                 })
 
             # Add scan summary if directory scan
