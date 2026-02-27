@@ -40,7 +40,7 @@ The behavioral analyzer requires LLM access. Set up your environment:
 export MCP_SCANNER_LLM_API_KEY="your_api_key"
 export MCP_SCANNER_LLM_MODEL="azure/gpt-5.2"
 export MCP_SCANNER_LLM_BASE_URL="https://your-endpoint.openai.azure.com/"
-export MCP_SCANNER_LLM_API_VERSION="2024-02-15-preview"
+export MCP_SCANNER_LLM_API_VERSION="2025-04-01-preview"
 
 # For OpenAI
 export MCP_SCANNER_LLM_API_KEY="your_openai_key"
