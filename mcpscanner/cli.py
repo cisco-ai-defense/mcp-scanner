@@ -256,8 +256,8 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
             "is_safe": False,
             "findings": {
                 "behavioral_analyzer": analyzer_finding
-            }
-        )
+            },
+        })
 
     if not results:
         results = [
@@ -1772,8 +1772,8 @@ async def main():
                     "is_safe": is_safe,
                     "findings": {
                         "behavioral_analyzer": analyzer_finding
-                    }
-                )
+                    },
+                })
 
             # If no findings, all functions are safe
             if not results:
