@@ -208,6 +208,38 @@ async def main():
 asyncio.run(main())
 ```
 
+### VirusTotal File/Directory Scanning
+
+```python
+from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
+
+# Create VirusTotal analyzer
+vt = VirusTotalAnalyzer(
+    api_key="your_virustotal_api_key",
+    enabled=True,
+    upload_files=False,  # privacy-friendly: hash-only lookups
+    max_files=10,
+)
+
+# Scan a single file
+finding = vt.analyze_file("/path/to/suspicious_file.exe")
+if finding:
+    print(f"MALWARE: {finding.severity} - {finding.summary}")
+else:
+    print("File is clean or not in VT database")
+
+# Scan a directory
+findings = vt.analyze_directory("/path/to/mcp_server_package/")
+for f in findings:
+    print(f"{f.severity}: {f.summary}")
+    if f.details:
+        print(f"  File: {f.details.get('file_path')}")
+
+# Check scan summary
+summary = vt.last_scan_summary
+print(f"Scanned: {summary['scanned']}, Malicious: {summary['malicious']}, Clean: {summary['clean']}")
+```
+
 ### Scanning with Authentication
 
 ```python

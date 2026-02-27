@@ -25,6 +25,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
+- **VirusTotal Binary Scanning**: Automatically detect malware in binary files (images, PDFs, executables, archives) bundled with MCP servers using VirusTotal hash lookups.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
@@ -42,6 +43,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - uv (Python package manager)
 - A valid Cisco AI Defense API Key (optional)
 - LLM Provider API Key (optional)
+- VirusTotal API Key (optional, for binary file malware scanning)
 
 ### Installing from PyPI
 
@@ -112,6 +114,28 @@ export MCP_SCANNER_LLM_MODEL="azure/gpt-5.2"
 export MCP_SCANNER_LLM_TIMEOUT=300
 ```
 Note: If you are using models from Azure Foundry, set the MCP_SCANNER_LLM_BASE_URL and MCP_SCANNER_LLM_MODEL environment variables, as Microsoft has deprecated the need for MCP_SCANNER_LLM_API_VERSION.
+
+#### VirusTotal Configuration (for file/directory malware scanning)
+
+The VirusTotal analyzer scans files and directories against VirusTotal's malware database using SHA256 hash lookups. It runs as a standalone analyzer via the `virustotal` subcommand or as part of `--analyzers virustotal`.
+
+```bash
+# VirusTotal API key (get one free at https://www.virustotal.com/)
+export VIRUSTOTAL_API_KEY="your_virustotal_api_key"
+
+# Optional: explicitly disable VirusTotal scanning even when API key is present.
+# When not set, scanning is auto-enabled if VIRUSTOTAL_API_KEY is configured.
+# Set to "false" to skip VT scanning without removing the API key (e.g. in CI).
+export MCP_SCANNER_VIRUSTOTAL_ENABLED=false
+
+# Optional: Upload unknown files to VirusTotal for scanning (default: false, privacy-friendly)
+export MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES=false
+
+# Optional: Max files to scan per directory (default: 10, set to 0 for unlimited)
+export MCP_SCANNER_VT_MAX_FILES=10
+```
+
+> **Note:** Without `VIRUSTOTAL_API_KEY`, files will not be scanned for malware. When enabled, the analyzer uses configurable inclusion/exclusion extension lists to determine which files to scan, skipping `__pycache__` and hidden directories.
 
 #### Using a Local LLM (No API Key Required)
 
@@ -206,6 +230,7 @@ asyncio.run(main())
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`, `--header`.
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
+- **virustotal**: scan files or directories for malware using VirusTotal hash lookups. Requires a `scan_path` argument (file or directory).
 - **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 - **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
@@ -339,6 +364,29 @@ mcp-scanner --raw instructions --server-url http://127.0.0.1:8000/mcp
 # With authentication
 mcp-scanner instructions --server-url https://your-server.com/mcp --bearer-token "$TOKEN"
 ```
+
+#### VirusTotal Malware Scanning
+
+The VirusTotal analyzer scans files and directories against VirusTotal's malware database using SHA256 hash lookups. It supports configurable inclusion/exclusion extension lists and a per-directory file limit.
+
+```bash
+# Scan a single file
+mcp-scanner virustotal /path/to/suspicious_file.exe
+
+# Scan a directory
+mcp-scanner virustotal /path/to/mcp_server_package/
+
+# With detailed output
+mcp-scanner virustotal /path/to/mcp_server_package/ --format detailed
+
+# Table format
+mcp-scanner virustotal /path/to/mcp_server_package/ --format table
+
+# Save results to file
+mcp-scanner virustotal /path/to/file.bin --output vt_results.json --format raw
+```
+
+> **Note:** Requires `VIRUSTOTAL_API_KEY` environment variable. Free tier allows 4 requests/minute and 500 requests/day.
 
 #### Behavioral Code Scanning
 
@@ -520,6 +568,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
 - **[Behavioral Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
+- **[VirusTotal Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/virustotal-scanning.md)** - File and directory malware scanning with VirusTotal
 - **[LLM Providers](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/llm-providers.md)** - LLM configuration for all providers
 - **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration

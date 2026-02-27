@@ -61,6 +61,11 @@ class Config:
         oauth_client_secret: str = None,
         oauth_token_url: str = None,
         oauth_scopes: List[str] = None,
+        virustotal_api_key: str = None,
+        virustotal_upload_files: bool = False,
+        virustotal_max_files: int = None,
+        virustotal_inclusion_extensions: set = None,
+        virustotal_exclusion_extensions: set = None,
     ):
         """Initialize a new Config instance.
 
@@ -84,6 +89,11 @@ class Config:
             oauth_client_secret (str, optional): OAuth client secret for authentication.
             oauth_token_url (str, optional): OAuth token URL for authentication.
             oauth_scopes (List[str], optional): OAuth scopes for authentication.
+            virustotal_api_key (str, optional): VirusTotal API key for binary file scanning. Falls back to VIRUSTOTAL_API_KEY env var.
+            virustotal_upload_files (bool, optional): If True, upload unknown files to VT for scanning. Defaults to False.
+            virustotal_max_files (int, optional): Max files to scan per directory (0=unlimited). Defaults to 10.
+            virustotal_inclusion_extensions (set, optional): Binary extensions to always include. Defaults from constants.
+            virustotal_exclusion_extensions (set, optional): Text/code extensions to always exclude. Defaults from constants.
         """
         self._api_key = api_key
         self._endpoint_url = endpoint_url
@@ -118,6 +128,32 @@ class Config:
         self._oauth_client_secret = oauth_client_secret
         self._oauth_token_url = oauth_token_url
         self._oauth_scopes = oauth_scopes
+
+        # VirusTotal configuration with environment variable fallback via constants
+        # Treat empty string as None to avoid enabling VT with a blank key
+        _raw_vt_key = virustotal_api_key or os.getenv(
+            CONSTANTS.ENV_VIRUSTOTAL_API_KEY
+        )
+        self._virustotal_api_key = _raw_vt_key if _raw_vt_key else None
+        # Respect explicit enable/disable from env var (True/False).
+        # If not explicitly set (None), auto-enable when API key is present.
+        if CONSTANTS.VIRUSTOTAL_ENABLED is not None:
+            self._virustotal_enabled = CONSTANTS.VIRUSTOTAL_ENABLED
+        else:
+            self._virustotal_enabled = self._virustotal_api_key is not None
+        self._virustotal_upload_files = (
+            virustotal_upload_files or CONSTANTS.VIRUSTOTAL_UPLOAD_FILES
+        )
+        self._virustotal_max_files = (
+            virustotal_max_files if virustotal_max_files is not None
+            else CONSTANTS.VIRUSTOTAL_MAX_FILES
+        )
+        self._virustotal_inclusion_extensions = (
+            virustotal_inclusion_extensions or CONSTANTS.VIRUSTOTAL_INCLUSION_EXTENSIONS
+        )
+        self._virustotal_exclusion_extensions = (
+            virustotal_exclusion_extensions or CONSTANTS.VIRUSTOTAL_EXCLUSION_EXTENSIONS
+        )
 
     @property
     def api_key(self) -> str:
@@ -280,6 +316,68 @@ class Config:
             Optional[List[str]]: The OAuth scopes.
         """
         return self._oauth_scopes
+
+    @property
+    def virustotal_api_key(self) -> Optional[str]:
+        """Get the VirusTotal API key.
+
+        Returns:
+            Optional[str]: The VirusTotal API key for binary file scanning.
+        """
+        return self._virustotal_api_key
+
+    @property
+    def virustotal_enabled(self) -> bool:
+        """Get whether VirusTotal scanning is enabled.
+
+        Enabled when VIRUSTOTAL_ENABLED=true or when a VT API key is present.
+
+        Returns:
+            bool: True if VirusTotal scanning is enabled.
+        """
+        return self._virustotal_enabled
+
+    @property
+    def virustotal_upload_files(self) -> bool:
+        """Get whether to upload unknown files to VirusTotal.
+
+        Returns:
+            bool: True if unknown files should be uploaded for scanning.
+        """
+        return self._virustotal_upload_files
+
+    @property
+    def virustotal_max_files(self) -> int:
+        """Get the max number of files to scan per directory.
+
+        0 means unlimited. Override via MCP_SCANNER_VT_MAX_FILES env var.
+
+        Returns:
+            int: Maximum files to scan (default 10).
+        """
+        return self._virustotal_max_files
+
+    @property
+    def virustotal_inclusion_extensions(self) -> set:
+        """Get the set of binary extensions to always include for VT scanning.
+
+        Override via MCP_SCANNER_VT_INCLUSION_EXTENSIONS env var (comma-separated).
+
+        Returns:
+            set: Inclusion extensions (e.g. {".exe", ".pdf", ".zip"}).
+        """
+        return self._virustotal_inclusion_extensions
+
+    @property
+    def virustotal_exclusion_extensions(self) -> set:
+        """Get the set of text/code extensions to always exclude from VT scanning.
+
+        Override via MCP_SCANNER_VT_EXCLUSION_EXTENSIONS env var (comma-separated).
+
+        Returns:
+            set: Exclusion extensions (e.g. {".py", ".js", ".md"}).
+        """
+        return self._virustotal_exclusion_extensions
 
     @property
     def base_url(self) -> str:

@@ -92,6 +92,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # Check if content is a directory
             if os.path.isdir(content):
                 self.logger.debug(f"Scanning directory: {content}")
+
                 python_files = self._find_python_files(content)
                 self.logger.debug(
                     f"Found {len(python_files)} Python file(s) to analyze"
