@@ -101,7 +101,7 @@ export MCP_SCANNER_LLM_API_KEY="your_llm_api_key"  # OpenAI
 # LLM Model Configuration (optional - defaults provided)
 export MCP_SCANNER_LLM_MODEL="gpt-4o"  # Any LiteLLM-supported model
 export MCP_SCANNER_LLM_BASE_URL="https://api.openai.com/v1"  # Custom LLM endpoint
-export MCP_SCANNER_LLM_API_VERSION="2024-02-01"  # API version (if required)
+export MCP_SCANNER_LLM_API_VERSION="2025-04-01-preview"  # API version (if required)
 
 # For Azure OpenAI (example)
 export MCP_SCANNER_LLM_BASE_URL="https://your-resource.openai.azure.com/"
