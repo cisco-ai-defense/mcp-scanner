@@ -104,8 +104,8 @@ class TestPromptBuilder:
 
         assert len(content) > 5000, f"Prompt seems too short: {len(content)} characters"
 
-    def test_prompt_has_severity_levels(self):
-        """Test that prompt defines severity levels."""
+    def test_prompt_has_threat_categories(self):
+        """Test that prompt defines threat categories."""
         prompt_path = (
             Path(__file__).parent.parent.parent
             / "mcpscanner"
@@ -115,9 +115,9 @@ class TestPromptBuilder:
         )
         content = prompt_path.read_text()
 
-        # Should define severity levels
-        for severity in ["HIGH", "MEDIUM", "LOW"]:
-            assert severity in content, f"Prompt should define {severity} severity"
+        # Should define threat categories (severity is in threats.py, not in the prompt)
+        for threat in ["PROMPT INJECTION", "DATA EXFILTRATION", "TOOL POISONING"]:
+            assert threat in content, f"Prompt should define {threat} threat category"
 
     def test_prompt_has_json_format_instructions(self):
         """Test that prompt includes JSON response format instructions."""
@@ -138,7 +138,7 @@ class TestPromptBuilder:
             ), f"Prompt should contain JSON format keyword: {keyword}"
 
         # Check for response structure
-        response_indicators = ["mismatch", "severity", "confidence"]
+        response_indicators = ["mismatch", "threat_name", "summary"]
         found_count = sum(
             1
             for indicator in response_indicators
