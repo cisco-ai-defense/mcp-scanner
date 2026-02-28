@@ -43,28 +43,50 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - A valid Cisco AI Defense API Key (optional)
 - LLM Provider API Key (optional)
 
-### Installing from PyPI
+### Installing as a CLI tool
 
 ```bash
-uv venv -p <Python version less than or equal to 3.13> /path/to/your/choice/of/venv/directory
-source /path/to/your/choice/of/venv/directory/bin/activate
-uv pip install cisco-ai-mcp-scanner
+uv tool install --python 3.13 cisco-ai-mcp-scanner
 ```
 
-### Installing from Source
+Alternatively, you can install from source:
+
+```bash
+uv tool install --python 3.13 --from git+https://github.com/cisco-ai-defense/mcp-scanner cisco-ai-mcp-scanner
+```
+
+
+### Installing for local development
 
 ```bash
 git clone https://github.com/cisco-ai-defense/mcp-scanner
 cd mcp-scanner
-# Install with uv (recommended)
+uv sync --python 3.13 
+```
 
-uv venv -p <Python version less than or equal to 3.13> /path/to/your/choice/of/venv/directory
+### Install as a dependency in other projects
 
-source /path/to/your/choice/of/venv/directory/bin/activate
+Add MCP Scanner as a dependency using uv. From your project root (initialize with uv if needed):
 
-uv pip install .
-# Or install in development mode
-uv pip install -e .
+```bash
+uv init --python 3.13 #if not already done
+uv add cisco-ai-mcp-scanner
+# then activate the virtual environment:
+## macOS and Linux: source .venv/bin/activate
+## Windows CMD: .vemv\Scripts\activate
+## Windows PWSH: .venv\Scripts\Activate.ps1
+uv sync
+```
+
+The module name is `mcpscanner`. Import this module with:
+
+```python
+# import everything (not recommended)
+import mcpscanner
+
+# selective imports (recommended). For example:
+from mcpscanner import Config, Scanner
+from mcpscanner.core.models import AnalyzerEnum
 ```
 
 ## Quick Start
@@ -99,14 +121,14 @@ export MCP_SCANNER_LLM_MODEL="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v2
 export MCP_SCANNER_LLM_API_KEY="your_llm_api_key"  # OpenAI
 
 # LLM Model Configuration (optional - defaults provided)
-export MCP_SCANNER_LLM_MODEL="gpt-4o"  # Any LiteLLM-supported model
+export MCP_SCANNER_LLM_MODEL="gpt-5.2"  # Any LiteLLM-supported model
 export MCP_SCANNER_LLM_BASE_URL="https://api.openai.com/v1"  # Custom LLM endpoint
-export MCP_SCANNER_LLM_API_VERSION="2024-02-01"  # API version (if required)
+export MCP_SCANNER_LLM_API_VERSION="2025-04-01-preview"  # API version (if required)
 
 # For Azure OpenAI (example)
 export MCP_SCANNER_LLM_BASE_URL="https://your-resource.openai.azure.com/"
-export MCP_SCANNER_LLM_API_VERSION="2024-02-01"
-export MCP_SCANNER_LLM_MODEL="azure/gpt-4"
+export MCP_SCANNER_LLM_API_VERSION="2025-04-01-preview"
+export MCP_SCANNER_LLM_MODEL="azure/gpt-5.2"
 
 # For Extended Thinking Models (longer timeout)
 export MCP_SCANNER_LLM_TIMEOUT=300
