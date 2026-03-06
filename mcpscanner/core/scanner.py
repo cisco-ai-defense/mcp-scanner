@@ -34,7 +34,7 @@ import httpx
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client, create_mcp_http_client
 from mcp.types import Tool as MCPTool, Prompt as MCPPrompt
 from mcp import StdioServerParameters
 
@@ -701,6 +701,17 @@ class Scanner:
                 if "cancel scope" not in str(e) and "TaskGroup" not in str(e):
                     logger.warning(f"Error closing client context: {e}")
 
+            # Explicitly close the httpx.AsyncClient we created, in case the
+            # MCP library's own cleanup failed (e.g. session termination
+            # DELETE returned 404 and the task group teardown left the
+            # client unclosed).
+            httpx_client = getattr(client_context, "_httpx_client", None)
+            if httpx_client and not httpx_client.is_closed:
+                try:
+                    await httpx_client.aclose()
+                except Exception:
+                    pass
+
     async def _get_mcp_session(
         self, server_url: str, auth: Optional[Auth] = None
     ) -> Tuple[Any, ClientSession]:
@@ -757,12 +768,16 @@ class Scanner:
             )
 
         # Create client context with or without OAuth
+        # For streamable HTTP, create an explicit httpx.AsyncClient so we can
+        # guarantee it gets closed even if the MCP library's internal cleanup
+        # fails (e.g. session termination DELETE returns 404).
+        httpx_client = None
         if oauth_provider:
-            client_context = (
-                sse_client(server_url, auth=oauth_provider)
-                if "/sse" in server_url
-                else streamablehttp_client(server_url, auth=oauth_provider)
-            )
+            if "/sse" in server_url:
+                client_context = sse_client(server_url, auth=oauth_provider)
+            else:
+                httpx_client = create_mcp_http_client(auth=oauth_provider)
+                client_context = streamable_http_client(server_url, http_client=httpx_client)
         else:
             logger.debug(
                 f'Using standard connection (no auth) for MCP server: server="{server_url}"'
@@ -775,11 +790,13 @@ class Scanner:
                     else sse_client(server_url)
                 )
             else:
-                client_context = (
-                    streamablehttp_client(server_url, headers=extra_headers)
-                    if extra_headers
-                    else streamablehttp_client(server_url)
+                httpx_client = create_mcp_http_client(
+                    headers=extra_headers if extra_headers else None
                 )
+                client_context = streamable_http_client(server_url, http_client=httpx_client)
+
+        # Stash the httpx client on the context so _close_mcp_session can close it
+        client_context._httpx_client = httpx_client
 
         client_context_opened = None
         session = None

@@ -89,11 +89,16 @@ def mock_mcp_session(mock_init_result):
     mock_stream_cm = AsyncMock()
     mock_stream_cm.__aenter__.return_value = mock_streams
 
+    mock_httpx_client = AsyncMock()
+    mock_httpx_client.is_closed = False
+    mock_httpx_client.aclose = AsyncMock()
+
     patches = [
         patch("mcpscanner.core.scanner.sse_client", return_value=mock_stream_cm),
         patch(
-            "mcpscanner.core.scanner.streamablehttp_client", return_value=mock_stream_cm
+            "mcpscanner.core.scanner.streamable_http_client", return_value=mock_stream_cm
         ),
+        patch("mcpscanner.core.scanner.create_mcp_http_client", return_value=mock_httpx_client),
         patch("mcpscanner.core.scanner.ClientSession", return_value=mock_session_cm),
     ]
 
