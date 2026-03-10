@@ -32,6 +32,7 @@ from typing import Any, Dict, Optional
 from ...base import SecurityFinding
 from .....threats.threats import ThreatMapping
 from ....static_analysis.context_extractor import FunctionContext
+from .json_utils import parse_json_from_llm
 
 
 class AlignmentResponseValidator:
@@ -59,8 +60,12 @@ class AlignmentResponseValidator:
             return None
 
         try:
-            # Try to parse JSON
-            data = json.loads(response)
+            data = parse_json_from_llm(response)
+
+            if data is None:
+                self.logger.warning(f"Invalid JSON response")
+                self.logger.debug(f"Raw response (first 500 chars): {response[:500]}")
+                return None
 
             # Validate it's a dictionary
             if not isinstance(data, dict):
@@ -77,11 +82,6 @@ class AlignmentResponseValidator:
             self.logger.debug(f"LLM response: {data}")
             return data
 
-        except json.JSONDecodeError as e:
-            self.logger.warning(f"Invalid JSON response: {e}")
-            self.logger.debug(f"Raw response (first 500 chars): {response[:500]}")
-            # Try to extract JSON from markdown code blocks
-            return self._extract_json_from_markdown(response)
         except Exception as e:
             self.logger.error(f"Unexpected error validating response: {e}")
             return None
@@ -109,39 +109,6 @@ class AlignmentResponseValidator:
                 return False
 
         return True
-
-    def _extract_json_from_markdown(self, response: str) -> Optional[Dict[str, Any]]:
-        """Try to extract JSON from markdown code blocks.
-
-        Sometimes LLMs wrap JSON in ```json ... ``` blocks.
-
-        Args:
-            response: Response that may contain markdown
-
-        Returns:
-            Parsed JSON or None
-        """
-        try:
-            # Look for ```json ... ``` or ``` ... ```
-            if "```json" in response:
-                start = response.find("```json") + 7
-                end = response.find("```", start)
-                json_str = response[start:end].strip()
-            elif "```" in response:
-                start = response.find("```") + 3
-                end = response.find("```", start)
-                json_str = response[start:end].strip()
-            else:
-                return None
-
-            data = json.loads(json_str)
-            if isinstance(data, dict) and self._has_required_fields(data):
-                return data
-
-        except Exception:
-            pass
-
-        return None
 
     def create_security_finding(
         self, analysis: Dict[str, Any], func_context: FunctionContext
