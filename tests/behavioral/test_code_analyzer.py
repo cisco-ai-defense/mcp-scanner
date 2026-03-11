@@ -161,9 +161,10 @@ def read_file(path: str) -> str:
 
                 assert isinstance(findings, list)
                 if findings:
-                    assert isinstance(findings[0], SecurityFinding)
+                    assert all(isinstance(f, SecurityFinding) for f in findings)
                     # DATA EXFILTRATION severity is HIGH in threats.py BEHAVIORAL_THREATS
-                    assert findings[0].severity == "HIGH"
+                    # Deterministic rules may produce earlier findings, so check any HIGH exists
+                    assert any(f.severity == "HIGH" for f in findings)
         finally:
             os.unlink(temp_path)
 

@@ -36,6 +36,10 @@ from ....threats.threats import ThreatMapping
 from ...static_analysis.context_extractor import ContextExtractor
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
 from ..base import BaseAnalyzer, SecurityFinding
+from ..deterministic_classifier import DeterministicClassifier, RuleMatch
+from ...policy.network_policy import NetworkPolicy
+from ...policy.filesystem_policy import FilesystemPolicy
+from ...policy.data_classifier import DataClassifier
 from .alignment import AlignmentOrchestrator
 
 
@@ -70,8 +74,24 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # Initialize alignment orchestrator (handles all LLM interaction)
         self.alignment_orchestrator = AlignmentOrchestrator(config)
 
+        # Deterministic engine (always runs)
+        self._deterministic = DeterministicClassifier()
+
+        # Policy modules (only active when configured)
+        self._network_policy = NetworkPolicy(
+            config_path=getattr(config, "network_policy_path", None)
+        )
+        self._filesystem_policy = FilesystemPolicy(
+            config_path=getattr(config, "filesystem_policy_path", None)
+        )
+        self._data_classifier = DataClassifier()
+
+        # LLM fallback flag
+        self._use_llm_fallback = getattr(config, "use_llm_fallback", True)
+
         self.logger.debug(
-            "BehavioralCodeAnalyzer initialized with alignment verification"
+            "BehavioralCodeAnalyzer initialized with deterministic engine "
+            f"(llm_fallback={'on' if self._use_llm_fallback else 'off'})"
         )
 
     async def analyze(
@@ -263,6 +283,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     ) -> List[SecurityFinding]:
         """Analyze Python source code for MCP docstring mismatches.
 
+        Phase 1: Run deterministic rules on FunctionContext (always).
+        Phase 2: Run policy checks (if configured).
+        Phase 3: Optionally fall back to LLM alignment check (if enabled
+                  and no HIGH-severity deterministic finding was produced).
+
         Args:
             source_code: Python source code to analyze
             context: Analysis context with file_path
@@ -291,38 +316,206 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         func_context, file_path, context["cross_file_analyzer"]
                     )
 
-            # Analyze each MCP entry point using alignment orchestrator
+            # Analyze each MCP entry point
             for func_context in mcp_contexts:
-                # Check function source size (configurable via constants)
-                func_source_size = (
-                    len(func_context.source) if hasattr(func_context, "source") else 0
-                )
-                func_line_count = (
-                    func_context.line_count
-                    if hasattr(func_context, "line_count")
-                    else 0
-                )
+                # --- Phase 1: Deterministic rules ---
+                det_matches = self._deterministic.classify(func_context)
 
-                if func_source_size > MCPScannerConstants.MAX_FUNCTION_SIZE_BYTES:
-                    self.logger.warning(
-                        f"Large function detected: {func_context.name} "
-                        f"({func_source_size:,} bytes, {func_line_count} lines) - prompt may be oversized"
+                has_high_deterministic = False
+                for match in det_matches:
+                    finding = self._create_deterministic_finding(
+                        match, func_context, file_path
                     )
-                elif func_line_count > 500:
-                    self.logger.debug(
-                        f"Long function: {func_context.name} ({func_line_count} lines)"
-                    )
-
-                result = await self.alignment_orchestrator.check_alignment(func_context)
-
-                if result:
-                    analysis, ctx = result
-                    finding = self._create_security_finding(analysis, ctx, file_path)
                     if finding:
                         findings.append(finding)
+                        if match.severity == "HIGH":
+                            has_high_deterministic = True
+
+                # --- Phase 2: Policy checks ---
+                policy_findings = self._run_policy_checks(func_context, file_path)
+                findings.extend(policy_findings)
+
+                # --- Phase 3: LLM fallback (optional) ---
+                if self._use_llm_fallback and not has_high_deterministic:
+                    # Check function source size (configurable via constants)
+                    func_source_size = (
+                        len(func_context.source)
+                        if hasattr(func_context, "source")
+                        else 0
+                    )
+                    func_line_count = (
+                        func_context.line_count
+                        if hasattr(func_context, "line_count")
+                        else 0
+                    )
+
+                    if func_source_size > MCPScannerConstants.MAX_FUNCTION_SIZE_BYTES:
+                        self.logger.warning(
+                            f"Large function detected: {func_context.name} "
+                            f"({func_source_size:,} bytes, {func_line_count} lines) - prompt may be oversized"
+                        )
+                    elif func_line_count > 500:
+                        self.logger.debug(
+                            f"Long function: {func_context.name} ({func_line_count} lines)"
+                        )
+
+                    result = await self.alignment_orchestrator.check_alignment(
+                        func_context
+                    )
+
+                    if result:
+                        analysis, ctx = result
+                        finding = self._create_security_finding(
+                            analysis, ctx, file_path
+                        )
+                        if finding:
+                            findings.append(finding)
 
         except Exception as e:
             self.logger.error(f"Analysis failed for {file_path}: {e}", exc_info=True)
+
+        return findings
+
+    def _create_deterministic_finding(
+        self, match: RuleMatch, func_context, file_path: str
+    ) -> Optional[SecurityFinding]:
+        """Create a SecurityFinding from a deterministic RuleMatch.
+
+        Args:
+            match: The rule match result
+            func_context: FunctionContext for the matched function
+            file_path: Source file path
+
+        Returns:
+            SecurityFinding or None
+        """
+        try:
+            threat_info = ThreatMapping.get_threat_mapping(
+                "behavioral", match.threat_name
+            )
+        except ValueError:
+            self.logger.warning(
+                f"No threat mapping for deterministic rule {match.rule_id}: "
+                f"{match.threat_name}"
+            )
+            return None
+
+        evidence_str = "; ".join(match.evidence[:5])
+        line_info = f"Line {func_context.line_number}: "
+        summary = (
+            f"{line_info}[{match.rule_id}] {match.threat_name} — {evidence_str}"
+        )
+
+        # Enrich with data classification for exfiltration findings
+        data_classification = None
+        if "EXFILTRATION" in match.threat_name:
+            variable_names = [
+                a.get("variable", "") for a in func_context.assignments
+            ]
+            param_names = [p.get("name", "") for p in func_context.parameters]
+            classification = self._data_classifier.classify_from_context(
+                string_literals=func_context.string_literals,
+                env_var_access=func_context.env_var_access,
+                parameter_names=param_names,
+                variable_names=variable_names,
+            )
+            if classification.has_sensitive_data:
+                data_classification = {
+                    "categories": sorted(classification.categories),
+                    "evidence": classification.evidence[:5],
+                }
+
+        return SecurityFinding(
+            severity=match.severity,
+            summary=summary,
+            analyzer="Behavioral",
+            threat_category=threat_info["scanner_category"],
+            details={
+                "function_name": func_context.name,
+                "decorator_type": (
+                    func_context.decorator_types[0]
+                    if func_context.decorator_types
+                    else "unknown"
+                ),
+                "line_number": func_context.line_number,
+                "source_file": file_path,
+                "threat_name": match.threat_name,
+                "threat_type": match.threat_name,
+                "rule_id": match.rule_id,
+                "deterministic": True,
+                "evidence": match.evidence,
+                "data_classification": data_classification,
+                "aitech": threat_info["aitech"],
+                "aitech_name": threat_info["aitech_name"],
+                "aisubtech": threat_info["aisubtech"],
+                "aisubtech_name": threat_info["aisubtech_name"],
+                "taxonomy_description": threat_info["description"],
+            },
+        )
+
+    def _run_policy_checks(
+        self, func_context, file_path: str
+    ) -> List[SecurityFinding]:
+        """Run network and filesystem policy checks on a function context.
+
+        Args:
+            func_context: FunctionContext with string literals, etc.
+            file_path: Source file path
+
+        Returns:
+            List of policy violation findings
+        """
+        findings = []
+
+        # Network egress policy
+        if self._network_policy.is_configured:
+            for violation in self._network_policy.check_strings(
+                func_context.string_literals
+            ):
+                findings.append(
+                    SecurityFinding(
+                        severity=violation.severity,
+                        summary=(
+                            f"Line {func_context.line_number}: Network policy violation "
+                            f"— {violation.reason}: {violation.destination}"
+                        ),
+                        analyzer="Behavioral",
+                        threat_category="UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS",
+                        details={
+                            "function_name": func_context.name,
+                            "source_file": file_path,
+                            "policy_type": "network_egress",
+                            "destination": violation.destination,
+                            "reason": violation.reason,
+                            "deterministic": True,
+                        },
+                    )
+                )
+
+        # Filesystem boundary policy
+        if self._filesystem_policy.is_configured:
+            for violation in self._filesystem_policy.check_strings(
+                func_context.string_literals
+            ):
+                findings.append(
+                    SecurityFinding(
+                        severity=violation.severity,
+                        summary=(
+                            f"Line {func_context.line_number}: Filesystem policy violation "
+                            f"— {violation.reason}: {violation.path}"
+                        ),
+                        analyzer="Behavioral",
+                        threat_category="UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS",
+                        details={
+                            "function_name": func_context.name,
+                            "source_file": file_path,
+                            "policy_type": "filesystem_boundary",
+                            "path": violation.path,
+                            "reason": violation.reason,
+                            "deterministic": True,
+                        },
+                    )
+                )
 
         return findings
 

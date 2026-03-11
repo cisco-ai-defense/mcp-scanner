@@ -61,6 +61,9 @@ class Config:
         oauth_client_secret: str = None,
         oauth_token_url: str = None,
         oauth_scopes: List[str] = None,
+        use_llm_fallback: bool = True,
+        network_policy_path: Optional[str] = None,
+        filesystem_policy_path: Optional[str] = None,
     ):
         """Initialize a new Config instance.
 
@@ -118,6 +121,11 @@ class Config:
         self._oauth_client_secret = oauth_client_secret
         self._oauth_token_url = oauth_token_url
         self._oauth_scopes = oauth_scopes
+
+        # Deterministic engine and policy configuration
+        self._use_llm_fallback = use_llm_fallback
+        self._network_policy_path = network_policy_path
+        self._filesystem_policy_path = filesystem_policy_path
 
     @property
     def api_key(self) -> str:
@@ -280,6 +288,21 @@ class Config:
             Optional[List[str]]: The OAuth scopes.
         """
         return self._oauth_scopes
+
+    @property
+    def use_llm_fallback(self) -> bool:
+        """Whether to use LLM fallback after deterministic rules."""
+        return self._use_llm_fallback
+
+    @property
+    def network_policy_path(self) -> Optional[str]:
+        """Path to the network egress policy JSON file."""
+        return self._network_policy_path
+
+    @property
+    def filesystem_policy_path(self) -> Optional[str]:
+        """Path to the filesystem boundary policy JSON file."""
+        return self._filesystem_policy_path
 
     @property
     def base_url(self) -> str:
