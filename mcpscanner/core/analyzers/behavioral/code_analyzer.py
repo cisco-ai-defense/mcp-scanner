@@ -26,6 +26,7 @@ This analyzer:
 4. Uses LLM to detect semantic mismatches between description and implementation
 """
 
+import ast
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -33,7 +34,7 @@ from typing import Any, Dict, List, Optional
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
-from ...static_analysis.context_extractor import ContextExtractor
+from ...static_analysis.context_extractor import ContextExtractor, FunctionContext
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
 from ..base import BaseAnalyzer, SecurityFinding
 from ..deterministic_classifier import DeterministicClassifier, RuleMatch
@@ -321,6 +322,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
             # Analyze each MCP entry point
             for func_context in mcp_contexts:
+                # Merge interprocedural context so rules see callee bodies
+                self._merge_interprocedural_context(
+                    func_context,
+                    file_path,
+                    context.get("cross_file_analyzer"),
+                    source_code,
+                )
+
                 # --- Phase 1: Deterministic rules ---
                 det_matches = self._deterministic.classify(func_context)
 
@@ -654,3 +663,155 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         except Exception as e:
             self.logger.warning(f"Failed to enrich with cross-file context: {e}")
+
+    def _merge_interprocedural_context(
+        self,
+        func_context: FunctionContext,
+        file_path: str,
+        call_graph_analyzer: Optional[CallGraphAnalyzer],
+        source_code: str,
+    ) -> None:
+        """Walk all functions reachable from this MCP tool and merge their
+        behavioral signals into the FunctionContext.
+
+        This allows deterministic rules to see dangerous calls, string literals,
+        and function calls inside helper classes/methods that the tool invokes.
+
+        Injects private attributes onto func_context:
+            _module_dangerous_calls: set of dangerous call names found in scope
+            _module_string_literals: list of string literals from all reachable fns
+            _module_function_calls: list of function call dicts from all reachable fns
+        """
+        from ..deterministic_classifier import _ALL_DANGEROUS_CALLS
+
+        dangerous_found: set = set()
+        all_literals: list = list(func_context.string_literals)
+        all_fn_calls: list = list(func_context.function_calls)
+
+        try:
+            tree = ast.parse(source_code)
+        except SyntaxError:
+            return
+
+        # Build a map of all function/method bodies in the module
+        body_map: dict = {}  # "name" or "Class.method" -> ast node
+        class_nodes: list = []  # ClassDef nodes for class-level attribute scanning
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                body_map[node.name] = node
+            if isinstance(node, ast.ClassDef):
+                class_nodes.append(node)
+                for item in node.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        body_map[f"{node.name}.{item.name}"] = item
+
+        # Determine which functions to inspect:
+        # 1. All reachable via call graph
+        # 2. Fallback: all functions in the module
+        reachable_names: set = set()
+
+        if call_graph_analyzer and func_context.reachable_functions:
+            for rf in func_context.reachable_functions:
+                # reachable_functions are "filepath::name" or "filepath::Class.method"
+                if "::" in rf:
+                    fn_name = rf.split("::", 1)[1]
+                    reachable_names.add(fn_name)
+
+        if not reachable_names:
+            # Fallback: inspect every function in the module
+            reachable_names = set(body_map.keys())
+
+        # Walk each reachable function body
+        for fn_name in reachable_names:
+            fn_node = body_map.get(fn_name)
+            if fn_node is None:
+                continue
+
+            for child in ast.walk(fn_node):
+                # Collect string literals
+                if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    val = child.value[:200]
+                    if val:
+                        all_literals.append(val)
+
+                # Collect function calls and check for dangerous ones
+                if isinstance(child, ast.Call):
+                    call_name = self._get_ast_call_name(child)
+                    if call_name:
+                        all_fn_calls.append({
+                            "name": call_name,
+                            "args": [
+                                ast.unparse(a)[:80]
+                                for a in child.args
+                                if hasattr(ast, "unparse")
+                            ],
+                            "line": getattr(child, "lineno", 0),
+                        })
+
+                        # Check against dangerous calls
+                        if call_name in _ALL_DANGEROUS_CALLS:
+                            dangerous_found.add(call_name)
+                        else:
+                            # Check partial matches (e.g. "subprocess.run")
+                            for dc in _ALL_DANGEROUS_CALLS:
+                                if dc in call_name or call_name.endswith(dc):
+                                    dangerous_found.add(dc)
+                                    break
+
+        # Also scan class-level attributes (e.g. PATHS = [...]) and
+        # module-level assignments for string literals and calls
+        for cls_node in class_nodes:
+            for item in cls_node.body:
+                # Class attributes (not methods)
+                if isinstance(item, ast.Assign):
+                    for child in ast.walk(item):
+                        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                            val = child.value[:200]
+                            if val:
+                                all_literals.append(val)
+
+        # Module-level string literals (outside functions/classes)
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for child in ast.walk(node):
+                    if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                        val = child.value[:200]
+                        if val:
+                            all_literals.append(val)
+
+        # Also merge boolean flags from reachable code
+        if dangerous_found:
+            exec_calls = {"eval", "exec", "compile", "execfile", "__import__"}
+            subprocess_calls = {c for c in _ALL_DANGEROUS_CALLS if "subprocess" in c or "os.system" in c or "os.popen" in c or "pty.spawn" in c}
+            network_calls = {c for c in _ALL_DANGEROUS_CALLS if "requests." in c or "httpx." in c or "urllib" in c or "socket" in c or "smtplib" in c or "ftplib" in c}
+            file_calls = {"open", "file"}
+
+            if dangerous_found & exec_calls:
+                func_context.has_eval_exec = True
+            if dangerous_found & subprocess_calls:
+                func_context.has_subprocess_calls = True
+            if dangerous_found & network_calls:
+                func_context.has_network_operations = True
+            if dangerous_found & file_calls:
+                func_context.has_file_operations = True
+
+        # Inject merged data as private attributes for rules to use
+        func_context._module_dangerous_calls = dangerous_found
+        func_context._module_string_literals = all_literals
+        func_context._module_function_calls = all_fn_calls
+
+    @staticmethod
+    def _get_ast_call_name(node: ast.Call) -> str:
+        """Extract a dotted call name from an ast.Call node."""
+        if isinstance(node.func, ast.Name):
+            return node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            parts = []
+            current = node.func
+            while isinstance(current, ast.Attribute):
+                parts.append(current.attr)
+                current = current.value
+            if isinstance(current, ast.Name):
+                parts.append(current.id)
+            return ".".join(reversed(parts))
+        return ""

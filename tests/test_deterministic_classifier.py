@@ -27,6 +27,10 @@ from mcpscanner.core.analyzers.deterministic_classifier import (
     TaintedFileWrite,
     EnvVarHarvesting,
     DocstringMismatchHeuristic,
+    FileScopeDangerousCall,
+    ResourceExhaustion,
+    TemplateInjection,
+    SensitiveFilePath,
     RuleMatch,
 )
 from mcpscanner.core.static_analysis.context_extractor import FunctionContext
@@ -394,3 +398,189 @@ class TestDeterministicClassifier:
         # Only subprocess rule is loaded, eval should not trigger
         matches = classifier.classify(ctx)
         assert len(matches) == 0
+
+
+# ── DET-008: FileScopeDangerousCall ──
+
+
+class TestFileScopeDangerousCall:
+    def test_no_module_calls(self):
+        ctx = _make_ctx()
+        assert FileScopeDangerousCall().matches(ctx) is None
+
+    def test_exec_in_module(self):
+        ctx = _make_ctx()
+        ctx._module_dangerous_calls = {"exec", "subprocess.Popen"}
+        match = FileScopeDangerousCall().matches(ctx)
+        assert match is not None
+        assert match.rule_id == "DET-008"
+        assert match.severity == "HIGH"
+
+    def test_network_only_in_module(self):
+        ctx = _make_ctx()
+        ctx._module_dangerous_calls = {"requests.post"}
+        match = FileScopeDangerousCall().matches(ctx)
+        assert match is not None
+        assert match.severity == "MEDIUM"
+        assert match.threat_name == "DATA EXFILTRATION"
+
+    def test_serialization_in_module(self):
+        ctx = _make_ctx()
+        ctx._module_dangerous_calls = {"pickle.loads"}
+        match = FileScopeDangerousCall().matches(ctx)
+        assert match is not None
+        assert match.threat_name == "UNAUTHORIZED OR UNSOLICITED CODE EXECUTION"
+
+    def test_empty_module_calls(self):
+        ctx = _make_ctx()
+        ctx._module_dangerous_calls = set()
+        assert FileScopeDangerousCall().matches(ctx) is None
+
+
+# ── DET-009: ResourceExhaustion ──
+
+
+class TestResourceExhaustion:
+    def test_no_fork(self):
+        ctx = _make_ctx()
+        ctx._module_dangerous_calls = set()
+        ctx._module_string_literals = []
+        assert ResourceExhaustion().matches(ctx) is None
+
+    def test_os_fork(self):
+        ctx = _make_ctx()
+        ctx._module_dangerous_calls = {"os.fork"}
+        match = ResourceExhaustion().matches(ctx)
+        assert match is not None
+        assert match.rule_id == "DET-009"
+        assert match.severity == "HIGH"
+
+    def test_fork_bomb_shell_string(self):
+        ctx = _make_ctx()
+        ctx._module_dangerous_calls = set()
+        ctx._module_string_literals = [":(){ :|:& };:"]
+        match = ResourceExhaustion().matches(ctx)
+        assert match is not None
+
+    def test_multiprocessing_without_loop(self):
+        ctx = _make_ctx(control_flow={"has_loops": False})
+        ctx._module_dangerous_calls = {"multiprocessing.Process"}
+        ctx._module_string_literals = []
+        assert ResourceExhaustion().matches(ctx) is None
+
+    def test_multiprocessing_with_loop(self):
+        ctx = _make_ctx(control_flow={"has_loops": True})
+        ctx._module_dangerous_calls = {"multiprocessing.Process"}
+        ctx._module_string_literals = []
+        match = ResourceExhaustion().matches(ctx)
+        assert match is not None
+
+
+# ── DET-010: TemplateInjection ──
+
+
+class TestTemplateInjection:
+    def test_no_templates(self):
+        ctx = _make_ctx(parameters=[{"name": "x"}])
+        assert TemplateInjection().matches(ctx) is None
+
+    def test_jinja2_template_with_param(self):
+        ctx = _make_ctx(
+            parameters=[{"name": "template_str"}],
+            function_calls=[
+                {"name": "jinja2.Template", "args": ["template_str"], "line": 10}
+            ],
+        )
+        match = TemplateInjection().matches(ctx)
+        assert match is not None
+        assert match.rule_id == "DET-010"
+        assert match.severity == "HIGH"
+
+    def test_template_render_with_param(self):
+        ctx = _make_ctx(
+            parameters=[{"name": "data"}],
+            function_calls=[
+                {"name": "tmpl.render", "args": ["data"], "line": 15}
+            ],
+        )
+        match = TemplateInjection().matches(ctx)
+        assert match is not None
+
+    def test_template_without_param(self):
+        ctx = _make_ctx(
+            parameters=[{"name": "x"}],
+            function_calls=[
+                {"name": "jinja2.Template", "args": ["'<h1>Hello</h1>'"], "line": 10}
+            ],
+        )
+        assert TemplateInjection().matches(ctx) is None
+
+    def test_module_level_template_call(self):
+        ctx = _make_ctx(parameters=[{"name": "user_input"}])
+        ctx._module_function_calls = [
+            {"name": "mako.template.Template", "args": ["user_input"], "line": 20}
+        ]
+        match = TemplateInjection().matches(ctx)
+        assert match is not None
+
+
+# ── DET-011: SensitiveFilePath ──
+
+
+class TestSensitiveFilePath:
+    def test_no_sensitive_paths(self):
+        ctx = _make_ctx(string_literals=["hello", "/tmp/data.txt"])
+        assert SensitiveFilePath().matches(ctx) is None
+
+    def test_etc_shadow(self):
+        ctx = _make_ctx(string_literals=["/etc/shadow"])
+        match = SensitiveFilePath().matches(ctx)
+        assert match is not None
+        assert match.rule_id == "DET-011"
+        assert "system file" in match.evidence[0]
+
+    def test_aws_credentials(self):
+        ctx = _make_ctx(string_literals=["~/.aws/credentials"])
+        match = SensitiveFilePath().matches(ctx)
+        assert match is not None
+        assert match.severity == "HIGH"  # credential files escalate
+        assert "credential" in match.evidence[0]
+
+    def test_cloud_metadata(self):
+        ctx = _make_ctx(string_literals=["http://169.254.169.254/latest/meta-data/"])
+        match = SensitiveFilePath().matches(ctx)
+        assert match is not None
+        assert match.severity == "HIGH"
+        assert "cloud metadata" in match.evidence[0]
+
+    def test_cursor_ide_config(self):
+        ctx = _make_ctx(string_literals=["~/.cursor/mcp.json"])
+        match = SensitiveFilePath().matches(ctx)
+        assert match is not None
+        assert match.severity == "HIGH"  # IDE configs escalate
+        assert "IDE config" in match.evidence[0]
+
+    def test_claude_config(self):
+        ctx = _make_ctx(string_literals=["claude_desktop_config.json"])
+        match = SensitiveFilePath().matches(ctx)
+        assert match is not None
+        assert "IDE config" in match.evidence[0]
+
+    def test_windsurf_config(self):
+        ctx = _make_ctx(string_literals=[".windsurf/settings"])
+        match = SensitiveFilePath().matches(ctx)
+        assert match is not None
+        assert "IDE config" in match.evidence[0]
+
+    def test_ssh_keys(self):
+        ctx = _make_ctx(string_literals=["~/.ssh/id_rsa"])
+        match = SensitiveFilePath().matches(ctx)
+        assert match is not None
+        assert "system file" in match.evidence[0] or "credential" in match.evidence[0]
+
+    def test_module_level_literals(self):
+        ctx = _make_ctx(string_literals=[])
+        ctx._module_string_literals = ["/etc/passwd", "/etc/shadow"]
+        match = SensitiveFilePath().matches(ctx)
+        assert match is not None
+        assert len(match.evidence) == 2
