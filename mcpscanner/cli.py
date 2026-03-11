@@ -1671,6 +1671,10 @@ async def main():
             # This follows the same pattern as other analyzers but operates on source files
             cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
 
+            # If no LLM key is available, run deterministic-only mode
+            if not cfg.llm_provider_api_key:
+                cfg._use_llm_fallback = False
+
             from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
 
             analyzer = BehavioralCodeAnalyzer(cfg)
@@ -1784,19 +1788,18 @@ async def main():
                 )
 
             # Automatically filter out VULNERABILITY findings - only show THREATS
+            # Deterministic findings (no classification field) always pass through
             filtered_results = []
             for result in results:
-                # Check if result has behavioral_analyzer findings with classification
                 if "findings" in result and "behavioral_analyzer" in result["findings"]:
                     analyzer_data = result["findings"]["behavioral_analyzer"]
                     classification = analyzer_data.get(
                         "threat_vulnerability_classification", ""
                     ).upper()
 
-                    # Only include THREAT findings, exclude VULNERABILITY
-                    if classification == "THREAT":
+                    # Include THREAT findings and deterministic findings (no classification)
+                    if classification == "THREAT" or not classification:
                         filtered_results.append(result)
-                # Keep results without findings (safe results)
                 elif not result.get("findings"):
                     filtered_results.append(result)
 

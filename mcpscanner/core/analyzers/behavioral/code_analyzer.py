@@ -71,8 +71,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         super().__init__(name="Behavioural")
         self._config = config
 
-        # Initialize alignment orchestrator (handles all LLM interaction)
-        self.alignment_orchestrator = AlignmentOrchestrator(config)
+        # LLM fallback flag
+        self._use_llm_fallback = getattr(config, "use_llm_fallback", True)
+
+        # Initialize alignment orchestrator only when LLM fallback is enabled
+        if self._use_llm_fallback:
+            self.alignment_orchestrator = AlignmentOrchestrator(config)
+        else:
+            self.alignment_orchestrator = None
 
         # Deterministic engine (always runs)
         self._deterministic = DeterministicClassifier()
@@ -85,9 +91,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             config_path=getattr(config, "filesystem_policy_path", None)
         )
         self._data_classifier = DataClassifier()
-
-        # LLM fallback flag
-        self._use_llm_fallback = getattr(config, "use_llm_fallback", True)
 
         self.logger.debug(
             "BehavioralCodeAnalyzer initialized with deterministic engine "
