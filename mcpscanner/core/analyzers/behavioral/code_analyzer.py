@@ -407,7 +407,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     "taxonomy_description": threat_info["description"],
                 },
             )
-
+            # Set capability based on decorator type
+            decorator_type = func_context.decorator_types[0] if func_context.decorator_types else "tool"
+            if "resource" in decorator_type.lower():
+                finding.capability = "resource"
+            elif "prompt" in decorator_type.lower():
+                finding.capability = "prompt"
+            else:
+                finding.capability = "tool"
+            
             return finding
 
         except Exception as e:
