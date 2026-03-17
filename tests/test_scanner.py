@@ -86,11 +86,16 @@ def mock_mcp_client():
     mock_stream_cm.__aenter__.return_value = mock_streams
 
     # Create the patches but don't apply them yet
+    mock_httpx_client = MagicMock()
+    mock_httpx_client.is_closed = False
+    mock_httpx_client.aclose = AsyncMock()
+
     patches = [
         patch("mcpscanner.core.scanner.sse_client", return_value=mock_stream_cm),
         patch(
-            "mcpscanner.core.scanner.streamablehttp_client", return_value=mock_stream_cm
+            "mcpscanner.core.scanner.streamable_http_client", return_value=mock_stream_cm
         ),
+        patch("mcpscanner.core.scanner.create_mcp_http_client", return_value=mock_httpx_client),
         patch("mcpscanner.core.scanner.ClientSession", mock_client_session_class),
     ]
 
@@ -787,7 +792,12 @@ async def test_get_mcp_session_401_unauthorized_streamable_http(config):
     """Test _get_mcp_session with 401 authentication error for streamable HTTP endpoint."""
     scanner = Scanner(config)
 
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
+    mock_httpx_client = MagicMock()
+    mock_httpx_client.is_closed = False
+    mock_httpx_client.aclose = AsyncMock()
+
+    with patch("mcpscanner.core.scanner.create_mcp_http_client", return_value=mock_httpx_client), \
+         patch("mcpscanner.core.scanner.streamable_http_client") as mock_client:
         mock_context = AsyncMock()
 
         # Create a mock HTTPStatusError with 401
@@ -841,7 +851,12 @@ async def test_get_mcp_session_403_forbidden(config):
     """Test _get_mcp_session with 403 forbidden error."""
     scanner = Scanner(config)
 
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
+    mock_httpx_client = MagicMock()
+    mock_httpx_client.is_closed = False
+    mock_httpx_client.aclose = AsyncMock()
+
+    with patch("mcpscanner.core.scanner.create_mcp_http_client", return_value=mock_httpx_client), \
+         patch("mcpscanner.core.scanner.streamable_http_client") as mock_client:
         mock_context = AsyncMock()
 
         class MockHTTPStatusError(Exception):
@@ -866,7 +881,12 @@ async def test_get_mcp_session_404_not_found(config):
     """Test _get_mcp_session with 404 not found error."""
     scanner = Scanner(config)
 
-    with patch("mcpscanner.core.scanner.streamablehttp_client") as mock_client:
+    mock_httpx_client = MagicMock()
+    mock_httpx_client.is_closed = False
+    mock_httpx_client.aclose = AsyncMock()
+
+    with patch("mcpscanner.core.scanner.create_mcp_http_client", return_value=mock_httpx_client), \
+         patch("mcpscanner.core.scanner.streamable_http_client") as mock_client:
         mock_context = AsyncMock()
 
         class MockHTTPStatusError(Exception):
