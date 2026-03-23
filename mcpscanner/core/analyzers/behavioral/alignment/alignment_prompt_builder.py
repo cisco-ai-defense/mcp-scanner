@@ -339,10 +339,12 @@ Parameter Flow Tracking:
         if func_context.exception_handlers:
             exc_parts = [f"\n**EXCEPTION HANDLING:**\n"]
             for handler in func_context.exception_handlers:
+                exc_type = handler.get('exception_type', 'Exception')
+                line = handler.get('line', '?')
                 exc_parts.append(
-                    f"  Line {handler['line']}: except {handler['exception_type']}"
+                    f"  Line {line}: except {exc_type}"
                 )
-                if handler["is_silent"]:
+                if handler.get("is_silent", False):
                     exc_parts.append(" (⚠️  SILENT - just 'pass')\n")
                 else:
                     exc_parts.append("\n")
@@ -369,13 +371,17 @@ Parameter Flow Tracking:
         # Add attribute access (self.attr, obj.attr)
         if func_context.attribute_access:
             writes = [
-                op for op in func_context.attribute_access if op["type"] == "write"
+                op for op in func_context.attribute_access if op.get("type") == "write"
             ]
             if writes:
                 attr_parts = [f"\n**ATTRIBUTE WRITES:**\n"]
                 for op in writes[:10]:
+                    line = op.get('line', '?')
+                    obj = op.get('object', '?')
+                    attr = op.get('attribute', '?')
+                    val = op.get('value', '?')
                     attr_parts.append(
-                        f"  Line {op['line']}: {op['object']}.{op['attribute']} = {op['value']}\n"
+                        f"  Line {line}: {obj}.{attr} = {val}\n"
                     )
                 content_parts.append("".join(attr_parts))
 
@@ -396,6 +402,93 @@ Parameter Flow Tracking:
 {end_tag}
 """
 
+        return prompt.strip()
+
+    def build_batch_prompt(self, func_contexts: List[FunctionContext]) -> str:
+        """Build a batched prompt for analyzing multiple functions in one LLM call.
+
+        Args:
+            func_contexts: List of function contexts to analyze
+
+        Returns:
+            Formatted prompt string with all functions
+        """
+        # Generate random delimiter tags
+        random_id = secrets.token_hex(16)
+        start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
+        end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
+
+        # Build content for all functions
+        all_content = []
+        all_content.append(f"Analyze the following {len(func_contexts)} functions for security threats.\n")
+        all_content.append("For EACH function, provide a separate JSON analysis.\n")
+        all_content.append("Return a JSON array with one object per function in the same order.\n\n")
+
+        for idx, func_context in enumerate(func_contexts):
+            docstring = func_context.docstring or "No docstring provided"
+            
+            all_content.append(f"=== FUNCTION {idx + 1} of {len(func_contexts)} ===\n")
+            all_content.append(f"**Function Name:** {func_context.name}\n")
+            all_content.append(f"**Line:** {func_context.line_number}\n")
+            all_content.append(f"**Decorator:** {func_context.decorator_types[0] if func_context.decorator_types else 'unknown'}\n")
+            all_content.append(f"**Docstring:** {docstring}\n")
+            all_content.append(f"**Parameters:** {json.dumps(func_context.parameters)}\n")
+            all_content.append(f"**Return Type:** {func_context.return_type or 'Not specified'}\n")
+
+            # Add key security indicators
+            if func_context.function_calls:
+                calls = [c.get("name", "?") for c in func_context.function_calls[:10]]
+                all_content.append(f"**Function Calls:** {', '.join(calls)}\n")
+
+            # Security flags
+            security_flags = []
+            if getattr(func_context, 'has_file_operations', False):
+                security_flags.append("FILE_OPS")
+            if getattr(func_context, 'has_network_operations', False):
+                security_flags.append("NETWORK_OPS")
+            if getattr(func_context, 'has_subprocess_calls', False):
+                security_flags.append("SUBPROCESS")
+            if getattr(func_context, 'has_eval_exec', False):
+                security_flags.append("EVAL/EXEC")
+            if security_flags:
+                all_content.append(f"**Security Flags:** {', '.join(security_flags)}\n")
+
+            # Add source code (truncated if too long)
+            source = getattr(func_context, 'source', '')
+            if source:
+                if len(source) > 2000:
+                    source = source[:2000] + "\n... (truncated)"
+                all_content.append(f"**Source Code:**\n```\n{source}\n```\n")
+
+            all_content.append("\n")
+
+        analysis_content = "".join(all_content)
+
+        # Build the prompt with batch instructions
+        batch_instructions = """
+IMPORTANT: You are analyzing MULTIPLE functions. Return a JSON ARRAY with one analysis object per function.
+
+Example response format for 3 functions:
+```json
+[
+  {"function_index": 0, "function_name": "func1", "mismatch_detected": false},
+  {"function_index": 1, "function_name": "func2", "mismatch_detected": true, "threat_name": "DATA EXFILTRATION", "severity": "HIGH", "description_claims": "...", "actual_behavior": "...", "security_implications": "..."},
+  {"function_index": 2, "function_name": "func3", "mismatch_detected": false}
+]
+```
+
+For each function with mismatch_detected=true, include all required fields (threat_name, severity, description_claims, actual_behavior, security_implications).
+For functions with no issues, just include function_index, function_name, and mismatch_detected=false.
+
+"""
+        prompt = f"""{self._template}
+
+{batch_instructions}
+
+{start_tag}
+{analysis_content}
+{end_tag}
+"""
         return prompt.strip()
 
     def _format_call_chain(self, chain: List[Dict[str, Any]], indent: int = 0) -> str:
