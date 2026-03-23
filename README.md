@@ -26,6 +26,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
 - **VirusTotal Binary Scanning**: Automatically detect malware in binary files (images, PDFs, executables, archives) bundled with MCP servers using VirusTotal hash lookups.
+- **Behavioural Code Scanning**: Scan Source code of MCP servers for detecting threats.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
@@ -75,7 +76,7 @@ uv init --python 3.13 #if not already done
 uv add cisco-ai-mcp-scanner
 # then activate the virtual environment:
 ## macOS and Linux: source .venv/bin/activate
-## Windows CMD: .vemv\Scripts\activate
+## Windows CMD: .venv\Scripts\activate
 ## Windows PWSH: .venv\Scripts\Activate.ps1
 uv sync
 ```
@@ -184,7 +185,7 @@ mcp-scanner --scan-known-configs --analyzers yara --format summary
 mcp-scanner --stdio-command uvx --stdio-arg=--from --stdio-arg=mcp-server-fetch --stdio-arg=mcp-server-fetch --analyzers yara --format summary
 
 # Remote server (deepwiki example)
-mcp-scanner --server-url https://mcp.deepwki.com/mcp --analyzers yara --format summary
+mcp-scanner --server-url https://mcp.deepwiki.com/mcp --analyzers yara --format summary
 
 # MCP Scanner as REST API
 mcp-scanner-api --host 0.0.0.0 --port 8080
@@ -210,7 +211,7 @@ async def main():
 
     # Scan all tools on a remote server
     tool_results = await scanner.scan_remote_server_tools(
-        "https://mcp.deepwki.com/mcp",
+        "https://mcp.deepwiki.com/mcp",
         analyzers=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
     )
 
@@ -254,6 +255,7 @@ asyncio.run(main())
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
 - **virustotal**: scan files or directories for malware using VirusTotal hash lookups. Requires a `scan_path` argument (file or directory).
 - **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
+- **supplychain**: scan source code of an MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 - **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
@@ -601,8 +603,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 
 
 ## Contact Cisco for obtaining an AI Defense subscription
-
-https://www.cisco.com/site/us/en/products/security/ai-defense/index.html
+[https://www.cisco.com/c/en/us/products/security/ai-defense/request-demo.html](https://www.cisco.com/c/en/us/products/security/ai-defense/request-demo.html)
 
 ## License
 Distributed under the `Apache 2.0` License. See [LICENSE](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/LICENSE) for more information.
