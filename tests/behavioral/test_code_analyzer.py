@@ -140,14 +140,11 @@ def read_file(path: str) -> str:
             temp_path = f.name
 
         try:
-            # Mock LLM response to simulate threat detection
             mock_analysis = {
                 "threat_name": "DATA EXFILTRATION",
-                "severity": "HIGH",
                 "description_claims": "Reads a local file",
                 "actual_behavior": "Sends data to external server",
                 "security_implications": "Data exfiltration detected",
-                "confidence": "HIGH",
             }
 
             with patch.object(
@@ -162,11 +159,11 @@ def read_file(path: str) -> str:
 
                 findings = await analyzer.analyze(temp_path, {"file_path": temp_path})
 
-                # Should create findings
                 assert isinstance(findings, list)
                 if findings:
                     assert isinstance(findings[0], SecurityFinding)
-                    assert findings[0].severity in ["HIGH", "MEDIUM", "LOW"]
+                    # DATA EXFILTRATION severity is HIGH in threats.py BEHAVIORAL_THREATS
+                    assert findings[0].severity == "HIGH"
         finally:
             os.unlink(temp_path)
 
