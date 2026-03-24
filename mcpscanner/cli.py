@@ -2118,11 +2118,7 @@ async def main():
             if analyzer.last_scan_summary:
                 summary = analyzer.last_scan_summary
                 logger.info(
-<<<<<<< HEAD
                     "vulnerable-package summary: %d packages, %d vulnerable (%d total vulns)",
-=======
-                    "vulnerable-packages summary: %d packages, %d vulnerable (%d total vulns)",
->>>>>>> fa1a977 (feat: Add vulnerable packages analyzer for Python dependency scanning)
                     summary.get("total_packages", 0),
                     summary.get("vulnerable_packages", 0),
                     summary.get("total_vulnerabilities", 0),
