@@ -61,6 +61,8 @@ class ScanningScreen(Screen):
             return self.scan_config.get("scan_path", "packages")
         if mode == "behavioral":
             return self.scan_config.get("source_path", "source")
+        if mode == "virustotal":
+            return self.scan_config.get("vt_scan_path", "files")
         return mode
 
     def _log(self, message: str, style: str = "") -> None:
@@ -126,6 +128,8 @@ class ScanningScreen(Screen):
             return await self._scan_config_file()
         if mode == "static":
             return await self._scan_static()
+        if mode == "virustotal":
+            return await self._scan_virustotal()
 
         return await self._scan_server()
 
@@ -489,6 +493,106 @@ class ScanningScreen(Screen):
             "requested_analyzers": ["behavioral"],
         }
 
+    # ── VirusTotal scan ──────────────────────────────────
+
+    async def _scan_virustotal(self) -> dict:
+        import os
+        from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
+        from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
+
+        scan_path = self.scan_config["vt_scan_path"]
+        vt_upload = self.scan_config.get("vt_upload", False)
+
+        vt_api_key = os.environ.get("VIRUSTOTAL_API_KEY", "")
+        if not vt_api_key:
+            raise ValueError(
+                "VIRUSTOTAL_API_KEY environment variable is not set. "
+                "Get a free key at https://www.virustotal.com/"
+            )
+
+        self._set_step("  Initializing VirusTotal analyzer...")
+        self._set_progress(20)
+        self._log(f"Scanning: {scan_path}")
+
+        analyzer = VirusTotalAnalyzer(
+            api_key=vt_api_key,
+            enabled=True,
+            upload_files=vt_upload,
+            max_files=CONSTANTS.VIRUSTOTAL_MAX_FILES,
+            inclusion_extensions=CONSTANTS.VIRUSTOTAL_INCLUSION_EXTENSIONS,
+            exclusion_extensions=CONSTANTS.VIRUSTOTAL_EXCLUSION_EXTENSIONS,
+        )
+
+        self._set_step("  Scanning files with VirusTotal...")
+        self._set_progress(40)
+
+        if os.path.isfile(scan_path):
+            finding = analyzer.analyze_file(scan_path)
+            findings = [finding] if finding else []
+            self._log(f"Scanned file: {os.path.basename(scan_path)}")
+        elif os.path.isdir(scan_path):
+            findings = analyzer.analyze_directory(scan_path)
+            self._log(f"Scanned directory: {scan_path}")
+        else:
+            raise FileNotFoundError(f"Path does not exist: {scan_path}")
+
+        self._set_step("  Processing results...")
+        self._set_progress(80)
+
+        results = []
+        if findings:
+            for finding in findings:
+                file_path = (
+                    finding.details.get("file_path", scan_path)
+                    if finding.details else scan_path
+                )
+                analyzer_finding = {
+                    "severity": finding.severity,
+                    "threat_summary": finding.summary,
+                    "threat_names": [finding.threat_category],
+                    "total_findings": 1,
+                    "mcp_taxonomies": [],
+                }
+                if finding.details:
+                    taxonomy = {}
+                    for key in ("aitech", "aitech_name", "aisubtech", "aisubtech_name", "taxonomy_description"):
+                        if key in finding.details:
+                            taxonomy[key.replace("taxonomy_description", "description")] = finding.details[key]
+                    if taxonomy:
+                        analyzer_finding["mcp_taxonomies"].append(taxonomy)
+
+                results.append({
+                    "tool_name": os.path.basename(file_path),
+                    "tool_description": f"VirusTotal scan of {os.path.basename(file_path)}",
+                    "status": "completed",
+                    "is_safe": False,
+                    "findings": {"virustotal_analyzer": analyzer_finding},
+                })
+                self._log(f"  MALWARE: {os.path.basename(file_path)} - {finding.summary}", "bold red")
+        else:
+            results.append({
+                "tool_name": os.path.basename(scan_path),
+                "tool_description": f"VirusTotal scan of {os.path.basename(scan_path)}",
+                "status": "completed",
+                "is_safe": True,
+                "findings": {
+                    "virustotal_analyzer": {
+                        "severity": "SAFE",
+                        "threat_summary": "No threats detected",
+                        "threat_names": [],
+                        "total_findings": 0,
+                        "mcp_taxonomies": [],
+                    }
+                },
+            })
+            self._log("No threats detected.", "bold green")
+
+        return {
+            "server_url": f"virustotal:{scan_path}",
+            "scan_results": results,
+            "requested_analyzers": ["virustotal"],
+        }
+
     # ── Helpers ──────────────────────────────────────────
 
     def _get_analyzers(self) -> list:
@@ -498,7 +602,6 @@ class ScanningScreen(Screen):
             "yara": AnalyzerEnum.YARA,
             "api": AnalyzerEnum.API,
             "llm": AnalyzerEnum.LLM,
-            "virustotal": AnalyzerEnum.VIRUSTOTAL,
         }
         selected = self.scan_config.get("analyzers", ["yara"])
         return [mapping[a] for a in selected if a in mapping]

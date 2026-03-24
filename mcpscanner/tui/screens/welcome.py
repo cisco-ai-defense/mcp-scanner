@@ -14,6 +14,7 @@ SCAN_MODES = [
     ("static", "Static File Scan", "Pre-generated JSON files"),
     ("vulnerable-packages", "Vulnerable Packages", "Python CVE scan"),
     ("behavioral", "Behavioral Analysis", "Docstring mismatch scan"),
+    ("virustotal", "VirusTotal Malware Scan", "Hash-based file scanning"),
 ]
 
 LOGO = "[bold #049fd9]Cisco MCP Scanner[/]"
@@ -28,6 +29,7 @@ class WelcomeScreen(Screen):
         Binding("5", "select_mode(4)", "Static", show=False),
         Binding("6", "select_mode(5)", "VulnPkg", show=False),
         Binding("7", "select_mode(6)", "Behavioral", show=False),
+        Binding("8", "select_mode(7)", "VirusTotal", show=False),
         Binding("escape", "app.quit", "Quit"),
     ]
 
@@ -49,7 +51,7 @@ class WelcomeScreen(Screen):
                         option_list.add_option(None)
                 yield option_list
             yield Static(
-                "Press [bold]1-7[/] or [bold]Enter[/] to select  ·  [bold]Q[/] to quit",
+                "Press [bold]1-8[/] or [bold]Enter[/] to select  ·  [bold]Q[/] to quit",
                 id="welcome-footer-text",
             )
         yield Footer()

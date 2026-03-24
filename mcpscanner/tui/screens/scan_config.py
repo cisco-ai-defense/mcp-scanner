@@ -23,6 +23,7 @@ MODE_TITLES = {
     "static": "Static File Scan",
     "vulnerable-packages": "Vulnerable Packages Scan",
     "behavioral": "Behavioral Analysis",
+    "virustotal": "VirusTotal Malware Scan",
 }
 
 
@@ -63,6 +64,8 @@ class ScanConfigScreen(Screen):
             yield from self._vuln_packages_form()
         elif self.mode == "behavioral":
             yield from self._behavioral_form()
+        elif self.mode == "virustotal":
+            yield from self._virustotal_form()
 
     # ── Remote ──────────────────────────────────────────
 
@@ -160,6 +163,15 @@ class ScanConfigScreen(Screen):
             yield Input(placeholder="/path/to/mcp_server.py", id="source-path")
         yield from self._severity_select()
 
+    # ── VirusTotal ─────────────────────────────────────
+
+    def _virustotal_form(self) -> ComposeResult:
+        with Vertical(classes="form-group"):
+            yield Label("Scan Path (file or directory)", classes="form-label")
+            yield Input(placeholder="/path/to/file_or_directory", id="vt-scan-path")
+        with Vertical(classes="form-group"):
+            yield Checkbox("Upload unknown files to VirusTotal", id="vt-upload")
+
     # ── Shared widgets ──────────────────────────────────
 
     def _analyzer_checkboxes(self) -> ComposeResult:
@@ -169,7 +181,6 @@ class ScanConfigScreen(Screen):
                 yield Checkbox("YARA", value=True, id="chk-yara")
                 yield Checkbox("API", value=True, id="chk-api")
                 yield Checkbox("LLM", value=False, id="chk-llm")
-                yield Checkbox("VirusTotal", value=False, id="chk-virustotal")
 
     def _severity_select(self) -> ComposeResult:
         with Vertical(classes="form-group"):
@@ -243,6 +254,9 @@ class ScanConfigScreen(Screen):
             config["fix_mode"] = _checked("fix-mode")
         elif self.mode == "behavioral":
             config["source_path"] = _val("source-path")
+        elif self.mode == "virustotal":
+            config["vt_scan_path"] = _val("vt-scan-path")
+            config["vt_upload"] = _checked("vt-upload")
 
         analyzers = []
         if _checked("chk-yara"):
@@ -251,8 +265,6 @@ class ScanConfigScreen(Screen):
             analyzers.append("api")
         if _checked("chk-llm"):
             analyzers.append("llm")
-        if _checked("chk-virustotal"):
-            analyzers.append("virustotal")
         config["analyzers"] = analyzers
         config["severity_filter"] = _select_val("severity-filter") or "all"
 
@@ -272,6 +284,8 @@ class ScanConfigScreen(Screen):
             return "Scan path is required"
         if mode == "behavioral" and not config.get("source_path"):
             return "Source path is required"
+        if mode == "virustotal" and not config.get("vt_scan_path"):
+            return "File or directory path is required"
         return None
 
     def _start_scan(self) -> None:
