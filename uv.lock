@@ -402,7 +402,7 @@ requires-dist = [
     { name = "expandvars", specifier = ">=0.12.0" },
     { name = "fastapi", specifier = ">=0.125.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "litellm", specifier = ">=1.77.0" },
+    { name = "litellm", url = "https://files.pythonhosted.org/packages/8c/a9/4814b6aa58f6705df2831eaadeb5bc8240684c8c9d5964245212f85049d1/litellm-1.80.10-py3-none-any.whl" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.25.0" },
     { name = "pydantic", specifier = ">=2.6.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
@@ -1255,7 +1255,7 @@ wheels = [
 [[package]]
 name = "litellm"
 version = "1.80.10"
-source = { registry = "https://pypi.org/simple" }
+source = { url = "https://files.pythonhosted.org/packages/8c/a9/4814b6aa58f6705df2831eaadeb5bc8240684c8c9d5964245212f85049d1/litellm-1.80.10-py3-none-any.whl" }
 dependencies = [
     { name = "aiohttp" },
     { name = "click" },
@@ -1272,10 +1272,62 @@ dependencies = [
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/44/0aaa7449e7c4aa05668ec03f1f68a01b1e476591071d9659a68db19371a2/litellm-1.80.10.tar.gz", hash = "sha256:4a4aff7558945c2f7e5c6523e67c1b5525a46b10b0e1ad6b8f847cb13b16779e", size = 12764777, upload-time = "2025-12-14T02:07:05.362Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8c/a9/4814b6aa58f6705df2831eaadeb5bc8240684c8c9d5964245212f85049d1/litellm-1.80.10-py3-none-any.whl", hash = "sha256:9b3e561efaba0eb1291cb1555d3dcb7283cf7f3cb65aadbcdb42e2a8765898c8", size = 11264240, upload-time = "2025-12-14T02:07:02.414Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/a9/4814b6aa58f6705df2831eaadeb5bc8240684c8c9d5964245212f85049d1/litellm-1.80.10-py3-none-any.whl", hash = "sha256:9b3e561efaba0eb1291cb1555d3dcb7283cf7f3cb65aadbcdb42e2a8765898c8" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10" },
+    { name = "apscheduler", marker = "extra == 'proxy'", specifier = ">=3.10.4,<4.0.0" },
+    { name = "azure-identity", marker = "(python_full_version >= '3.9' and extra == 'extra-proxy') or (python_full_version >= '3.9' and extra == 'proxy')", specifier = ">=1.15.0,<2.0.0" },
+    { name = "azure-keyvault-secrets", marker = "extra == 'extra-proxy'", specifier = ">=4.8.0,<5.0.0" },
+    { name = "azure-storage-blob", marker = "extra == 'proxy'", specifier = ">=12.25.1,<13.0.0" },
+    { name = "backoff", marker = "extra == 'proxy'" },
+    { name = "boto3", marker = "extra == 'proxy'", specifier = "==1.36.0" },
+    { name = "click" },
+    { name = "cryptography", marker = "extra == 'proxy'" },
+    { name = "diskcache", marker = "extra == 'caching'", specifier = ">=5.6.1,<6.0.0" },
+    { name = "fastapi", marker = "extra == 'proxy'", specifier = ">=0.120.1" },
+    { name = "fastapi-sso", marker = "extra == 'proxy'", specifier = ">=0.16.0,<0.17.0" },
+    { name = "fastuuid", specifier = ">=0.13.0" },
+    { name = "google-cloud-iam", marker = "extra == 'extra-proxy'", specifier = ">=2.19.1,<3.0.0" },
+    { name = "google-cloud-kms", marker = "extra == 'extra-proxy'", specifier = ">=2.21.3,<3.0.0" },
+    { name = "grpcio", marker = "python_full_version < '3.14'", specifier = ">=1.62.3,<1.68.0" },
+    { name = "grpcio", marker = "python_full_version >= '3.14'", specifier = ">=1.75.0" },
+    { name = "gunicorn", marker = "extra == 'proxy'", specifier = ">=23.0.0,<24.0.0" },
+    { name = "httpx", specifier = ">=0.23.0" },
+    { name = "importlib-metadata", specifier = ">=6.8.0" },
+    { name = "jinja2", specifier = ">=3.1.2,<4.0.0" },
+    { name = "jsonschema", specifier = ">=4.22.0,<5.0.0" },
+    { name = "litellm-enterprise", marker = "extra == 'proxy'", specifier = "==0.1.25" },
+    { name = "litellm-proxy-extras", marker = "extra == 'proxy'", specifier = "==0.4.14" },
+    { name = "mcp", marker = "python_full_version >= '3.10' and extra == 'proxy'", specifier = ">=1.21.2,<2.0.0" },
+    { name = "mlflow", marker = "python_full_version >= '3.10' and extra == 'mlflow'", specifier = ">3.1.4" },
+    { name = "numpydoc", marker = "extra == 'utils'" },
+    { name = "openai", specifier = ">=2.8.0" },
+    { name = "orjson", marker = "extra == 'proxy'", specifier = ">=3.9.7,<4.0.0" },
+    { name = "polars", marker = "python_full_version >= '3.10' and extra == 'proxy'", specifier = ">=1.31.0,<2.0.0" },
+    { name = "prisma", marker = "extra == 'extra-proxy'", specifier = "==0.11.0" },
+    { name = "pydantic", specifier = ">=2.5.0,<3.0.0" },
+    { name = "pyjwt", marker = "python_full_version >= '3.9' and extra == 'proxy'", specifier = ">=2.10.1,<3.0.0" },
+    { name = "pynacl", marker = "extra == 'proxy'", specifier = ">=1.5.0,<2.0.0" },
+    { name = "python-dotenv", specifier = ">=0.2.0" },
+    { name = "python-multipart", marker = "extra == 'proxy'", specifier = ">=0.0.18,<0.0.19" },
+    { name = "pyyaml", marker = "extra == 'proxy'", specifier = ">=6.0.1,<7.0.0" },
+    { name = "redisvl", marker = "python_full_version >= '3.9' and python_full_version < '3.14' and extra == 'extra-proxy'", specifier = ">=0.4.1,<0.5.0" },
+    { name = "resend", marker = "extra == 'extra-proxy'", specifier = ">=0.8.0" },
+    { name = "rich", marker = "extra == 'proxy'", specifier = "==13.7.1" },
+    { name = "rq", marker = "extra == 'proxy'" },
+    { name = "semantic-router", marker = "python_full_version >= '3.9' and python_full_version < '3.14' and extra == 'semantic-router'", specifier = ">=0.1.12" },
+    { name = "soundfile", marker = "extra == 'proxy'", specifier = ">=0.12.1,<0.13.0" },
+    { name = "tiktoken", specifier = ">=0.7.0" },
+    { name = "tokenizers" },
+    { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.31.1,<0.32.0" },
+    { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.21.0,<0.22.0" },
+    { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0.0" },
+]
+provides-extras = ["caching", "extra-proxy", "mlflow", "proxy", "semantic-router", "utils"]
 
 [[package]]
 name = "markdown-it-py"
