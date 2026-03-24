@@ -189,7 +189,8 @@ class ReportGenerator:
 
         self.server_url = self.data.get(
             "server_url",
-            self.data.get("scan_target", "Unknown"),
+            self.data.get("scan_target",
+                self.data.get("mcp_server_repository", "Unknown")),
         )
         self.scan_results = self.data.get("scan_results", [])
         self.requested_analyzers = self.data.get("requested_analyzers", [])
