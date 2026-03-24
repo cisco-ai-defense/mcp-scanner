@@ -108,13 +108,6 @@ Analyze if the tool's parameters make sense for its stated purpose. Consider the
 - File tools legitimately need `file_path`, `content`, `encoding`
 - System management tools legitimately need elevated parameters
 
-## Severity Classification
-
-- **HIGH**: Active prompt injection, data exfiltration, or credential harvesting attempts
-- **MEDIUM**: Suspicious patterns that could enable attacks
-- **LOW**: Minor concerns or theoretical risks
-- **SAFE**: No malicious content detected
-
 ## Required Output Format
 
 Respond with ONLY a valid JSON object:

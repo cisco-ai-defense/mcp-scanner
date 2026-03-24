@@ -25,7 +25,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **Vulnerable Packages Scanning**: Scan Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) using pip-audit integration.
 - **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
-- **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
+- **Behavioural Code Scanning**: Scan Source code of MCP servers for detecting threats.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
@@ -44,28 +44,50 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - A valid Cisco AI Defense API Key (optional)
 - LLM Provider API Key (optional)
 
-### Installing from PyPI
+### Installing as a CLI tool
 
 ```bash
-uv venv -p <Python version less than or equal to 3.13> /path/to/your/choice/of/venv/directory
-source /path/to/your/choice/of/venv/directory/bin/activate
-uv pip install cisco-ai-mcp-scanner
+uv tool install --python 3.13 cisco-ai-mcp-scanner
 ```
 
-### Installing from Source
+Alternatively, you can install from source:
+
+```bash
+uv tool install --python 3.13 --from git+https://github.com/cisco-ai-defense/mcp-scanner cisco-ai-mcp-scanner
+```
+
+
+### Installing for local development
 
 ```bash
 git clone https://github.com/cisco-ai-defense/mcp-scanner
 cd mcp-scanner
-# Install with uv (recommended)
+uv sync --python 3.13 
+```
 
-uv venv -p <Python version less than or equal to 3.13> /path/to/your/choice/of/venv/directory
+### Install as a dependency in other projects
 
-source /path/to/your/choice/of/venv/directory/bin/activate
+Add MCP Scanner as a dependency using uv. From your project root (initialize with uv if needed):
 
-uv pip install .
-# Or install in development mode
-uv pip install -e .
+```bash
+uv init --python 3.13 #if not already done
+uv add cisco-ai-mcp-scanner
+# then activate the virtual environment:
+## macOS and Linux: source .venv/bin/activate
+## Windows CMD: .venv\Scripts\activate
+## Windows PWSH: .venv\Scripts\Activate.ps1
+uv sync
+```
+
+The module name is `mcpscanner`. Import this module with:
+
+```python
+# import everything (not recommended)
+import mcpscanner
+
+# selective imports (recommended). For example:
+from mcpscanner import Config, Scanner
+from mcpscanner.core.models import AnalyzerEnum
 ```
 
 ## Quick Start
@@ -100,14 +122,14 @@ export MCP_SCANNER_LLM_MODEL="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v2
 export MCP_SCANNER_LLM_API_KEY="your_llm_api_key"  # OpenAI
 
 # LLM Model Configuration (optional - defaults provided)
-export MCP_SCANNER_LLM_MODEL="gpt-4o"  # Any LiteLLM-supported model
+export MCP_SCANNER_LLM_MODEL="gpt-5.2"  # Any LiteLLM-supported model
 export MCP_SCANNER_LLM_BASE_URL="https://api.openai.com/v1"  # Custom LLM endpoint
-export MCP_SCANNER_LLM_API_VERSION="2024-02-01"  # API version (if required)
+export MCP_SCANNER_LLM_API_VERSION="2025-04-01-preview"  # API version (if required)
 
 # For Azure OpenAI (example)
 export MCP_SCANNER_LLM_BASE_URL="https://your-resource.openai.azure.com/"
-export MCP_SCANNER_LLM_API_VERSION="2024-02-01"
-export MCP_SCANNER_LLM_MODEL="azure/gpt-4"
+export MCP_SCANNER_LLM_API_VERSION="2025-04-01-preview"
+export MCP_SCANNER_LLM_MODEL="azure/gpt-5.2"
 
 # For Extended Thinking Models (longer timeout)
 export MCP_SCANNER_LLM_TIMEOUT=300
@@ -139,7 +161,7 @@ mcp-scanner --scan-known-configs --analyzers yara --format summary
 mcp-scanner --stdio-command uvx --stdio-arg=--from --stdio-arg=mcp-server-fetch --stdio-arg=mcp-server-fetch --analyzers yara --format summary
 
 # Remote server (deepwiki example)
-mcp-scanner --server-url https://mcp.deepwki.com/mcp --analyzers yara --format summary
+mcp-scanner --server-url https://mcp.deepwiki.com/mcp --analyzers yara --format summary
 
 # MCP Scanner as REST API
 mcp-scanner-api --host 0.0.0.0 --port 8080
@@ -165,7 +187,7 @@ async def main():
 
     # Scan all tools on a remote server
     tool_results = await scanner.scan_remote_server_tools(
-        "https://mcp.deepwki.com/mcp",
+        "https://mcp.deepwiki.com/mcp",
         analyzers=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
     )
 
@@ -209,6 +231,7 @@ asyncio.run(main())
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
 - **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 - **vulnerable-packages**: scan Python dependencies for known vulnerabilities using pip-audit. Requires a path to a requirements file or project directory.
+- **supplychain**: scan source code of an MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 - **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
@@ -559,8 +582,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 
 
 ## Contact Cisco for obtaining an AI Defense subscription
-
-https://www.cisco.com/site/us/en/products/security/ai-defense/index.html
+[https://www.cisco.com/c/en/us/products/security/ai-defense/request-demo.html](https://www.cisco.com/c/en/us/products/security/ai-defense/request-demo.html)
 
 ## License
 Distributed under the `Apache 2.0` License. See [LICENSE](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/LICENSE) for more information.
