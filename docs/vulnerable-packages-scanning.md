@@ -169,32 +169,38 @@ Produces output listing each vulnerable package with its vulnerability IDs, alia
 ### JSON Output Structure
 
 ```json
-[
-  {
-    "tool_name": "flask==0.5",
-    "tool_description": "PYSEC-2019-179: flask==0.5 | Aliases: CVE-2019-1010083, GHSA-5wv5-4vpf-pj6m | Flask before 1.0 is affected by unexpected memory usage...",
-    "status": "completed",
-    "is_safe": false,
-    "findings": {
-      "vulnerable_packages_analyzer": {
-        "severity": "HIGH",
-        "threat_summary": "Vulnerable dependency: flask==0.5 [PYSEC-2019-179] | Aliases: CVE-2019-1010083, GHSA-5wv5-4vpf-pj6m | Fix: 1.0 | Details: ...",
-        "threat_names": ["VULNERABLE DEPENDENCY"],
-        "total_findings": 1,
-        "mcp_taxonomies": [
-          {
-            "aitech": "AITech-9.2",
-            "aitech_name": "Detection Evasion",
-            "aisubtech": "AISubtech-9.2.1",
-            "aisubtech_name": "Supply Chain Compromise",
-            "description": "A Python dependency with a publicly known vulnerability..."
-          }
-        ]
+{
+  "mcp_server_repository": "vulnerable-packages:/path/to/requirements.txt",
+  "scan_results": [
+    {
+      "package_name": "flask==0.5",
+      "vulnerability_description": "PYSEC-2019-179: flask==0.5 | Aliases: CVE-2019-1010083, GHSA-5wv5-4vpf-pj6m | Flask before 1.0 is affected by unexpected memory usage...",
+      "status": "completed",
+      "is_safe": false,
+      "findings": {
+        "vulnerable_packages_analyzer": {
+          "severity": "HIGH",
+          "threat_summary": "Vulnerable dependency: flask==0.5 [PYSEC-2019-179] | Aliases: CVE-2019-1010083, GHSA-5wv5-4vpf-pj6m | Fix: 1.0 | Details: ...",
+          "threat_names": ["VULNERABLE DEPENDENCY"],
+          "total_findings": 1,
+          "mcp_taxonomies": [
+            {
+              "aitech": "AITech-9.2",
+              "aitech_name": "Detection Evasion",
+              "aisubtech": "AISubtech-9.2.1",
+              "aisubtech_name": "Supply Chain Compromise",
+              "description": "A Python dependency with a publicly known vulnerability..."
+            }
+          ]
+        }
       }
     }
-  }
-]
+  ],
+  "requested_analyzers": ["vulnerable_packages"]
+}
 ```
+
+**Note:** The vulnerable-packages output uses `package_name` and `vulnerability_description` (instead of `tool_name` / `tool_description` used by other scan types), and `mcp_server_repository` as the top-level identifier (instead of `server_url`).
 
 ## Programmatic Usage
 
