@@ -26,8 +26,8 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
-    # Pin via wheel URL: PyPI simple index may omit litellm; also avoids compromised releases (BerriAI/litellm#24512).
-    "litellm @ https://files.pythonhosted.org/packages/8c/a9/4814b6aa58f6705df2831eaadeb5bc8240684c8c9d5964245212f85049d1/litellm-1.80.10-py3-none-any.whl",
+    # Pin below known-bad PyPI release 1.82.8 (BerriAI/litellm#24512); IOC spot-check on wheel, see PR body.
+    "litellm==1.80.16",
     "expandvars>=0.12.0",
 ]
 
