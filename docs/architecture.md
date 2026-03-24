@@ -14,6 +14,7 @@ The MCP Scanner is organized into the following components:
 - **YaraAnalyzer**: Handles YARA pattern matching for detecting known malicious patterns and signatures.
 - **LLMAnalyzer**: Advanced AI-powered analysis using configurable LLM models for sophisticated threat detection.
 - **BehavioralCodeAnalyzer**: LLM-powered behavioral analysis with cross-file dataflow tracking, alignment checking, and comprehensive threat taxonomy mapping (AITech/AISubtech).
+- **VulnerablePackagesAnalyzer**: Scans Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) by running pip-audit as a subprocess. Supports requirements files, project directories, and installed environments. Maps findings to AITech-9.2 (Supply Chain Compromise).
 
 ## Utility Methods
 
