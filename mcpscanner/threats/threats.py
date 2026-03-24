@@ -291,6 +291,17 @@ class ThreatMapping:
             "aisubtech": "AISubtech-9.2.1",
             "aisubtech_name": "Supply Chain Compromise",
             "description": "A Python dependency with a publicly known vulnerability (CVE/PYSEC/GHSA) was detected. Vulnerable dependencies in MCP server packages can be exploited to compromise the server, exfiltrate data, or escalate privileges.",
+    # VirusTotal Analyzer Threats
+    # Note: These are malware detections from VirusTotal hash lookups on binary files
+    VIRUSTOTAL_THREATS = {
+        "MALWARE": {
+            "scanner_category": "MALWARE",
+            "severity": "HIGH",
+            "aitech": "AITech-9.2",
+            "aitech_name": "Detection Evasion",
+            "aisubtech": "AISubtech-9.2.2",
+            "aisubtech_name": "Backdoors and Trojans",
+            "description": "Binary file detected as malicious by VirusTotal. Multiple antivirus engines flagged this file as malware, indicating it may contain backdoors, trojans, or other malicious payloads embedded within the MCP server package.",
         },
     }
 
@@ -401,6 +412,7 @@ class ThreatMapping:
             "ai_defense": cls.AI_DEFENSE_THREATS,
             "behavioral": cls.BEHAVIORAL_THREATS,
             "vulnerable_packages": cls.VULNERABLE_PACKAGES_THREATS,
+            "virustotal": cls.VIRUSTOTAL_THREATS,
         }
 
         analyzer_lower = analyzer.lower()
@@ -441,3 +453,4 @@ YARA_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.YARA_THREATS)
 API_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.AI_DEFENSE_THREATS)
 BEHAVIORAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.BEHAVIORAL_THREATS)
 VULNERABLE_PACKAGES_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VULNERABLE_PACKAGES_THREATS)
+VIRUSTOTAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VIRUSTOTAL_THREATS)

@@ -100,6 +100,7 @@ class SecurityFinding:
                 "API": "ai_defense",
                 "BEHAVIORAL": "behavioral",
                 "VULNERABLE_PACKAGES": "vulnerable_packages",
+                "VIRUSTOTAL": "virustotal",
             }
 
             # Check if this is a built-in analyzer

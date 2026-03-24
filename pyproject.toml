@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.3.0"
+version = "4.3.1"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
@@ -26,10 +26,12 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
-    "litellm>=1.77.0",
+    # Pin below known-bad PyPI release 1.82.8 (BerriAI/litellm#24512); IOC spot-check on wheel, see PR body.
+    "litellm==1.80.16",
     "expandvars>=0.12.0",
     "pip-audit>=2.7.0",
     "textual>=3.0.0",
+    "puremagic>=1.28",
 ]
 
 [dependency-groups]

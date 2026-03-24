@@ -21,6 +21,7 @@ The MCP Scanner is organized into the following components:
 - **CLI** (`mcpscanner/cli.py`): Command-line interface with Click, supporting all scan modes, output formats, and subcommands.
 - **API Server** (`mcpscanner/server.py`): REST API server with FastAPI for integrating scanning into web applications and CI/CD pipelines.
 - **TUI** (`mcpscanner/tui/`): Interactive Terminal User Interface built with Textual. Provides guided, multi-screen scanning with a Welcome screen, dynamic configuration forms, live progress display, and a results DataTable with export. See [TUI Documentation](tui.md).
+- **VirusTotalAnalyzer**: Standalone file/directory malware scanner using VirusTotal SHA256 hash lookups with configurable inclusion/exclusion extension lists.
 
 ## Utility Methods
 
