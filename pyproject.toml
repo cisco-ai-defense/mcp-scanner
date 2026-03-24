@@ -29,6 +29,7 @@ dependencies = [
     # Pin below known-bad PyPI release 1.82.8 (BerriAI/litellm#24512); IOC spot-check on wheel, see PR body.
     "litellm==1.80.16",
     "expandvars>=0.12.0",
+    "puremagic>=1.28",
 ]
 
 [dependency-groups]

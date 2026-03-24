@@ -99,6 +99,7 @@ class SecurityFinding:
                 "YARA": "yara",
                 "API": "ai_defense",
                 "BEHAVIORAL": "behavioral",
+                "VIRUSTOTAL": "virustotal",
             }
 
             # Check if this is a built-in analyzer

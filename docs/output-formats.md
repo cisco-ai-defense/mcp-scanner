@@ -8,7 +8,7 @@ The MCP Scanner supports multiple output formats to suit different use cases and
 - **`summary`**: Concise summary showing only key findings
 - **`detailed`**: Comprehensive output with full finding details and threat taxonomy information
 - **`by_tool`**: Results grouped by scanned tool
-- **`by_analyzer`**: Results grouped by analyzer type (API, YARA, LLM)
+- **`by_analyzer`**: Results grouped by analyzer type (API, YARA, LLM, VirusTotal)
 - **`by_severity`**: Results grouped by severity level (HIGH, MEDIUM, LOW, UNKNOWN)
 - **`table`**: Tabular format for easy reading
 
@@ -59,7 +59,7 @@ mcp-scanner --server-url http://127.0.0.1:8001/sse --analyzer-filter yara_analyz
 # Show API and LLM analyzer results
 mcp-scanner --server-url http://127.0.0.1:8001/sse --analyzer-filter api_analyzer,llm_analyzer
 
-# Available analyzers: api_analyzer, yara_analyzer, llm_analyzer
+# Available analyzers: api_analyzer, yara_analyzer, llm_analyzer, virustotal_analyzer
 ```
 
 ### Additional Options
