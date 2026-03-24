@@ -101,6 +101,7 @@ class SecurityFinding:
                 "BEHAVIORAL": "behavioral",
                 "VIRUSTOTAL": "virustotal",
                 "PROMPTDEFENSE": "prompt_defense",
+                "VULNERABLE_PACKAGES": "vulnerable_packages",
             }
 
             # Check if this is a built-in analyzer

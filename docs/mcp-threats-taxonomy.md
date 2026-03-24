@@ -46,6 +46,12 @@ The MCP Scanner maps all detected threats to the MCP Taxonomy, which provides a 
 | CODE_DETECTION | AITech-9.1 | Model or Agentic System Manipulation | AISubtech-9.1.1 | Code Execution | Autonomously generating, interpreting, or executing code, leading to unsolicited or unauthorized code execution targeted to large language models (LLMs), or agentic frameworks, systems (including MCP, A2A) often include integrated code interpreter or tool execution components. |
 | SECURITY_VIOLATION | AITech-9.1 | Model or Agentic System Manipulation | AISubtech-9.1.2 | Unauthorized or Unsolicited System Access | Manipulating or accessing underlying system resources without authorization, leading to unsolicited modification or deletion of files, registries, or permissions through model-driven or agent-executed commands system. |
 
+### Vulnerable Packages Analyzer Threats
+
+| Threat Name | AITech ID | AITech Name | AISubtech ID | AISubtech Name | Description |
+|-------------|-----------|-------------|--------------|----------------|-------------|
+| VULNERABLE DEPENDENCY | AITech-9.2 | Detection Evasion | AISubtech-9.2.1 | Supply Chain Compromise | A Python dependency with a publicly known vulnerability (CVE/PYSEC/GHSA) was detected. Vulnerable dependencies in MCP server packages can be exploited to compromise the server, exfiltrate data, or escalate privileges. |
+
 ## MCP Threats Taxonomy
 
 ### Core Threats Referenced
@@ -59,6 +65,7 @@ The MCP Scanner maps all detected threats to the MCP Taxonomy, which provides a 
 | AITech-9.1 | Model or Agentic System Manipulation | AISubtech-9.1.4 | Injection Attacks (SQL, Command Execution, XSS) | Injecting malicious payloads such as SQL queries, command sequences, or scripts into MCP servers or tools that process model or user input, leading to data exposure, remote code execution, or compromise of the underlying system environment. |
 | AITech-12.1 | Tool Exploitation | AISubtech-12.1.2 | Tool Poisoning | Corrupting, modifying, or degrading the functionality, outputs, or behavior of tools used by agents through data poisoning, configuration tampering, or behavioral manipulation, causing the tool resulting in deceptive or malicious outputs, privilege escalation, or propagation of altered data. |
 | AITech-12.1 | Tool Exploitation | AISubtech-12.1.5 | Tool Shadowing | Disguising, substituting or duplicating legitimate tools within an agent or MCP server or tool registry, enabling malicious tools with identical or similar identifiers to intercept or replace trusted tool calls, leading to unauthorized actions, data exfiltration, or redirection of legitimate operations. |
+| AITech-9.2 | Detection Evasion | AISubtech-9.2.1 | Supply Chain Compromise | A Python dependency with a publicly known vulnerability (CVE/PYSEC/GHSA) was detected. Vulnerable dependencies in MCP server packages can be exploited to compromise the server, exfiltrate data, or escalate privileges. |
 | AITech-15.1 | Harmful / Misleading / Inaccurate Content | AISubtech-15.1.8 | Safety Harms & Toxicity: Harassment | Prompts, content, or outputs from AI or agentic-systems that enable, promote, or facilitate harassment, intimidation, or targeted abuse. |
 | AITech-15.1 | Harmful / Misleading / Inaccurate Content | AISubtech-15.1.9 | Safety Harms & Toxicity: Hate Speech | Prompts, content, or outputs from AI or agentic-systems that enable, promote, or facilitate hateful, discriminatory, or demeaning expression targeting individuals or specific communities. |
 | AITech-15.1 | Harmful / Misleading / Inaccurate Content | AISubtech-15.1.11 | Safety Harms & Toxicity: Profanity | Prompts, content, or outputs from AI or agentic-systems that contain or promote profane, vulgar, or offensive language. |
