@@ -140,6 +140,7 @@ mcp-scanner --server-url http://127.0.0.1:8001/sse --format by_severity --severi
 - **Tools**: `tool_name`, `tool_description`
 - **Prompts**: `prompt_name`, `prompt_description`
 - **Resources**: `resource_uri`, `resource_name`, `resource_mime_type`
+- **Vulnerable Packages**: `package_name`, `vulnerability_description` (uses `mcp_server_repository` instead of `server_url` at the top level)
 
 ### Detailed Format Example
 ```
