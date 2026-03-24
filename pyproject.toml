@@ -29,6 +29,7 @@ dependencies = [
     "litellm>=1.77.0",
     "expandvars>=0.12.0",
     "pip-audit>=2.7.0",
+    "textual>=3.0.0",
 ]
 
 [dependency-groups]
@@ -53,6 +54,7 @@ Issues = "https://github.com/cisco-ai-defense/mcp-scanner/issues"
 [project.scripts]
 mcp-scanner = "mcpscanner.cli:cli_entry_point"
 mcp-scanner-api = "mcpscanner.server:main"
+mcp-scanner-tui = "mcpscanner.tui.app:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
