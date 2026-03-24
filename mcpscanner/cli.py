@@ -2079,9 +2079,7 @@ async def main():
 
                     results.append({
                         "package_name": f"{pkg}=={ver}",
-                        "tool_name": f"{pkg}=={ver}",
                         "vulnerability_description": " | ".join(tool_desc_parts),
-                        "tool_description": " | ".join(tool_desc_parts),
                         "status": "completed",
                         "is_safe": False,
                         "findings": {"vulnerable_packages_analyzer": analyzer_finding},
@@ -2089,9 +2087,7 @@ async def main():
             else:
                 results.append({
                     "package_name": scan_path,
-                    "tool_name": scan_path,
                     "vulnerability_description": f"Vulnerable packages scan of {os.path.basename(scan_path)}",
-                    "tool_description": f"Vulnerable packages scan of {os.path.basename(scan_path)}",
                     "status": "completed",
                     "is_safe": True,
                     "findings": {
@@ -2293,13 +2289,18 @@ async def main():
             return
 
         is_vuln_pkg_scan = hasattr(args, "cmd") and args.cmd == "vulnerable-packages"
-        results_dict = {
-            "server_url": server_label,
-            "scan_results": results,
-            "requested_analyzers": selected_analyzers,
-        }
         if is_vuln_pkg_scan:
-            results_dict["mcp_server_repository"] = server_label
+            results_dict = {
+                "mcp_server_repository": server_label,
+                "scan_results": results,
+                "requested_analyzers": selected_analyzers,
+            }
+        else:
+            results_dict = {
+                "server_url": server_label,
+                "scan_results": results,
+                "requested_analyzers": selected_analyzers,
+            }
         formatter = ReportGenerator(results_dict)
 
         if args.stats:
