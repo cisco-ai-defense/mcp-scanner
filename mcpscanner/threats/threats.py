@@ -104,7 +104,7 @@ class ThreatMapping:
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.4",
             "aisubtech_name": "Injection Attacks (SQL, Command Execution, XSS)",
-            "description": "Injecting malicious payloads such as SQL queries, command sequences, or scripts into MCP servers or tools that process model or user input, leading to data exposure, remote code execution, or compromise of the underlying system environment.",
+            "description": "Leveraging an LLM to generate, optimize, or automatically adapt injection payloads that bypass detection mechanisms or exploit system vulnerabilities. The LLM/agent acts as an intermediary tool that crafts, refines, or personalizes the malicious injection.",
         },
         "CREDENTIAL HARVESTING": {
             "scanner_category": "SECURITY VIOLATION",
