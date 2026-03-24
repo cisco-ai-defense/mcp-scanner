@@ -1951,6 +1951,8 @@ async def main():
                 if args.verbose:
                     print(f"Results saved to {args.output}")
 
+            selected_analyzers = [AnalyzerEnum.VULNERABLE_PACKAGES]
+
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
             cfg = _build_config(selected_analyzers)
