@@ -59,6 +59,7 @@ class AnalyzerEnum(str, Enum):
     LLM = "llm"
     BEHAVIORAL = "behavioral"
     READINESS = "readiness"
+    VULNERABLE_PACKAGES = "vulnerable_packages"
 
 
 class AnalysisContext(BaseModel):

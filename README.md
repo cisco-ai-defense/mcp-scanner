@@ -22,6 +22,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
+- **Vulnerable Packages Scanning**: Scan Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) using pip-audit integration.
 - **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
@@ -207,6 +208,7 @@ asyncio.run(main())
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
 - **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
+- **vulnerable-packages**: scan Python dependencies for known vulnerabilities using pip-audit. Requires a path to a requirements file or project directory.
 - **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
@@ -364,6 +366,32 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
 
+#### Vulnerable Packages Scanning
+
+The Vulnerable Packages Analyzer scans Python dependencies for known security vulnerabilities (CVE, PYSEC, GHSA) using pip-audit. It requires no API keys and works with requirements files or project directories.
+
+```bash
+# Scan a requirements file
+mcp-scanner vulnerable-packages /path/to/requirements.txt
+
+# Scan a project directory (auto-detects requirements.txt or pyproject.toml)
+mcp-scanner vulnerable-packages /path/to/project/
+
+# Use OSV vulnerability service instead of PyPI
+mcp-scanner vulnerable-packages /path/to/requirements.txt --vulnerability-service osv
+
+# Detailed output with full vulnerability descriptions
+mcp-scanner vulnerable-packages /path/to/requirements.txt --format detailed
+
+# Save results to file
+mcp-scanner vulnerable-packages /path/to/requirements.txt --output results.json --format raw
+
+# Automatically fix vulnerable dependencies
+mcp-scanner vulnerable-packages /path/to/requirements.txt --fix
+```
+
+Each vulnerability is mapped to the Cisco AI Threat Security Taxonomy under **AITech-9.2 / AISubtech-9.2.1 (Supply Chain Compromise)**.
+
 #### Scan Static/Offline Files (CI/CD Mode)
 
 The `static` subcommand allows you to scan pre-generated JSON files without connecting to a live MCP server. This is ideal for CI/CD pipelines, air-gapped environments, or reproducible security checks.
@@ -520,6 +548,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
 - **[Behavioral Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
+- **[Vulnerable Packages Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/vulnerable-packages-scanning.md)** - Python dependency vulnerability scanning with pip-audit
 - **[LLM Providers](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/llm-providers.md)** - LLM configuration for all providers
 - **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration

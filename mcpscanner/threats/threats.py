@@ -280,6 +280,20 @@ class ThreatMapping:
         },
     }
 
+    # Vulnerable Packages Analyzer Threats
+    # Note: These map known-vulnerable Python dependency findings
+    VULNERABLE_PACKAGES_THREATS = {
+        "VULNERABLE_DEPENDENCY": {
+            "scanner_category": "VULNERABLE DEPENDENCY",
+            "severity": "HIGH",
+            "aitech": "AITech-9.2",
+            "aitech_name": "Detection Evasion",
+            "aisubtech": "AISubtech-9.2.1",
+            "aisubtech_name": "Supply Chain Compromise",
+            "description": "A Python dependency with a publicly known vulnerability (CVE/PYSEC/GHSA) was detected. Vulnerable dependencies in MCP server packages can be exploited to compromise the server, exfiltrate data, or escalate privileges.",
+        },
+    }
+
     # AI Defense API Analyzer Threats
     # Note: These are the actual classification values returned by Cisco AI Defense API
     AI_DEFENSE_THREATS = {
@@ -386,6 +400,7 @@ class ThreatMapping:
             "yara": cls.YARA_THREATS,
             "ai_defense": cls.AI_DEFENSE_THREATS,
             "behavioral": cls.BEHAVIORAL_THREATS,
+            "vulnerable_packages": cls.VULNERABLE_PACKAGES_THREATS,
         }
 
         analyzer_lower = analyzer.lower()
@@ -425,3 +440,4 @@ LLM_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.LLM_THREATS)
 YARA_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.YARA_THREATS)
 API_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.AI_DEFENSE_THREATS)
 BEHAVIORAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.BEHAVIORAL_THREATS)
+VULNERABLE_PACKAGES_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VULNERABLE_PACKAGES_THREATS)
