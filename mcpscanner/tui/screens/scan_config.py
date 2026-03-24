@@ -169,6 +169,7 @@ class ScanConfigScreen(Screen):
                 yield Checkbox("YARA", value=True, id="chk-yara")
                 yield Checkbox("API", value=True, id="chk-api")
                 yield Checkbox("LLM", value=False, id="chk-llm")
+                yield Checkbox("VirusTotal", value=False, id="chk-virustotal")
 
     def _severity_select(self) -> ComposeResult:
         with Vertical(classes="form-group"):
@@ -250,6 +251,8 @@ class ScanConfigScreen(Screen):
             analyzers.append("api")
         if _checked("chk-llm"):
             analyzers.append("llm")
+        if _checked("chk-virustotal"):
+            analyzers.append("virustotal")
         config["analyzers"] = analyzers
         config["severity_filter"] = _select_val("severity-filter") or "all"
 

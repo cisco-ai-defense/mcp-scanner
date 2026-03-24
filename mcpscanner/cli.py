@@ -1199,8 +1199,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, readiness, vulnerable_packages (default: %(default)s)",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_packages (default: %(default)s)",
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")

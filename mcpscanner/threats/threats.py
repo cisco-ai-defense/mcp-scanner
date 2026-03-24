@@ -291,6 +291,9 @@ class ThreatMapping:
             "aisubtech": "AISubtech-9.2.1",
             "aisubtech_name": "Supply Chain Compromise",
             "description": "A Python dependency with a publicly known vulnerability (CVE/PYSEC/GHSA) was detected. Vulnerable dependencies in MCP server packages can be exploited to compromise the server, exfiltrate data, or escalate privileges.",
+        },
+    }
+
     # VirusTotal Analyzer Threats
     # Note: These are malware detections from VirusTotal hash lookups on binary files
     VIRUSTOTAL_THREATS = {
