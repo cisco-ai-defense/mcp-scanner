@@ -498,6 +498,7 @@ class ScanningScreen(Screen):
             "yara": AnalyzerEnum.YARA,
             "api": AnalyzerEnum.API,
             "llm": AnalyzerEnum.LLM,
+            "virustotal": AnalyzerEnum.VIRUSTOTAL,
         }
         selected = self.scan_config.get("analyzers", ["yara"])
         return [mapping[a] for a in selected if a in mapping]
