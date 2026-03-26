@@ -29,6 +29,8 @@ dependencies = [
     # Pin below known-bad PyPI release 1.82.8 (BerriAI/litellm#24512); IOC spot-check on wheel, see PR body.
     "litellm==1.80.16",
     "expandvars>=0.12.0",
+    "pip-audit>=2.7.0",
+    "textual>=3.0.0",
     "puremagic>=1.28",
 ]
 
@@ -54,6 +56,7 @@ Issues = "https://github.com/cisco-ai-defense/mcp-scanner/issues"
 [project.scripts]
 mcp-scanner = "mcpscanner.cli:cli_entry_point"
 mcp-scanner-api = "mcpscanner.server:main"
+mcp-scanner-tui = "mcpscanner.tui.app:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

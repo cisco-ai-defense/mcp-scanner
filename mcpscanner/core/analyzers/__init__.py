@@ -27,6 +27,7 @@ from .base import BaseAnalyzer, SecurityFinding
 from .behavioral import BehavioralCodeAnalyzer, AlignmentOrchestrator
 from .llm_analyzer import LLMAnalyzer
 from .yara_analyzer import YaraAnalyzer
+from .vulnerable_packages_analyzer import VulnerablePackagesAnalyzer
 from .virustotal_analyzer import VirusTotalAnalyzer
 from .readiness import ReadinessAnalyzer, ReadinessLLMJudge, OpaProvider
 
@@ -38,6 +39,7 @@ __all__ = [
     "LLMAnalyzer",
     "BehavioralCodeAnalyzer",
     "AlignmentOrchestrator",
+    "VulnerablePackagesAnalyzer",
     "VirusTotalAnalyzer",
     "ReadinessAnalyzer",
     "ReadinessLLMJudge",

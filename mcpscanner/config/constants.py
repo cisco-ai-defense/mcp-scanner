@@ -199,6 +199,14 @@ class MCPScannerConstants:
         os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHES_CALLS", "10")
     )
 
+    # Vulnerable Packages Configuration
+    VULNERABLE_PACKAGES_VULNERABILITY_SERVICE: str = os.getenv(
+        "MCP_SCANNER_VULNERABLE_PACKAGES_SERVICE", "pypi"
+    )
+    VULNERABLE_PACKAGES_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_VULNERABLE_PACKAGES_TIMEOUT", "120")
+    )
+
     # VirusTotal Configuration
     ENV_VIRUSTOTAL_API_KEY: str = os.getenv(
         "MCP_SCANNER_ENV_VIRUSTOTAL_API_KEY_NAME", "VIRUSTOTAL_API_KEY"

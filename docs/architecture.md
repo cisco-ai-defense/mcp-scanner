@@ -14,6 +14,13 @@ The MCP Scanner is organized into the following components:
 - **YaraAnalyzer**: Handles YARA pattern matching for detecting known malicious patterns and signatures.
 - **LLMAnalyzer**: Advanced AI-powered analysis using configurable LLM models for sophisticated threat detection.
 - **BehavioralCodeAnalyzer**: LLM-powered behavioral analysis with cross-file dataflow tracking, alignment checking, and comprehensive threat taxonomy mapping (AITech/AISubtech).
+- **VulnerablePackagesAnalyzer**: Scans Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) by running pip-audit as a subprocess. Supports requirements files, project directories, and installed environments. Maps findings to AITech-9.2 (Supply Chain Compromise).
+
+## User Interfaces
+
+- **CLI** (`mcpscanner/cli.py`): Command-line interface with Click, supporting all scan modes, output formats, and subcommands.
+- **API Server** (`mcpscanner/server.py`): REST API server with FastAPI for integrating scanning into web applications and CI/CD pipelines.
+- **TUI** (`mcpscanner/tui/`): Interactive Terminal User Interface built with Textual. Provides guided, multi-screen scanning with a Welcome screen, dynamic configuration forms, live progress display, and a results DataTable with export. See [TUI Documentation](tui.md).
 - **VirusTotalAnalyzer**: Standalone file/directory malware scanner using VirusTotal SHA256 hash lookups with configurable inclusion/exclusion extension lists.
 
 ## Utility Methods

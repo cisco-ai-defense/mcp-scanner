@@ -99,6 +99,7 @@ class SecurityFinding:
                 "YARA": "yara",
                 "API": "ai_defense",
                 "BEHAVIORAL": "behavioral",
+                "VULNERABLE_PACKAGES": "vulnerable_packages",
                 "VIRUSTOTAL": "virustotal",
             }
 

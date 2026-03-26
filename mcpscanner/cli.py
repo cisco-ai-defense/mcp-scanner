@@ -1073,6 +1073,51 @@ async def main():
         help="Output format (default: %(default)s)",
     )
 
+    # vulnerable-packages subcommand - scan Python dependencies for known vulnerabilities
+    p_vuln_pkgs = subparsers.add_parser(
+        "vulnerable-packages",
+        help="Scan Python dependencies for known vulnerabilities using pip-audit",
+    )
+    p_vuln_pkgs.add_argument(
+        "scan_path",
+        help="Path to a project directory or requirements file to audit",
+    )
+    p_vuln_pkgs.add_argument(
+        "--vulnerability-service",
+        choices=["pypi", "osv"],
+        default=None,
+        help="Vulnerability service to query (default: pypi)",
+    )
+    p_vuln_pkgs.add_argument(
+        "--fix", action="store_true", help="Automatically fix vulnerable dependencies"
+    )
+    p_vuln_pkgs.add_argument(
+        "--output", "-o", help="Save scan results to a file"
+    )
+    p_vuln_pkgs.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_vuln_pkgs.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_vuln_pkgs.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_vuln_pkgs.add_argument(
+        "--format",
+        choices=[
+            "raw",
+            "summary",
+            "detailed",
+            "by_tool",
+            "by_analyzer",
+            "by_severity",
+            "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+
     # Stdio subcommand
     p_stdio = subparsers.add_parser(
         "stdio", help="Scan an MCP server via stdio (local command execution)"
@@ -1154,7 +1199,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_packages (default: %(default)s)",
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
@@ -1254,6 +1299,7 @@ async def main():
             "yara_analyzer",
             "llm_analyzer",
             "behavioral_analyzer",
+            "vulnerable_packages_analyzer",
             "virustotal_analyzer",
         ],
         help="Filter results by specific analyzer",
@@ -1951,6 +1997,104 @@ async def main():
                 if args.verbose:
                     print(f"Results saved to {args.output}")
 
+        elif args.cmd == "vulnerable-packages":
+            import os
+            from mcpscanner.core.analyzers.vulnerable_packages_analyzer import VulnerablePackagesAnalyzer
+            from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
+
+            scan_path = args.scan_path
+
+            if not os.path.exists(scan_path):
+                print(f"Error: Path does not exist: {scan_path}", file=sys.stderr)
+                sys.exit(1)
+
+            vuln_service = (
+                args.vulnerability_service
+                or CONSTANTS.VULNERABLE_PACKAGES_VULNERABILITY_SERVICE
+            )
+
+            analyzer = VulnerablePackagesAnalyzer(
+                enabled=True,
+                vulnerability_service=vuln_service,
+                timeout=CONSTANTS.VULNERABLE_PACKAGES_TIMEOUT,
+                fix_mode=getattr(args, "fix", False),
+            )
+
+            findings = analyzer.analyze_path(scan_path)
+
+            results = []
+            if findings:
+                for finding in findings:
+                    pkg = finding.details.get("package_name", "unknown") if finding.details else "unknown"
+                    ver = finding.details.get("installed_version", "?") if finding.details else "?"
+                    vuln_id = finding.details.get("vulnerability_id", "") if finding.details else ""
+
+                    analyzer_finding = {
+                        "severity": finding.severity,
+                        "threat_summary": finding.summary,
+                        "threat_names": [finding.threat_category],
+                        "total_findings": 1,
+                        "mcp_taxonomies": [],
+                    }
+                    if finding.details:
+                        taxonomy = {}
+                        for key in ("aitech", "aitech_name", "aisubtech", "aisubtech_name", "taxonomy_description"):
+                            if key in finding.details:
+                                taxonomy[key.replace("taxonomy_description", "description")] = finding.details[key]
+                        if taxonomy:
+                            analyzer_finding["mcp_taxonomies"].append(taxonomy)
+
+                    aliases = finding.details.get("aliases", []) if finding.details else []
+                    desc = finding.details.get("description", "") if finding.details else ""
+                    alias_str = ", ".join(aliases) if aliases else ""
+
+                    tool_desc_parts = [f"{vuln_id}: {pkg}=={ver}"]
+                    if alias_str:
+                        tool_desc_parts.append(f"Aliases: {alias_str}")
+                    if desc:
+                        tool_desc_parts.append(desc)
+
+                    results.append({
+                        "package_name": f"{pkg}=={ver}",
+                        "vulnerability_description": " | ".join(tool_desc_parts),
+                        "status": "completed",
+                        "is_safe": False,
+                        "findings": {"vulnerable_packages_analyzer": analyzer_finding},
+                    })
+            else:
+                results.append({
+                    "package_name": scan_path,
+                    "vulnerability_description": f"Vulnerable packages scan of {os.path.basename(scan_path)}",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {
+                        "vulnerable_packages_analyzer": {
+                            "severity": "SAFE",
+                            "threat_summary": "No known vulnerabilities found",
+                            "threat_names": [],
+                            "total_findings": 0,
+                            "mcp_taxonomies": [],
+                        }
+                    },
+                })
+
+            if analyzer.last_scan_summary:
+                summary = analyzer.last_scan_summary
+                logger.info(
+                    "vulnerable-packages summary: %d packages, %d vulnerable (%d total vulns)",
+                    summary.get("total_packages", 0),
+                    summary.get("vulnerable_packages", 0),
+                    summary.get("total_vulnerabilities", 0),
+                )
+
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2)
+                if args.verbose:
+                    print(f"Results saved to {args.output}")
+
+            selected_analyzers = [AnalyzerEnum.VULNERABLE_PACKAGES]
+
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
             cfg = _build_config(selected_analyzers)
@@ -2081,6 +2225,8 @@ async def main():
             server_label = args.server_url
         elif hasattr(args, "cmd") and args.cmd == "resources":
             server_label = args.server_url
+        elif hasattr(args, "cmd") and args.cmd == "vulnerable-packages":
+            server_label = f"vulnerable-packages:{args.scan_path}"
         elif hasattr(args, "cmd") and args.cmd == "virustotal":
             server_label = f"virustotal:{args.scan_path}"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
@@ -2119,11 +2265,19 @@ async def main():
                 display_instructions_results(results, server_label, detailed=False)
             return
 
-        results_dict = {
-            "server_url": server_label,
-            "scan_results": results,
-            "requested_analyzers": selected_analyzers,
-        }
+        is_vuln_pkg_scan = hasattr(args, "cmd") and args.cmd == "vulnerable-packages"
+        if is_vuln_pkg_scan:
+            results_dict = {
+                "mcp_server_repository": server_label,
+                "scan_results": results,
+                "requested_analyzers": selected_analyzers,
+            }
+        else:
+            results_dict = {
+                "server_url": server_label,
+                "scan_results": results,
+                "requested_analyzers": selected_analyzers,
+            }
         formatter = ReportGenerator(results_dict)
 
         if args.stats:

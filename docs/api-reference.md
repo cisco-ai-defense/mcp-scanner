@@ -28,7 +28,7 @@ The MCP Scanner API supports all the same output formatting options as the CLI t
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `server_url` | string | required | URL of the MCP server to scan |
-| `analyzers` | array | ["yara"] | List of analyzers to use: "api", "yara", "llm" |
+| `analyzers` | array | ["yara"] | List of analyzers to use: "api", "yara", "llm", "vulnerable_packages" |
 | `output_format` | string | "raw" | Output format (see formats below) |
 | `severity_filter` | string | "all" | Filter by severity level |
 | `analyzer_filter` | string | null | Filter by specific analyzer name |

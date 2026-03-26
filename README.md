@@ -20,8 +20,9 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 ## Features
 
-- **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
+- **Multiple Modes:** Run scanner as a stand-alone CLI tool, REST API server, or interactive TUI
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
+- **Vulnerable Packages Scanning**: Scan Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) using pip-audit integration.
 - **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
@@ -253,6 +254,8 @@ asyncio.run(main())
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`, `--header`.
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
+- **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
+- **vulnerable-packages**: scan Python dependencies for known vulnerabilities using pip-audit. Requires a path to a requirements file or project directory.
 - **virustotal**: scan files or directories for malware using VirusTotal hash lookups. Requires a `scan_path` argument (file or directory).
 - **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 - **supplychain**: scan source code of an MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
@@ -436,6 +439,32 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
 
+#### Vulnerable Packages Scanning
+
+The Vulnerable Packages Analyzer scans Python dependencies for known security vulnerabilities (CVE, PYSEC, GHSA) using pip-audit. It requires no API keys and works with requirements files or project directories.
+
+```bash
+# Scan a requirements file
+mcp-scanner vulnerable-packages /path/to/requirements.txt
+
+# Scan a project directory (auto-detects requirements.txt or pyproject.toml)
+mcp-scanner vulnerable-packages /path/to/project/
+
+# Use OSV vulnerability service instead of PyPI
+mcp-scanner vulnerable-packages /path/to/requirements.txt --vulnerability-service osv
+
+# Detailed output with full vulnerability descriptions
+mcp-scanner vulnerable-packages /path/to/requirements.txt --format detailed
+
+# Save results to file
+mcp-scanner vulnerable-packages /path/to/requirements.txt --output results.json --format raw
+
+# Automatically fix vulnerable dependencies
+mcp-scanner vulnerable-packages /path/to/requirements.txt --fix
+```
+
+Each vulnerability is mapped to the Cisco AI Threat Security Taxonomy under **AITech-9.2 / AISubtech-9.2.1 (Supply Chain Compromise)**.
+
 #### Scan Static/Offline Files (CI/CD Mode)
 
 The `static` subcommand allows you to scan pre-generated JSON files without connecting to a live MCP server. This is ideal for CI/CD pipelines, air-gapped environments, or reproducible security checks.
@@ -497,6 +526,26 @@ mcp-scanner --analyzers readiness --detailed --server-url http://localhost:8000/
 ```
 
 See [Readiness Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/readiness-scanning.md) for complete technical details.
+
+### TUI (Terminal User Interface)
+
+The MCP Scanner includes an interactive Terminal User Interface built with [Textual](https://textual.textualize.io/). The TUI provides a guided, menu-driven experience for all scan modes without needing to remember CLI flags.
+
+```bash
+# Launch the TUI
+mcp-scanner-tui
+```
+
+**Features:**
+- **Guided scan mode selection** - Choose from Remote, Stdio, Config, Known Configs, Static/CI-CD, Vulnerable Packages, or Behavioral scanning
+- **Dynamic forms** - Each scan mode presents relevant input fields with validation
+- **Live progress** - Real-time progress bar and log output during scans
+- **Results table** - DataTable view with severity, analyzer, and threat columns
+- **Row detail panel** - Select any row to view detailed findings
+- **Export** - Save results to JSON with a single keypress (`e`)
+- **Keyboard navigation** - Full keyboard support with numeric hotkeys for scan mode selection
+
+For more details, see [TUI Documentation](docs/tui.md).
 
 ### API Server Usage
 
@@ -592,12 +641,14 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
 - **[Behavioral Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
+- **[Vulnerable Packages Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/vulnerable-packages-scanning.md)** - Python dependency vulnerability scanning with pip-audit
 - **[VirusTotal Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/virustotal-scanning.md)** - File and directory malware scanning with VirusTotal
 - **[LLM Providers](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/llm-providers.md)** - LLM configuration for all providers
 - **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration
 - **[Programmatic Usage](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/programmatic-usage.md)** - Programmatic usage examples and advanced usage
 - **[Static Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/static-scanning.md)** - Offline/CI-CD scanning mode
+- **[TUI](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/tui.md)** - Interactive Terminal User Interface
 - **[API Reference](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md)** - Complete REST API documentation
 - **[Output Formats](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/output-formats.md)** - Detailed output format options
 
