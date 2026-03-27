@@ -14,6 +14,7 @@ This directory contains detailed documentation for the MCP Scanner SDK.
 - **[Static Scanning](static-scanning.md)** - Offline/CI-CD scanning mode for pre-generated JSON files
 - **[API Reference](api-reference.md)** - Complete REST API documentation and examples
 - **[Output Formats](output-formats.md)** - Detailed output format options and filtering
+- **[PyPI Scanning](pypi-scanning.md)** - Docker-sandboxed PyPI package scanning with behavioral analysis and vulnerability audit
 
 ## Quick Links
 
