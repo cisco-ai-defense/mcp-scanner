@@ -34,11 +34,13 @@ from ..core.models import (
     SpecificPromptScanRequest,
     SpecificResourceScanRequest,
     SpecificInstructionsScanRequest,
+    StaticScanRequest,
     ToolScanResult,
 )
 from ..core.report_generator import ReportGenerator, results_to_json
 from ..core.result import (
     ScanResult,
+    ToolScanResult as ResultToolScanResult,
     PromptScanResult,
     ResourceScanResult,
     InstructionsScanResult,
@@ -962,4 +964,165 @@ async def scan_instructions_endpoint(
         logger.error(f"Unexpected error in instructions scan: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Error scanning instructions: {str(e)}"
+        )
+
+
+@router.post(
+    "/scan-static",
+    response_model=dict,
+    tags=["Scanning"],
+)
+async def scan_static_endpoint(
+    request: StaticScanRequest,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Scan static JSON data (tools, prompts, resources) without a live MCP server.
+
+    Accepts tool/prompt/resource definitions directly in the request body
+    and runs the specified analyzers against them. Ideal for CI/CD pipelines
+    and environments where a live MCP server is not available.
+    """
+    import json
+    import tempfile
+    import os
+
+    logger.debug("Starting static scan")
+
+    if not request.tools and not request.prompts and not request.resources:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of 'tools', 'prompts', or 'resources' must be provided.",
+        )
+
+    try:
+        from ..core.analyzers.static_analyzer import StaticAnalyzer
+        from ..core.analyzers.yara_analyzer import YaraAnalyzer
+        from ..core.analyzers.llm_analyzer import LLMAnalyzer
+        from ..core.analyzers.api_analyzer import ApiAnalyzer
+        from ..config.config import Config
+        from ..core.models import AnalyzerEnum
+
+        # Build config from environment (reuse the scanner factory's config logic)
+        scanner = scanner_factory(request.analyzers)
+
+        # Build analyzer instances for StaticAnalyzer
+        analyzer_instances = []
+        if AnalyzerEnum.YARA in request.analyzers:
+            analyzer_instances.append(YaraAnalyzer())
+        if AnalyzerEnum.API in request.analyzers and scanner._api_analyzer:
+            analyzer_instances.append(scanner._api_analyzer)
+        if AnalyzerEnum.LLM in request.analyzers and scanner._llm_analyzer:
+            analyzer_instances.append(scanner._llm_analyzer)
+
+        if not analyzer_instances:
+            raise HTTPException(
+                status_code=400,
+                detail="No analyzers available. Check API keys or use 'yara' analyzer.",
+            )
+
+        static = StaticAnalyzer(analyzers=analyzer_instances, config=scanner._config)
+
+        all_results = []
+
+        # Scan tools
+        if request.tools:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False, encoding="utf-8"
+            )
+            try:
+                json.dump({"tools": request.tools}, tmp)
+                tmp.close()
+                tools_results = await static.scan_tools_file(tmp.name)
+                for r in tools_results:
+                    tool_result = ResultToolScanResult(
+                        tool_name=r["tool_name"],
+                        tool_description=r.get("tool_description", ""),
+                        status=r["status"],
+                        analyzers=r.get("analyzers", []),
+                        findings=r["findings"],
+                    )
+                    all_results.append(tool_result)
+            finally:
+                os.unlink(tmp.name)
+
+        # Scan prompts
+        if request.prompts:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False, encoding="utf-8"
+            )
+            try:
+                json.dump({"prompts": request.prompts}, tmp)
+                tmp.close()
+                prompts_results = await static.scan_prompts_file(tmp.name)
+                for r in prompts_results:
+                    prompt_result = PromptScanResult(
+                        prompt_name=r["prompt_name"],
+                        prompt_description=r.get("prompt_description", ""),
+                        status=r["status"],
+                        analyzers=r.get("analyzers", []),
+                        findings=r["findings"],
+                    )
+                    all_results.append(prompt_result)
+            finally:
+                os.unlink(tmp.name)
+
+        # Scan resources
+        if request.resources:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False, encoding="utf-8"
+            )
+            try:
+                json.dump({"resources": request.resources}, tmp)
+                tmp.close()
+                mime_types = request.allowed_mime_types or ["text/plain", "text/html"]
+                resources_results = await static.scan_resources_file(
+                    tmp.name, allowed_mime_types=mime_types
+                )
+                for r in resources_results:
+                    resource_result = ResourceScanResult(
+                        resource_uri=r["resource_uri"],
+                        resource_name=r["resource_name"],
+                        resource_mime_type=r.get("resource_mime_type", "unknown"),
+                        status=r["status"],
+                        analyzers=r.get("analyzers", []),
+                        findings=r["findings"],
+                    )
+                    all_results.append(resource_result)
+            finally:
+                os.unlink(tmp.name)
+
+        # Convert results to JSON format
+        json_results = await results_to_json(all_results)
+
+        # Format output if not raw
+        if request.output_format != OutputFormat.RAW:
+            scan_data = {
+                "server_url": "static",
+                "scan_results": json_results,
+            }
+            generator = ReportGenerator(scan_data)
+            formatted_output = generator.format_output(format_type=request.output_format)
+            return {
+                "source": "static",
+                "output_format": request.output_format.value,
+                "formatted_output": formatted_output,
+                "total_items": len(all_results),
+            }
+
+        # Raw output
+        return {
+            "source": "static",
+            "total_items": len(all_results),
+            "scan_results": json_results,
+        }
+
+    except HTTPException:
+        raise
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+        logger.error(f"Validation error in static scan: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error in static scan: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Error during static scan: {str(e)}"
         )

@@ -311,6 +311,32 @@ class SpecificInstructionsScanRequest(APIScanRequest):
     pass  # No additional fields needed - scans the server's instructions field
 
 
+class StaticScanRequest(BaseModel):
+    """Request for scanning static JSON data without a live MCP server."""
+
+    tools: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="List of tool objects to scan. Each object should have 'name', 'description', and optionally 'inputSchema'.",
+    )
+    prompts: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="List of prompt objects to scan. Each object should have 'name', 'description', and optionally 'arguments'.",
+    )
+    resources: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="List of resource objects to scan. Each object should have 'uri', 'name', 'description', and optionally 'mimeType'.",
+    )
+    analyzers: List[AnalyzerEnum] = Field(
+        default=[AnalyzerEnum.YARA],
+        description="List of analyzers to run",
+    )
+    allowed_mime_types: Optional[List[str]] = Field(
+        default=["text/plain", "text/html"],
+        description="Allowed MIME types for resource scanning",
+    )
+    output_format: OutputFormat = OutputFormat.RAW
+
+
 class AnalyzerFinding(BaseModel):
     """Analyzer finding with grouped structure."""
 
