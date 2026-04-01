@@ -21,6 +21,7 @@ for MCP security scan results, supporting multiple output formats and filtering 
 """
 
 import json
+import os
 from typing import Any, Dict, List, Optional, Union
 
 from .models import OutputFormat, SeverityFilter
@@ -208,6 +209,8 @@ class ReportGenerator:
                 self.requested_analyzer_keys.add("llm_analyzer")
             elif analyzer.upper() == "BEHAVIORAL":
                 self.requested_analyzer_keys.add("behavioral_analyzer")
+            elif analyzer.upper() == "VIRUSTOTAL":
+                self.requested_analyzer_keys.add("virustotal_analyzer")
 
     def format_output(
         self,
@@ -703,12 +706,20 @@ class ReportGenerator:
             "behavioral_analyzer" in result.get("findings", {}) for result in results
         )
 
+        # Check if this is a virustotal scan
+        is_virustotal = any(
+            "virustotal_analyzer" in result.get("findings", {}) for result in results
+        )
+
         if has_config_results:
             # Table header with Target Server column for config-based scans
             header = f"{'Scan Target':<20} {'Target Server':<20} {'Tool Name':<18} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
         elif is_behavioral:
             # Behavioral scan: show only BEHAVIORAL column
             header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'BEHAVIORAL':<15} {'Severity':<10}"
+        elif is_virustotal:
+            # VirusTotal scan: show only VT column
+            header = f"{'Scan Target':<30} {'File':<30} {'Status':<10} {'VIRUSTOTAL':<15} {'Severity':<10}"
         else:
             # Table header without Target Server column for direct server scans
             header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
@@ -726,10 +737,11 @@ class ReportGenerator:
             # For behavioral scans, extract just the filename
             if is_behavioral and "behavioral:" in scan_target_source:
                 # Extract filename from "behavioral:/path/to/file.py"
-                import os
-
                 full_path = scan_target_source.replace("behavioral:", "")
                 scan_target_source = os.path.basename(full_path)
+            elif is_virustotal and "virustotal:" in scan_target_source:
+                full_path = scan_target_source.replace("virustotal:", "")
+                scan_target_source = os.path.basename(full_path) or full_path[:28]
             else:
                 # Truncate for non-behavioral scans
                 scan_target_source = (
@@ -789,6 +801,11 @@ class ReportGenerator:
                 # Behavioral scan: show only behavioral analyzer status
                 behavioral_severity = get_analyzer_status("behavioral_analyzer")[:13]
                 row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {behavioral_severity:<15} {overall_severity:<10}"
+            elif is_virustotal:
+                # VirusTotal scan: show only VT analyzer status
+                vt_severity = get_analyzer_status("virustotal_analyzer")[:13]
+                file_name = result.get("tool_name", "Unknown")[:28]
+                row = f"{scan_target_source:<30} {file_name:<30} {status:<10} {vt_severity:<15} {overall_severity:<10}"
             elif has_config_results:
                 api_severity = get_analyzer_status("api_analyzer")[:6]
                 yara_severity = get_analyzer_status("yara_analyzer")[:6]
@@ -839,6 +856,7 @@ class ReportGenerator:
                 "api_analyzer": {"total": 0, "with_findings": 0},
                 "yara_analyzer": {"total": 0, "with_findings": 0},
                 "llm_analyzer": {"total": 0, "with_findings": 0},
+                "virustotal_analyzer": {"total": 0, "with_findings": 0},
             },
         }
 
