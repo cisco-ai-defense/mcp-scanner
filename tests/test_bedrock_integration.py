@@ -105,6 +105,7 @@ class TestBedrockAWSProfileAuthentication:
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
+    @patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": ""})
     async def test_bedrock_with_aws_profile(self, mock_completion):
         """Test Bedrock model with AWS profile authentication."""
         # Mock successful Bedrock response
@@ -156,6 +157,7 @@ class TestBedrockSessionTokenAuthentication:
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
+    @patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": ""})
     async def test_bedrock_with_session_token(self, mock_completion):
         """Test Bedrock model with AWS session token (temporary credentials)."""
         # Mock successful Bedrock response
@@ -271,6 +273,7 @@ class TestBedrockScannerIntegration:
             == "bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0"
         )
 
+    @patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": ""})
     def test_scanner_initialization_with_bedrock_profile(self):
         """Test Scanner initializes correctly with AWS profile (no API key)."""
         config = Config(
