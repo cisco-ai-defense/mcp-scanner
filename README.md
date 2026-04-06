@@ -498,6 +498,34 @@ mcp-scanner --analyzers readiness --detailed --server-url http://localhost:8000/
 
 See [Readiness Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/readiness-scanning.md) for complete technical details.
 
+### Prompt Defense Scanning
+
+The Prompt Defense Analyzer checks MCP tool descriptions and system prompts for **missing** defensive measures against 12 common attack vectors. It is pure regex — no API key or external dependencies required — and always runs by default.
+
+**Attack vectors checked:**
+1. Instruction Override (HIGH)
+2. Data Leakage (HIGH)
+3. Role Escape (HIGH)
+4. Indirect Injection (HIGH)
+5. Output Weaponization (HIGH)
+6. Output Manipulation (MEDIUM)
+7. Multilingual Bypass (MEDIUM)
+8. Unicode/Homoglyph Attack (MEDIUM)
+9. Context Overflow (MEDIUM)
+10. Social Engineering (MEDIUM)
+11. Input Validation (MEDIUM)
+12. Abuse Prevention (LOW)
+
+```bash
+# Prompt defense scan only (no API keys required)
+mcp-scanner --analyzers prompt_defense --server-url http://localhost:8000/mcp
+
+# Combined security + prompt defense scan
+mcp-scanner --analyzers yara,prompt_defense --server-url http://localhost:8000/mcp
+```
+
+Each missing defense maps to MCP Taxonomy codes (AITech / AISubtech) for standardized reporting.
+
 ### API Server Usage
 
 The API server provides a REST interface to the MCP scanner functionality, allowing you to integrate security scanning into web applications, CI/CD pipelines, or other services. It exposes the same scanning capabilities as the CLI tool but through HTTP endpoints.

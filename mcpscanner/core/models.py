@@ -60,6 +60,7 @@ class AnalyzerEnum(str, Enum):
     BEHAVIORAL = "behavioral"
     VIRUSTOTAL = "virustotal"
     READINESS = "readiness"
+    PROMPT_DEFENSE = "prompt_defense"
 
 
 class AnalysisContext(BaseModel):
