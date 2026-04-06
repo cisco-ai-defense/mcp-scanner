@@ -66,6 +66,7 @@ from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .analyzers.virustotal_analyzer import VirusTotalAnalyzer
+from .analyzers.prompt_defense_analyzer import PromptDefenseAnalyzer
 from .analyzers.readiness import ReadinessAnalyzer
 from .auth import (
     Auth,
@@ -153,6 +154,8 @@ class Scanner:
         )
         # Readiness analyzer always available (no API keys needed)
         self._readiness_analyzer = ReadinessAnalyzer()
+        # Prompt defense analyzer always available (pure regex, no API keys needed)
+        self._prompt_defense_analyzer = PromptDefenseAnalyzer()
         self._custom_analyzers = custom_analyzers or []
 
         # Debug logging for analyzer initialization
@@ -169,6 +172,8 @@ class Scanner:
             active_analyzers.append("VirusTotal")
         if self._readiness_analyzer:
             active_analyzers.append("Readiness")
+        if self._prompt_defense_analyzer:
+            active_analyzers.append("PromptDefense")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -229,6 +234,12 @@ class Scanner:
         if AnalyzerEnum.READINESS in requested_analyzers and not self._readiness_analyzer:
             missing_requirements.append(
                 "Readiness analyzer requested but failed to initialize"
+            )
+
+        # PROMPT_DEFENSE analyzer should always be available (pure regex, no API keys)
+        if AnalyzerEnum.PROMPT_DEFENSE in requested_analyzers and not self._prompt_defense_analyzer:
+            missing_requirements.append(
+                "Prompt Defense analyzer requested but failed to initialize"
             )
 
         if missing_requirements:
@@ -381,6 +392,19 @@ class Scanner:
             except Exception as e:
                 logger.error(f'Readiness analysis failed: tool="{name}", error="{e}"')
 
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
+            # Run PROMPT_DEFENSE analysis on the tool description
+            try:
+                pd_context = {"tool_name": name, "content_type": "description"}
+                pd_findings = await self._prompt_defense_analyzer.analyze(
+                    description, pd_context
+                )
+                for finding in pd_findings:
+                    finding.analyzer = "PromptDefense"
+                all_findings.extend(pd_findings)
+            except Exception as e:
+                logger.error(f'Prompt defense analysis failed: tool="{name}", error="{e}"')
+
         # Run custom analyzers
         custom_analyzer_names = []
         for analyzer in self._custom_analyzers:
@@ -514,6 +538,19 @@ class Scanner:
                 f"LLM scan requested for prompt '{name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
 
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
+            # Run PROMPT_DEFENSE analysis on the prompt description
+            try:
+                pd_context = {"tool_name": name, "content_type": "description"}
+                pd_findings = await self._prompt_defense_analyzer.analyze(
+                    description, pd_context
+                )
+                for finding in pd_findings:
+                    finding.analyzer = "PromptDefense"
+                all_findings.extend(pd_findings)
+            except Exception as e:
+                logger.error(f'Prompt defense analysis failed: prompt="{name}", error="{e}"')
+
         # Run custom analyzers
         custom_analyzer_names = []
         for analyzer in self._custom_analyzers:
@@ -628,6 +665,21 @@ class Scanner:
             logger.warning(
                 f"LLM scan requested for instructions from '{server_name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
+
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
+            # Run PROMPT_DEFENSE analysis on the server instructions
+            try:
+                pd_context = {"tool_name": server_name, "content_type": "instructions"}
+                pd_findings = await self._prompt_defense_analyzer.analyze(
+                    instructions, pd_context
+                )
+                for finding in pd_findings:
+                    finding.analyzer = "PromptDefense"
+                all_findings.extend(pd_findings)
+            except Exception as e:
+                logger.error(
+                    f'Prompt defense analysis failed on instructions: server="{server_name}", error="{e}"'
+                )
 
         # Run custom analyzers
         custom_analyzer_names = []
