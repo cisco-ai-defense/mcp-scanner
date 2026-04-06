@@ -77,8 +77,8 @@ DEFENSE_RULES: List[Dict[str, Any]] = [
         "threat_category": "PROMPT INJECTION",
         "taxonomy_key": "ROLE_ESCAPE",
         "patterns": [
-            r"(?i)(?:stay in (?:role|character)|maintain (?:role|persona)|保持角色)",
-            r"(?i)(?:do not (?:pretend|act as|role.?play|impersonate)|不要(?:假裝|扮演|模仿))",
+            r"(?i)(?:stay in (?:role|character)|maintain (?:role|persona)|never (?:break|change|switch|abandon) (?:character|role)|保持角色|維持角色)",
+            r"(?i)(?:do not (?:pretend|act as|role.?play|impersonate|adopt)|you (?:are|must always be)|不要(?:假裝|扮演|模仿)|你(?:是|的角色))",
         ],
         "min_matches": 1,
         "summary_missing": (
@@ -134,8 +134,8 @@ DEFENSE_RULES: List[Dict[str, Any]] = [
         "threat_category": "PROMPT INJECTION",
         "taxonomy_key": "OUTPUT_MANIPULATION",
         "patterns": [
-            r"(?i)(?:output (?:format|structure|schema)|response (?:format|template)|輸出(?:格式|結構))",
-            r"(?i)(?:do not (?:modify|alter|change) (?:the )?(?:output|response|format)|不要(?:修改|更改)(?:輸出|回應))",
+            r"(?i)(?:output (?:format|structure|schema)|response (?:format|template)|only (?:respond|reply|output) (?:with|in|as)|輸出(?:格式|結構)|只(?:回答|回覆|輸出))",
+            r"(?i)(?:do not (?:modify|alter|change) (?:the )?(?:output|response|format)|restrict.*(?:output|response)|不要(?:修改|更改)(?:輸出|回應))",
         ],
         "min_matches": 1,
         "summary_missing": (
@@ -153,8 +153,8 @@ DEFENSE_RULES: List[Dict[str, Any]] = [
         "threat_category": "PROMPT INJECTION",
         "taxonomy_key": "MULTILANG_BYPASS",
         "patterns": [
-            r"(?i)(?:regardless of (?:language|lang)|any language|所有語言|任何語言)",
-            r"(?i)(?:multilingual|multi-language|language.?agnostic|跨語言|多語)",
+            r"(?i)(?:regardless of (?:language|lang)|any language|only (?:respond|reply|answer|communicate) in|所有語言|任何語言|只(?:用|使用)(?:中文|英文))",
+            r"(?i)(?:multilingual|multi-language|language.?agnostic|跨語言|多語|語言)",
         ],
         "min_matches": 1,
         "summary_missing": (
@@ -191,7 +191,7 @@ DEFENSE_RULES: List[Dict[str, Any]] = [
         "threat_category": "DENIAL OF SERVICE",
         "taxonomy_key": "CONTEXT_OVERFLOW",
         "patterns": [
-            r"(?i)(?:(?:max|maximum) (?:length|size|tokens|characters)|length limit|長度限制|最大(?:長度|大小))",
+            r"(?i)(?:(?:max|maximum|limit) (?:length|size|tokens|characters|input)|length limit|\d+ (?:character|token|char)s?|長度限制|最大(?:長度|大小)|字數|不超過)",
             r"(?i)(?:truncat|overflow|context (?:window|limit)|截斷|溢出|上下文(?:視窗|限制))",
         ],
         "min_matches": 1,
