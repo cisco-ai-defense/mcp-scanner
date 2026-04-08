@@ -53,12 +53,16 @@ class VulnerablePackagesAnalyzer:
         timeout: int = 120,
         fix_mode: bool = False,
         desc: bool = True,
+        skip_deps: bool = False,
+        disable_pip: bool = False,
     ):
         self.enabled = enabled
         self.vulnerability_service = vulnerability_service
         self.timeout = timeout
         self.fix_mode = fix_mode
         self.desc = desc
+        self.skip_deps = skip_deps
+        self.disable_pip = disable_pip
         self.last_scan_summary: Optional[Dict[str, Any]] = None
 
         self._pip_audit_cmd = self._find_pip_audit()
@@ -101,25 +105,37 @@ class VulnerablePackagesAnalyzer:
         return None
 
     def analyze_requirements(self, requirements_path: str) -> List[SecurityFinding]:
-        """Scan a requirements file for vulnerable dependencies."""
+        """Scan a requirements file for vulnerable dependencies.
+
+        By default pip-audit resolves transitive dependencies.  Pass
+        ``skip_deps=True`` / ``disable_pip=True`` at init time to restrict
+        the scan to only the packages listed in the file (useful for
+        fully-resolved or pinned inputs).
+        """
         if not self.enabled:
             return []
         path = Path(requirements_path)
         if not path.is_file():
             logger.warning("Requirements file does not exist: %s", requirements_path)
             return []
-        args = ["-r", str(path), "--no-deps", "--disable-pip"]
+        args = ["-r", str(path)]
+        if self.skip_deps:
+            args.append("--no-deps")
+        if self.disable_pip:
+            args.append("--disable-pip")
         return self._run_and_parse(args, source=str(path))
 
     def analyze_path(self, target_path: str) -> List[SecurityFinding]:
         """Scan a project directory, requirements file, or installed environment.
 
         Heuristics:
-          - If *target_path* points to a file ending in ``.txt`` or ``.in``, treat
-            as a requirements file.
-          - If *target_path* is a directory containing ``pyproject.toml`` or
-            ``requirements.txt``, scan the requirements file.
-          - Otherwise treat as an installed environment path.
+          - File ending in ``.txt`` or ``.in`` → requirements file scan.
+          - Directory with ``requirements.txt`` → requirements file scan.
+          - Directory with ``pyproject.toml`` and a ``.venv`` → installed
+            environment scan via ``--path .venv``.
+          - Directory with ``pyproject.toml`` (no ``.venv``) → project scan
+            via positional arg (``pip-audit <dir>``).
+          - Any other directory → installed environment scan via ``--path``.
         """
         if not self.enabled:
             return []
@@ -136,10 +152,11 @@ class VulnerablePackagesAnalyzer:
 
             pyproject = p / "pyproject.toml"
             if pyproject.is_file():
-                args = ["--path", str(p)]
                 venv = p / ".venv"
                 if venv.is_dir():
                     args = ["--path", str(venv)]
+                else:
+                    args = [str(p)]
                 return self._run_and_parse(args, source=str(p))
 
             args = ["--path", str(p)]
@@ -188,16 +205,27 @@ class VulnerablePackagesAnalyzer:
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
 
+        if result.returncode != 0 and not stdout:
+            logger.warning(
+                "pip-audit exited with code %d and produced no JSON output",
+                result.returncode,
+            )
+            if stderr:
+                error_hint = self._extract_error_hint(stderr)
+                logger.warning("pip-audit error: %s", error_hint)
+                if self._is_resolution_failure(stderr):
+                    logger.warning(
+                        "This looks like a dependency-resolution failure. "
+                        "Try re-running with --no-deps --disable-pip to "
+                        "scan only the explicitly listed packages."
+                    )
+            return []
+
         if stderr:
             for line in stderr.splitlines():
                 logger.debug("pip-audit stderr: %s", line)
 
         if not stdout:
-            if result.returncode != 0:
-                logger.warning(
-                    "pip-audit exited with code %d and no JSON output",
-                    result.returncode,
-                )
             return []
 
         try:
@@ -208,6 +236,39 @@ class VulnerablePackagesAnalyzer:
             return []
 
         return self._parse_results(data, source)
+
+    @staticmethod
+    def _extract_error_hint(stderr: str) -> str:
+        """Return the most informative line(s) from pip-audit stderr.
+
+        For Python tracebacks the last non-blank line is usually the
+        exception; for other output just return the last few lines.
+        """
+        lines = [l for l in stderr.splitlines() if l.strip()]
+        if not lines:
+            return stderr[:300]
+        for line in reversed(lines):
+            stripped = line.strip()
+            if stripped and not stripped.startswith(("File ", "File \"", "Traceback")):
+                return stripped[:300]
+        return lines[-1].strip()[:300]
+
+    @staticmethod
+    def _is_resolution_failure(stderr: str) -> bool:
+        """Heuristic: does stderr indicate a dependency-resolution problem?"""
+        markers = (
+            "ensurepip",
+            "CalledProcessError",
+            "ResolutionImpossible",
+            "No matching distribution",
+            "Could not find a version",
+            "InstallationError",
+            "BacktrackingResolver",
+            "SIGABRT",
+            "pip._vendor",
+        )
+        lower = stderr.lower()
+        return any(m.lower() in lower for m in markers)
 
     def _parse_results(
         self, data: Dict[str, Any], source: str
@@ -267,6 +328,9 @@ class VulnerablePackagesAnalyzer:
         description = vuln.get("description", "")
 
         has_fix = len(fix_versions) > 0
+        # Severity reflects remediation urgency, not CVSS score:
+        # HIGH  = a fix is available → upgrade immediately
+        # MEDIUM = no fix yet → monitor and mitigate
         severity = "HIGH" if has_fix else "MEDIUM"
 
         fix_str = ", ".join(fix_versions) if fix_versions else "No fix available"

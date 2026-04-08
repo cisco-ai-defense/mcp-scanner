@@ -114,14 +114,26 @@ The analyzer uses the following heuristics to determine how to scan a path:
 
 1. **File ending in `.txt` or `.in`**: Treated as a requirements file (`pip-audit -r <path>`)
 2. **Directory with `requirements.txt`**: Scans the requirements file
-3. **Directory with `pyproject.toml`**: Scans the project environment. If a `.venv` directory exists, uses `--path .venv`; otherwise uses `--path <directory>`
-4. **Other directories**: Uses `--path <directory>` to scan installed packages
+3. **Directory with `pyproject.toml` and `.venv`**: Scans the installed environment via `--path .venv`
+4. **Directory with `pyproject.toml` (no `.venv`)**: Scans as a project directory via positional arg (`pip-audit <dir>`)
+5. **Other directories**: Uses `--path <directory>` to scan installed packages
+
+### Dependency Resolution
+
+By default, pip-audit resolves transitive dependencies so that vulnerabilities
+in indirect packages (e.g. `werkzeug`, `jinja2` pulled in by `flask`) are also
+reported.  If you are scanning a fully-resolved or pinned input and want to
+skip dependency resolution:
+
+```bash
+mcp-scanner vulnerable-packages requirements.txt --no-deps --disable-pip
+```
 
 ### Finding Structure
 
 Each vulnerability produces a `SecurityFinding` with:
 
-- **severity**: `HIGH` if a fix is available, `MEDIUM` otherwise
+- **severity**: `HIGH` if a fix is available (upgrade immediately), `MEDIUM` if no fix exists yet (monitor and mitigate). This reflects *remediation urgency*, not a CVSS score.
 - **summary**: Human-readable description including package name, version, vulnerability ID, aliases, fix versions, and full description
 - **analyzer**: `VULNERABLE_PACKAGES`
 - **threat_category**: `VULNERABLE DEPENDENCY`
@@ -170,7 +182,7 @@ Produces output listing each vulnerable package with its vulnerability IDs, alia
 
 ```json
 {
-  "mcp_server_repository": "vulnerable-packages:/path/to/requirements.txt",
+  "scan_target": "vulnerable-packages:/path/to/requirements.txt",
   "scan_results": [
     {
       "package_name": "flask==0.5",
@@ -200,7 +212,7 @@ Produces output listing each vulnerable package with its vulnerability IDs, alia
 }
 ```
 
-**Note:** The vulnerable-packages output uses `package_name` and `vulnerability_description` (instead of `tool_name` / `tool_description` used by other scan types), and `mcp_server_repository` as the top-level identifier (instead of `server_url`).
+**Note:** The vulnerable-packages output uses `package_name` and `vulnerability_description` (instead of `tool_name` / `tool_description` used by other scan types), and `scan_target` as the top-level identifier (instead of `server_url`).
 
 ## Programmatic Usage
 

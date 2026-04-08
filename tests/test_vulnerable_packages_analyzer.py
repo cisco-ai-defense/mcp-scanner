@@ -320,7 +320,8 @@ class TestAnalyzeRequirements:
         assert findings == []
 
     @patch("subprocess.run")
-    def test_passes_correct_cli_args(self, mock_run, analyzer, tmp_requirements):
+    def test_passes_correct_cli_args_default(self, mock_run, analyzer, tmp_requirements):
+        """By default --no-deps and --disable-pip are NOT passed."""
         mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
         analyzer.analyze_requirements(tmp_requirements)
         cmd = mock_run.call_args[0][0]
@@ -328,9 +329,20 @@ class TestAnalyzeRequirements:
         assert "json" in cmd
         assert "-r" in cmd
         assert tmp_requirements in cmd
+        assert "--no-deps" not in cmd
+        assert "--disable-pip" not in cmd
+        assert "--desc" in cmd
+
+    @patch("subprocess.run")
+    def test_skip_deps_and_disable_pip_opt_in(self, mock_run, tmp_requirements):
+        """--no-deps and --disable-pip only appear when explicitly opted in."""
+        with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/usr/bin/pip-audit"]):
+            a = VulnerablePackagesAnalyzer(enabled=True, skip_deps=True, disable_pip=True)
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        a.analyze_requirements(tmp_requirements)
+        cmd = mock_run.call_args[0][0]
         assert "--no-deps" in cmd
         assert "--disable-pip" in cmd
-        assert "--desc" in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -373,11 +385,12 @@ class TestAnalyzePath:
 
     @patch("subprocess.run")
     def test_dir_with_pyproject_no_venv(self, mock_run, analyzer, tmp_path):
+        """Without .venv, pip-audit receives the project dir as a positional arg."""
         (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
         mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
         analyzer.analyze_path(str(tmp_path))
         cmd = mock_run.call_args[0][0]
-        assert "--path" in cmd
+        assert "--path" not in cmd
         assert str(tmp_path) in cmd
 
     @patch("subprocess.run")
@@ -452,6 +465,37 @@ class TestRunAndParse:
         mock_run.return_value = _make_completed_process(stdout="", returncode=2)
         findings = analyzer._run_and_parse([], source="test")
         assert findings == []
+
+    @patch("subprocess.run")
+    def test_nonzero_exit_surfaces_stderr_warning(self, mock_run, analyzer, caplog):
+        stderr_msg = (
+            "Traceback (most recent call last):\n"
+            "  File \"/tmp/venv/bin/pip-audit\", line 10\n"
+            "subprocess.CalledProcessError: ensurepip failed with SIGABRT"
+        )
+        mock_run.return_value = _make_completed_process(
+            stdout="", returncode=1, stderr=stderr_msg
+        )
+        import logging
+        with caplog.at_level(logging.WARNING):
+            findings = analyzer._run_and_parse([], source="test")
+        assert findings == []
+        assert "pip-audit exited with code 1" in caplog.text
+        assert "ensurepip failed with SIGABRT" in caplog.text
+        assert "--no-deps --disable-pip" in caplog.text
+
+    @patch("subprocess.run")
+    def test_nonzero_exit_no_resolution_hint_for_other_errors(self, mock_run, analyzer, caplog):
+        mock_run.return_value = _make_completed_process(
+            stdout="", returncode=1, stderr="ERROR: unknown option --bad-flag"
+        )
+        import logging
+        with caplog.at_level(logging.WARNING):
+            findings = analyzer._run_and_parse([], source="test")
+        assert findings == []
+        assert "pip-audit exited with code 1" in caplog.text
+        assert "unknown option --bad-flag" in caplog.text
+        assert "--no-deps --disable-pip" not in caplog.text
 
     @patch("subprocess.run")
     def test_invalid_json_returns_empty(self, mock_run, analyzer):
@@ -651,6 +695,47 @@ class TestCreateFinding:
 # ---------------------------------------------------------------------------
 
 
+class TestErrorHintHelpers:
+    """Tests for _extract_error_hint and _is_resolution_failure."""
+
+    def test_extract_error_hint_returns_exception_line(self):
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "  File \"/tmp/venv/bin/pip-audit\", line 10\n"
+            "ValueError: something broke"
+        )
+        hint = VulnerablePackagesAnalyzer._extract_error_hint(stderr)
+        assert "ValueError: something broke" in hint
+
+    def test_extract_error_hint_returns_last_line_for_non_traceback(self):
+        stderr = "WARNING: pip is old\nERROR: could not resolve"
+        hint = VulnerablePackagesAnalyzer._extract_error_hint(stderr)
+        assert "could not resolve" in hint
+
+    def test_extract_error_hint_empty_stderr(self):
+        hint = VulnerablePackagesAnalyzer._extract_error_hint("")
+        assert hint == ""
+
+    def test_is_resolution_failure_ensurepip(self):
+        assert VulnerablePackagesAnalyzer._is_resolution_failure("ensurepip crashed")
+
+    def test_is_resolution_failure_sigabrt(self):
+        assert VulnerablePackagesAnalyzer._is_resolution_failure("died with SIGABRT")
+
+    def test_is_resolution_failure_no_matching(self):
+        assert VulnerablePackagesAnalyzer._is_resolution_failure(
+            "No matching distribution found for flask==99.0"
+        )
+
+    def test_is_resolution_failure_false_for_unrelated(self):
+        assert not VulnerablePackagesAnalyzer._is_resolution_failure(
+            "ERROR: unknown option --bad-flag"
+        )
+
+
+# ---------------------------------------------------------------------------
+
+
 class TestScanSummary:
     @patch("subprocess.run")
     def test_summary_updated_after_scan(self, mock_run, analyzer, tmp_requirements):
@@ -749,3 +834,123 @@ class TestModuleExport:
         from mcpscanner.core.analyzers import VulnerablePackagesAnalyzer
 
         assert VulnerablePackagesAnalyzer is not None
+
+
+# ---------------------------------------------------------------------------
+# ReportGenerator integration tests for vulnerable-packages output
+# ---------------------------------------------------------------------------
+
+
+class TestReportGeneratorIntegration:
+    """Verify that ReportGenerator handles vulnerable-packages data
+    correctly across all output formats (summary, detailed, table, stats).
+    """
+
+    @pytest.fixture
+    def vuln_results_dict(self):
+        return {
+            "scan_target": "vulnerable-packages:/tmp/requirements.txt",
+            "scan_results": [
+                {
+                    "package_name": "flask==0.5",
+                    "vulnerability_description": "PYSEC-2019-179: flask==0.5",
+                    "status": "completed",
+                    "is_safe": False,
+                    "findings": {
+                        "vulnerable_packages_analyzer": {
+                            "severity": "HIGH",
+                            "threat_summary": "Vulnerable dependency: flask==0.5",
+                            "threat_names": ["VULNERABLE DEPENDENCY"],
+                            "total_findings": 1,
+                            "mcp_taxonomies": [
+                                {
+                                    "aitech": "AITech-9.2",
+                                    "aitech_name": "Detection Evasion",
+                                    "aisubtech": "AISubtech-9.2.1",
+                                    "aisubtech_name": "Supply Chain Compromise",
+                                }
+                            ],
+                        }
+                    },
+                },
+                {
+                    "package_name": "requests==2.31.0",
+                    "vulnerability_description": "No vulnerabilities",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {
+                        "vulnerable_packages_analyzer": {
+                            "severity": "SAFE",
+                            "threat_summary": "No known vulnerabilities found",
+                            "threat_names": [],
+                            "total_findings": 0,
+                            "mcp_taxonomies": [],
+                        }
+                    },
+                },
+            ],
+            "requested_analyzers": ["VULNERABLE_PACKAGES"],
+        }
+
+    def test_summary_shows_package_names(self, vuln_results_dict):
+        from mcpscanner.core.report_generator import ReportGenerator
+        from mcpscanner.core.models import OutputFormat
+
+        rg = ReportGenerator(vuln_results_dict)
+        out = rg.format_output(format_type=OutputFormat.SUMMARY)
+        assert "flask==0.5" in out
+        assert "Unsafe items: 1" in out
+
+    def test_detailed_shows_analyzer_results(self, vuln_results_dict):
+        from mcpscanner.core.report_generator import ReportGenerator
+        from mcpscanner.core.models import OutputFormat
+
+        rg = ReportGenerator(vuln_results_dict)
+        out = rg.format_output(format_type=OutputFormat.DETAILED)
+        assert "vulnerable_packages_analyzer" in out
+        assert "flask==0.5" in out
+        assert "Severity: HIGH" in out
+
+    def test_table_has_vuln_pkgs_column(self, vuln_results_dict):
+        from mcpscanner.core.report_generator import ReportGenerator
+        from mcpscanner.core.models import OutputFormat
+
+        rg = ReportGenerator(vuln_results_dict)
+        out = rg.format_output(format_type=OutputFormat.TABLE)
+        assert "VULN_PKGS" in out
+        assert "flask==0.5" in out
+
+    def test_stats_includes_vuln_packages_analyzer(self, vuln_results_dict):
+        from mcpscanner.core.report_generator import ReportGenerator
+
+        rg = ReportGenerator(vuln_results_dict)
+        stats = rg.get_statistics()
+        assert "vulnerable_packages_analyzer" in stats["analyzer_stats"]
+        vp = stats["analyzer_stats"]["vulnerable_packages_analyzer"]
+        assert vp["total"] == 2
+        assert vp["with_findings"] == 1
+
+    def test_scan_target_used_instead_of_server_url(self, vuln_results_dict):
+        from mcpscanner.core.report_generator import ReportGenerator
+        from mcpscanner.core.models import OutputFormat
+
+        rg = ReportGenerator(vuln_results_dict)
+        assert rg.server_url == "vulnerable-packages:/tmp/requirements.txt"
+        out = rg.format_output(format_type=OutputFormat.SUMMARY)
+        assert "requirements.txt" in out
+
+    def test_requested_analyzer_keys_registered(self, vuln_results_dict):
+        from mcpscanner.core.report_generator import ReportGenerator
+
+        rg = ReportGenerator(vuln_results_dict)
+        assert "vulnerable_packages_analyzer" in rg.requested_analyzer_keys
+        assert rg.is_vuln_pkg_scan is True
+
+    def test_by_severity_groups_correctly(self, vuln_results_dict):
+        from mcpscanner.core.report_generator import ReportGenerator
+        from mcpscanner.core.models import OutputFormat
+
+        rg = ReportGenerator(vuln_results_dict)
+        out = rg.format_output(format_type=OutputFormat.BY_SEVERITY)
+        assert "HIGH SEVERITY" in out
+        assert "flask==0.5" in out

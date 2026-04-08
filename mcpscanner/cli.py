@@ -1095,6 +1095,18 @@ async def main():
         "--fix", action="store_true", help="Automatically fix vulnerable dependencies"
     )
     p_vuln_pkgs.add_argument(
+        "--no-deps",
+        action="store_true",
+        dest="no_deps",
+        help="Skip transitive dependency resolution (only for fully-resolved/pinned inputs)",
+    )
+    p_vuln_pkgs.add_argument(
+        "--disable-pip",
+        action="store_true",
+        dest="disable_pip",
+        help="Disable pip for dependency resolution (use with --no-deps for pinned inputs)",
+    )
+    p_vuln_pkgs.add_argument(
         "--output", "-o", help="Save scan results to a file"
     )
     p_vuln_pkgs.add_argument(
@@ -2041,6 +2053,8 @@ async def main():
                 vulnerability_service=vuln_service,
                 timeout=CONSTANTS.VULNERABLE_PACKAGES_TIMEOUT,
                 fix_mode=getattr(args, "fix", False),
+                skip_deps=getattr(args, "no_deps", False),
+                disable_pip=getattr(args, "disable_pip", False),
             )
 
             findings = analyzer.analyze_path(scan_path)
@@ -2291,7 +2305,7 @@ async def main():
         is_vuln_pkg_scan = hasattr(args, "cmd") and args.cmd == "vulnerable-packages"
         if is_vuln_pkg_scan:
             results_dict = {
-                "mcp_server_repository": server_label,
+                "scan_target": server_label,
                 "scan_results": results,
                 "requested_analyzers": selected_analyzers,
             }
@@ -2375,6 +2389,8 @@ async def main():
             server_label = "well-known-configs"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "vulnerable-packages":
+            server_label = f"vulnerable-packages:{args.scan_path}"
 
         # Handle prompts, resources, and instructions with detailed view
         if hasattr(args, "cmd") and args.cmd == "prompts":
@@ -2383,6 +2399,14 @@ async def main():
             display_resource_results(results, server_label, detailed=args.detailed)
         elif hasattr(args, "cmd") and args.cmd == "instructions":
             display_instructions_results(results, server_label, detailed=args.detailed)
+        elif hasattr(args, "cmd") and args.cmd == "vulnerable-packages":
+            results_dict = {
+                "scan_target": server_label,
+                "scan_results": results,
+                "requested_analyzers": [AnalyzerEnum.VULNERABLE_PACKAGES],
+            }
+            formatter = ReportGenerator(results_dict)
+            print(formatter.format_output(format_type=OutputFormat.DETAILED))
         else:
             results_dict = {"server_url": server_label, "scan_results": results}
             display_results(results_dict, detailed=args.detailed)
