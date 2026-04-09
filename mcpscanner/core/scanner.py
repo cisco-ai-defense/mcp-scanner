@@ -1441,11 +1441,16 @@ class Scanner:
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
         expand_vars_default: Optional[str] = None,
+        errlog: Any = None,
     ) -> Dict[str, List[ToolScanResult]]:
         """Scan all well-known MCP configuration files and their servers.
 
         Args:
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
+            auth (Optional[Auth]): Authentication configuration for remote servers.
+            expand_vars_default (Optional[str]): Default variable expansion mode.
+            errlog: Optional file-like object for stderr redirection of stdio servers.
+                    Pass ``open(os.devnull, "w")`` to suppress server stderr.
 
         Returns:
             Dict[str, List[ToolScanResult]]: Dictionary mapping config file paths to scan results.
@@ -1486,7 +1491,7 @@ class Scanner:
                         # Scan stdio server with timeout and error recovery
                         try:
                             results = await self.scan_stdio_server_tools(
-                                server_config, analyzers
+                                server_config, analyzers, errlog=errlog
                             )
                             # Add server name and source to each result
                             for result in results:
@@ -1546,12 +1551,17 @@ class Scanner:
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
         expand_vars_default: Optional[str] = None,
+        errlog: Any = None,
     ) -> List[ToolScanResult]:
         """Scan all servers in a specific MCP configuration file.
 
         Args:
             config_path (str): Path to the MCP configuration file.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
+            auth (Optional[Auth]): Authentication configuration for remote servers.
+            expand_vars_default (Optional[str]): Default variable expansion mode.
+            errlog: Optional file-like object for stderr redirection of stdio servers.
+                    Pass ``open(os.devnull, "w")`` to suppress server stderr.
 
         Returns:
             List[ToolScanResult]: The results of scanning all servers in the config file.
@@ -1591,7 +1601,7 @@ class Scanner:
                     # Scan stdio server with timeout and error recovery
                     try:
                         results = await self.scan_stdio_server_tools(
-                            server_config, analyzers
+                            server_config, analyzers, errlog=errlog
                         )
                         # Add server name and source to each result
                         for result in results:
@@ -1895,6 +1905,7 @@ class Scanner:
         server_config: StdioServer,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
+        errlog: Any = None,
     ) -> List[PromptScanResult]:
         """Scan prompts from a stdio MCP server.
 
@@ -1902,6 +1913,8 @@ class Scanner:
             server_config: The stdio server configuration
             analyzers: List of analyzers to use (defaults to API and LLM)
             timeout: Connection timeout in seconds
+            errlog: Optional file-like object for stderr redirection.
+                    Pass ``open(os.devnull, "w")`` to suppress server stderr.
 
         Returns:
             List of prompt scan results
@@ -1923,7 +1936,7 @@ class Scanner:
             async def connect_and_scan():
                 nonlocal client_context, session
                 client_context, session = await self._get_stdio_session(
-                    server_config, timeout
+                    server_config, timeout, errlog
                 )
 
                 # List all prompts
@@ -1965,6 +1978,7 @@ class Scanner:
         prompt_name: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
+        errlog: Any = None,
     ) -> PromptScanResult:
         """Scan a specific prompt on a stdio MCP server.
 
@@ -1973,6 +1987,8 @@ class Scanner:
             prompt_name (str): The name of the prompt to scan.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
             timeout (Optional[int]): Timeout for the connection.
+            errlog: Optional file-like object for stderr redirection.
+                    Pass ``open(os.devnull, "w")`` to suppress server stderr.
 
         Returns:
             PromptScanResult: The result of the scan.
@@ -1994,7 +2010,7 @@ class Scanner:
         session = None
         try:
             client_context, session = await self._get_stdio_session(
-                server_config, timeout
+                server_config, timeout, errlog
             )
 
             # List all prompts and find the target prompt

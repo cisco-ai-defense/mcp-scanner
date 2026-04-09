@@ -88,6 +88,41 @@ def get_logger(name: str, level: Optional[str] = None) -> logging.Logger:
     return setup_logger(name, level)
 
 
+def set_log_level(level: int) -> None:
+    """
+    Set the log level for the entire mcpscanner library.
+
+    This updates the ``mcpscanner`` root logger **and** every child logger
+    (plus their handlers), so it works regardless of whether child loggers
+    were created with explicit levels or ``propagate = False``.
+
+    Can be called at any time — it affects loggers that already exist as
+    well as new ones created later (via the root logger level check in
+    ``setup_logger``).
+
+    Args:
+        level: A ``logging`` level constant, e.g. ``logging.ERROR``,
+               ``logging.WARNING``, ``logging.DEBUG``.
+
+    Example::
+
+        import logging
+        from mcpscanner.utils.logging_config import set_log_level
+
+        set_log_level(logging.ERROR)   # suppress everything below ERROR
+        set_log_level(logging.DEBUG)   # show all debug output
+    """
+    root_logger = logging.getLogger("mcpscanner")
+    root_logger.setLevel(level)
+
+    for name in list(logging.Logger.manager.loggerDict.keys()):
+        if name.startswith("mcpscanner"):
+            child = logging.getLogger(name)
+            child.setLevel(level)
+            for handler in child.handlers:
+                handler.setLevel(level)
+
+
 def set_verbose_logging(verbose: bool = False) -> None:
     """
     Enable or disable verbose logging for all mcpscanner loggers.
@@ -95,17 +130,4 @@ def set_verbose_logging(verbose: bool = False) -> None:
     Args:
         verbose: If True, set all existing mcpscanner loggers to DEBUG level
     """
-    target_level = logging.DEBUG if verbose else logging.INFO
-
-    # Set the root mcpscanner logger level
-    root_logger = logging.getLogger("mcpscanner")
-    root_logger.setLevel(target_level)
-
-    # Update all existing mcpscanner loggers
-    for name in list(logging.Logger.manager.loggerDict.keys()):
-        if name.startswith("mcpscanner"):
-            logger = logging.getLogger(name)
-            logger.setLevel(target_level)
-            # Update handler levels too
-            for handler in logger.handlers:
-                handler.setLevel(target_level)
+    set_log_level(logging.DEBUG if verbose else logging.INFO)
