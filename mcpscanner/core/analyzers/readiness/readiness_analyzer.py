@@ -25,39 +25,27 @@ It detects issues like missing timeouts, unsafe retry loops, and silent failures
 
 Implements 20 core heuristic rules (HEUR-001 through HEUR-020):
 
-Timeout Guards (HEUR-001, HEUR-002):
-- Missing timeout configuration
-- Timeout values too long (>5 minutes)
+Rules are classified by whether they check fields defined in the MCP spec
+or aspirational best-practice fields that are NOT part of the spec.
 
-Retry Configuration (HEUR-003, HEUR-004, HEUR-005):
-- No retry limit defined
-- Unlimited or excessive retries
-- Missing backoff strategy
+MCP-spec-grounded rules (check name, description, inputSchema, outputSchema,
+annotations):
+- HEUR-008: Missing outputSchema (LOW)
+- HEUR-009/010: Description quality (MEDIUM/HIGH)
+- HEUR-011/012: Input validation via inputSchema (LOW/INFO)
+- HEUR-016: Resource cleanup not documented (MEDIUM)
+- HEUR-017: No idempotency — checks annotations.idempotentHint (INFO)
+- HEUR-018: Dangerous operation keywords — checks annotations.destructiveHint (HIGH/MEDIUM)
+- HEUR-020: Circular dependency risk (MEDIUM)
 
-Error Handling (HEUR-006, HEUR-007, HEUR-008):
-- Missing error schema
-- Error schema without error code field
-- Missing output schema
-
-Description Quality (HEUR-009, HEUR-010):
-- Vague or missing descriptions
-- Overloaded tool scope indicators
-
-Input Validation (HEUR-011, HEUR-012):
-- No required fields defined
-- Missing input validation hints
-
-Operational Config (HEUR-013, HEUR-014, HEUR-015):
-- No rate limiting
-- Missing version information
-- No observability configuration
-
-Resource Management (HEUR-016, HEUR-017):
-- Resource cleanup not documented
-- No idempotency indication
-
-Safety (HEUR-018, HEUR-019, HEUR-020):
-- Dangerous operation keywords
+Aspirational best-practice rules (fields NOT in MCP Tool spec — severity INFO):
+- HEUR-001/002: Timeout configuration
+- HEUR-003/004/005: Retry configuration
+- HEUR-006/007: Error schema
+- HEUR-013: Rate limiting
+- HEUR-014: Versioning
+- HEUR-015: Observability
+- HEUR-019: Authentication context
 - No authentication context
 - Circular dependency risk
 
@@ -368,7 +356,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return max(0, score)
 
     # ===================================================================
-    # HEUR-001: Missing timeout (HIGH)
+    # HEUR-001: Missing timeout (INFO)
+    # Note: The MCP Tool spec does not define a timeout field.
+    # This is an aspirational best-practice hint, not a spec violation.
     # ===================================================================
     def _check_missing_timeout(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -379,18 +369,23 @@ class ReadinessAnalyzer(BaseAnalyzer):
         timeout_fields = ["timeout", "timeoutMs", "timeout_ms", "timeoutSeconds"]
         has_timeout = any(field in tool_def for field in timeout_fields)
 
-        # Also check nested config
-        config = tool_def.get("config", {})
+        config = tool_def.get("config") or {}
         has_timeout = has_timeout or any(field in config for field in timeout_fields)
+
+        annotations = tool_def.get("annotations") or {}
+        has_timeout = has_timeout or any(
+            field in annotations for field in timeout_fields
+        )
 
         if not has_timeout:
             findings.append(
                 self.create_security_finding(
-                    severity="HIGH",
+                    severity="INFO",
                     summary=(
                         f"Tool '{tool_name}' does not specify a timeout. "
-                        "Operations may hang indefinitely if external services "
-                        "become unresponsive."
+                        "The MCP spec does not define a timeout field on tools; "
+                        "timeout enforcement is typically handled server-side or "
+                        "by the calling client."
                     ),
                     threat_category="MISSING_TIMEOUT_GUARD",
                     details={
@@ -398,8 +393,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         "rule_id": "HEUR-001",
                         "location": f"tool.{tool_name}",
                         "recommendation": (
-                            "Add a 'timeout' or 'timeoutMs' field with a reasonable "
-                            "value (e.g., 30000 for 30 seconds)"
+                            "Consider implementing server-side timeout guards for "
+                            "long-running operations. The MCP spec does not include "
+                            "timeout fields on Tool definitions."
                         ),
                     },
                 )
@@ -408,7 +404,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-002: Timeout too long (MEDIUM)
+    # HEUR-002: Timeout too long (INFO)
+    # Note: The MCP Tool spec does not define a timeout field.
+    # This only fires when a non-spec timeout field happens to be present.
     # ===================================================================
     def _check_timeout_too_long(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -417,14 +415,17 @@ class ReadinessAnalyzer(BaseAnalyzer):
         findings: List[SecurityFinding] = []
 
         timeout_fields = ["timeout", "timeoutMs", "timeout_ms"]
-        config = tool_def.get("config", {})
+        config = tool_def.get("config") or {}
+        annotations = tool_def.get("annotations") or {}
 
         for field in timeout_fields:
-            timeout_value = tool_def.get(field) or config.get(field)
+            timeout_value = (
+                tool_def.get(field) or config.get(field) or annotations.get(field)
+            )
             if timeout_value is not None and timeout_value > 300000:
                 findings.append(
                     self.create_security_finding(
-                        severity="MEDIUM",
+                        severity="INFO",
                         summary=(
                             f"Tool '{tool_name}' has {field}={timeout_value}ms "
                             "(over 5 minutes). Long timeouts can cause extended hangs "
@@ -448,7 +449,8 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-003: No retry limit (MEDIUM)
+    # HEUR-003: No retry limit (INFO)
+    # Note: The MCP Tool spec does not define retry fields.
     # ===================================================================
     def _check_no_retry_limit(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -466,10 +468,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         has_retries = any(field in tool_def for field in retry_fields)
 
-        config = tool_def.get("config", {})
+        config = tool_def.get("config") or {}
         has_retries = has_retries or any(field in config for field in retry_fields)
 
-        # Also check for retryPolicy object
         retry_policy = tool_def.get("retryPolicy") or config.get("retryPolicy")
         if retry_policy and isinstance(retry_policy, dict):
             has_retries = has_retries or any(
@@ -479,11 +480,12 @@ class ReadinessAnalyzer(BaseAnalyzer):
         if not has_retries:
             findings.append(
                 self.create_security_finding(
-                    severity="MEDIUM",
+                    severity="INFO",
                     summary=(
                         f"Tool '{tool_name}' does not specify a retry limit. "
-                        "Without limits, retry logic may cause resource exhaustion "
-                        "or infinite loops."
+                        "The MCP spec does not define retry fields on tools; "
+                        "retry logic is typically implemented by the client or "
+                        "server framework."
                     ),
                     threat_category="UNSAFE_RETRY_LOOP",
                     details={
@@ -491,8 +493,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         "rule_id": "HEUR-003",
                         "location": f"tool.{tool_name}",
                         "recommendation": (
-                            "Add a 'maxRetries' or 'retryLimit' field with a "
-                            "reasonable value (e.g., 3)"
+                            "Consider implementing retry limits in your server-side "
+                            "tool handler or client framework. The MCP spec does not "
+                            "include retry fields on Tool definitions."
                         ),
                     },
                 )
@@ -501,7 +504,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-004: Unlimited retries (HIGH)
+    # HEUR-004: Unlimited retries (MEDIUM)
+    # Note: Retry fields are not part of the MCP spec, but if present
+    # with dangerous values, it's worth flagging.
     # ===================================================================
     def _check_unlimited_retries(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -510,7 +515,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         findings: List[SecurityFinding] = []
 
         retry_fields = ["maxRetries", "retries", "max_retries", "retryLimit"]
-        config = tool_def.get("config", {})
+        config = tool_def.get("config") or {}
         retry_policy = tool_def.get("retryPolicy") or config.get("retryPolicy") or {}
 
         for field in retry_fields:
@@ -524,7 +529,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 if retry_value == -1:
                     findings.append(
                         self.create_security_finding(
-                            severity="HIGH",
+                            severity="MEDIUM",
                             summary=(
                                 f"Tool '{tool_name}' has {field}=-1, indicating "
                                 "unlimited retries. This can cause infinite loops "
@@ -546,7 +551,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 elif retry_value > 10:
                     findings.append(
                         self.create_security_finding(
-                            severity="HIGH",
+                            severity="MEDIUM",
                             summary=(
                                 f"Tool '{tool_name}' has {field}={retry_value}. "
                                 "Very high retry limits may cause extended delays "
@@ -577,7 +582,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
 
         # First check if retries are configured
         retry_fields = ["maxRetries", "retries", "max_retries", "retryLimit"]
-        config = tool_def.get("config", {})
+        config = tool_def.get("config") or {}
         retry_policy = tool_def.get("retryPolicy") or config.get("retryPolicy") or {}
 
         has_retries = any(
@@ -630,7 +635,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-006: Missing error schema (MEDIUM)
+    # HEUR-006: Missing error schema (INFO)
+    # Note: The MCP Tool spec does not define an error schema field.
+    # MCP uses isError in CallToolResult for error signaling.
     # ===================================================================
     def _check_missing_error_schema(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -644,11 +651,12 @@ class ReadinessAnalyzer(BaseAnalyzer):
         if not has_error_schema:
             findings.append(
                 self.create_security_finding(
-                    severity="MEDIUM",
+                    severity="INFO",
                     summary=(
                         f"Tool '{tool_name}' does not define an error response schema. "
-                        "Without structured error responses, agents cannot "
-                        "programmatically handle failures."
+                        "The MCP spec uses 'isError' in CallToolResult for error "
+                        "signaling; structured error schemas are not part of the "
+                        "Tool definition."
                     ),
                     threat_category="MISSING_ERROR_SCHEMA",
                     details={
@@ -656,8 +664,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         "rule_id": "HEUR-006",
                         "location": f"tool.{tool_name}",
                         "recommendation": (
-                            "Add an 'errorSchema' field defining the structure of "
-                            "error responses with error codes and messages"
+                            "MCP tools signal errors via isError in CallToolResult. "
+                            "Consider documenting expected error content structures "
+                            "in the tool description for better agent error handling."
                         ),
                     },
                 )
@@ -755,7 +764,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-009: Check if description is missing or too short (<20 chars)."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "")
+        description = tool_def.get("description") or ""
 
         if not description:
             findings.append(
@@ -837,7 +846,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-010: Check if description mentions >5 verbs or overload keywords."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = (tool_def.get("description") or "").lower()
 
         # Check for overload keywords
         overload_keywords = ["any", "all", "everything", "anything", "whatever"]
@@ -1034,7 +1043,8 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-013: No rate limit (LOW)
+    # HEUR-013: No rate limit (INFO)
+    # Note: The MCP Tool spec does not define rate limit fields.
     # ===================================================================
     def _check_no_rate_limit(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -1051,7 +1061,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         has_rate_limit = any(field in tool_def for field in rate_limit_fields)
 
-        config = tool_def.get("config", {})
+        config = tool_def.get("config") or {}
         has_rate_limit = has_rate_limit or any(
             field in config for field in rate_limit_fields
         )
@@ -1059,11 +1069,11 @@ class ReadinessAnalyzer(BaseAnalyzer):
         if not has_rate_limit:
             findings.append(
                 self.create_security_finding(
-                    severity="LOW",
+                    severity="INFO",
                     summary=(
                         f"Tool '{tool_name}' does not specify rate limits. "
-                        "Without rate limits, rapid repeated calls may overwhelm "
-                        "external services or exhaust resources."
+                        "The MCP spec does not define rate limit fields on tools; "
+                        "rate limiting is typically implemented server-side."
                     ),
                     threat_category="UNSAFE_RETRY_LOOP",
                     details={
@@ -1071,7 +1081,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         "rule_id": "HEUR-013",
                         "location": f"tool.{tool_name}",
                         "recommendation": (
-                            "Add a 'rateLimit' field specifying maximum calls per time period"
+                            "Consider implementing server-side rate limiting for "
+                            "tools that call external services. The MCP spec does "
+                            "not include rate limit fields on Tool definitions."
                         ),
                     },
                 )
@@ -1080,7 +1092,8 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-014: No version (LOW)
+    # HEUR-014: No version (INFO)
+    # Note: The MCP Tool spec does not define a version field on tools.
     # ===================================================================
     def _check_no_version(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -1094,11 +1107,12 @@ class ReadinessAnalyzer(BaseAnalyzer):
         if not has_version:
             findings.append(
                 self.create_security_finding(
-                    severity="LOW",
+                    severity="INFO",
                     summary=(
                         f"Tool '{tool_name}' does not specify a version. "
-                        "Versioning helps track changes and ensure compatibility "
-                        "when tools evolve over time."
+                        "The MCP spec does not define a version field on tools; "
+                        "versioning is managed at the server level via protocol "
+                        "negotiation."
                     ),
                     threat_category="NO_OBSERVABILITY_HOOKS",
                     details={
@@ -1106,7 +1120,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         "rule_id": "HEUR-014",
                         "location": f"tool.{tool_name}",
                         "recommendation": (
-                            "Add a 'version' field (e.g., '1.0.0') following semantic versioning"
+                            "Consider versioning at the server level. The MCP spec "
+                            "handles versioning through protocol negotiation in "
+                            "the initialize handshake."
                         ),
                     },
                 )
@@ -1115,7 +1131,8 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-015: No observability config (LOW)
+    # HEUR-015: No observability config (INFO)
+    # Note: The MCP Tool spec does not define observability fields.
     # ===================================================================
     def _check_no_observability(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -1135,7 +1152,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         has_observability = any(field in tool_def for field in observability_fields)
 
-        config = tool_def.get("config", {})
+        config = tool_def.get("config") or {}
         has_observability = has_observability or any(
             field in config for field in observability_fields
         )
@@ -1143,11 +1160,12 @@ class ReadinessAnalyzer(BaseAnalyzer):
         if not has_observability:
             findings.append(
                 self.create_security_finding(
-                    severity="LOW",
+                    severity="INFO",
                     summary=(
-                        f"Tool '{tool_name}' does not configure observability hooks "
-                        "(logging, metrics, tracing). Without observability, "
-                        "debugging production issues becomes extremely difficult."
+                        f"Tool '{tool_name}' does not configure observability hooks. "
+                        "The MCP spec does not define observability fields on tools; "
+                        "logging and tracing are typically implemented in the server "
+                        "framework."
                     ),
                     threat_category="NO_OBSERVABILITY_HOOKS",
                     details={
@@ -1155,8 +1173,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         "rule_id": "HEUR-015",
                         "location": f"tool.{tool_name}",
                         "recommendation": (
-                            "Add logging, metrics, or tracing configuration to enable "
-                            "monitoring and debugging in production"
+                            "Consider implementing server-side logging and tracing. "
+                            "The MCP spec does not include observability fields on "
+                            "Tool definitions."
                         ),
                     },
                 )
@@ -1173,7 +1192,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-016: Check if description mentions resources but not cleanup."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = (tool_def.get("description") or "").lower()
 
         # Check if tool appears to use resources that need cleanup
         resource_indicators = [
@@ -1234,6 +1253,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
 
     # ===================================================================
     # HEUR-017: No idempotency indication (INFO)
+    # The MCP spec provides annotations.idempotentHint for this purpose.
     # ===================================================================
     def _check_no_idempotency_indication(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -1241,9 +1261,13 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-017: Check if tool appears to modify state but doesn't document idempotency."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = (tool_def.get("description") or "").lower()
+        annotations = tool_def.get("annotations") or {}
 
-        # Check if tool appears to be state-changing
+        # MCP spec provides annotations.idempotentHint
+        if annotations.get("idempotentHint") is not None:
+            return findings
+
         state_changing_verbs = [
             "create",
             "delete",
@@ -1260,8 +1284,11 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         is_state_changing = any(verb in description for verb in state_changing_verbs)
 
+        # Also check if annotations.readOnlyHint is explicitly false
+        if annotations.get("readOnlyHint") is False:
+            is_state_changing = True
+
         if is_state_changing:
-            # Check if idempotency is documented
             idempotency_indicators = [
                 "idempotent",
                 "safe to retry",
@@ -1280,17 +1307,18 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         severity="INFO",
                         summary=(
                             f"Tool '{tool_name}' appears to perform state-changing operations "
-                            "but doesn't indicate whether it's idempotent. This is important "
-                            "for retry logic - non-idempotent operations may cause duplicates."
+                            "but doesn't indicate whether it's idempotent. Consider setting "
+                            "annotations.idempotentHint (per the MCP spec) to inform clients."
                         ),
                         threat_category="NON_DETERMINISTIC_RESPONSE",
                         details={
                             "tool_name": tool_name,
                             "rule_id": "HEUR-017",
-                            "location": f"tool.{tool_name}.description",
+                            "location": f"tool.{tool_name}.annotations",
                             "recommendation": (
-                                "Document whether the operation is idempotent and safe to retry. "
-                                "If not idempotent, consider adding idempotency keys."
+                                "Set annotations.idempotentHint to true or false in your "
+                                "tool definition. This MCP spec field helps clients decide "
+                                "whether operations are safe to retry."
                             ),
                         },
                     )
@@ -1299,7 +1327,8 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-018: Dangerous operation keywords (HIGH)
+    # HEUR-018: Dangerous operation keywords (HIGH / MEDIUM)
+    # Severity depends on whether annotations.destructiveHint is set.
     # ===================================================================
     def _check_dangerous_operation_keywords(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -1307,9 +1336,10 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-018: Check for dangerous keywords in name/description."""
         findings: List[SecurityFinding] = []
 
-        name = tool_def.get("name", "").lower()
-        description = tool_def.get("description", "").lower()
+        name = (tool_def.get("name") or "").lower()
+        description = (tool_def.get("description") or "").lower()
         combined = f"{name} {description}"
+        annotations = tool_def.get("annotations") or {}
 
         dangerous_keywords = [
             ("delete", "deletion operations"),
@@ -1330,13 +1360,22 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 found_dangerous.append((keyword, meaning))
 
         if found_dangerous:
+            has_destructive_hint = annotations.get("destructiveHint") is True
+            severity = "MEDIUM" if has_destructive_hint else "HIGH"
+            hint_note = (
+                " The tool correctly declares annotations.destructiveHint=true."
+                if has_destructive_hint
+                else " Consider setting annotations.destructiveHint=true (per the MCP spec)."
+            )
+
             findings.append(
                 self.create_security_finding(
-                    severity="HIGH",
+                    severity=severity,
                     summary=(
                         f"Tool '{tool_name}' contains dangerous operation keywords: "
                         f"{', '.join(k for k, _ in found_dangerous)}. "
-                        "Tools performing destructive operations require extra safeguards."
+                        f"Tools performing destructive operations require extra safeguards."
+                        f"{hint_note}"
                     ),
                     threat_category="OVERLOADED_TOOL_SCOPE",
                     details={
@@ -1344,9 +1383,11 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         "rule_id": "HEUR-018",
                         "location": f"tool.{tool_name}",
                         "keywords": [k for k, m in found_dangerous],
+                        "destructiveHint": has_destructive_hint,
                         "recommendation": (
-                            "Add safeguards: require explicit confirmation, implement dry-run mode, "
-                            "add audit logging, or provide undo/rollback mechanisms"
+                            "Set annotations.destructiveHint=true in your tool definition "
+                            "so clients can prompt for confirmation. Also consider implementing "
+                            "dry-run mode, audit logging, or undo/rollback mechanisms."
                         ),
                     },
                 )
@@ -1373,11 +1414,11 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         has_auth = any(field in tool_def for field in auth_fields)
 
-        config = tool_def.get("config", {})
+        config = tool_def.get("config") or {}
         has_auth = has_auth or any(field in config for field in auth_fields)
 
         # Check if description mentions external services
-        description = tool_def.get("description", "").lower()
+        description = (tool_def.get("description") or "").lower()
         external_indicators = [
             "api",
             "service",
@@ -1428,7 +1469,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-020: Check if tool references itself or common circular patterns."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = (tool_def.get("description") or "").lower()
 
         # Check if tool name appears in its own description (potential self-reference)
         if tool_name and tool_name.lower() in description:

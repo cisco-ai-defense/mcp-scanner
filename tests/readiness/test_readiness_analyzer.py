@@ -77,7 +77,7 @@ class TestHEUR001MissingTimeout:
 
     @pytest.mark.asyncio
     async def test_missing_timeout_triggers_finding(self):
-        """Tool without timeout should trigger HIGH finding."""
+        """Tool without timeout should trigger INFO finding (not in MCP spec)."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "test_tool",
@@ -90,7 +90,7 @@ class TestHEUR001MissingTimeout:
 
         finding = find_finding_by_rule(findings, "HEUR-001")
         assert finding is not None
-        assert finding.severity == "HIGH"
+        assert finding.severity == "INFO"
         assert finding.threat_category == "MISSING_TIMEOUT_GUARD"
 
     @pytest.mark.asyncio
@@ -133,7 +133,7 @@ class TestHEUR002TimeoutTooLong:
 
     @pytest.mark.asyncio
     async def test_long_timeout_triggers_finding(self):
-        """Timeout > 5 minutes should trigger MEDIUM finding."""
+        """Timeout > 5 minutes should trigger INFO finding (not in MCP spec)."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "test_tool",
@@ -147,7 +147,7 @@ class TestHEUR002TimeoutTooLong:
 
         finding = find_finding_by_rule(findings, "HEUR-002")
         assert finding is not None
-        assert finding.severity == "MEDIUM"
+        assert finding.severity == "INFO"
         assert finding.details["value"] == 600000
 
     @pytest.mark.asyncio
@@ -173,7 +173,7 @@ class TestHEUR003NoRetryLimit:
 
     @pytest.mark.asyncio
     async def test_no_retry_limit_triggers_finding(self):
-        """Tool without retry limit should trigger MEDIUM finding."""
+        """Tool without retry limit should trigger INFO finding (not in MCP spec)."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "test_tool",
@@ -187,7 +187,7 @@ class TestHEUR003NoRetryLimit:
 
         finding = find_finding_by_rule(findings, "HEUR-003")
         assert finding is not None
-        assert finding.severity == "MEDIUM"
+        assert finding.severity == "INFO"
         assert finding.threat_category == "UNSAFE_RETRY_LOOP"
 
     @pytest.mark.asyncio
@@ -214,7 +214,7 @@ class TestHEUR004UnlimitedRetries:
 
     @pytest.mark.asyncio
     async def test_unlimited_retries_triggers_finding(self):
-        """maxRetries=-1 should trigger HIGH finding."""
+        """maxRetries=-1 should trigger MEDIUM finding."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "test_tool",
@@ -229,12 +229,12 @@ class TestHEUR004UnlimitedRetries:
 
         finding = find_finding_by_rule(findings, "HEUR-004")
         assert finding is not None
-        assert finding.severity == "HIGH"
+        assert finding.severity == "MEDIUM"
         assert finding.details["value"] == -1
 
     @pytest.mark.asyncio
     async def test_excessive_retries_triggers_finding(self):
-        """maxRetries > 10 should trigger HIGH finding."""
+        """maxRetries > 10 should trigger MEDIUM finding."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "test_tool",
@@ -249,7 +249,7 @@ class TestHEUR004UnlimitedRetries:
 
         finding = find_finding_by_rule(findings, "HEUR-004")
         assert finding is not None
-        assert finding.severity == "HIGH"
+        assert finding.severity == "MEDIUM"
         assert finding.details["value"] == 50
 
     @pytest.mark.asyncio
@@ -318,7 +318,7 @@ class TestHEUR006MissingErrorSchema:
 
     @pytest.mark.asyncio
     async def test_missing_error_schema_triggers_finding(self):
-        """Tool without error schema should trigger MEDIUM finding."""
+        """Tool without error schema should trigger INFO finding (not in MCP spec)."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "test_tool",
@@ -332,7 +332,7 @@ class TestHEUR006MissingErrorSchema:
 
         finding = find_finding_by_rule(findings, "HEUR-006")
         assert finding is not None
-        assert finding.severity == "MEDIUM"
+        assert finding.severity == "INFO"
         assert finding.threat_category == "MISSING_ERROR_SCHEMA"
 
     @pytest.mark.asyncio
@@ -682,7 +682,7 @@ class TestHEUR013NoRateLimit:
 
     @pytest.mark.asyncio
     async def test_missing_rate_limit_triggers_finding(self):
-        """Tool without rate limit should trigger LOW finding."""
+        """Tool without rate limit should trigger INFO finding (not in MCP spec)."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "test_tool",
@@ -696,7 +696,7 @@ class TestHEUR013NoRateLimit:
 
         finding = find_finding_by_rule(findings, "HEUR-013")
         assert finding is not None
-        assert finding.severity == "LOW"
+        assert finding.severity == "INFO"
 
     @pytest.mark.asyncio
     async def test_with_rate_limit_no_finding(self):
@@ -722,7 +722,7 @@ class TestHEUR014NoVersion:
 
     @pytest.mark.asyncio
     async def test_missing_version_triggers_finding(self):
-        """Tool without version should trigger LOW finding."""
+        """Tool without version should trigger INFO finding (not in MCP spec)."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "test_tool",
@@ -736,7 +736,7 @@ class TestHEUR014NoVersion:
 
         finding = find_finding_by_rule(findings, "HEUR-014")
         assert finding is not None
-        assert finding.severity == "LOW"
+        assert finding.severity == "INFO"
 
     @pytest.mark.asyncio
     async def test_with_version_no_finding(self):
@@ -762,7 +762,7 @@ class TestHEUR015NoObservability:
 
     @pytest.mark.asyncio
     async def test_missing_observability_triggers_finding(self):
-        """Tool without observability should trigger LOW finding."""
+        """Tool without observability should trigger INFO finding (not in MCP spec)."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "test_tool",
@@ -776,7 +776,7 @@ class TestHEUR015NoObservability:
 
         finding = find_finding_by_rule(findings, "HEUR-015")
         assert finding is not None
-        assert finding.severity == "LOW"
+        assert finding.severity == "INFO"
         assert finding.threat_category == "NO_OBSERVABILITY_HOOKS"
 
     @pytest.mark.asyncio
@@ -876,12 +876,86 @@ class TestHEUR017NoIdempotencyIndication:
         assert finding is None
 
 
+class TestHEUR017MCPAnnotations:
+    """Tests for HEUR-017 MCP annotations.idempotentHint support."""
+
+    @pytest.mark.asyncio
+    async def test_idempotent_hint_suppresses_finding(self):
+        """Tool with annotations.idempotentHint=true should not trigger HEUR-017."""
+        analyzer = ReadinessAnalyzer()
+        tool_def = {
+            "name": "create_user",
+            "description": "Create a new user in the system",
+            "annotations": {"idempotentHint": True},
+        }
+        content = json.dumps(tool_def)
+        context = {"tool_name": "create_user"}
+
+        findings = await analyzer.analyze(content, context)
+
+        finding = find_finding_by_rule(findings, "HEUR-017")
+        assert finding is None
+
+    @pytest.mark.asyncio
+    async def test_idempotent_hint_false_suppresses_finding(self):
+        """Tool with annotations.idempotentHint=false should also suppress (hint is declared)."""
+        analyzer = ReadinessAnalyzer()
+        tool_def = {
+            "name": "delete_record",
+            "description": "Delete a record from the database",
+            "annotations": {"idempotentHint": False},
+        }
+        content = json.dumps(tool_def)
+        context = {"tool_name": "delete_record"}
+
+        findings = await analyzer.analyze(content, context)
+
+        finding = find_finding_by_rule(findings, "HEUR-017")
+        assert finding is None
+
+    @pytest.mark.asyncio
+    async def test_null_annotations_handled(self):
+        """Tool with annotations=null should not crash."""
+        analyzer = ReadinessAnalyzer()
+        tool_def = {
+            "name": "update_record",
+            "description": "Update a record in the database",
+            "annotations": None,
+        }
+        content = json.dumps(tool_def)
+        context = {"tool_name": "update_record"}
+
+        findings = await analyzer.analyze(content, context)
+
+        finding = find_finding_by_rule(findings, "HEUR-017")
+        assert finding is not None
+        assert finding.severity == "INFO"
+
+    @pytest.mark.asyncio
+    async def test_readonly_hint_false_triggers_finding(self):
+        """Tool with readOnlyHint=false and no idempotentHint should trigger HEUR-017."""
+        analyzer = ReadinessAnalyzer()
+        tool_def = {
+            "name": "silent_tool",
+            "description": "Does something quietly",
+            "annotations": {"readOnlyHint": False},
+        }
+        content = json.dumps(tool_def)
+        context = {"tool_name": "silent_tool"}
+
+        findings = await analyzer.analyze(content, context)
+
+        finding = find_finding_by_rule(findings, "HEUR-017")
+        assert finding is not None
+        assert finding.severity == "INFO"
+
+
 class TestHEUR018DangerousOperationKeywords:
     """Tests for HEUR-018: Dangerous operation keywords."""
 
     @pytest.mark.asyncio
     async def test_delete_keyword_triggers_finding(self):
-        """Tool with 'delete' keyword should trigger HIGH finding."""
+        """Tool with 'delete' keyword should trigger HIGH finding without destructiveHint."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "delete_user",
@@ -915,6 +989,25 @@ class TestHEUR018DangerousOperationKeywords:
         finding = find_finding_by_rule(findings, "HEUR-018")
         assert finding is not None
         assert finding.severity == "HIGH"
+
+    @pytest.mark.asyncio
+    async def test_destructive_hint_downgrades_to_medium(self):
+        """Tool with destructiveHint=true should be MEDIUM instead of HIGH."""
+        analyzer = ReadinessAnalyzer()
+        tool_def = {
+            "name": "delete_user",
+            "description": "Delete a user from the system",
+            "annotations": {"destructiveHint": True},
+        }
+        content = json.dumps(tool_def)
+        context = {"tool_name": "delete_user"}
+
+        findings = await analyzer.analyze(content, context)
+
+        finding = find_finding_by_rule(findings, "HEUR-018")
+        assert finding is not None
+        assert finding.severity == "MEDIUM"
+        assert finding.details.get("destructiveHint") is True
 
     @pytest.mark.asyncio
     async def test_safe_tool_no_finding(self):
@@ -1175,7 +1268,7 @@ class TestFixtureFiles:
 
         finding = find_finding_by_rule(findings, "HEUR-002")
         assert finding is not None
-        assert finding.severity == "MEDIUM"
+        assert finding.severity == "INFO"
 
     @pytest.mark.asyncio
     async def test_overloaded_scope_fixture(self):
