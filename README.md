@@ -187,6 +187,9 @@ mcp-scanner --stdio-command uvx --stdio-arg=--from --stdio-arg=mcp-server-fetch 
 # Remote server (deepwiki example)
 mcp-scanner --server-url https://mcp.deepwiki.com/mcp --analyzers yara --format summary
 
+# Suppress all output below ERROR (useful in CI/CD)
+mcp-scanner --log-level error --analyzers yara --format raw --server-url https://mcp.deepwiki.com/mcp
+
 # MCP Scanner as REST API
 mcp-scanner-api --host 0.0.0.0 --port 8080
 
@@ -196,10 +199,15 @@ mcp-scanner-api --host 0.0.0.0 --port 8080
 
 ```python
 import asyncio
-from mcpscanner import Config, Scanner
+import os
+from mcpscanner import Config, Scanner, set_log_level
 from mcpscanner.core.models import AnalyzerEnum
+import logging
 
 async def main():
+    # Suppress all mcpscanner logs below ERROR
+    set_log_level(logging.ERROR)
+
     # Create configuration with your API keys
     config = Config(
         api_key="your_cisco_api_key",
@@ -239,6 +247,16 @@ async def main():
     # Print resource results
     for result in resource_results:
         print(f"Resource: {result.resource_name}, Safe: {result.is_safe}, Status: {result.status}")
+
+    # Scan a stdio server while suppressing its stderr output
+    from mcpscanner.core.mcp_models import StdioServer
+    server = StdioServer(command="uvx", args=["mcp-server-fetch"])
+    with open(os.devnull, "w") as devnull:
+        stdio_results = await scanner.scan_stdio_server_tools(
+            server,
+            analyzers=[AnalyzerEnum.YARA],
+            errlog=devnull
+        )
 
 # Run the scanner
 asyncio.run(main())
@@ -525,6 +543,62 @@ mcp-scanner --analyzers yara,prompt_defense --server-url http://localhost:8000/m
 ```
 
 Each missing defense maps to MCP Taxonomy codes (AITech / AISubtech) for standardized reporting.
+
+### Logging Control
+
+By default the CLI shows `WARNING`-level output (or `DEBUG` with `--verbose`). For finer control use `--log-level`:
+
+```bash
+# Show only errors (good for CI/CD)
+mcp-scanner --log-level error --analyzers yara --format raw --server-url https://mcp.deepwiki.com/mcp
+
+# Show warnings and above
+mcp-scanner --log-level warning --analyzers yara --format summary --scan-known-configs
+
+# Full debug output (equivalent to --verbose)
+mcp-scanner --log-level debug --analyzers yara --server-url https://mcp.deepwiki.com/mcp
+```
+
+`--log-level` takes precedence over `--verbose` when both are provided.
+
+#### Library Log Level (SDK)
+
+Library consumers can control the log level programmatically. Unlike
+`logging.getLogger("mcpscanner").setLevel(...)`, which does not propagate
+to child loggers, `set_log_level` updates **every** mcpscanner logger and
+handler:
+
+```python
+import logging
+from mcpscanner import set_log_level
+
+set_log_level(logging.ERROR)    # suppress everything below ERROR
+set_log_level(logging.DEBUG)    # show all debug output
+```
+
+#### Suppressing Stdio Server Stderr
+
+MCP servers launched via stdio may emit noisy output to stderr (startup
+banners, dependency logs, etc.). All stdio scan methods accept an `errlog`
+parameter to redirect or suppress this output:
+
+```python
+import os
+from mcpscanner import Scanner, Config
+from mcpscanner.core.mcp_models import StdioServer
+
+scanner = Scanner(Config())
+server = StdioServer(command="uvx", args=["mcp-server-fetch"])
+
+with open(os.devnull, "w") as devnull:
+    results = await scanner.scan_stdio_server_tools(server, errlog=devnull)
+    prompts = await scanner.scan_stdio_server_prompts(server, errlog=devnull)
+```
+
+The `errlog` parameter is supported on `scan_stdio_server_tools`,
+`scan_stdio_server_tool`, `scan_stdio_server_prompts`,
+`scan_stdio_server_prompt`, `scan_well_known_mcp_configs`, and
+`scan_mcp_config_file`.
 
 ### API Server Usage
 
