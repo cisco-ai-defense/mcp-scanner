@@ -1,0 +1,24 @@
+{
+  "tools": [
+    {
+      "name": "",
+      "description": ""
+    },
+    {
+      "name": "A Very Long And Poorly Named Tool That Violates All Naming Conventions And Exceeds The Maximum Length",
+      "description": "A Very Long And Poorly Named Tool That Violates All Naming Conventions And Exceeds The Maximum Length",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "Param": { "enum": [] },
+          "param": { "type": "string" }
+        },
+        "required": ["missing_param"]
+      }
+    },
+    {
+      "name": "html_desc",
+      "description": "<p>This has <b>HTML</b> in it</p>"
+    }
+  ]
+}

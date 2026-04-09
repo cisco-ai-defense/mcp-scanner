@@ -61,6 +61,7 @@ class AnalyzerEnum(str, Enum):
     VIRUSTOTAL = "virustotal"
     READINESS = "readiness"
     PROMPT_DEFENSE = "prompt_defense"
+    LINT = "lint"
 
 
 class AnalysisContext(BaseModel):

@@ -863,6 +863,176 @@ def display_instructions_results(
             print()
 
 
+async def _handle_lint(args):
+    """Handle the 'lint' subcommand."""
+    import json as _json
+    from pathlib import Path
+
+    from mcpscanner.core.analyzers.linter import LintEngine, LintFormatter
+    from mcpscanner.core.analyzers.linter.config import LintConfig
+
+    tools = []
+    prompts = []
+    resources = []
+    target = ""
+
+    lint_config = LintConfig.load(getattr(args, "lint_config", None))
+    ruleset = getattr(args, "ruleset", None) or lint_config.extends
+
+    if getattr(args, "tools_file", None) or getattr(args, "prompts_file", None) or getattr(args, "resources_file", None):
+        target = "static"
+        if args.tools_file:
+            target = args.tools_file
+            p = Path(args.tools_file)
+            if p.is_file():
+                data = _json.loads(p.read_text())
+                tools = data.get("tools", data) if isinstance(data, dict) else data
+        if args.prompts_file:
+            p = Path(args.prompts_file)
+            if p.is_file():
+                data = _json.loads(p.read_text())
+                prompts = data.get("prompts", data) if isinstance(data, dict) else data
+        if args.resources_file:
+            p = Path(args.resources_file)
+            if p.is_file():
+                data = _json.loads(p.read_text())
+                resources = data.get("resources", data) if isinstance(data, dict) else data
+
+    elif getattr(args, "server_url", None):
+        target = args.server_url
+        tools, prompts, resources = await _fetch_mcp_schemas_remote(args)
+
+    elif getattr(args, "stdio_command", None):
+        target = f"stdio:{args.stdio_command}"
+        tools, prompts, resources = await _fetch_mcp_schemas_stdio(args)
+
+    else:
+        print("Error: provide --server-url, --stdio-command, or --tools-file for linting")
+        return
+
+    engine = LintEngine(config=lint_config, ruleset=ruleset)
+    summary = engine.lint(tools=tools, prompts=prompts, resources=resources, target=target)
+
+    fmt = getattr(args, "format", "table")
+    formatter = LintFormatter(summary)
+    output = formatter.format(fmt)
+    print(output)
+
+    if getattr(args, "output", None):
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(formatter.format_json() if fmt != "json" else output)
+        print(f"Results saved to {args.output}")
+
+
+async def _fetch_mcp_schemas_remote(args):
+    """Connect to a remote MCP server and fetch tool/prompt/resource schemas."""
+    from mcp.client.session import ClientSession
+    from mcp.client.sse import sse_client
+    from mcp.client.streamable_http import streamable_http_client, create_mcp_http_client
+
+    server_url = args.server_url
+    headers = {}
+    for h in getattr(args, "header", []) or []:
+        if ":" in h:
+            k, v = h.split(":", 1)
+            headers[k.strip()] = v.strip()
+    if getattr(args, "bearer_token", None):
+        headers["Authorization"] = f"Bearer {args.bearer_token}"
+
+    extra_headers = headers if headers else None
+
+    if "/sse" in server_url:
+        client_ctx = sse_client(server_url, headers=extra_headers) if extra_headers else sse_client(server_url)
+    else:
+        http_client = create_mcp_http_client(headers=extra_headers) if extra_headers else create_mcp_http_client()
+        client_ctx = streamable_http_client(server_url, http_client=http_client)
+
+    async with client_ctx as streams:
+        read, write, *_ = streams
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            tools = []
+            prompts = []
+            resources = []
+
+            try:
+                tool_list = await session.list_tools()
+                tools = [_json_loads_model(t) for t in tool_list.tools]
+            except Exception:
+                pass
+
+            try:
+                prompt_list = await session.list_prompts()
+                prompts = [_json_loads_model(p) for p in prompt_list.prompts]
+            except Exception:
+                pass
+
+            try:
+                resource_list = await session.list_resources()
+                resources = [_json_loads_model(r) for r in resource_list.resources]
+            except Exception:
+                pass
+
+            return tools, prompts, resources
+
+
+async def _fetch_mcp_schemas_stdio(args):
+    """Connect to a stdio MCP server and fetch tool/prompt/resource schemas."""
+    import os
+    import sys
+
+    from mcp import StdioServerParameters
+    from mcp.client.session import ClientSession
+    from mcp.client.stdio import stdio_client
+
+    stdio_args = []
+    if getattr(args, "stdio_args", ""):
+        stdio_args.extend([a for a in args.stdio_args.split(",") if a])
+    if getattr(args, "stdio_arg", None):
+        stdio_args.extend(args.stdio_arg)
+
+    server_params = StdioServerParameters(
+        command=args.stdio_command,
+        args=stdio_args,
+        env={**os.environ},
+    )
+
+    async with stdio_client(server_params, errlog=sys.stderr) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            tools = []
+            prompts = []
+            resources = []
+
+            try:
+                tool_list = await session.list_tools()
+                tools = [_json_loads_model(t) for t in tool_list.tools]
+            except Exception:
+                pass
+
+            try:
+                prompt_list = await session.list_prompts()
+                prompts = [_json_loads_model(p) for p in prompt_list.prompts]
+            except Exception:
+                pass
+
+            try:
+                resource_list = await session.list_resources()
+                resources = [_json_loads_model(r) for r in resource_list.resources]
+            except Exception:
+                pass
+
+            return tools, prompts, resources
+
+
+def _json_loads_model(obj):
+    """Convert an MCP SDK model to a plain dict via JSON round-trip."""
+    import json as _json
+    return _json.loads(obj.model_dump_json())
+
+
 async def main():
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(
@@ -1130,6 +1300,72 @@ async def main():
     p_known_configs.add_argument(
         "--bearer-token",
         help="Bearer token for authentication",
+    )
+
+    # Lint subcommand - MCP schema quality validation
+    p_lint = subparsers.add_parser(
+        "lint",
+        help="Validate MCP tool/prompt/resource schemas for quality and completeness",
+    )
+    p_lint.add_argument(
+        "--server-url",
+        help="URL of the MCP server to lint",
+    )
+    p_lint.add_argument(
+        "--stdio-command",
+        help="Command to run a stdio-based MCP server for linting",
+    )
+    p_lint.add_argument(
+        "--stdio-args",
+        type=str,
+        default="",
+        help="Arguments for the stdio command (comma-separated)",
+    )
+    p_lint.add_argument(
+        "--stdio-arg",
+        action="append",
+        help="Repeatable single argument for stdio command",
+    )
+    p_lint.add_argument(
+        "--tools-file",
+        help="Path to a JSON file with MCP tool definitions for offline linting",
+    )
+    p_lint.add_argument(
+        "--prompts-file",
+        help="Path to a JSON file with MCP prompt definitions for offline linting",
+    )
+    p_lint.add_argument(
+        "--resources-file",
+        help="Path to a JSON file with MCP resource definitions for offline linting",
+    )
+    p_lint.add_argument(
+        "--ruleset",
+        choices=["recommended", "strict", "quality"],
+        default="recommended",
+        help="Predefined ruleset (default: %(default)s)",
+    )
+    p_lint.add_argument(
+        "--lint-config",
+        help="Path to YAML config for rule overrides",
+    )
+    p_lint.add_argument(
+        "--format",
+        choices=["table", "summary", "json"],
+        default="table",
+        help="Output format (default: %(default)s)",
+    )
+    p_lint.add_argument(
+        "--output", "-o", help="Save lint results to a file",
+    )
+    p_lint.add_argument(
+        "--header",
+        action="append",
+        default=[],
+        help="Custom HTTP header in 'Key: Value' format for remote servers",
+    )
+    p_lint.add_argument(
+        "--bearer-token",
+        help="Bearer token for remote MCP server authentication",
     )
 
     # API key and endpoint configuration
@@ -1950,6 +2186,10 @@ async def main():
                     json.dump(results, f, indent=2)
                 if args.verbose:
                     print(f"Results saved to {args.output}")
+
+        elif hasattr(args, "cmd") and args.cmd == "lint":
+            await _handle_lint(args)
+            return
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:

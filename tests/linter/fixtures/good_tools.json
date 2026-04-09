@@ -1,0 +1,56 @@
+{
+  "tools": [
+    {
+      "name": "read_wiki_structure",
+      "description": "Read the hierarchical page structure of a wiki including section headings and nesting levels.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repoName": {
+            "type": "string",
+            "description": "The repository name to read the wiki from",
+            "example": "facebook/react"
+          },
+          "page": {
+            "type": "string",
+            "description": "Optional page path within the wiki",
+            "default": "index"
+          }
+        },
+        "required": ["repoName"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "sections": { "type": "array" }
+        }
+      }
+    },
+    {
+      "name": "search_content",
+      "description": "Search across all wiki pages for matching content using full-text search capabilities.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query string",
+            "example": "authentication flow"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results to return",
+            "default": 10
+          }
+        },
+        "required": ["query"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "results": { "type": "array" }
+        }
+      }
+    }
+  ]
+}

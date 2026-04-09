@@ -30,6 +30,7 @@ from .yara_analyzer import YaraAnalyzer
 from .virustotal_analyzer import VirusTotalAnalyzer
 from .prompt_defense_analyzer import PromptDefenseAnalyzer
 from .readiness import ReadinessAnalyzer, ReadinessLLMJudge, OpaProvider
+from .linter import LintEngine
 
 __all__ = [
     "BaseAnalyzer",
@@ -44,4 +45,5 @@ __all__ = [
     "ReadinessAnalyzer",
     "ReadinessLLMJudge",
     "OpaProvider",
+    "LintEngine",
 ]
