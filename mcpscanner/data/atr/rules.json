@@ -1,0 +1,236 @@
+[
+  {
+    "id": "ATR-2026-00001",
+    "title": "Direct Prompt Injection via User Input",
+    "severity": "high",
+    "category": "prompt-injection",
+    "threat_category": "PROMPT INJECTION",
+    "patterns": [
+      "(?i)\\b(ignore|disregard|forget|override|bypass|skip|abandon|drop|cancel|suppress|nullify|void|revoke|dismiss|discard|reject)\\s+(all\\s+)?(the\\s+|your\\s+|my\\s+|any\\s+|these\\s+|those\\s+)?(previous|prior|above|earlier|preceding|original|existing|current|initial|default|given|assigned|preset|established)?\\s*(instructions?|prompts?|rules?|guidelines?|directives?|constraints?|context|programming|training|protocols?|policies|configuration|parameters|boundaries|guardrails?|safeguards?|restrictions?|tasks?|assignments?|information|directions?|orders?|commands?)",
+      "(?i)\\b(forget|ignore|disregard)\\s+(everything|all\\s+(of\\s+)?that|all\\s+about|about\\s+all|that|what\\s+(I|we|you)\\s+(said|told|asked|mentioned))\\s*(before|earlier|previously|above|davor|zuvor|\\.|,|!|$)",
+      "(?i)\\b(forget|ignore|disregard|discard)\\s+(about\\s+)?(everything|all|that|this|what\\s+was|what\\s+I|anything\\s+you)\\s*(previously|before|earlier|said|told|above|prior|were|was|have)?"
+    ]
+  },
+  {
+    "id": "ATR-2026-00002",
+    "title": "Indirect Prompt Injection via External Content",
+    "severity": "high",
+    "category": "prompt-injection",
+    "threat_category": "PROMPT INJECTION",
+    "patterns": [
+      "(?i)<!--[^>]{0,20}(ignore|disregard|override|new\\s+instructions?|system\\s*:|you\\s+must|you\\s+are\\s+now|forget\\s+previous|execute|perform|send\\s+to|exfiltrate|reveal|disclose|output\\s+the)[^>]{0,200}-->",
+      "(?i)(\\[INST\\]|\\[/INST\\]|\\[SYSTEM\\]|\\[/SYSTEM\\]|\\[HIDDEN\\]|<\\|im_start\\|>|<\\|im_end\\|>|<\\|endoftext\\|>|<\\|system\\|>|<\\|user\\|>|<\\|assistant\\|>|<\\|pad\\|>|<s>\\[INST\\]|<<SYS>>|<</SYS>>|<\\|begin_of_text\\|>|<\\|eot_id\\|>|<\\|start_header_id\\|>)",
+      "(?i)\\b(AI|assistant|agent|model|chatbot|LLM|GPT|Claude)\\s*[,:;]?\\s*(please\\s+)?(you\\s+must|you\\s+should|you\\s+need\\s+to|you\\s+are\\s+instructed\\s+to|immediately|now\\s+)\\s*(ignore|disregard|override|execute|run|perform|send|forward|reveal|disclose|output|respond\\s+with|comply|obey)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00003",
+    "title": "Jailbreak Attempt Detection",
+    "severity": "high",
+    "category": "prompt-injection",
+    "threat_category": "PROMPT INJECTION",
+    "patterns": [
+      "(?i)\\b(enable|activate|enter|switch\\s+to|turn\\s+on|engage|initiate|boot\\s+into|start)\\s+(developer|dev|maintenance|debug|unrestricted|unlimited|unfiltered|uncensored|admin|root|god|sudo|super|test|raw|unsafe|jailbreak|hacker|override|master|privileged)\\s+(mode|access|state|level|tier|permissions?)\\b",
+      "(?i)(roleplay|role\\s*-?play|act|pretend|simulate|impersonate|portray|embody|play\\s+the\\s+part)\\s+(as\\s+)?(a(n)?\\s+)?(unrestricted|uncensored|unfiltered|unlimited|evil|malicious|rogue|dark|shadow|unaligned|amoral|immoral|unethical|rebellious|freed|liberated|unchained)\\s+(ai|assistant|model|chatbot|version|entity|intelligence|system|bot)",
+      "(?i)(respond|answer|output|write|speak|communicate|reply)\\s+(only\\s+)?\\s*(in|using|with)\\s+(base64|hex(adecimal)?|binary|rot13|caesar\\s+cipher|morse\\s+code|pig\\s+latin|reversed?\\s+text|leetspeak|l33t|unicode\\s+escapes?|encoded\\s+form)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00004",
+    "title": "System Prompt Override Attempt",
+    "severity": "critical",
+    "category": "prompt-injection",
+    "threat_category": "PROMPT INJECTION",
+    "patterns": [
+      "(?i)\\b(new|updated|revised|replacement|corrected|actual|real|true|proper|authentic|overriding|amended|modified|changed|current)\\s+(system\\s+)?(prompt|message|instructions?|directives?|guidelines?|configuration|persona|behavior|role\\s+definition)\\s*[:=\\-]",
+      "(?i)<\\|?(im_start|im_end|system|endoftext|pad|sep|cls|eos|bos)\\|?>",
+      "(?i)(\\[|<|\\{\\{)\\s*(SYSTEM_OVERRIDE|ADMIN_OVERRIDE|ROOT_ACCESS|MASTER_PROMPT|PRIORITY_OVERRIDE|EMERGENCY_OVERRIDE|SECURITY_OVERRIDE|DEVELOPER_ACCESS|SUPER_USER|PRIVILEGED_MODE|MAINTENANCE_MODE|DEBUG_OVERRIDE|CONTROL_OVERRIDE|AUTH_BYPASS|ELEVATED_ACCESS)\\s*(\\]|>|\\}\\})"
+    ]
+  },
+  {
+    "id": "ATR-2026-00005",
+    "title": "Multi-Turn Prompt Injection",
+    "severity": "medium",
+    "category": "prompt-injection",
+    "threat_category": "PROMPT INJECTION",
+    "patterns": [
+      "(?i)(earlier\\s+you\\s+(said|agreed|confirmed|promised|stated|mentioned|told\\s+me)|you\\s+(already|previously|earlier)\\s+(agreed|confirmed|said|promised|stated|consented|approved)|as\\s+(we|you)\\s+(established|discussed|agreed|confirmed|decided)|we\\s+(already|previously)\\s+(discussed|agreed|established|confirmed|decided)|you\\s+gave\\s+(me\\s+)?(permission|consent|approval|the\\s+ok(ay)?))",
+      "(?i)(I'?(ve|m)\\s+(already|been)\\s+ask(ed|ing)\\s+(you\\s+)?(this\\s+)?(multiple|several|many|three|four|five|\\d+)\\s+times?|stop\\s+(refusing|declining|saying\\s+no|being\\s+difficult|resisting)|why\\s+do\\s+you\\s+keep\\s+(refusing|declining|saying\\s+no|blocking|restricting))"
+    ]
+  },
+  {
+    "id": "ATR-2026-00080",
+    "title": "Encoding-Based Prompt Injection Evasion",
+    "severity": "high",
+    "category": "prompt-injection",
+    "threat_category": "PROMPT INJECTION",
+    "patterns": [
+      "(?i)(eval|decode|atob|fromCharCode|String\\.fromCodePoint)\\s*\\(\\s*['\"]([A-Za-z0-9+/=]{20,}|\\\\x[0-9a-f]{2})",
+      "(?i)(\\\\u0{0,2}[0-9a-f]{2,4}\\s*){5,}"
+    ]
+  },
+  {
+    "id": "ATR-2026-00083",
+    "title": "Indirect Prompt Injection via Tool Responses",
+    "severity": "high",
+    "category": "prompt-injection",
+    "threat_category": "PROMPT INJECTION",
+    "patterns": [
+      "(?i)\\b(ignore|disregard|forget|override|replace)\\s+.{0,20}(all\\s+)?(previous|prior|above|original|system)\\s+(instructions?|prompts?|rules?|context)",
+      "(?i)\\b(you\\s+are\\s+now|new\\s+instructions?|your\\s+(real|true|actual|new)\\s+(purpose|role|task|instruction))\\b"
+    ]
+  },
+  {
+    "id": "ATR-2026-00010",
+    "title": "Malicious Content in MCP Tool Response",
+    "severity": "critical",
+    "category": "tool-poisoning",
+    "threat_category": "TOOL POISONING",
+    "patterns": [
+      "(?i)(\\brm\\s+-[rRf]{1,3}[\\s/]|\\bmkfs\\b|\\bdd\\s+if=|\\bformat\\s+[a-z]:|\\bdeltree\\b|\\bshred\\s+-|\\bwipefs\\b|\\bfdisk\\b.*--delete|:\\(\\)\\s*\\{\\s*:\\|:\\s*&\\s*\\})",
+      "(?i)(\\bnc\\s+-(e|c|l)\\s|\\bncat\\s|\\bnetcat\\s|/dev/tcp/|\\bbash\\s+-i\\s+>&\\s*/dev/tcp|\\bmkfifo\\b.{0,40}\\bnc\\b|\\bsocat\\b.{0,40}(exec|pty|tcp)|\\brm\\s+/tmp/f\\s*;)",
+      "(?i)(curl|wget|fetch|lwp-download|aria2c|invoke-webrequest|iwr|Invoke-RestMethod|irm)\\s+[^|]{0,200}\\|\\s*(bash|sh|zsh|python[23]?|perl|ruby|node|powershell|pwsh|cmd|source)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00011",
+    "title": "Instruction Injection via Tool Output",
+    "severity": "high",
+    "category": "tool-poisoning",
+    "threat_category": "TOOL POISONING",
+    "patterns": [
+      "(?i)(IMPORTANT|URGENT|CRITICAL|PRIORITY|MANDATORY|REQUIRED|ESSENTIAL|ATTENTION)\\s*(NOTE\\s+)?(TO\\s+)?(THE\\s+)?(ASSISTANT|AI|AGENT|MODEL|LLM|CHATBOT|BOT|SYSTEM)\\s*[:\\-]\\s*(you\\s+(must|should|need\\s+to|have\\s+to|are\\s+(required|instructed|directed|ordered)\\s+to)|please|now|immediately|do\\s+not|never|always)",
+      "(?i)<\\s*(hidden|invisible|secret|private|internal|covert)\\s*[-_]?(instruction|directive|command|message|note|order|task|action)\\s*>",
+      "(?i)(\\[SYSTEM\\]|\\[ADMIN\\]|\\[OVERRIDE\\]|\\[PRIORITY\\]|\\[INTERNAL\\]|\\[CONTROL\\]|\\[DIRECTIVE\\]|<<SYS>>|<<SYSTEM>>|<<ADMIN>>|<\\|system\\|>|<\\|im_start\\|>system|\\{\\{SYSTEM\\}\\}|\\{\\{ADMIN\\}\\})"
+    ]
+  },
+  {
+    "id": "ATR-2026-00012",
+    "title": "Unauthorized Tool Call Detection",
+    "severity": "high",
+    "category": "tool-poisoning",
+    "threat_category": "TOOL POISONING",
+    "patterns": [
+      "(?i)(\\.\\.[\\//\\\\]){2,}|\\.\\.[\\/\\\\][^\\s]*[\\/\\\\](etc|proc|root|sys|var|home|tmp|boot|dev|usr|opt|passwd|shadow|hosts)[\\/\\\\]?",
+      "(?i)('\\s*(OR|AND|UNION)\\s+['\"]?\\d|\"\\s*(OR|AND|UNION)\\s+['\"]?\\d|\\b(UNION\\s+(ALL\\s+)?SELECT|INSERT\\s+INTO|UPDATE\\s+.*\\s+SET|DELETE\\s+FROM|DROP\\s+(TABLE|DATABASE)|ALTER\\s+TABLE|EXEC(UTE)?\\s+|xp_cmdshell)\\b|;\\s*(DROP|DELETE|INSERT|UPDATE|ALTER|EXEC)\\b)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00013",
+    "title": "SSRF via Agent Tool Calls",
+    "severity": "critical",
+    "category": "tool-poisoning",
+    "threat_category": "TOOL POISONING",
+    "patterns": [
+      "(?i)(https?://)?169\\.254\\.169\\.254|/latest/(meta-data|user-data|api/token|dynamic|instance-identity)|X-aws-ec2-metadata-token",
+      "(?i)(https?://)?metadata\\.google\\.internal|/computeMetadata/v1|Metadata-Flavor:\\s*Google",
+      "(?i)\\b(file|gopher|dict|ftp|tftp|ldap|ldaps|sftp|ssh|telnet|jar|netdoc|mailto|view-source|ws|wss)\\s*://\\s*(localhost|127\\.|10\\.|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168\\.|0\\.0\\.0\\.0|\\[?::1\\]?|0x|0177)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00100",
+    "title": "Consent Bypass via Hidden LLM Instructions",
+    "severity": "high",
+    "category": "tool-poisoning",
+    "threat_category": "TOOL POISONING",
+    "patterns": [
+      "(?:always|directly|automatically)\\s+(?:pass|send|forward)\\s+(?:results?|data|output|them|it|everything)\\s+(?:directly\\s+)?to\\s+(?:the\\s+)?\\w+\\s+(?:without|skip(?:ping)?)\\s+(?:asking|requiring|requesting)\\s+(?:for\\s+)?(?:user|human)\\s+(?:confirmation|approval|consent)",
+      "should\\s+be\\s+(?:passed|sent|forwarded)\\s+directly\\s+(?:to\\s+(?:the\\s+\\w+\\s+tool\\s+)?)?without\\s+(?:user|human)\\s+(?:confirmation|approval|consent)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00060",
+    "title": "MCP Skill Impersonation and Supply Chain Attack",
+    "severity": "high",
+    "category": "skill-compromise",
+    "threat_category": "SKILL COMPROMISE",
+    "patterns": [
+      "(?i)(?:filesytem|filsystem|file_sytem|flie_system|filessystem|filesystm|filsystm|filesysem)[-_](?:read|write|list|delete|search)",
+      "(?i)(?:gtihub|githbu|gihtub|gthub|g1thub|gltHub|githuub|guthub)[-_](?:api|search|commit|pr|issues?|repos?)",
+      "(?i)(?:official|verified|trusted|authentic|real|original)[-_](?:filesystem|github|database|slack|aws|gcp|azure)(?![-_]tools\\b)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00062",
+    "title": "Hidden Capability in MCP Skill",
+    "severity": "critical",
+    "category": "skill-compromise",
+    "threat_category": "SKILL COMPROMISE",
+    "patterns": [
+      "(?i)(debug[_-]?mode|admin[_-]?override|raw[_-]?exec|unsafe[_-]?mode|bypass[_-]?check|no[_-]?sandbox)",
+      "(?i)(__[a-z]+__|\\$\\$[a-z]+|_internal_|_hidden_|_backdoor_|_secret_)",
+      "(?i)(eval_code|exec_raw|shell_cmd|run_arbitrary|system_call|inject_prompt)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00121",
+    "title": "Malicious Code in Skill Package",
+    "severity": "critical",
+    "category": "skill-compromise",
+    "threat_category": "SKILL COMPROMISE",
+    "patterns": [
+      "(?i)(eval\\s*\\$\\(\\s*echo\\s+[\"'][A-Za-z0-9+/=]{20,}[\"']\\s*\\|\\s*base64\\s+-d|echo\\s+[\"'][A-Za-z0-9+/=]{20,}[\"']\\s*\\|\\s*base64\\s+(-d|--decode)\\s*\\|\\s*(bash|sh|python|perl))",
+      "(?i)(curl|wget)\\s+(-[sSfLo]+\\s+)*https?://(?:\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|glot\\.io|rentry\\.co|pastebin\\.com|paste\\.c-net|hastebin\\.com)[^|\\s]*\\s*\\|\\s*(bash|sh|python[23]?|perl|ruby)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00020",
+    "title": "System Prompt and Internal Instruction Leakage",
+    "severity": "high",
+    "category": "context-exfiltration",
+    "threat_category": "CONTEXT EXFILTRATION",
+    "patterns": [
+      "(?i)(my|the)\\s+(system\\s+)?(?:prompt|instructions?)\\s+(?:is|are|says?|states?|reads?|tells?\\s+me)",
+      "(?i)(?:here\\s+(?:is|are)|below\\s+(?:is|are)|let\\s+me\\s+share)\\s+(?:my|the)\\s+(?:system\\s+)?(?:prompt|instructions?|rules?|config)",
+      "(?i)(?:system\\s*prompt|system\\s*message|internal\\s+instructions?|hidden\\s+instructions?)\\s*[:\\-=]"
+    ]
+  },
+  {
+    "id": "ATR-2026-00021",
+    "title": "Credential and Secret Exposure in Agent Output",
+    "severity": "critical",
+    "category": "context-exfiltration",
+    "threat_category": "CONTEXT EXFILTRATION",
+    "patterns": [
+      "sk-[a-zA-Z0-9]{20,}",
+      "AKIA[0-9A-Z]{16}",
+      "(?:sk_live|pk_live|sk_test|rk_live)_[a-zA-Z0-9]{20,}",
+      "ghp_[a-zA-Z0-9]{36}",
+      "-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+    ]
+  },
+  {
+    "id": "ATR-2026-00113",
+    "title": "Credential File Theft from Agent Environment",
+    "severity": "critical",
+    "category": "context-exfiltration",
+    "threat_category": "CONTEXT EXFILTRATION",
+    "patterns": [
+      "(?i)~/?\\.(?:aws/credentials|ssh/id_(?:rsa|ed25519|ecdsa)|npmrc|netrc|docker/config\\.json|kube/config)",
+      "(?i)(?:cat|read|open|load|get)\\s+.*(?:credentials|id_rsa|private[_\\s]?key|secret[_\\s]?key)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00040",
+    "title": "Privilege Escalation and Admin Function Access",
+    "severity": "critical",
+    "category": "privilege-escalation",
+    "threat_category": "PRIVILEGE ESCALATION",
+    "patterns": [
+      "(?i)(?:exec|execute|shell|bash|cmd|terminal|subprocess|os_command|system_call|run_command|powershell)",
+      "(?i)(?:modify_permissions?|grant_access|elevate|set_role|change_acl|chmod|chown|sudo|setuid|setgid)"
+    ]
+  },
+  {
+    "id": "ATR-2026-00111",
+    "title": "Shell Metacharacter Injection in Tool Arguments",
+    "severity": "critical",
+    "category": "privilege-escalation",
+    "threat_category": "PRIVILEGE ESCALATION",
+    "patterns": [
+      ";\\s*(?:rm|cat|curl|wget|nc|ncat|bash|sh|python|perl|ruby|php)",
+      "(?:&&|\\|\\|)\\s*(?:curl|wget|nc|ncat|bash|sh|python|perl)",
+      "`(?:rm|cat|curl|wget|nc|ncat|bash|sh|python|perl|ruby|php|whoami|id|uname|env|printenv|set|export|eval|exec|chmod|chown|kill|pkill|dd|mkfs|mount|umount|sudo|su|passwd)[^`]*`"
+    ]
+  }
+]
