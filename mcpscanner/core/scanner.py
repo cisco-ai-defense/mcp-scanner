@@ -1308,14 +1308,14 @@ class Scanner:
         Args:
             server_config: The stdio server configuration
             analyzers: List of analyzers to use
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds (defaults to config's stdio_timeout)
             errlog: Optional file-like object for stderr redirection
 
         Returns:
             List[ToolScanResult]: List of tool scan results
         """
         if timeout is None:
-            timeout = 60
+            timeout = self._config.stdio_timeout
 
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -1378,7 +1378,7 @@ class Scanner:
             server_config (StdioServer): The stdio server configuration.
             tool_name (str): The name of the tool to scan.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
-            timeout (Optional[int]): Timeout for the connection.
+            timeout (Optional[int]): Timeout for the connection (defaults to config's stdio_timeout).
             errlog: Optional file-like object for stderr redirection.
 
         Returns:
@@ -1387,6 +1387,8 @@ class Scanner:
         Raises:
             ValueError: If the tool is not found on the server.
         """
+        if timeout is None:
+            timeout = self._config.stdio_timeout
         if not server_config.command:
             raise ValueError("No command provided in stdio server configuration.")
 
@@ -1915,12 +1917,13 @@ class Scanner:
             timeout: Connection timeout in seconds
             errlog: Optional file-like object for stderr redirection.
                     Pass ``open(os.devnull, "w")`` to suppress server stderr.
+            timeout: Connection timeout in seconds (defaults to config's stdio_timeout)
 
         Returns:
             List of prompt scan results
         """
         if timeout is None:
-            timeout = 60
+            timeout = self._config.stdio_timeout
 
         # Default to API and LLM analyzers for prompts
         if analyzers is None:
@@ -1989,6 +1992,7 @@ class Scanner:
             timeout (Optional[int]): Timeout for the connection.
             errlog: Optional file-like object for stderr redirection.
                     Pass ``open(os.devnull, "w")`` to suppress server stderr.
+            timeout (Optional[int]): Timeout for the connection (defaults to config's stdio_timeout).
 
         Returns:
             PromptScanResult: The result of the scan.
@@ -1996,6 +2000,8 @@ class Scanner:
         Raises:
             ValueError: If the prompt is not found on the server.
         """
+        if timeout is None:
+            timeout = self._config.stdio_timeout
         if not server_config.command:
             raise ValueError("No command provided in stdio server configuration.")
 

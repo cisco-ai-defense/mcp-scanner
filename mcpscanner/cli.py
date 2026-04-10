@@ -129,6 +129,7 @@ def _build_config(
     llm_api_version = os.environ.get("MCP_SCANNER_LLM_API_VERSION")
     llm_model = os.environ.get("MCP_SCANNER_LLM_MODEL")
     llm_timeout = os.environ.get("MCP_SCANNER_LLM_TIMEOUT")
+    stdio_timeout = os.environ.get("MCP_SCANNER_STDIO_TIMEOUT")
     endpoint_url = endpoint_url or _get_endpoint_from_env()
 
     config_params = {
@@ -158,6 +159,8 @@ def _build_config(
         config_params["llm_api_version"] = llm_api_version
     if llm_timeout:
         config_params["llm_timeout"] = float(llm_timeout)
+    if stdio_timeout:
+        config_params["stdio_timeout"] = int(stdio_timeout)
 
     # VirusTotal configuration — pass API key so Config can wire it up;
     # remaining VT settings (max_files, extensions, etc.) fall back to
@@ -1150,6 +1153,11 @@ async def main():
         type=int,
         help="Timeout in seconds for LLM API calls (overrides MCP_SCANNER_LLM_TIMEOUT environment variable)",
     )
+    parser.add_argument(
+        "--stdio-timeout",
+        type=int,
+        help="Timeout in seconds for stdio server connections (overrides MCP_SCANNER_STDIO_TIMEOUT environment variable, default: 60)",
+    )
 
     parser.add_argument(
         "--analyzers",
@@ -1344,6 +1352,8 @@ async def main():
         os.environ["MCP_SCANNER_LLM_API_KEY"] = args.llm_api_key
     if args.llm_timeout:
         os.environ["MCP_SCANNER_LLM_TIMEOUT"] = str(args.llm_timeout)
+    if args.stdio_timeout:
+        os.environ["MCP_SCANNER_STDIO_TIMEOUT"] = str(args.stdio_timeout)
 
     try:
         # Handle static file scanning subcommand (matches 'prompts' and 'resources' pattern)
