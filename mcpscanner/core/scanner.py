@@ -65,6 +65,8 @@ from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
+from .analyzers.virustotal_analyzer import VirusTotalAnalyzer
+from .analyzers.prompt_defense_analyzer import PromptDefenseAnalyzer
 from .analyzers.readiness import ReadinessAnalyzer
 from .auth import (
     Auth,
@@ -138,8 +140,22 @@ class Scanner:
         self._behavioral_analyzer = (
             BehavioralCodeAnalyzer(config) if config.llm_provider_api_key else None
         )
+        self._vt_analyzer = (
+            VirusTotalAnalyzer(
+                api_key=config.virustotal_api_key,
+                enabled=config.virustotal_enabled,
+                upload_files=config.virustotal_upload_files,
+                max_files=config.virustotal_max_files,
+                inclusion_extensions=config.virustotal_inclusion_extensions,
+                exclusion_extensions=config.virustotal_exclusion_extensions,
+            )
+            if config.virustotal_enabled
+            else None
+        )
         # Readiness analyzer always available (no API keys needed)
         self._readiness_analyzer = ReadinessAnalyzer()
+        # Prompt defense analyzer always available (pure regex, no API keys needed)
+        self._prompt_defense_analyzer = PromptDefenseAnalyzer()
         self._custom_analyzers = custom_analyzers or []
 
         # Debug logging for analyzer initialization
@@ -152,8 +168,12 @@ class Scanner:
             active_analyzers.append("LLM")
         if self._behavioral_analyzer:
             active_analyzers.append("Behavioral")
+        if self._vt_analyzer:
+            active_analyzers.append("VirusTotal")
         if self._readiness_analyzer:
             active_analyzers.append("Readiness")
+        if self._prompt_defense_analyzer:
+            active_analyzers.append("PromptDefense")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -196,6 +216,14 @@ class Scanner:
                 "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
             )
 
+        if (
+            AnalyzerEnum.VIRUSTOTAL in requested_analyzers
+            and not self._vt_analyzer
+        ):
+            missing_requirements.append(
+                "VirusTotal analyzer requested but VIRUSTOTAL_API_KEY not configured or scanning is disabled"
+            )
+
         # YARA analyzer should always be available since it doesn't require API keys
         if AnalyzerEnum.YARA in requested_analyzers and not self._yara_analyzer:
             missing_requirements.append(
@@ -206,6 +234,12 @@ class Scanner:
         if AnalyzerEnum.READINESS in requested_analyzers and not self._readiness_analyzer:
             missing_requirements.append(
                 "Readiness analyzer requested but failed to initialize"
+            )
+
+        # PROMPT_DEFENSE analyzer should always be available (pure regex, no API keys)
+        if AnalyzerEnum.PROMPT_DEFENSE in requested_analyzers and not self._prompt_defense_analyzer:
+            missing_requirements.append(
+                "Prompt Defense analyzer requested but failed to initialize"
             )
 
         if missing_requirements:
@@ -358,6 +392,19 @@ class Scanner:
             except Exception as e:
                 logger.error(f'Readiness analysis failed: tool="{name}", error="{e}"')
 
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
+            # Run PROMPT_DEFENSE analysis on the tool description
+            try:
+                pd_context = {"tool_name": name, "content_type": "description"}
+                pd_findings = await self._prompt_defense_analyzer.analyze(
+                    description, pd_context
+                )
+                for finding in pd_findings:
+                    finding.analyzer = "PromptDefense"
+                all_findings.extend(pd_findings)
+            except Exception as e:
+                logger.error(f'Prompt defense analysis failed: tool="{name}", error="{e}"')
+
         # Run custom analyzers
         custom_analyzer_names = []
         for analyzer in self._custom_analyzers:
@@ -491,6 +538,19 @@ class Scanner:
                 f"LLM scan requested for prompt '{name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
 
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
+            # Run PROMPT_DEFENSE analysis on the prompt description
+            try:
+                pd_context = {"tool_name": name, "content_type": "description"}
+                pd_findings = await self._prompt_defense_analyzer.analyze(
+                    description, pd_context
+                )
+                for finding in pd_findings:
+                    finding.analyzer = "PromptDefense"
+                all_findings.extend(pd_findings)
+            except Exception as e:
+                logger.error(f'Prompt defense analysis failed: prompt="{name}", error="{e}"')
+
         # Run custom analyzers
         custom_analyzer_names = []
         for analyzer in self._custom_analyzers:
@@ -605,6 +665,21 @@ class Scanner:
             logger.warning(
                 f"LLM scan requested for instructions from '{server_name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
+
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
+            # Run PROMPT_DEFENSE analysis on the server instructions
+            try:
+                pd_context = {"tool_name": server_name, "content_type": "instructions"}
+                pd_findings = await self._prompt_defense_analyzer.analyze(
+                    instructions, pd_context
+                )
+                for finding in pd_findings:
+                    finding.analyzer = "PromptDefense"
+                all_findings.extend(pd_findings)
+            except Exception as e:
+                logger.error(
+                    f'Prompt defense analysis failed on instructions: server="{server_name}", error="{e}"'
+                )
 
         # Run custom analyzers
         custom_analyzer_names = []
@@ -1233,14 +1308,14 @@ class Scanner:
         Args:
             server_config: The stdio server configuration
             analyzers: List of analyzers to use
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds (defaults to config's stdio_timeout)
             errlog: Optional file-like object for stderr redirection
 
         Returns:
             List[ToolScanResult]: List of tool scan results
         """
         if timeout is None:
-            timeout = 60
+            timeout = self._config.stdio_timeout
 
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -1303,7 +1378,7 @@ class Scanner:
             server_config (StdioServer): The stdio server configuration.
             tool_name (str): The name of the tool to scan.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
-            timeout (Optional[int]): Timeout for the connection.
+            timeout (Optional[int]): Timeout for the connection (defaults to config's stdio_timeout).
             errlog: Optional file-like object for stderr redirection.
 
         Returns:
@@ -1312,6 +1387,8 @@ class Scanner:
         Raises:
             ValueError: If the tool is not found on the server.
         """
+        if timeout is None:
+            timeout = self._config.stdio_timeout
         if not server_config.command:
             raise ValueError("No command provided in stdio server configuration.")
 
@@ -1826,13 +1903,13 @@ class Scanner:
         Args:
             server_config: The stdio server configuration
             analyzers: List of analyzers to use (defaults to API and LLM)
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds (defaults to config's stdio_timeout)
 
         Returns:
             List of prompt scan results
         """
         if timeout is None:
-            timeout = 60
+            timeout = self._config.stdio_timeout
 
         # Default to API and LLM analyzers for prompts
         if analyzers is None:
@@ -1897,7 +1974,7 @@ class Scanner:
             server_config (StdioServer): The stdio server configuration.
             prompt_name (str): The name of the prompt to scan.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
-            timeout (Optional[int]): Timeout for the connection.
+            timeout (Optional[int]): Timeout for the connection (defaults to config's stdio_timeout).
 
         Returns:
             PromptScanResult: The result of the scan.
@@ -1905,6 +1982,8 @@ class Scanner:
         Raises:
             ValueError: If the prompt is not found on the server.
         """
+        if timeout is None:
+            timeout = self._config.stdio_timeout
         if not server_config.command:
             raise ValueError("No command provided in stdio server configuration.")
 

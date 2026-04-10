@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.3.0"
+version = "4.5.0"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
@@ -26,7 +26,8 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
-    "litellm>=1.77.0",
+    # Pinned to 1.83.0 (verified safe release after PyPI compromise; avoid 1.82.x). BerriAI/litellm#24512.
+    "litellm==1.83.0",
     "expandvars>=0.12.0",
     "tree-sitter>=0.21.0",
     "tree-sitter-python>=0.21.0",
@@ -39,10 +40,10 @@ dependencies = [
     "tree-sitter-ruby>=0.21.0",
     "tree-sitter-rust>=0.21.0",
     "tree-sitter-php>=0.21.0",
+    "puremagic>=1.28",
 ]
 
 [project.optional-dependencies]
-# Individual language support (use flexible version constraints)
 js = [
     "tree-sitter>=0.21.0",
     "tree-sitter-javascript>=0.21.0",
@@ -76,7 +77,6 @@ php = [
     "tree-sitter>=0.21.0",
     "tree-sitter-php>=0.21.0",
 ]
-# All stable languages (excludes swift which has version issues)
 all-languages = [
     "tree-sitter>=0.21.0",
     "tree-sitter-javascript>=0.21.0",
