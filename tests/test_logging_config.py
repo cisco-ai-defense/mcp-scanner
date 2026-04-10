@@ -128,6 +128,26 @@ class TestSetLogLevel:
         set_log_level(logging.WARNING)
         assert child.level == logging.WARNING
 
+    def test_new_logger_inherits_root_level(self):
+        """Loggers created after set_log_level() should inherit the root level."""
+        set_log_level(logging.ERROR)
+
+        new_name = "mcpscanner.test_child_after_set"
+        _cleanup_loggers(new_name)
+        new_child = setup_logger(new_name)
+        assert new_child.level == logging.ERROR
+        _cleanup_loggers(new_name)
+
+    def test_new_logger_inherits_warning_level(self):
+        """Covers all levels, not just DEBUG — the original bug."""
+        set_log_level(logging.WARNING)
+
+        new_name = "mcpscanner.test_child_warn"
+        _cleanup_loggers(new_name)
+        new_child = setup_logger(new_name)
+        assert new_child.level == logging.WARNING
+        _cleanup_loggers(new_name)
+
 
 class TestSetVerboseLogging:
     """Tests for set_verbose_logging (delegates to set_log_level)."""

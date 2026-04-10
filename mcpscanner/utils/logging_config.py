@@ -47,11 +47,9 @@ def setup_logger(
     if logger.handlers:
         return logger
 
-    # Check if mcpscanner root logger has been configured for debug
     mcpscanner_root = logging.getLogger("mcpscanner")
-    if mcpscanner_root.level == logging.DEBUG and name.startswith("mcpscanner"):
-        # Use DEBUG level if the root mcpscanner logger is set to DEBUG
-        logger.setLevel(logging.DEBUG)
+    if mcpscanner_root.level != logging.NOTSET and name.startswith("mcpscanner"):
+        logger.setLevel(mcpscanner_root.level)
     elif level:
         logger.setLevel(getattr(logging, level.upper()))
     else:
