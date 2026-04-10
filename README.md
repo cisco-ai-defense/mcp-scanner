@@ -160,6 +160,18 @@ export MCP_SCANNER_VT_MAX_FILES=10
 
 > **Note:** Without `VIRUSTOTAL_API_KEY`, files will not be scanned for malware. When enabled, the analyzer uses configurable inclusion/exclusion extension lists to determine which files to scan, skipping `__pycache__` and hidden directories.
 
+#### Stdio Connection Timeout
+
+When scanning stdio MCP servers, the scanner waits for the server process to start and respond. The default timeout is 60 seconds, which may be insufficient for servers that download large dependencies on first run. This setting only affects the stdio server connection; LLM/API call timeouts are controlled separately via `MCP_SCANNER_LLM_TIMEOUT`.
+
+```bash
+# Increase stdio server startup timeout (default: 60 seconds)
+export MCP_SCANNER_STDIO_TIMEOUT=180  # 3 minutes — useful for servers with heavy deps
+
+# Or use the CLI flag (overrides the environment variable)
+mcp-scanner --stdio-timeout 180 stdio --stdio-command uvx --stdio-arg mcp-clickhouse
+```
+
 #### Using a Local LLM (No API Key Required)
 
 If you are using a local LLM endpoint such as Ollama, vLLM, or LocalAI,
@@ -247,7 +259,7 @@ asyncio.run(main())
 #### Subcommands Overview
 
 - **remote**: scan a remote MCP server (SSE or streamable HTTP). Supports `--server-url`, optional `--bearer-token`, `--header`.
-- **stdio**: launch and scan a stdio MCP server. Requires `--stdio-command`; accepts `--stdio-args`, `--stdio-env`, optional `--stdio-tool`.
+- **stdio**: launch and scan a stdio MCP server. Requires `--stdio-command`; accepts `--stdio-args`, `--stdio-env`, optional `--stdio-tool`, `--stdio-timeout`.
 - **config**: scan servers from a specific MCP config file. Requires `--config-path`; optional `--bearer-token`.
 - **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`, `--header`.
@@ -298,6 +310,10 @@ mcp-scanner --analyzers yara --format summary \
   stdio --stdio-command uvx \
   --stdio-arg=--from --stdio-arg=mcp-server-fetch --stdio-arg=mcp-server-fetch \
   --stdio-tool fetch
+
+# Increase startup timeout for servers with heavy dependencies (default: 60s)
+mcp-scanner --stdio-timeout 180 --analyzers yara --format summary \
+  stdio --stdio-command uvx --stdio-arg mcp-clickhouse@0.1.13
 ```
 
 #### Use a Bearer token with remote servers (non-OAuth)
