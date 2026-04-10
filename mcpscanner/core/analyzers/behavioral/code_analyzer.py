@@ -28,7 +28,7 @@ This analyzer:
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
@@ -36,6 +36,9 @@ from ....threats.threats import ThreatMapping
 from ...static_analysis.context_extractor import ContextExtractor
 from ...static_analysis.native_analyzer import NativeAnalyzer
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
+from ...static_analysis.interprocedural.treesitter_call_graph import (
+    TreeSitterCallGraphAnalyzer,
+)
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 
@@ -94,73 +97,131 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             if os.path.isdir(content):
                 self.logger.debug(f"Scanning directory: {content}")
 
-                python_files = self._find_python_files(content)
+                source_files = self._find_source_files(content)
                 self.logger.debug(
-                    f"Found {len(python_files)} Python file(s) to analyze"
+                    f"Found {len(source_files)} source file(s) to analyze"
                 )
 
-                # Build cross-file analyzer for the entire directory
-                cross_file_analyzer = CallGraphAnalyzer()
+                # Partition files by language family
+                python_files: List[str] = []
+                ts_files_by_lang: Dict[str, List[str]] = {}
+                for src_file in source_files:
+                    ext = Path(src_file).suffix.lower()
+                    if ext in self._PYTHON_EXTENSIONS:
+                        python_files.append(src_file)
+                    elif ext in self._EXT_TO_TS_LANGUAGE:
+                        lang = self._EXT_TO_TS_LANGUAGE[ext]
+                        ts_files_by_lang.setdefault(lang, []).append(src_file)
+
+                # Build Python call graph
+                py_call_graph_analyzer: Optional[CallGraphAnalyzer] = None
+                if python_files:
+                    py_call_graph_analyzer = CallGraphAnalyzer()
+
+                # Build per-language tree-sitter call graph analyzers
+                ts_call_graph_analyzers: Dict[str, TreeSitterCallGraphAnalyzer] = {}
+                for lang in ts_files_by_lang:
+                    ts_call_graph_analyzers[lang] = TreeSitterCallGraphAnalyzer(lang)
+
                 total_size = 0
-                for py_file in python_files:
+                for src_file in source_files:
                     try:
-                        # Check file size before loading (configurable via constants)
-                        file_size = os.path.getsize(py_file)
+                        file_size = os.path.getsize(src_file)
                         total_size += file_size
 
                         if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
                             self.logger.error(
-                                f"Very large file detected, skipping: {py_file} ({file_size:,} bytes)"
+                                f"Very large file detected, skipping: {src_file} ({file_size:,} bytes)"
                             )
                             continue
                         elif file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
                             self.logger.debug(
-                                f"Large file detected: {py_file} ({file_size:,} bytes)"
+                                f"Large file detected: {src_file} ({file_size:,} bytes)"
                             )
 
-                        with open(py_file, "r") as f:
+                        with open(src_file, "r") as f:
                             source_code = f.read()
-                        cross_file_analyzer.add_file(Path(py_file), source_code)
+
+                        ext = Path(src_file).suffix.lower()
+                        if ext in self._PYTHON_EXTENSIONS and py_call_graph_analyzer:
+                            py_call_graph_analyzer.add_file(Path(src_file), source_code)
+                        elif ext in self._EXT_TO_TS_LANGUAGE:
+                            lang = self._EXT_TO_TS_LANGUAGE[ext]
+                            ts_call_graph_analyzers[lang].add_file(
+                                Path(src_file), source_code
+                            )
                     except Exception as e:
                         self.logger.warning(
-                            f"Failed to add file {py_file} to cross-file analyzer: {e}"
+                            f"Failed to add file {src_file} to cross-file analyzer: {e}"
                         )
 
-                # Log total directory size
                 self.logger.debug(
-                    f"Total directory size: {total_size:,} bytes across {len(python_files)} files"
+                    f"Total directory size: {total_size:,} bytes across {len(source_files)} files"
                 )
                 if total_size > 10_000_000:  # 10MB
                     self.logger.warning(
                         f"Detected large codebase ({total_size:,} bytes). Analysis performance may be affected."
                     )
 
-                # Build the call graph
-                call_graph = cross_file_analyzer.build_call_graph()
-                self.logger.debug(
-                    f"Built call graph with {len(call_graph.functions)} functions"
-                )
+                # Build call graphs
+                if py_call_graph_analyzer:
+                    call_graph = py_call_graph_analyzer.build_call_graph()
+                    self.logger.debug(
+                        f"Built Python call graph with {len(call_graph.functions)} functions"
+                    )
 
-                # Analyze each file with cross-file context
-                for py_file in python_files:
-                    self.logger.debug(f"Analyzing file: {py_file}")
+                for lang, ts_analyzer in ts_call_graph_analyzers.items():
+                    ts_cg = ts_analyzer.build_call_graph()
+                    self.logger.debug(
+                        f"Built {lang} call graph with {len(ts_cg.functions)} functions"
+                    )
+
+                # Analyze each file with its language-appropriate call graph
+                for src_file in source_files:
+                    self.logger.debug(f"Analyzing file: {src_file}")
+                    ext = Path(src_file).suffix.lower()
+                    if ext in self._PYTHON_EXTENSIONS:
+                        file_cga = py_call_graph_analyzer
+                    elif ext in self._EXT_TO_TS_LANGUAGE:
+                        lang = self._EXT_TO_TS_LANGUAGE[ext]
+                        file_cga = ts_call_graph_analyzers.get(lang)
+                    else:
+                        file_cga = None
+
                     file_findings = await self._analyze_file(
-                        py_file, context, cross_file_analyzer
+                        src_file, context, file_cga
                     )
                     all_findings.extend(file_findings)
 
             # Check if content is a single file
             elif os.path.isfile(content):
-                # Build call graph even for single file to track method calls
-                cross_file_analyzer = CallGraphAnalyzer()
+                ext = Path(content).suffix.lower()
+                cross_file_analyzer = None
                 try:
                     with open(content, "r") as f:
                         source_code = f.read()
-                    cross_file_analyzer.add_file(Path(content), source_code)
-                    call_graph = cross_file_analyzer.build_call_graph()
-                    self.logger.debug(
-                        f"Built call graph with {len(call_graph.functions)} functions"
-                    )
+
+                    if ext in self._PYTHON_EXTENSIONS:
+                        cga = CallGraphAnalyzer()
+                        cga.add_file(Path(content), source_code)
+                        call_graph = cga.build_call_graph()
+                        cross_file_analyzer = cga
+                    elif ext in self._EXT_TO_TS_LANGUAGE:
+                        lang = self._EXT_TO_TS_LANGUAGE[ext]
+                        ts_cga = TreeSitterCallGraphAnalyzer(lang)
+                        ts_cga.add_file(Path(content), source_code)
+                        ts_cga.build_call_graph()
+                        cross_file_analyzer = ts_cga
+                    else:
+                        cga = CallGraphAnalyzer()
+                        cga.add_file(Path(content), source_code)
+                        call_graph = cga.build_call_graph()
+                        cross_file_analyzer = cga
+
+                    if cross_file_analyzer:
+                        self.logger.debug(
+                            f"Built call graph for {content}"
+                        )
                 except Exception as e:
                     self.logger.warning(
                         f"Failed to build call graph for {content}: {e}"
@@ -173,16 +234,24 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
             else:
                 # Content is source code string
-                # Try to build call graph even for source code strings if we can infer structure
                 cross_file_analyzer = None
                 try:
-                    # Create a temporary path for the source code
                     temp_path = Path(context.get("file_path", "inline_code.py"))
-                    cross_file_analyzer = CallGraphAnalyzer()
-                    cross_file_analyzer.add_file(temp_path, content)
-                    call_graph = cross_file_analyzer.build_call_graph()
+                    ext = temp_path.suffix.lower()
+
+                    if ext in self._PYTHON_EXTENSIONS or ext not in self._EXT_TO_TS_LANGUAGE:
+                        cross_file_analyzer = CallGraphAnalyzer()
+                        cross_file_analyzer.add_file(temp_path, content)
+                        call_graph = cross_file_analyzer.build_call_graph()
+                    else:
+                        lang = self._EXT_TO_TS_LANGUAGE[ext]
+                        ts_cga = TreeSitterCallGraphAnalyzer(lang)
+                        ts_cga.add_file(temp_path, content)
+                        ts_cga.build_call_graph()
+                        cross_file_analyzer = ts_cga
+
                     self.logger.debug(
-                        f"Built call graph for inline source with {len(call_graph.functions)} functions"
+                        "Built call graph for inline source"
                     )
                     context["cross_file_analyzer"] = cross_file_analyzer
                 except Exception as e:
@@ -201,10 +270,27 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.logger.error(f"Behavioural analysis failed: {e}", exc_info=True)
             return []
 
+    # Maps file extensions to tree-sitter language identifiers used by
+    # TreeSitterCallGraphAnalyzer. Python is handled separately via CallGraphAnalyzer.
+    _EXT_TO_TS_LANGUAGE = {
+        ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+        ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
+        ".go": "go",
+        ".java": "java",
+        ".kt": "kotlin", ".kts": "kotlin",
+        ".cs": "c_sharp",
+        ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
+        ".rs": "rust",
+        ".php": "php", ".phtml": "php",
+    }
+
+    _PYTHON_EXTENSIONS = {".py", ".pyw"}
+
     def _find_source_files(self, directory: str) -> List[str]:
         """Find all supported source files in a directory.
 
-        Supports Python, TypeScript, and JavaScript files.
+        Supports Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby,
+        Rust, and PHP files.
 
         Args:
             directory: Directory path to search
@@ -215,12 +301,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         source_files = []
         path = Path(directory)
 
-        # Supported extensions
-        extensions = {".py", ".pyw", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+        extensions = self._PYTHON_EXTENSIONS | set(self._EXT_TO_TS_LANGUAGE.keys())
 
         for ext in extensions:
             for source_file in path.rglob(f"*{ext}"):
-                # Skip __pycache__, node_modules, and hidden directories
                 file_str = str(source_file)
                 if (
                     "__pycache__" not in file_str
@@ -255,14 +339,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         self,
         file_path: str,
         context: Dict[str, Any],
-        cross_file_analyzer: Optional[CallGraphAnalyzer] = None,
+        cross_file_analyzer: Optional[
+            Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer]
+        ] = None,
     ) -> List[SecurityFinding]:
-        """Analyze a single Python file.
+        """Analyze a single source file.
 
         Args:
-            file_path: Path to Python file
+            file_path: Path to source file
             context: Analysis context
-            cross_file_analyzer: Optional cross-file analyzer for tracking imports
+            cross_file_analyzer: Optional cross-file analyzer (Python or tree-sitter)
 
         Returns:
             List of SecurityFinding objects
@@ -531,39 +617,44 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             return None
 
     def _enrich_with_cross_file_context(
-        self, func_context, file_path: str, call_graph_analyzer
+        self,
+        func_context,
+        file_path: str,
+        call_graph_analyzer: Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer],
     ) -> None:
         """Enrich function context with cross-file analysis data.
 
         Args:
             func_context: FunctionContext to enrich
             file_path: Source file path
-            call_graph_analyzer: CallGraphAnalyzer instance
+            call_graph_analyzer: CallGraphAnalyzer or TreeSitterCallGraphAnalyzer
         """
         try:
-            # Build full function name for call graph lookup
             full_func_name = f"{file_path}::{func_context.name}"
 
-            # Get all reachable functions from this entry point
             reachable = call_graph_analyzer.get_reachable_functions(full_func_name)
             if reachable:
                 func_context.reachable_functions = reachable
 
-            # Analyze parameter flow across files if parameters exist
             if func_context.parameters:
                 param_names = [
                     p.get("name") for p in func_context.parameters if p.get("name")
                 ]
                 if param_names:
-                    flow_info = call_graph_analyzer.analyze_parameter_flow_across_files(
-                        full_func_name, param_names
-                    )
+                    if isinstance(call_graph_analyzer, TreeSitterCallGraphAnalyzer):
+                        flow_info = call_graph_analyzer.analyze_cross_file_flows(
+                            full_func_name, param_names
+                        )
+                    else:
+                        flow_info = (
+                            call_graph_analyzer.analyze_parameter_flow_across_files(
+                                full_func_name, param_names
+                            )
+                        )
 
-                    # Add cross-file flow information
                     if flow_info.get("cross_file_flows"):
                         func_context.cross_file_calls = flow_info["cross_file_flows"]
 
-                    # Store summary in dataflow
                     func_context.dataflow_summary["cross_file_analysis"] = {
                         "total_reachable": len(reachable),
                         "files_involved": flow_info.get("total_files_involved", 0),
