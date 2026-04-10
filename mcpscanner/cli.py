@@ -44,7 +44,7 @@ from mcpscanner.core.report_generator import (
     SeverityFilter,
     results_to_json,
 )
-from mcpscanner.utils.logging_config import set_verbose_logging
+from mcpscanner.utils.logging_config import set_verbose_logging, set_log_level
 from mcpscanner.core.auth import Auth
 from mcpscanner.core.mcp_models import StdioServer
 from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
@@ -1170,6 +1170,13 @@ async def main():
         "--verbose", "-v", action="store_true", help="Print verbose output"
     )
     parser.add_argument(
+        "--log-level",
+        choices=["debug", "info", "warning", "error", "critical"],
+        default=None,
+        help="Set log level for the mcpscanner library (overrides --verbose). "
+        "Useful for suppressing noisy output in CI/CD pipelines.",
+    )
+    parser.add_argument(
         "--detailed", "-d", action="store_true", help="Show detailed results"
     )
     parser.add_argument(
@@ -1313,14 +1320,21 @@ async def main():
                 "Usage: mcp-scanner --source-path FILE --analyzers behavioral"
             )
 
-    if args.verbose:
+    if args.log_level:
+        effective_level = getattr(logging, args.log_level.upper())
+        logging.basicConfig(
+            level=effective_level,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            stream=sys.stdout,
+        )
+        set_log_level(effective_level)
+    elif args.verbose:
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             stream=sys.stdout,
         )
-        logging.getLogger("mcpscanner").setLevel(logging.DEBUG)
-        set_verbose_logging(True)
+        set_log_level(logging.DEBUG)
         logger.info("Verbose output enabled - detailed analyzer logs will be shown")
     else:
         logging.basicConfig(
@@ -1328,8 +1342,7 @@ async def main():
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             stream=sys.stdout,
         )
-        logging.getLogger("mcpscanner").setLevel(logging.WARNING)
-        set_verbose_logging(False)
+        set_log_level(logging.WARNING)
 
     if args.api_key:
         os.environ["MCP_SCANNER_API_KEY"] = args.api_key
