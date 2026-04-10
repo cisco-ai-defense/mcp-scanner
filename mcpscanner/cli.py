@@ -1076,6 +1076,39 @@ async def main():
         help="Output format (default: %(default)s)",
     )
 
+    # PyPI package scan subcommand (Docker-sandboxed)
+    p_pypi = subparsers.add_parser(
+        "pypi-scan",
+        help="Download and scan a PyPI package in a Docker sandbox",
+    )
+    p_pypi.add_argument("package", help="PyPI package name (e.g., flask)")
+    p_pypi.add_argument(
+        "--version", help="Specific package version (default: latest)"
+    )
+    p_pypi.add_argument(
+        "--output", "-o", help="Save scan results to a file"
+    )
+    p_pypi.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_pypi.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_pypi.add_argument(
+        "--format",
+        choices=[
+            "raw", "summary", "detailed", "by_tool",
+            "by_analyzer", "by_severity", "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+    p_pypi.add_argument(
+        "--rebuild-image",
+        action="store_true",
+        help="Force rebuild of the Docker scanner image",
+    )
+
     # Stdio subcommand
     p_stdio = subparsers.add_parser(
         "stdio", help="Scan an MCP server via stdio (local command execution)"
@@ -1974,6 +2007,69 @@ async def main():
                 if args.verbose:
                     print(f"Results saved to {args.output}")
 
+        elif args.cmd == "pypi-scan":
+            from mcpscanner.core.pypi_scanner import (
+                DockerNotAvailableError,
+                PyPIPackageScanner,
+                PyPIScanError,
+            )
+
+            try:
+                scanner = PyPIPackageScanner()
+                if getattr(args, "rebuild_image", False):
+                    scanner.build_image(force=True)
+
+                scan_results = scanner.scan_package(
+                    package=args.package,
+                    version=getattr(args, "version", None),
+                    verbose=getattr(args, "verbose", False),
+                )
+
+                pkg_spec = args.package
+                if getattr(args, "version", None):
+                    pkg_spec = f"{args.package}=={args.version}"
+
+                results = []
+                for finding in scan_results.get("findings", []):
+                    analyzer_name = finding.get("analyzer", "unknown") + "_analyzer"
+                    results.append({
+                        "tool_name": finding.get("details", {}).get("function_name", pkg_spec),
+                        "tool_description": finding.get("summary", ""),
+                        "status": "completed",
+                        "is_safe": False,
+                        "findings": {
+                            analyzer_name: {
+                                "severity": finding.get("severity", "UNKNOWN"),
+                                "threat_summary": finding.get("summary", ""),
+                                "threat_names": [finding.get("threat_category", "UNKNOWN")],
+                                "total_findings": 1,
+                                "mcp_taxonomies": [],
+                            }
+                        },
+                    })
+
+                if not results:
+                    results.append({
+                        "tool_name": pkg_spec,
+                        "tool_description": f"PyPI package scan of {pkg_spec}",
+                        "status": "completed",
+                        "is_safe": True,
+                        "findings": {},
+                    })
+
+                if args.output:
+                    with open(args.output, "w", encoding="utf-8") as f:
+                        json.dump(results, f, indent=2)
+                    if args.verbose:
+                        print(f"Results saved to {args.output}")
+
+            except DockerNotAvailableError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            except PyPIScanError as e:
+                print(f"Scan Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
             cfg = _build_config(selected_analyzers)
@@ -2108,6 +2204,11 @@ async def main():
             server_label = f"virustotal:{args.scan_path}"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "pypi-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}=={args.version}"
+            server_label = f"pypi:{pkg_spec}"
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
             server_label = f"behavioral:{args.source_path}"
         elif args.stdio_command:
@@ -2221,6 +2322,11 @@ async def main():
             server_label = "well-known-configs"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "pypi-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}=={args.version}"
+            server_label = f"pypi:{pkg_spec}"
 
         # Handle prompts, resources, and instructions with detailed view
         if hasattr(args, "cmd") and args.cmd == "prompts":

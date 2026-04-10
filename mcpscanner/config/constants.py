@@ -243,6 +243,17 @@ class MCPScannerConstants:
         if ext.strip()
     )
 
+    # PyPI Docker Scanner Configuration
+    DOCKER_IMAGE_NAME: str = os.getenv(
+        "MCP_SCANNER_DOCKER_IMAGE_NAME", "mcp-scanner-pypi"
+    )
+    DOCKER_IMAGE_TAG: str = os.getenv(
+        "MCP_SCANNER_DOCKER_IMAGE_TAG", "latest"
+    )
+    PYPI_SCAN_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_PYPI_SCAN_TIMEOUT", "300")
+    )
+
     # OAuth Configuration
     OAUTH_CLIENT_NAME: str = os.getenv(
         "MCP_SCANNER_OAUTH_CLIENT_NAME", "MCP Scanner Client"
