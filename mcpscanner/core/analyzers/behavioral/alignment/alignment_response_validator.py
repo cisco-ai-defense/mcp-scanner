@@ -103,8 +103,9 @@ class AlignmentResponseValidator:
 
         # If mismatch detected, check for additional required fields
         # Note: severity is no longer required from LLM - it's determined by threat classification system
+        # threat_name is required because downstream uses it to map severity and taxonomy
         if data.get("mismatch_detected"):
-            mismatch_required = ["summary"]
+            mismatch_required = ["threat_name", "summary"]
             if not all(field in data for field in mismatch_required):
                 return False
 

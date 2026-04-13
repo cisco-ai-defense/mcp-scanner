@@ -139,7 +139,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                                 f"Large file detected: {src_file} ({file_size:,} bytes)"
                             )
 
-                        with open(src_file, "r") as f:
+                        with open(src_file, "r", encoding="utf-8") as f:
                             source_code = f.read()
 
                         ext = Path(src_file).suffix.lower()
@@ -198,7 +198,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 ext = Path(content).suffix.lower()
                 cross_file_analyzer = None
                 try:
-                    with open(content, "r") as f:
+                    with open(content, "r", encoding="utf-8") as f:
                         source_code = f.read()
 
                     if ext in self._PYTHON_EXTENSIONS:
@@ -379,11 +379,12 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     ) -> List[SecurityFinding]:
         """Analyze source code for docstring/behavior mismatches.
 
-        Supports Python, TypeScript, and JavaScript. Uses ContextExtractor for
-        MCP-decorated Python functions, falls back to NativeAnalyzer when:
+        Supports Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby,
+        Rust, and PHP. Uses ContextExtractor for MCP-decorated Python functions,
+        falls back to NativeAnalyzer when:
         - ContextExtractor fails (syntax errors, unsupported patterns)
         - No MCP decorators found but analysis is still needed
-        - Non-Python files (TypeScript/JavaScript)
+        - Non-Python files (TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, PHP)
 
         Args:
             source_code: Source code to analyze
@@ -528,7 +529,23 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """
         try:
             threat_name = analysis.get("threat_name", "").upper()
-            severity = analysis.get("severity", "").upper()
+
+            if not threat_name:
+                self.logger.warning(
+                    f"No threat_name in analysis for {func_context.name}"
+                )
+                return None
+
+            # Get threat mapping from taxonomy (severity is derived here, not from LLM)
+            try:
+                threat_info = ThreatMapping.get_threat_mapping(
+                    "behavioral", threat_name
+                )
+            except ValueError as e:
+                self.logger.warning(f"Unknown threat name '{threat_name}': {e}")
+                return None
+
+            severity = threat_info["severity"]
 
             # For non-Python files, skip INFO severity and GENERAL DESCRIPTION-CODE MISMATCH
             is_python = file_path.endswith(".py")
@@ -543,24 +560,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         f"Skipping GENERAL DESCRIPTION-CODE MISMATCH for non-Python file: {file_path}"
                     )
                     return None
-
-            if not threat_name:
-                self.logger.warning(
-                    f"No threat_name in analysis for {func_context.name}"
-                )
-                return None
-
-            # Get threat mapping from taxonomy
-            try:
-                threat_info = ThreatMapping.get_threat_mapping(
-                    "behavioral", threat_name
-                )
-            except ValueError as e:
-                self.logger.warning(f"Unknown threat name '{threat_name}': {e}")
-                return None
-
-            # Use severity from centralized threat mapping only
-            severity = threat_info["severity"]
 
             # Build threat summary from analysis
             description_claims = analysis.get("description_claims", "")

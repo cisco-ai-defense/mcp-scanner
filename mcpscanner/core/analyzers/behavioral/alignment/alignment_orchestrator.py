@@ -30,6 +30,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from .....config.config import Config
+from .....threats.threats import ThreatMapping
 from ....static_analysis.context_extractor import FunctionContext
 from .alignment_prompt_builder import AlignmentPromptBuilder
 from .alignment_llm_client import AlignmentLLMClient
@@ -156,10 +157,11 @@ class AlignmentOrchestrator:
                         f"Classifying finding as threat or vulnerability for {func_context.name}"
                     )
                     try:
+                        mapped_severity = self._get_mapped_severity(threat_name)
                         classification = (
                             await self.threat_vuln_classifier.classify_finding(
-                                threat_name=result.get("threat_name", "UNKNOWN"),
-                                severity=result.get("severity", "UNKNOWN"),
+                                threat_name=threat_name or "UNKNOWN",
+                                severity=mapped_severity,
                                 summary=result.get("summary", ""),
                                 description_claims=result.get("description_claims", ""),
                                 actual_behavior=result.get("actual_behavior", ""),
@@ -257,9 +259,10 @@ class AlignmentOrchestrator:
                         threat_name = result.get("threat_name", "")
                         if threat_name != "GENERAL DESCRIPTION-CODE MISMATCH":
                             try:
+                                mapped_severity = self._get_mapped_severity(threat_name)
                                 classification = await self.threat_vuln_classifier.classify_finding(
-                                    threat_name=result.get("threat_name", "UNKNOWN"),
-                                    severity=result.get("severity", "UNKNOWN"),
+                                    threat_name=threat_name or "UNKNOWN",
+                                    severity=mapped_severity,
                                     summary=result.get("summary", ""),
                                     description_claims=result.get("description_claims", ""),
                                     actual_behavior=result.get("actual_behavior", ""),
@@ -290,6 +293,26 @@ class AlignmentOrchestrator:
                         pass
         
         return results
+
+    @staticmethod
+    def _get_mapped_severity(threat_name: str) -> str:
+        """Derive severity from centralized ThreatMapping.
+
+        Args:
+            threat_name: Threat name from the LLM result
+
+        Returns:
+            Mapped severity string, or "UNKNOWN" when the threat name is unrecognised.
+        """
+        if not threat_name:
+            return "UNKNOWN"
+        try:
+            threat_info = ThreatMapping.get_threat_mapping(
+                "behavioral", threat_name.upper()
+            )
+            return threat_info["severity"]
+        except (ValueError, KeyError):
+            return "UNKNOWN"
 
     def get_statistics(self) -> Dict[str, int]:
         """Get analysis statistics.
