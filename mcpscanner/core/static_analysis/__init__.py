@@ -27,11 +27,18 @@ industry-standard SAST tool conventions:
 - **Interprocedural**: Cross-file call graph analysis
 - **Semantic**: Name resolution and type inference
 
-Architecture inspired by Semgrep, CodeQL, and other production SAST tools.
+Architecture inspired by production SAST tools.
 """
 
 from .context_extractor import ContextExtractor, FunctionContext
+from .native_analyzer import NativeAnalyzer, NativeAnalysisResult
 
 __version__ = "1.0.0"
 
-__all__ = ["__version__", "ContextExtractor", "FunctionContext"]
+__all__ = [
+    "__version__",
+    "ContextExtractor",
+    "FunctionContext",
+    "NativeAnalyzer",
+    "NativeAnalysisResult",
+]

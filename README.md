@@ -284,7 +284,6 @@ asyncio.run(main())
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
 - **virustotal**: scan files or directories for malware using VirusTotal hash lookups. Requires a `scan_path` argument (file or directory).
-- **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 - **supplychain**: scan source code of an MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
 - **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
@@ -446,15 +445,23 @@ mcp-scanner virustotal /path/to/file.bin --output vt_results.json --format raw
 
 > **Note:** Requires `VIRUSTOTAL_API_KEY` environment variable. Free tier allows 4 requests/minute and 500 requests/day.
 
-#### Behavioral Code Scanning
+#### Behavioral Code Scanning (Multi-Language)
 
 The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking.
 
-```bash
-# Scan a single Python file
-mcp-scanner behavioral /path/to/mcp_server.py
+**Supported Languages:** Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Rust, Ruby, PHP
 
-# Scan a directory
+```bash
+# Scan a single file (any supported language)
+mcp-scanner behavioral /path/to/mcp_server.py
+mcp-scanner behavioral /path/to/server.ts
+mcp-scanner behavioral /path/to/server.go
+mcp-scanner behavioral /path/to/McpService.java
+mcp-scanner behavioral /path/to/server.kt
+mcp-scanner behavioral /path/to/Tools.cs
+mcp-scanner behavioral /path/to/server.rs
+
+# Scan a directory (auto-detects language by extension)
 mcp-scanner behavioral /path/to/mcp_servers/
 
 # With specific output format

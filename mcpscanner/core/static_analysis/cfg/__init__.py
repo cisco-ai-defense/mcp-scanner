@@ -17,5 +17,6 @@
 """Control Flow Graph (CFG) construction and analysis."""
 
 from .builder import CFGNode, ControlFlowGraph, DataFlowAnalyzer
+from .treesitter_builder import TSCFGNode, TreeSitterCFG, TreeSitterCFGBuilder
 
-__all__ = ["CFGNode", "ControlFlowGraph", "DataFlowAnalyzer"]
+__all__ = ["CFGNode", "ControlFlowGraph", "DataFlowAnalyzer", "TSCFGNode", "TreeSitterCFG", "TreeSitterCFGBuilder"]
