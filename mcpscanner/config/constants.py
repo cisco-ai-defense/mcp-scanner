@@ -243,6 +243,14 @@ class MCPScannerConstants:
         if ext.strip()
     )
 
+    # Vulnerable Package Configuration
+    VULNERABLE_PACKAGE_VULNERABILITY_SERVICE: str = os.getenv(
+        "MCP_SCANNER_VULNERABLE_PACKAGE_SERVICE", "pypi"
+    )
+    VULNERABLE_PACKAGE_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_VULNERABLE_PACKAGE_TIMEOUT", "120")
+    )
+
     # OAuth Configuration
     OAUTH_CLIENT_NAME: str = os.getenv(
         "MCP_SCANNER_OAUTH_CLIENT_NAME", "MCP Scanner Client"
