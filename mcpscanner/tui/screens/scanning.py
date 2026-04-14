@@ -57,7 +57,7 @@ class ScanningScreen(Screen):
             return "well-known configs"
         if mode == "static":
             return self.scan_config.get("tools_path", "static files")
-        if mode == "vulnerable-packages":
+        if mode == "vulnerable-package":
             return self.scan_config.get("scan_path", "packages")
         if mode == "behavioral":
             return self.scan_config.get("source_path", "source")
@@ -118,7 +118,7 @@ class ScanningScreen(Screen):
     async def _execute_scan(self) -> dict:
         mode = self.scan_config["mode"]
 
-        if mode == "vulnerable-packages":
+        if mode == "vulnerable-package":
             return await self._scan_vulnerable_packages()
         if mode == "behavioral":
             return await self._scan_behavioral()
@@ -380,8 +380,8 @@ class ScanningScreen(Screen):
     # ── Vulnerable packages ─────────────────────────────
 
     async def _scan_vulnerable_packages(self) -> dict:
-        from mcpscanner.core.analyzers.vulnerable_packages_analyzer import (
-            VulnerablePackagesAnalyzer,
+        from mcpscanner.core.analyzers.vulnerable_package_analyzer import (
+            VulnerablePackageAnalyzer,
         )
         from mcpscanner.core.models import AnalyzerEnum
 
@@ -393,7 +393,7 @@ class ScanningScreen(Screen):
         self._set_progress(20)
         self._log(f"Scanning: {scan_path} (service: {service})")
 
-        analyzer = VulnerablePackagesAnalyzer(
+        analyzer = VulnerablePackageAnalyzer(
             enabled=True,
             vulnerability_service=service,
             fix_mode=fix,
@@ -442,7 +442,7 @@ class ScanningScreen(Screen):
                     "vulnerability_description": " | ".join(tool_desc_parts),
                     "status": "completed",
                     "is_safe": False,
-                    "findings": {"vulnerable_packages_analyzer": analyzer_finding},
+                    "findings": {"vulnerable_package_analyzer": analyzer_finding},
                 })
 
         if not results:
@@ -452,7 +452,7 @@ class ScanningScreen(Screen):
                 "status": "completed",
                 "is_safe": True,
                 "findings": {
-                    "vulnerable_packages_analyzer": {
+                    "vulnerable_package_analyzer": {
                         "severity": "SAFE",
                         "threat_summary": "No known vulnerabilities found",
                         "threat_names": [],
@@ -463,9 +463,9 @@ class ScanningScreen(Screen):
             })
 
         return {
-            "mcp_server_repository": f"vulnerable-packages:{scan_path}",
+            "mcp_server_repository": f"vulnerable-package:{scan_path}",
             "scan_results": results,
-            "requested_analyzers": ["vulnerable_packages"],
+            "requested_analyzers": ["vulnerable_package"],
         }
 
     # ── Behavioral ──────────────────────────────────────

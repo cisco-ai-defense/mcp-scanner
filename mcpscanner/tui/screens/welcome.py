@@ -12,7 +12,7 @@ SCAN_MODES = [
     ("config", "Config File Scan", "From MCP config file"),
     ("known-configs", "Well-Known Configs", "Claude, Cursor, Windsurf"),
     ("static", "Static File Scan", "Pre-generated JSON files"),
-    ("vulnerable-packages", "Vulnerable Packages", "Python CVE scan"),
+    ("vulnerable-package", "Vulnerable Package", "Python CVE scan"),
     ("behavioral", "Behavioral Analysis", "Docstring mismatch scan"),
     ("virustotal", "VirusTotal Malware Scan", "Hash-based file scanning"),
 ]

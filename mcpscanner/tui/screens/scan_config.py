@@ -21,7 +21,7 @@ MODE_TITLES = {
     "config": "Config File Scan",
     "known-configs": "Well-Known Configs Scan",
     "static": "Static File Scan",
-    "vulnerable-packages": "Vulnerable Packages Scan",
+    "vulnerable-package": "Vulnerable Package Scan",
     "behavioral": "Behavioral Analysis",
     "virustotal": "VirusTotal Malware Scan",
 }
@@ -60,7 +60,7 @@ class ScanConfigScreen(Screen):
             yield from self._known_configs_form()
         elif self.mode == "static":
             yield from self._static_form()
-        elif self.mode == "vulnerable-packages":
+        elif self.mode == "vulnerable-package":
             yield from self._vuln_packages_form()
         elif self.mode == "behavioral":
             yield from self._behavioral_form()
@@ -248,7 +248,7 @@ class ScanConfigScreen(Screen):
             config["tools_path"] = _val("tools-path")
             config["prompts_path"] = _val("prompts-path")
             config["resources_path"] = _val("resources-path")
-        elif self.mode == "vulnerable-packages":
+        elif self.mode == "vulnerable-package":
             config["scan_path"] = _val("scan-path")
             config["vuln_service"] = _select_val("vuln-service")
             config["fix_mode"] = _checked("fix-mode")
@@ -280,7 +280,7 @@ class ScanConfigScreen(Screen):
             return "Config file path is required"
         if mode == "static" and not config.get("tools_path"):
             return "At least a tools JSON file is required"
-        if mode == "vulnerable-packages" and not config.get("scan_path"):
+        if mode == "vulnerable-package" and not config.get("scan_path"):
             return "Scan path is required"
         if mode == "behavioral" and not config.get("source_path"):
             return "Source path is required"
