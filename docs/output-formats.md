@@ -59,7 +59,7 @@ mcp-scanner --server-url http://127.0.0.1:8001/sse --analyzer-filter yara_analyz
 # Show API and LLM analyzer results
 mcp-scanner --server-url http://127.0.0.1:8001/sse --analyzer-filter api_analyzer,llm_analyzer
 
-# Available analyzers: api_analyzer, yara_analyzer, llm_analyzer, virustotal_analyzer, vulnerable_packages_analyzer
+# Available analyzers: api_analyzer, yara_analyzer, llm_analyzer, virustotal_analyzer, vulnerable_package_analyzer
 ```
 
 ### Additional Options

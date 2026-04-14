@@ -29,7 +29,7 @@ from .llm_analyzer import LLMAnalyzer
 from .yara_analyzer import YaraAnalyzer
 from .virustotal_analyzer import VirusTotalAnalyzer
 from .prompt_defense_analyzer import PromptDefenseAnalyzer
-from .vulnerable_packages_analyzer import VulnerablePackagesAnalyzer
+from .vulnerable_package_analyzer import VulnerablePackageAnalyzer
 from .readiness import ReadinessAnalyzer, ReadinessLLMJudge, OpaProvider
 
 __all__ = [
@@ -42,7 +42,7 @@ __all__ = [
     "AlignmentOrchestrator",
     "VirusTotalAnalyzer",
     "PromptDefenseAnalyzer",
-    "VulnerablePackagesAnalyzer",
+    "VulnerablePackageAnalyzer",
     "ReadinessAnalyzer",
     "ReadinessLLMJudge",
     "OpaProvider",

@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for the vulnerable packages analyzer."""
+"""Unit tests for the vulnerable package analyzer."""
 
 import json
 import os
@@ -24,7 +24,7 @@ import tempfile
 import pytest
 from unittest.mock import patch, MagicMock
 
-from mcpscanner.core.analyzers.vulnerable_packages_analyzer import VulnerablePackagesAnalyzer
+from mcpscanner.core.analyzers.vulnerable_package_analyzer import VulnerablePackageAnalyzer
 from mcpscanner.core.analyzers.base import SecurityFinding
 
 
@@ -141,15 +141,15 @@ def _make_completed_process(stdout="", stderr="", returncode=0):
 
 @pytest.fixture
 def analyzer():
-    """Create a VulnerablePackagesAnalyzer with the binary lookup mocked."""
-    with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/usr/bin/pip-audit"]):
-        return VulnerablePackagesAnalyzer(enabled=True)
+    """Create a VulnerablePackageAnalyzer with the binary lookup mocked."""
+    with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/usr/bin/pip-audit"]):
+        return VulnerablePackageAnalyzer(enabled=True)
 
 
 @pytest.fixture
 def disabled_analyzer():
-    with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/usr/bin/pip-audit"]):
-        return VulnerablePackagesAnalyzer(enabled=False)
+    with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/usr/bin/pip-audit"]):
+        return VulnerablePackageAnalyzer(enabled=False)
 
 
 @pytest.fixture
@@ -183,7 +183,7 @@ def tmp_pyproject_dir(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-class TestVulnerablePackagesAnalyzerInit:
+class TestVulnerablePackageAnalyzerInit:
     def test_init_defaults(self, analyzer):
         assert analyzer.enabled is True
         assert analyzer.vulnerability_service == "pypi"
@@ -194,8 +194,8 @@ class TestVulnerablePackagesAnalyzerInit:
         assert analyzer.last_scan_summary is None
 
     def test_init_custom_params(self):
-        with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/bin/pip-audit"]):
-            a = VulnerablePackagesAnalyzer(
+        with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/bin/pip-audit"]):
+            a = VulnerablePackageAnalyzer(
                 enabled=True,
                 vulnerability_service="osv",
                 timeout=60,
@@ -211,27 +211,27 @@ class TestVulnerablePackagesAnalyzerInit:
         assert disabled_analyzer.enabled is False
 
     def test_find_pip_audit_in_venv(self):
-        with patch("mcpscanner.core.analyzers.vulnerable_packages_analyzer.Path") as MockPath:
+        with patch("mcpscanner.core.analyzers.vulnerable_package_analyzer.Path") as MockPath:
             mock_venv_bin = MagicMock()
             mock_venv_bin.is_file.return_value = True
             mock_venv_bin.__str__ = lambda self: "/some/venv/bin/pip-audit"
             MockPath.return_value.parent.__truediv__ = MagicMock(return_value=mock_venv_bin)
-            a = VulnerablePackagesAnalyzer.__new__(VulnerablePackagesAnalyzer)
+            a = VulnerablePackageAnalyzer.__new__(VulnerablePackageAnalyzer)
             result = a._find_pip_audit()
             assert result == ["/some/venv/bin/pip-audit"]
 
     def test_find_pip_audit_via_which(self):
-        with patch("mcpscanner.core.analyzers.vulnerable_packages_analyzer.Path") as MockPath:
+        with patch("mcpscanner.core.analyzers.vulnerable_package_analyzer.Path") as MockPath:
             mock_venv_bin = MagicMock()
             mock_venv_bin.is_file.return_value = False
             MockPath.return_value.parent.__truediv__ = MagicMock(return_value=mock_venv_bin)
             with patch("shutil.which", side_effect=lambda x: "/usr/local/bin/pip-audit" if x == "pip-audit" else None):
-                a = VulnerablePackagesAnalyzer.__new__(VulnerablePackagesAnalyzer)
+                a = VulnerablePackageAnalyzer.__new__(VulnerablePackageAnalyzer)
                 result = a._find_pip_audit()
                 assert result == ["/usr/local/bin/pip-audit"]
 
     def test_find_pip_audit_via_uvx(self):
-        with patch("mcpscanner.core.analyzers.vulnerable_packages_analyzer.Path") as MockPath:
+        with patch("mcpscanner.core.analyzers.vulnerable_package_analyzer.Path") as MockPath:
             mock_venv_bin = MagicMock()
             mock_venv_bin.is_file.return_value = False
             MockPath.return_value.parent.__truediv__ = MagicMock(return_value=mock_venv_bin)
@@ -240,12 +240,12 @@ class TestVulnerablePackagesAnalyzerInit:
                     return "/usr/local/bin/uvx"
                 return None
             with patch("shutil.which", side_effect=which_side_effect):
-                a = VulnerablePackagesAnalyzer.__new__(VulnerablePackagesAnalyzer)
+                a = VulnerablePackageAnalyzer.__new__(VulnerablePackageAnalyzer)
                 result = a._find_pip_audit()
                 assert result == ["/usr/local/bin/uvx", "pip-audit"]
 
     def test_find_pip_audit_via_uv_tool_run(self):
-        with patch("mcpscanner.core.analyzers.vulnerable_packages_analyzer.Path") as MockPath:
+        with patch("mcpscanner.core.analyzers.vulnerable_package_analyzer.Path") as MockPath:
             mock_venv_bin = MagicMock()
             mock_venv_bin.is_file.return_value = False
             MockPath.return_value.parent.__truediv__ = MagicMock(return_value=mock_venv_bin)
@@ -254,29 +254,29 @@ class TestVulnerablePackagesAnalyzerInit:
                     return "/usr/local/bin/uv"
                 return None
             with patch("shutil.which", side_effect=which_side_effect):
-                a = VulnerablePackagesAnalyzer.__new__(VulnerablePackagesAnalyzer)
+                a = VulnerablePackageAnalyzer.__new__(VulnerablePackageAnalyzer)
                 result = a._find_pip_audit()
                 assert result == ["/usr/local/bin/uv", "tool", "run", "pip-audit"]
 
     def test_find_pip_audit_not_found(self):
-        with patch("mcpscanner.core.analyzers.vulnerable_packages_analyzer.Path") as MockPath:
+        with patch("mcpscanner.core.analyzers.vulnerable_package_analyzer.Path") as MockPath:
             mock_venv_bin = MagicMock()
             mock_venv_bin.is_file.return_value = False
             MockPath.return_value.parent.__truediv__ = MagicMock(return_value=mock_venv_bin)
             with patch("shutil.which", return_value=None):
-                a = VulnerablePackagesAnalyzer.__new__(VulnerablePackagesAnalyzer)
+                a = VulnerablePackageAnalyzer.__new__(VulnerablePackageAnalyzer)
                 result = a._find_pip_audit()
                 assert result is None
 
     def test_find_prefers_venv_over_uvx(self):
         """Venv binary takes priority even when uvx is available."""
-        with patch("mcpscanner.core.analyzers.vulnerable_packages_analyzer.Path") as MockPath:
+        with patch("mcpscanner.core.analyzers.vulnerable_package_analyzer.Path") as MockPath:
             mock_venv_bin = MagicMock()
             mock_venv_bin.is_file.return_value = True
             mock_venv_bin.__str__ = lambda self: "/proj/.venv/bin/pip-audit"
             MockPath.return_value.parent.__truediv__ = MagicMock(return_value=mock_venv_bin)
             with patch("shutil.which", return_value="/usr/local/bin/uvx"):
-                a = VulnerablePackagesAnalyzer.__new__(VulnerablePackagesAnalyzer)
+                a = VulnerablePackageAnalyzer.__new__(VulnerablePackageAnalyzer)
                 result = a._find_pip_audit()
                 assert result == ["/proj/.venv/bin/pip-audit"]
 
@@ -336,8 +336,8 @@ class TestAnalyzeRequirements:
     @patch("subprocess.run")
     def test_skip_deps_and_disable_pip_opt_in(self, mock_run, tmp_requirements):
         """--no-deps and --disable-pip only appear when explicitly opted in."""
-        with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/usr/bin/pip-audit"]):
-            a = VulnerablePackagesAnalyzer(enabled=True, skip_deps=True, disable_pip=True)
+        with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/usr/bin/pip-audit"]):
+            a = VulnerablePackageAnalyzer(enabled=True, skip_deps=True, disable_pip=True)
         mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
         a.analyze_requirements(tmp_requirements)
         cmd = mock_run.call_args[0][0]
@@ -412,15 +412,15 @@ class TestAnalyzePath:
 
 class TestRunAndParse:
     def test_no_binary_returns_empty(self):
-        with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=None):
-            a = VulnerablePackagesAnalyzer(enabled=True)
+        with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=None):
+            a = VulnerablePackageAnalyzer(enabled=True)
         findings = a._run_and_parse([], source="test")
         assert findings == []
 
     @patch("subprocess.run")
     def test_uvx_command_structure(self, mock_run):
-        with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/usr/local/bin/uvx", "pip-audit"]):
-            a = VulnerablePackagesAnalyzer(enabled=True)
+        with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/usr/local/bin/uvx", "pip-audit"]):
+            a = VulnerablePackageAnalyzer(enabled=True)
         mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
         a._run_and_parse([], source="test")
         cmd = mock_run.call_args[0][0]
@@ -431,8 +431,8 @@ class TestRunAndParse:
 
     @patch("subprocess.run")
     def test_uv_tool_run_command_structure(self, mock_run):
-        with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/usr/local/bin/uv", "tool", "run", "pip-audit"]):
-            a = VulnerablePackagesAnalyzer(enabled=True)
+        with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/usr/local/bin/uv", "tool", "run", "pip-audit"]):
+            a = VulnerablePackageAnalyzer(enabled=True)
         mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
         a._run_and_parse([], source="test")
         cmd = mock_run.call_args[0][0]
@@ -505,8 +505,8 @@ class TestRunAndParse:
 
     @patch("subprocess.run")
     def test_fix_mode_flag(self, mock_run):
-        with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/bin/pip-audit"]):
-            a = VulnerablePackagesAnalyzer(enabled=True, fix_mode=True)
+        with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/bin/pip-audit"]):
+            a = VulnerablePackageAnalyzer(enabled=True, fix_mode=True)
         mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
         a._run_and_parse([], source="test")
         cmd = mock_run.call_args[0][0]
@@ -514,8 +514,8 @@ class TestRunAndParse:
 
     @patch("subprocess.run")
     def test_desc_disabled(self, mock_run):
-        with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/bin/pip-audit"]):
-            a = VulnerablePackagesAnalyzer(enabled=True, desc=False)
+        with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/bin/pip-audit"]):
+            a = VulnerablePackageAnalyzer(enabled=True, desc=False)
         mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
         a._run_and_parse([], source="test")
         cmd = mock_run.call_args[0][0]
@@ -523,8 +523,8 @@ class TestRunAndParse:
 
     @patch("subprocess.run")
     def test_osv_service(self, mock_run):
-        with patch.object(VulnerablePackagesAnalyzer, "_find_pip_audit", return_value=["/bin/pip-audit"]):
-            a = VulnerablePackagesAnalyzer(enabled=True, vulnerability_service="osv")
+        with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/bin/pip-audit"]):
+            a = VulnerablePackageAnalyzer(enabled=True, vulnerability_service="osv")
         mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
         a._run_and_parse([], source="test")
         cmd = mock_run.call_args[0][0]
@@ -588,7 +588,7 @@ class TestCreateFinding:
 
         assert isinstance(finding, SecurityFinding)
         assert finding.severity == "HIGH"
-        assert finding.analyzer == "VULNERABLE_PACKAGES"
+        assert finding.analyzer == "VULNERABLE_PACKAGE"
         assert finding.threat_category == "VULNERABLE DEPENDENCY"
         assert "flask==0.5" in finding.summary
         assert "PYSEC-2019-179" in finding.summary
@@ -651,9 +651,9 @@ class TestCreateFinding:
         finding = analyzer._create_finding("p", "1", vuln, "s")
         d = finding.details
 
-        assert d["aitech"] == "AITech-9.2"
-        assert d["aitech_name"] == "Detection Evasion"
-        assert d["aisubtech"] == "AISubtech-9.2.1"
+        assert d["aitech"] == "AITech-12.1"
+        assert d["aitech_name"] == "Tool Exploitation"
+        assert d["aisubtech"] == "AISubtech-12.1.6"
         assert d["aisubtech_name"] == "Supply Chain Compromise"
         assert "taxonomy_description" in d
 
@@ -704,31 +704,31 @@ class TestErrorHintHelpers:
             "  File \"/tmp/venv/bin/pip-audit\", line 10\n"
             "ValueError: something broke"
         )
-        hint = VulnerablePackagesAnalyzer._extract_error_hint(stderr)
+        hint = VulnerablePackageAnalyzer._extract_error_hint(stderr)
         assert "ValueError: something broke" in hint
 
     def test_extract_error_hint_returns_last_line_for_non_traceback(self):
         stderr = "WARNING: pip is old\nERROR: could not resolve"
-        hint = VulnerablePackagesAnalyzer._extract_error_hint(stderr)
+        hint = VulnerablePackageAnalyzer._extract_error_hint(stderr)
         assert "could not resolve" in hint
 
     def test_extract_error_hint_empty_stderr(self):
-        hint = VulnerablePackagesAnalyzer._extract_error_hint("")
+        hint = VulnerablePackageAnalyzer._extract_error_hint("")
         assert hint == ""
 
     def test_is_resolution_failure_ensurepip(self):
-        assert VulnerablePackagesAnalyzer._is_resolution_failure("ensurepip crashed")
+        assert VulnerablePackageAnalyzer._is_resolution_failure("ensurepip crashed")
 
     def test_is_resolution_failure_sigabrt(self):
-        assert VulnerablePackagesAnalyzer._is_resolution_failure("died with SIGABRT")
+        assert VulnerablePackageAnalyzer._is_resolution_failure("died with SIGABRT")
 
     def test_is_resolution_failure_no_matching(self):
-        assert VulnerablePackagesAnalyzer._is_resolution_failure(
+        assert VulnerablePackageAnalyzer._is_resolution_failure(
             "No matching distribution found for flask==99.0"
         )
 
     def test_is_resolution_failure_false_for_unrelated(self):
-        assert not VulnerablePackagesAnalyzer._is_resolution_failure(
+        assert not VulnerablePackageAnalyzer._is_resolution_failure(
             "ERROR: unknown option --bad-flag"
         )
 
@@ -766,15 +766,15 @@ class TestScanSummary:
 
 
 class TestThreatMapping:
-    def test_vulnerable_packages_threat_mapping_exists(self):
+    def test_vulnerable_package_threat_mapping_exists(self):
         from mcpscanner.threats.threats import ThreatMapping
 
-        info = ThreatMapping.get_threat_mapping("vulnerable_packages", "VULNERABLE_DEPENDENCY")
+        info = ThreatMapping.get_threat_mapping("vulnerable_package", "VULNERABLE_DEPENDENCY")
         assert info["scanner_category"] == "VULNERABLE DEPENDENCY"
-        assert info["aitech"] == "AITech-9.2"
-        assert info["aisubtech"] == "AISubtech-9.2.1"
+        assert info["aitech"] == "AITech-12.1"
+        assert info["aisubtech"] == "AISubtech-12.1.6"
 
-    def test_vulnerable_packages_in_analyzer_map(self):
+    def test_vulnerable_package_in_analyzer_map(self):
         from mcpscanner.threats.threats import ThreatMapping
 
         analyzer_map = {
@@ -782,16 +782,16 @@ class TestThreatMapping:
             "yara": ThreatMapping.YARA_THREATS,
             "ai_defense": ThreatMapping.AI_DEFENSE_THREATS,
             "behavioral": ThreatMapping.BEHAVIORAL_THREATS,
-            "vulnerable_packages": ThreatMapping.VULNERABLE_PACKAGES_THREATS,
+            "vulnerable_package": ThreatMapping.VULNERABLE_PACKAGE_THREATS,
         }
-        assert "vulnerable_packages" in analyzer_map
-        assert "VULNERABLE_DEPENDENCY" in analyzer_map["vulnerable_packages"]
+        assert "vulnerable_package" in analyzer_map
+        assert "VULNERABLE_DEPENDENCY" in analyzer_map["vulnerable_package"]
 
     def test_simplified_mapping_created(self):
-        from mcpscanner.threats.threats import VULNERABLE_PACKAGES_THREAT_MAPPING
+        from mcpscanner.threats.threats import VULNERABLE_PACKAGE_THREAT_MAPPING
 
-        assert "VULNERABLE_DEPENDENCY" in VULNERABLE_PACKAGES_THREAT_MAPPING
-        entry = VULNERABLE_PACKAGES_THREAT_MAPPING["VULNERABLE_DEPENDENCY"]
+        assert "VULNERABLE_DEPENDENCY" in VULNERABLE_PACKAGE_THREAT_MAPPING
+        entry = VULNERABLE_PACKAGE_THREAT_MAPPING["VULNERABLE_DEPENDENCY"]
         assert entry["threat_category"] == "VULNERABLE DEPENDENCY"
         assert entry["severity"] == "HIGH"
 
@@ -802,26 +802,26 @@ class TestThreatMapping:
 
 
 class TestAnalyzerEnum:
-    def test_vulnerable_packages_in_enum(self):
+    def test_vulnerable_package_in_enum(self):
         from mcpscanner.core.models import AnalyzerEnum
 
-        assert hasattr(AnalyzerEnum, "VULNERABLE_PACKAGES")
-        assert AnalyzerEnum.VULNERABLE_PACKAGES.value == "vulnerable_packages"
+        assert hasattr(AnalyzerEnum, "VULNERABLE_PACKAGE")
+        assert AnalyzerEnum.VULNERABLE_PACKAGE.value == "vulnerable_package"
 
-    def test_vulnerable_packages_in_base_analyzer_map(self):
+    def test_vulnerable_package_in_base_analyzer_map(self):
         from mcpscanner.core.analyzers.base import SecurityFinding
 
         finding = SecurityFinding(
             severity="HIGH",
             summary="test",
-            analyzer="VULNERABLE_PACKAGES",
+            analyzer="VULNERABLE_PACKAGE",
             threat_category="VULNERABLE DEPENDENCY",
             details={"threat_type": "VULNERABLE_DEPENDENCY"},
         )
         taxonomy = finding._get_mcp_taxonomy()
         assert taxonomy is not None
-        assert taxonomy["aitech"] == "AITech-9.2"
-        assert taxonomy["aisubtech"] == "AISubtech-9.2.1"
+        assert taxonomy["aitech"] == "AITech-12.1"
+        assert taxonomy["aisubtech"] == "AISubtech-12.1.6"
 
 
 # ---------------------------------------------------------------------------
@@ -830,26 +830,26 @@ class TestAnalyzerEnum:
 
 
 class TestModuleExport:
-    def test_vulnerable_packages_analyzer_importable_from_package(self):
-        from mcpscanner.core.analyzers import VulnerablePackagesAnalyzer
+    def test_vulnerable_package_analyzer_importable_from_package(self):
+        from mcpscanner.core.analyzers import VulnerablePackageAnalyzer
 
-        assert VulnerablePackagesAnalyzer is not None
+        assert VulnerablePackageAnalyzer is not None
 
 
 # ---------------------------------------------------------------------------
-# ReportGenerator integration tests for vulnerable-packages output
+# ReportGenerator integration tests for vulnerable-package output
 # ---------------------------------------------------------------------------
 
 
 class TestReportGeneratorIntegration:
-    """Verify that ReportGenerator handles vulnerable-packages data
+    """Verify that ReportGenerator handles vulnerable-package data
     correctly across all output formats (summary, detailed, table, stats).
     """
 
     @pytest.fixture
     def vuln_results_dict(self):
         return {
-            "scan_target": "vulnerable-packages:/tmp/requirements.txt",
+            "scan_target": "vulnerable-package:/tmp/requirements.txt",
             "scan_results": [
                 {
                     "package_name": "flask==0.5",
@@ -857,16 +857,16 @@ class TestReportGeneratorIntegration:
                     "status": "completed",
                     "is_safe": False,
                     "findings": {
-                        "vulnerable_packages_analyzer": {
+                        "vulnerable_package_analyzer": {
                             "severity": "HIGH",
                             "threat_summary": "Vulnerable dependency: flask==0.5",
                             "threat_names": ["VULNERABLE DEPENDENCY"],
                             "total_findings": 1,
                             "mcp_taxonomies": [
                                 {
-                                    "aitech": "AITech-9.2",
-                                    "aitech_name": "Detection Evasion",
-                                    "aisubtech": "AISubtech-9.2.1",
+                                    "aitech": "AITech-12.1",
+                                    "aitech_name": "Tool Exploitation",
+                                    "aisubtech": "AISubtech-12.1.6",
                                     "aisubtech_name": "Supply Chain Compromise",
                                 }
                             ],
@@ -879,7 +879,7 @@ class TestReportGeneratorIntegration:
                     "status": "completed",
                     "is_safe": True,
                     "findings": {
-                        "vulnerable_packages_analyzer": {
+                        "vulnerable_package_analyzer": {
                             "severity": "SAFE",
                             "threat_summary": "No known vulnerabilities found",
                             "threat_names": [],
@@ -889,7 +889,7 @@ class TestReportGeneratorIntegration:
                     },
                 },
             ],
-            "requested_analyzers": ["VULNERABLE_PACKAGES"],
+            "requested_analyzers": ["VULNERABLE_PACKAGE"],
         }
 
     def test_summary_shows_package_names(self, vuln_results_dict):
@@ -907,7 +907,7 @@ class TestReportGeneratorIntegration:
 
         rg = ReportGenerator(vuln_results_dict)
         out = rg.format_output(format_type=OutputFormat.DETAILED)
-        assert "vulnerable_packages_analyzer" in out
+        assert "vulnerable_package_analyzer" in out
         assert "flask==0.5" in out
         assert "Severity: HIGH" in out
 
@@ -925,8 +925,8 @@ class TestReportGeneratorIntegration:
 
         rg = ReportGenerator(vuln_results_dict)
         stats = rg.get_statistics()
-        assert "vulnerable_packages_analyzer" in stats["analyzer_stats"]
-        vp = stats["analyzer_stats"]["vulnerable_packages_analyzer"]
+        assert "vulnerable_package_analyzer" in stats["analyzer_stats"]
+        vp = stats["analyzer_stats"]["vulnerable_package_analyzer"]
         assert vp["total"] == 2
         assert vp["with_findings"] == 1
 
@@ -935,7 +935,7 @@ class TestReportGeneratorIntegration:
         from mcpscanner.core.models import OutputFormat
 
         rg = ReportGenerator(vuln_results_dict)
-        assert rg.server_url == "vulnerable-packages:/tmp/requirements.txt"
+        assert rg.server_url == "vulnerable-package:/tmp/requirements.txt"
         out = rg.format_output(format_type=OutputFormat.SUMMARY)
         assert "requirements.txt" in out
 
@@ -943,7 +943,7 @@ class TestReportGeneratorIntegration:
         from mcpscanner.core.report_generator import ReportGenerator
 
         rg = ReportGenerator(vuln_results_dict)
-        assert "vulnerable_packages_analyzer" in rg.requested_analyzer_keys
+        assert "vulnerable_package_analyzer" in rg.requested_analyzer_keys
         assert rg.is_vuln_pkg_scan is True
 
     def test_by_severity_groups_correctly(self, vuln_results_dict):

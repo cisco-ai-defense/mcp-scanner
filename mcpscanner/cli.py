@@ -1076,9 +1076,9 @@ async def main():
         help="Output format (default: %(default)s)",
     )
 
-    # vulnerable-packages subcommand - scan Python dependencies for known vulnerabilities
+    # vulnerable-package subcommand - scan Python dependencies for known vulnerabilities
     p_vuln_pkgs = subparsers.add_parser(
-        "vulnerable-packages",
+        "vulnerable-package",
         help="Scan Python dependencies for known vulnerabilities using pip-audit",
     )
     p_vuln_pkgs.add_argument(
@@ -1219,7 +1219,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_packages (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package (default: %(default)s)",
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
@@ -1327,7 +1327,7 @@ async def main():
             "llm_analyzer",
             "behavioral_analyzer",
             "virustotal_analyzer",
-            "vulnerable_packages_analyzer",
+            "vulnerable_package_analyzer",
         ],
         help="Filter results by specific analyzer",
     )
@@ -2032,9 +2032,9 @@ async def main():
                 if args.verbose:
                     print(f"Results saved to {args.output}")
 
-        elif args.cmd == "vulnerable-packages":
+        elif args.cmd == "vulnerable-package":
             import os
-            from mcpscanner.core.analyzers.vulnerable_packages_analyzer import VulnerablePackagesAnalyzer
+            from mcpscanner.core.analyzers.vulnerable_package_analyzer import VulnerablePackageAnalyzer
             from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
 
             scan_path = args.scan_path
@@ -2045,13 +2045,13 @@ async def main():
 
             vuln_service = (
                 args.vulnerability_service
-                or CONSTANTS.VULNERABLE_PACKAGES_VULNERABILITY_SERVICE
+                or CONSTANTS.VULNERABLE_PACKAGE_VULNERABILITY_SERVICE
             )
 
-            analyzer = VulnerablePackagesAnalyzer(
+            analyzer = VulnerablePackageAnalyzer(
                 enabled=True,
                 vulnerability_service=vuln_service,
-                timeout=CONSTANTS.VULNERABLE_PACKAGES_TIMEOUT,
+                timeout=CONSTANTS.VULNERABLE_PACKAGE_TIMEOUT,
                 fix_mode=getattr(args, "fix", False),
                 skip_deps=getattr(args, "no_deps", False),
                 disable_pip=getattr(args, "disable_pip", False),
@@ -2096,16 +2096,16 @@ async def main():
                         "vulnerability_description": " | ".join(tool_desc_parts),
                         "status": "completed",
                         "is_safe": False,
-                        "findings": {"vulnerable_packages_analyzer": analyzer_finding},
+                        "findings": {"vulnerable_package_analyzer": analyzer_finding},
                     })
             else:
                 results.append({
                     "package_name": scan_path,
-                    "vulnerability_description": f"Vulnerable packages scan of {os.path.basename(scan_path)}",
+                    "vulnerability_description": f"Vulnerable package scan of {os.path.basename(scan_path)}",
                     "status": "completed",
                     "is_safe": True,
                     "findings": {
-                        "vulnerable_packages_analyzer": {
+                        "vulnerable_package_analyzer": {
                             "severity": "SAFE",
                             "threat_summary": "No known vulnerabilities found",
                             "threat_names": [],
@@ -2118,7 +2118,7 @@ async def main():
             if analyzer.last_scan_summary:
                 summary = analyzer.last_scan_summary
                 logger.info(
-                    "vulnerable-packages summary: %d packages, %d vulnerable (%d total vulns)",
+                    "vulnerable-package summary: %d packages, %d vulnerable (%d total vulns)",
                     summary.get("total_packages", 0),
                     summary.get("vulnerable_packages", 0),
                     summary.get("total_vulnerabilities", 0),
@@ -2130,7 +2130,7 @@ async def main():
                 if args.verbose:
                     print(f"Results saved to {args.output}")
 
-            selected_analyzers = [AnalyzerEnum.VULNERABLE_PACKAGES]
+            selected_analyzers = [AnalyzerEnum.VULNERABLE_PACKAGE]
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
@@ -2264,8 +2264,8 @@ async def main():
             server_label = args.server_url
         elif hasattr(args, "cmd") and args.cmd == "virustotal":
             server_label = f"virustotal:{args.scan_path}"
-        elif hasattr(args, "cmd") and args.cmd == "vulnerable-packages":
-            server_label = f"vulnerable-packages:{args.scan_path}"
+        elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
+            server_label = f"vulnerable-package:{args.scan_path}"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
@@ -2302,7 +2302,7 @@ async def main():
                 display_instructions_results(results, server_label, detailed=False)
             return
 
-        is_vuln_pkg_scan = hasattr(args, "cmd") and args.cmd == "vulnerable-packages"
+        is_vuln_pkg_scan = hasattr(args, "cmd") and args.cmd == "vulnerable-package"
         if is_vuln_pkg_scan:
             results_dict = {
                 "scan_target": server_label,
@@ -2389,8 +2389,8 @@ async def main():
             server_label = "well-known-configs"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
-        elif hasattr(args, "cmd") and args.cmd == "vulnerable-packages":
-            server_label = f"vulnerable-packages:{args.scan_path}"
+        elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
+            server_label = f"vulnerable-package:{args.scan_path}"
 
         # Handle prompts, resources, and instructions with detailed view
         if hasattr(args, "cmd") and args.cmd == "prompts":
@@ -2399,11 +2399,11 @@ async def main():
             display_resource_results(results, server_label, detailed=args.detailed)
         elif hasattr(args, "cmd") and args.cmd == "instructions":
             display_instructions_results(results, server_label, detailed=args.detailed)
-        elif hasattr(args, "cmd") and args.cmd == "vulnerable-packages":
+        elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
             results_dict = {
                 "scan_target": server_label,
                 "scan_results": results,
-                "requested_analyzers": [AnalyzerEnum.VULNERABLE_PACKAGES],
+                "requested_analyzers": [AnalyzerEnum.VULNERABLE_PACKAGE],
             }
             formatter = ReportGenerator(results_dict)
             print(formatter.format_output(format_type=OutputFormat.DETAILED))

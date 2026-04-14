@@ -205,7 +205,7 @@ class ReportGenerator:
             "API": "api_analyzer",
             "LLM": "llm_analyzer",
             "BEHAVIORAL": "behavioral_analyzer",
-            "VULNERABLE_PACKAGES": "vulnerable_packages_analyzer",
+            "VULNERABLE_PACKAGE": "vulnerable_package_analyzer",
             "VIRUSTOTAL": "virustotal_analyzer",
         }
         self.requested_analyzer_keys = set()
@@ -216,7 +216,7 @@ class ReportGenerator:
             if key:
                 self.requested_analyzer_keys.add(key)
 
-        self.is_vuln_pkg_scan = "vulnerable_packages_analyzer" in (
+        self.is_vuln_pkg_scan = "vulnerable_package_analyzer" in (
             self.analyzers_used | self.requested_analyzer_keys
         )
 
@@ -743,8 +743,8 @@ class ReportGenerator:
             else:
                 scan_target_source = self.server_url
 
-            if self.is_vuln_pkg_scan and "vulnerable-packages:" in scan_target_source:
-                full_path = scan_target_source.replace("vulnerable-packages:", "")
+            if self.is_vuln_pkg_scan and "vulnerable-package:" in scan_target_source:
+                full_path = scan_target_source.replace("vulnerable-package:", "")
                 scan_target_source = os.path.basename(full_path) or full_path[:28]
             elif is_behavioral and "behavioral:" in scan_target_source:
                 # Extract filename from "behavioral:/path/to/file.py"
@@ -810,7 +810,7 @@ class ReportGenerator:
 
             if self.is_vuln_pkg_scan:
                 pkg_name = result.get("package_name", result.get("tool_name", "Unknown"))[:23]
-                vp_severity = get_analyzer_status("vulnerable_packages_analyzer")[:13]
+                vp_severity = get_analyzer_status("vulnerable_package_analyzer")[:13]
                 row = f"{scan_target_source:<30} {pkg_name:<25} {status:<10} {vp_severity:<15} {overall_severity:<10}"
             elif is_behavioral:
                 behavioral_severity = get_analyzer_status("behavioral_analyzer")[:13]
@@ -871,7 +871,7 @@ class ReportGenerator:
                 "yara_analyzer": {"total": 0, "with_findings": 0},
                 "llm_analyzer": {"total": 0, "with_findings": 0},
                 "virustotal_analyzer": {"total": 0, "with_findings": 0},
-                "vulnerable_packages_analyzer": {"total": 0, "with_findings": 0},
+                "vulnerable_package_analyzer": {"total": 0, "with_findings": 0},
             },
         }
 

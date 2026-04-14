@@ -286,7 +286,7 @@ asyncio.run(main())
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
 - **virustotal**: scan files or directories for malware using VirusTotal hash lookups. Requires a `scan_path` argument (file or directory).
 - **supplychain**: scan source code of an MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
-- **vulnerable-packages**: scan Python dependencies for known vulnerabilities using pip-audit. Requires a path to a requirements file or project directory.
+- **vulnerable-package**: scan Python dependencies for known vulnerabilities using pip-audit. Requires a path to a requirements file or project directory.
 - **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
@@ -485,25 +485,25 @@ The Vulnerable Packages Analyzer scans Python dependencies for known security vu
 
 ```bash
 # Scan a requirements file
-mcp-scanner vulnerable-packages /path/to/requirements.txt
+mcp-scanner vulnerable-package /path/to/requirements.txt
 
 # Scan a project directory (auto-detects requirements.txt or pyproject.toml)
-mcp-scanner vulnerable-packages /path/to/project/
+mcp-scanner vulnerable-package /path/to/project/
 
 # Use OSV vulnerability service instead of PyPI
-mcp-scanner vulnerable-packages /path/to/requirements.txt --vulnerability-service osv
+mcp-scanner vulnerable-package /path/to/requirements.txt --vulnerability-service osv
 
 # Detailed output with full vulnerability descriptions
-mcp-scanner vulnerable-packages /path/to/requirements.txt --format detailed
+mcp-scanner vulnerable-package /path/to/requirements.txt --format detailed
 
 # Save results to file
-mcp-scanner vulnerable-packages /path/to/requirements.txt --output results.json --format raw
+mcp-scanner vulnerable-package /path/to/requirements.txt --output results.json --format raw
 
 # Automatically fix vulnerable dependencies
-mcp-scanner vulnerable-packages /path/to/requirements.txt --fix
+mcp-scanner vulnerable-package /path/to/requirements.txt --fix
 ```
 
-Each vulnerability is mapped to the Cisco AI Threat Security Taxonomy under **AITech-9.2 / AISubtech-9.2.1 (Supply Chain Compromise)**.
+Each vulnerability is mapped to the Cisco AI Threat Security Taxonomy under **AITech-12.1 / AISubtech-12.1.6 (Supply Chain Compromise)**.
 
 #### Scan Static/Offline Files (CI/CD Mode)
 
@@ -746,7 +746,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
 - **[Behavioral Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
 - **[VirusTotal Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/virustotal-scanning.md)** - File and directory malware scanning with VirusTotal
-- **[Vulnerable Packages Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/vulnerable-packages-scanning.md)** - Python dependency vulnerability scanning with pip-audit
+- **[Vulnerable Package Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/vulnerable-package-scanning.md)** - Python dependency vulnerability scanning with pip-audit
 - **[LLM Providers](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/llm-providers.md)** - LLM configuration for all providers
 - **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration

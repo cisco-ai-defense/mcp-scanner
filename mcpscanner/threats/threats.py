@@ -294,15 +294,15 @@ class ThreatMapping:
         },
     }
 
-    # Vulnerable Packages Analyzer Threats
+    # Vulnerable Package Analyzer Threats
     # Note: These map known-vulnerable Python dependency findings
-    VULNERABLE_PACKAGES_THREATS = {
+    VULNERABLE_PACKAGE_THREATS = {
         "VULNERABLE_DEPENDENCY": {
             "scanner_category": "VULNERABLE DEPENDENCY",
             "severity": "HIGH",
-            "aitech": "AITech-9.2",
-            "aitech_name": "Detection Evasion",
-            "aisubtech": "AISubtech-9.2.1",
+            "aitech": "AITech-12.1",
+            "aitech_name": "Tool Exploitation",
+            "aisubtech": "AISubtech-12.1.6",
             "aisubtech_name": "Supply Chain Compromise",
             "description": "A Python dependency with a publicly known vulnerability (CVE/PYSEC/GHSA) was detected. Vulnerable dependencies in MCP server packages can be exploited to compromise the server, exfiltrate data, or escalate privileges.",
         },
@@ -529,7 +529,7 @@ class ThreatMapping:
             "behavioral": cls.BEHAVIORAL_THREATS,
             "virustotal": cls.VIRUSTOTAL_THREATS,
             "prompt_defense": cls.PROMPT_DEFENSE_THREATS,
-            "vulnerable_packages": cls.VULNERABLE_PACKAGES_THREATS,
+            "vulnerable_package": cls.VULNERABLE_PACKAGE_THREATS,
         }
 
         analyzer_lower = analyzer.lower()
@@ -571,4 +571,4 @@ API_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.AI_DEFENSE_THREATS)
 BEHAVIORAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.BEHAVIORAL_THREATS)
 VIRUSTOTAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VIRUSTOTAL_THREATS)
 PROMPT_DEFENSE_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.PROMPT_DEFENSE_THREATS)
-VULNERABLE_PACKAGES_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VULNERABLE_PACKAGES_THREATS)
+VULNERABLE_PACKAGE_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VULNERABLE_PACKAGE_THREATS)

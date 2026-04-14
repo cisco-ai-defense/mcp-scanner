@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """
-Vulnerable packages analyzer for scanning Python dependencies for known vulnerabilities.
+Vulnerable package analyzer for scanning Python dependencies for known vulnerabilities.
 
 Runs ``pip-audit`` as a subprocess with JSON output, parses the results,
 and converts each vulnerability into a :class:`SecurityFinding`.
@@ -37,7 +37,7 @@ from .base import SecurityFinding
 logger = logging.getLogger(__name__)
 
 
-class VulnerablePackagesAnalyzer:
+class VulnerablePackageAnalyzer:
     """Analyzer that checks Python dependencies for known vulnerabilities via pip-audit.
 
     Supports scanning:
@@ -70,7 +70,7 @@ class VulnerablePackagesAnalyzer:
         if self.enabled:
             cmd_label = " ".join(self._pip_audit_cmd) if self._pip_audit_cmd else "N/A"
             logger.info(
-                "vulnerable-packages analyzer enabled (cmd=%s, service=%s, timeout=%ds)",
+                "vulnerable-package analyzer enabled (cmd=%s, service=%s, timeout=%ds)",
                 cmd_label,
                 self.vulnerability_service,
                 self.timeout,
@@ -305,7 +305,7 @@ class VulnerablePackagesAnalyzer:
         }
 
         logger.info(
-            "vulnerable-packages scan summary: %d packages scanned, "
+            "vulnerable-package scan summary: %d packages scanned, "
             "%d vulnerable (%d total vulnerabilities)",
             total_packages,
             vulnerable_packages,
@@ -346,13 +346,13 @@ class VulnerablePackagesAnalyzer:
         summary = " | ".join(summary_parts)
 
         threat_info = ThreatMapping.get_threat_mapping(
-            "vulnerable_packages", "VULNERABLE_DEPENDENCY"
+            "vulnerable_package", "VULNERABLE_DEPENDENCY"
         )
 
         return SecurityFinding(
             severity=severity,
             summary=summary,
-            analyzer="VULNERABLE_PACKAGES",
+            analyzer="VULNERABLE_PACKAGE",
             threat_category=threat_info["scanner_category"],
             details={
                 "package_name": package_name,
