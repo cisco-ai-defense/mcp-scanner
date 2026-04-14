@@ -11,7 +11,7 @@ This analyzer runs `pip-audit` as a subprocess, parses its JSON output, and conv
 - Scans requirements files (`requirements.txt`, `*.in`), project directories, or installed environments
 - Queries PyPI or OSV vulnerability databases
 - Reports vulnerability IDs, aliases (CVE/GHSA), fix versions, and full descriptions
-- Maps all findings to **AITech-12.1 / AISubtech-12.1.6 (Supply Chain Compromise)**
+- Maps all findings to **AITech-9.3 / AISubtech-9.3.1 (Malicious Package / Tool Injection)**
 - Optional auto-fix mode to upgrade vulnerable packages
 
 ## Prerequisites
@@ -153,11 +153,11 @@ All findings from the Vulnerable Package Analyzer are mapped to:
 
 | Field | Value |
 |-------|-------|
-| AITech | AITech-12.1 |
-| AITech Name | Tool Exploitation |
-| AISubtech | AISubtech-12.1.6 |
-| AISubtech Name | Supply Chain Compromise |
-| Description | A Python dependency with a publicly known vulnerability (CVE/PYSEC/GHSA) was detected. Vulnerable dependencies in MCP server packages can be exploited to compromise the server, exfiltrate data, or escalate privileges. |
+| AITech | AITech-9.3 |
+| AITech Name | Supply Chain Compromise |
+| AISubtech | AISubtech-9.3.1 |
+| AISubtech Name | Malicious Package / Tool Injection |
+| Description | Introduction of malicious or adversarial tools, APIs, or packages into the toolset, registry, or dependency chain used by a system or agent, enabling the model to unknowingly invoke compromised tools that can execute attacks or expose data. |
 
 ## Example Output
 
@@ -197,10 +197,10 @@ Produces output listing each vulnerable package with its vulnerability IDs, alia
           "total_findings": 1,
           "mcp_taxonomies": [
             {
-              "aitech": "AITech-12.1",
-              "aitech_name": "Tool Exploitation",
-              "aisubtech": "AISubtech-12.1.6",
-              "aisubtech_name": "Supply Chain Compromise",
+              "aitech": "AITech-9.3",
+              "aitech_name": "Supply Chain Compromise",
+              "aisubtech": "AISubtech-9.3.1",
+              "aisubtech_name": "Malicious Package / Tool Injection",
               "description": "A Python dependency with a publicly known vulnerability..."
             }
           ]

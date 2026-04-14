@@ -300,11 +300,11 @@ class ThreatMapping:
         "VULNERABLE_DEPENDENCY": {
             "scanner_category": "VULNERABLE DEPENDENCY",
             "severity": "HIGH",
-            "aitech": "AITech-12.1",
-            "aitech_name": "Tool Exploitation",
-            "aisubtech": "AISubtech-12.1.6",
-            "aisubtech_name": "Supply Chain Compromise",
-            "description": "A Python dependency with a publicly known vulnerability (CVE/PYSEC/GHSA) was detected. Vulnerable dependencies in MCP server packages can be exploited to compromise the server, exfiltrate data, or escalate privileges.",
+            "aitech": "AITech-9.3",
+            "aitech_name": "Supply Chain Compromise",
+            "aisubtech": "AISubtech-9.3.1",
+            "aisubtech_name": "Malicious Package / Tool Injection",
+            "description": "Introduction of malicious or adversarial tools, APIs, or packages into the toolset, registry, or dependency chain used by a system or agent, enabling the model to unknowingly invoke compromised tools that can execute attacks or expose data.",
         },
     }
 

@@ -503,7 +503,7 @@ mcp-scanner vulnerable-package /path/to/requirements.txt --output results.json -
 mcp-scanner vulnerable-package /path/to/requirements.txt --fix
 ```
 
-Each vulnerability is mapped to the Cisco AI Threat Security Taxonomy under **AITech-12.1 / AISubtech-12.1.6 (Supply Chain Compromise)**.
+Each vulnerability is mapped to the Cisco AI Threat Security Taxonomy under **AITech-9.3 / AISubtech-9.3.1 (Malicious Package / Tool Injection)**.
 
 #### Scan Static/Offline Files (CI/CD Mode)
 

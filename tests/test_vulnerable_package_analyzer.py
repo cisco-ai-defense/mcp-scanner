@@ -651,10 +651,10 @@ class TestCreateFinding:
         finding = analyzer._create_finding("p", "1", vuln, "s")
         d = finding.details
 
-        assert d["aitech"] == "AITech-12.1"
-        assert d["aitech_name"] == "Tool Exploitation"
-        assert d["aisubtech"] == "AISubtech-12.1.6"
-        assert d["aisubtech_name"] == "Supply Chain Compromise"
+        assert d["aitech"] == "AITech-9.3"
+        assert d["aitech_name"] == "Supply Chain Compromise"
+        assert d["aisubtech"] == "AISubtech-9.3.1"
+        assert d["aisubtech_name"] == "Malicious Package / Tool Injection"
         assert "taxonomy_description" in d
 
     def test_finding_with_empty_description(self, analyzer):
@@ -771,8 +771,8 @@ class TestThreatMapping:
 
         info = ThreatMapping.get_threat_mapping("vulnerable_package", "VULNERABLE_DEPENDENCY")
         assert info["scanner_category"] == "VULNERABLE DEPENDENCY"
-        assert info["aitech"] == "AITech-12.1"
-        assert info["aisubtech"] == "AISubtech-12.1.6"
+        assert info["aitech"] == "AITech-9.3"
+        assert info["aisubtech"] == "AISubtech-9.3.1"
 
     def test_vulnerable_package_in_analyzer_map(self):
         from mcpscanner.threats.threats import ThreatMapping
@@ -820,8 +820,8 @@ class TestAnalyzerEnum:
         )
         taxonomy = finding._get_mcp_taxonomy()
         assert taxonomy is not None
-        assert taxonomy["aitech"] == "AITech-12.1"
-        assert taxonomy["aisubtech"] == "AISubtech-12.1.6"
+        assert taxonomy["aitech"] == "AITech-9.3"
+        assert taxonomy["aisubtech"] == "AISubtech-9.3.1"
 
 
 # ---------------------------------------------------------------------------
@@ -864,10 +864,10 @@ class TestReportGeneratorIntegration:
                             "total_findings": 1,
                             "mcp_taxonomies": [
                                 {
-                                    "aitech": "AITech-12.1",
-                                    "aitech_name": "Tool Exploitation",
-                                    "aisubtech": "AISubtech-12.1.6",
-                                    "aisubtech_name": "Supply Chain Compromise",
+                                    "aitech": "AITech-9.3",
+                                    "aitech_name": "Supply Chain Compromise",
+                                    "aisubtech": "AISubtech-9.3.1",
+                                    "aisubtech_name": "Malicious Package / Tool Injection",
                                 }
                             ],
                         }
