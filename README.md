@@ -20,7 +20,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 ## Features
 
-- **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
+- **Multiple Modes:** Run scanner as a stand-alone CLI tool, REST API server, or interactive TUI
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
 - **Vulnerable Packages Scanning**: Scan Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) using pip-audit integration.
 - **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
@@ -595,6 +595,26 @@ mcp-scanner --analyzers yara,prompt_defense --server-url http://localhost:8000/m
 
 Each missing defense maps to MCP Taxonomy codes (AITech / AISubtech) for standardized reporting.
 
+### TUI (Terminal User Interface)
+
+The MCP Scanner includes an interactive Terminal User Interface built with [Textual](https://textual.textualize.io/). The TUI provides a guided, menu-driven experience for all scan modes without needing to remember CLI flags.
+
+```bash
+# Launch the TUI
+mcp-scanner-tui
+```
+
+**Features:**
+- **Guided scan mode selection** - Choose from Remote, Stdio, Config, Known Configs, Static/CI-CD, Vulnerable Packages, or Behavioral scanning
+- **Dynamic forms** - Each scan mode presents relevant input fields with validation
+- **Live progress** - Real-time progress bar and log output during scans
+- **Results table** - DataTable view with severity, analyzer, and threat columns
+- **Row detail panel** - Select any row to view detailed findings
+- **Export** - Save results to JSON with a single keypress (`e`)
+- **Keyboard navigation** - Full keyboard support with numeric hotkeys for scan mode selection
+
+For more details, see [TUI Documentation](docs/tui.md).
+
 ### Logging Control
 
 By default the CLI shows `WARNING`-level output (or `DEBUG` with `--verbose`). For finer control use `--log-level`:
@@ -752,6 +772,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration
 - **[Programmatic Usage](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/programmatic-usage.md)** - Programmatic usage examples and advanced usage
 - **[Static Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/static-scanning.md)** - Offline/CI-CD scanning mode
+- **[TUI](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/tui.md)** - Interactive Terminal User Interface
 - **[API Reference](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md)** - Complete REST API documentation
 - **[Output Formats](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/output-formats.md)** - Detailed output format options
 

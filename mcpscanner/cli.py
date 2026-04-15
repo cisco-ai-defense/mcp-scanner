@@ -2306,6 +2306,7 @@ async def main():
         if is_vuln_pkg_scan:
             results_dict = {
                 "scan_target": server_label,
+                "mcp_server_repository": server_label,
                 "scan_results": results,
                 "requested_analyzers": selected_analyzers,
             }

@@ -1,0 +1,498 @@
+/* MCP Scanner TUI - Dark Theme (Cisco-inspired) */
+
+Screen {
+    background: #0d1117;
+    color: #e6edf3;
+}
+
+/* ── Header ─────────────────────────────────────────── */
+
+Header {
+    background: #049fd9;
+    color: #ffffff;
+    dock: top;
+    height: 1;
+}
+
+/* ── Footer ─────────────────────────────────────────── */
+
+Footer {
+    background: #161b22;
+    color: #8b949e;
+}
+
+FooterKey .footer-key--key {
+    color: #58a6ff;
+    background: #21262d;
+}
+
+FooterKey .footer-key--description {
+    color: #8b949e;
+}
+
+/* ── Panels and containers ──────────────────────────── */
+
+.panel {
+    background: #161b22;
+    border: solid #30363d;
+    padding: 1 2;
+    margin: 1 0;
+}
+
+.panel-title {
+    color: #049fd9;
+    text-style: bold;
+}
+
+/* ── Welcome screen ─────────────────────────────────── */
+
+#welcome-container {
+    width: 100%;
+    height: 1fr;
+    padding: 0 2;
+    content-align: center middle;
+}
+
+#welcome-title {
+    text-align: center;
+    color: #049fd9;
+    text-style: bold;
+    width: 100%;
+    height: auto;
+    margin: 2 0 1 0;
+}
+
+#welcome-subtitle {
+    text-align: center;
+    color: #8b949e;
+    width: 100%;
+    margin-bottom: 2;
+}
+
+#mode-list-container {
+    width: 100%;
+    max-width: 80;
+    height: auto;
+    align-horizontal: center;
+}
+
+#scan-mode-list {
+    width: 100%;
+    height: auto;
+    max-height: 20;
+    background: #161b22;
+    border: solid #30363d;
+}
+
+#scan-mode-list > .option-list--option-highlighted {
+    background: #049fd9 30%;
+    color: #e6edf3;
+}
+
+#scan-mode-list > .option-list--option {
+    padding: 0 2;
+}
+
+#welcome-footer-text {
+    text-align: center;
+    color: #6e7681;
+    width: 100%;
+    margin-top: 1;
+}
+
+/* ── Scan config screen ─────────────────────────────── */
+
+#config-container {
+    width: 100%;
+    height: 100%;
+    padding: 1 2;
+}
+
+#config-title {
+    text-style: bold;
+    color: #049fd9;
+    width: 100%;
+    margin-bottom: 1;
+}
+
+.form-group {
+    margin-bottom: 1;
+    height: auto;
+}
+
+.form-label {
+    color: #8b949e;
+    margin-bottom: 0;
+    width: 100%;
+}
+
+Input {
+    background: #0d1117;
+    border: tall #30363d;
+    color: #e6edf3;
+    width: 100%;
+}
+
+Input:focus {
+    border: tall #049fd9;
+}
+
+Select {
+    width: 100%;
+}
+
+Checkbox {
+    background: transparent;
+    margin-right: 2;
+}
+
+Checkbox:focus {
+    background: #21262d;
+}
+
+RadioSet {
+    background: transparent;
+}
+
+RadioButton {
+    background: transparent;
+}
+
+#analyzer-checkboxes {
+    layout: horizontal;
+    height: auto;
+    width: 100%;
+}
+
+#config-buttons {
+    layout: horizontal;
+    height: auto;
+    width: 100%;
+    align-horizontal: center;
+    margin-top: 2;
+}
+
+#config-buttons Button {
+    margin: 0 1;
+}
+
+#start-scan-btn {
+    width: auto;
+    min-width: 20;
+}
+
+Button {
+    background: #049fd9;
+    color: #ffffff;
+    border: none;
+    min-width: 16;
+}
+
+Button:hover {
+    background: #58a6ff;
+}
+
+Button:focus {
+    background: #58a6ff;
+    text-style: bold;
+}
+
+Button.-danger {
+    background: #f85149;
+}
+
+Button.-danger:hover {
+    background: #ff7b72;
+}
+
+Button.-success {
+    background: #3fb950;
+}
+
+Button.-secondary {
+    background: #21262d;
+    color: #8b949e;
+}
+
+Button.-secondary:hover {
+    background: #30363d;
+    color: #e6edf3;
+}
+
+/* ── Scanning progress screen ───────────────────────── */
+
+#scanning-container {
+    width: 100%;
+    height: 100%;
+    padding: 1 2;
+}
+
+#scanning-title {
+    text-style: bold;
+    color: #049fd9;
+    width: 100%;
+    margin-bottom: 1;
+}
+
+ProgressBar Bar {
+    color: #39c5cf;
+    background: #21262d;
+}
+
+ProgressBar PercentageStatus {
+    color: #39c5cf;
+    text-style: bold;
+}
+
+#scan-steps {
+    height: auto;
+    margin: 1 0;
+    padding: 1 2;
+    background: #161b22;
+    border: solid #30363d;
+}
+
+.step-done {
+    color: #3fb950;
+}
+
+.step-active {
+    color: #39c5cf;
+    text-style: bold;
+}
+
+.step-pending {
+    color: #6e7681;
+}
+
+.step-error {
+    color: #f85149;
+}
+
+#scan-log {
+    height: 1fr;
+    margin: 1 0;
+    background: #0d1117;
+    border: solid #30363d;
+}
+
+RichLog {
+    background: #0d1117;
+    color: #8b949e;
+    scrollbar-color: #30363d;
+    scrollbar-color-hover: #484f58;
+    scrollbar-color-active: #6e7681;
+}
+
+#cancel-btn {
+    dock: bottom;
+    margin-bottom: 1;
+    width: auto;
+}
+
+/* ── Results screen ─────────────────────────────────── */
+
+#results-container {
+    width: 100%;
+    height: 1fr;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#results-header {
+    height: auto;
+    layout: horizontal;
+    width: 100%;
+    margin-bottom: 0;
+}
+
+#results-title {
+    text-style: bold;
+    color: #049fd9;
+    width: 1fr;
+}
+
+#results-actions {
+    width: auto;
+    height: auto;
+    layout: horizontal;
+}
+
+#results-actions Button {
+    margin-left: 1;
+    min-width: 12;
+}
+
+/* Stats bar */
+#stats-bar {
+    height: auto;
+    layout: horizontal;
+    width: 100%;
+    padding: 1 2;
+    background: #161b22;
+    border: solid #30363d;
+    margin-bottom: 1;
+}
+
+.stat-item {
+    width: auto;
+    margin-right: 3;
+}
+
+.stat-value {
+    text-style: bold;
+}
+
+.stat-label {
+    color: #8b949e;
+}
+
+.severity-high {
+    color: #f85149;
+}
+
+.severity-medium {
+    color: #d29922;
+}
+
+.severity-low {
+    color: #e3b341;
+}
+
+.severity-safe {
+    color: #3fb950;
+}
+
+.severity-unknown {
+    color: #f85149;
+}
+
+/* Tabs */
+TabbedContent {
+    height: 1fr;
+}
+
+ContentSwitcher {
+    height: 1fr;
+}
+
+TabPane {
+    padding: 1;
+    height: 1fr;
+}
+
+Tabs {
+    background: #161b22;
+}
+
+Tab {
+    color: #8b949e;
+    background: transparent;
+}
+
+Tab.-active {
+    color: #e6edf3;
+    text-style: bold;
+}
+
+Tab:hover {
+    color: #58a6ff;
+}
+
+Underline {
+    color: #049fd9;
+}
+
+/* DataTable */
+DataTable {
+    background: #0d1117;
+    scrollbar-color: #30363d;
+    scrollbar-color-hover: #484f58;
+    scrollbar-color-active: #6e7681;
+}
+
+DataTable > .datatable--header {
+    background: #161b22;
+    color: #049fd9;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #049fd9 30%;
+    color: #e6edf3;
+}
+
+DataTable > .datatable--even-row {
+    background: #0d1117;
+}
+
+DataTable > .datatable--odd-row {
+    background: #161b22 40%;
+}
+
+/* Results table */
+#results-table {
+    height: 15;
+    background: #0d1117;
+    border: solid #30363d;
+    margin: 1 0;
+}
+
+/* Detail panel */
+#detail-panel {
+    height: auto;
+    max-height: 6;
+    padding: 0 1;
+    background: #161b22;
+    border: solid #30363d;
+    color: #e6edf3;
+}
+
+/* ── Scrollbars ─────────────────────────────────────── */
+
+* {
+    scrollbar-color: #30363d;
+    scrollbar-color-hover: #484f58;
+    scrollbar-color-active: #6e7681;
+    scrollbar-background: #0d1117;
+    scrollbar-background-hover: #0d1117;
+    scrollbar-background-active: #0d1117;
+}
+
+/* ── Responsive adjustments ─────────────────────────── */
+
+#config-container {
+    max-width: 100;
+}
+
+#scanning-container {
+    max-width: 120;
+}
+
+/* ── Export modal ───────────────────────────────────── */
+
+#export-dialog {
+    align: center middle;
+    width: 60;
+    height: auto;
+    max-height: 20;
+    background: #161b22;
+    border: solid #049fd9;
+    padding: 2;
+}
+
+#export-dialog Input {
+    margin-bottom: 1;
+}
+
+#export-buttons {
+    layout: horizontal;
+    height: auto;
+    width: 100%;
+    align-horizontal: right;
+    margin-top: 1;
+}
+
+#export-buttons Button {
+    margin-left: 1;
+}
