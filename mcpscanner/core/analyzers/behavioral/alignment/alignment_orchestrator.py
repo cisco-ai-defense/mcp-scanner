@@ -253,25 +253,24 @@ class AlignmentOrchestrator:
                         
                         # Classify as threat or vulnerability
                         threat_name = result.get("threat_name", "")
-                        if threat_name != "GENERAL DESCRIPTION-CODE MISMATCH":
-                            try:
-                                mapped_severity = self._get_mapped_severity(threat_name)
-                                classification = await self.threat_vuln_classifier.classify_finding(
-                                    threat_name=threat_name or "UNKNOWN",
-                                    severity=mapped_severity,
-                                    summary=result.get("summary", ""),
-                                    description_claims=result.get("description_claims", ""),
-                                    actual_behavior=result.get("actual_behavior", ""),
-                                    security_implications=result.get("security_implications", ""),
-                                    dataflow_evidence=result.get("dataflow_evidence", ""),
-                                )
-                                if classification:
-                                    result["threat_vulnerability_classification"] = classification["classification"]
-                                else:
-                                    result["threat_vulnerability_classification"] = "UNCLEAR"
-                            except Exception as e:
-                                self.logger.error(f"Classification failed: {e}")
+                        try:
+                            mapped_severity = self._get_mapped_severity(threat_name)
+                            classification = await self.threat_vuln_classifier.classify_finding(
+                                threat_name=threat_name or "UNKNOWN",
+                                severity=mapped_severity,
+                                summary=result.get("summary", ""),
+                                description_claims=result.get("description_claims", ""),
+                                actual_behavior=result.get("actual_behavior", ""),
+                                security_implications=result.get("security_implications", ""),
+                                dataflow_evidence=result.get("dataflow_evidence", ""),
+                            )
+                            if classification:
+                                result["threat_vulnerability_classification"] = classification["classification"]
+                            else:
                                 result["threat_vulnerability_classification"] = "UNCLEAR"
+                        except Exception as e:
+                            self.logger.error(f"Classification failed: {e}")
+                            result["threat_vulnerability_classification"] = "UNCLEAR"
                         
                         results.append((result, func_context))
                     else:
