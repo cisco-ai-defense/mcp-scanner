@@ -85,6 +85,28 @@ class TestCliHelperFunctions:
             assert config.api_key == ""  # API not selected
             assert config.llm_provider_api_key == "test_llm_key"
 
+    def test_build_config_with_stdio_timeout(self):
+        """Test _build_config passes MCP_SCANNER_STDIO_TIMEOUT to Config."""
+        analyzers = [AnalyzerEnum.YARA]
+
+        with patch.dict(
+            "os.environ",
+            {"MCP_SCANNER_STDIO_TIMEOUT": "180"},
+        ):
+            config = _build_config(analyzers)
+            assert config.stdio_timeout == 180
+
+    def test_build_config_stdio_timeout_default(self):
+        """Test _build_config uses default stdio_timeout when env var is not set."""
+        analyzers = [AnalyzerEnum.YARA]
+
+        with patch.dict("os.environ", {}, clear=False):
+            env = dict(**{k: v for k, v in __import__("os").environ.items()})
+            env.pop("MCP_SCANNER_STDIO_TIMEOUT", None)
+            with patch.dict("os.environ", env, clear=True):
+                config = _build_config(analyzers)
+                assert config.stdio_timeout == 60
+
     def test_build_config_no_analyzers(self):
         """Test _build_config with no analyzers selected."""
         analyzers = []

@@ -99,6 +99,9 @@ class SecurityFinding:
                 "YARA": "yara",
                 "API": "ai_defense",
                 "BEHAVIORAL": "behavioral",
+                "VIRUSTOTAL": "virustotal",
+                "PROMPTDEFENSE": "prompt_defense",
+                "VULNERABLE_PACKAGE": "vulnerable_package",
             }
 
             # Check if this is a built-in analyzer

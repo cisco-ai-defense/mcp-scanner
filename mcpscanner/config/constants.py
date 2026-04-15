@@ -136,6 +136,9 @@ class MCPScannerConstants:
     DEFAULT_LLM_API_VERSION: str = os.getenv("MCP_SCANNER_LLM_API_VERSION", None)
     DEFAULT_LLM_TIMEOUT: int = int(os.getenv("MCP_SCANNER_LLM_TIMEOUT", "30"))
 
+    # Stdio server connection timeout
+    DEFAULT_STDIO_TIMEOUT: int = int(os.getenv("MCP_SCANNER_STDIO_TIMEOUT", "60"))
+
     # LLM Prompt Configuration
     PROMPT_LENGTH_THRESHOLD: int = int(
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
@@ -206,6 +209,55 @@ class MCPScannerConstants:
     )
     BEHAVIORAL_MAX_REACHES_CALLS: int = int(
         os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHES_CALLS", "10")
+    )
+
+    # VirusTotal Configuration
+    ENV_VIRUSTOTAL_API_KEY: str = os.getenv(
+        "MCP_SCANNER_ENV_VIRUSTOTAL_API_KEY_NAME", "VIRUSTOTAL_API_KEY"
+    )
+    # Tri-state: True if explicitly enabled, False if explicitly disabled,
+    # None if not set (auto-enable when API key is present)
+    _VIRUSTOTAL_ENABLED_RAW: str = os.getenv("MCP_SCANNER_VIRUSTOTAL_ENABLED", "")
+    VIRUSTOTAL_ENABLED: bool = (
+        True if _VIRUSTOTAL_ENABLED_RAW.lower() in ("true", "1", "yes")
+        else False if _VIRUSTOTAL_ENABLED_RAW.lower() in ("false", "0", "no")
+        else None  # Not explicitly set — let Config decide based on API key
+    )
+    VIRUSTOTAL_UPLOAD_FILES: bool = os.getenv(
+        "MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false"
+    ).lower() in ("true", "1", "yes")
+
+    # Maximum number of files to scan per directory (0 = unlimited).
+    # Override via MCP_SCANNER_VT_MAX_FILES env var.
+    VIRUSTOTAL_MAX_FILES: int = int(
+        os.getenv("MCP_SCANNER_VT_MAX_FILES", "10")
+    )
+
+    # Extra inclusion extensions: additional binary extensions to always scan.
+    # The analyzer has built-in 3-tier classification (text → dangerous → magic check).
+    # These env-var overrides add to the built-in dangerous set.
+    # Override via MCP_SCANNER_VT_INCLUSION_EXTENSIONS (comma-separated).
+    VIRUSTOTAL_INCLUSION_EXTENSIONS: set = set(
+        ext.strip()
+        for ext in os.getenv("MCP_SCANNER_VT_INCLUSION_EXTENSIONS", "").split(",")
+        if ext.strip()
+    )
+
+    # Extra exclusion extensions: additional text extensions to always skip.
+    # These env-var overrides add to the built-in pure-text set.
+    # Override via MCP_SCANNER_VT_EXCLUSION_EXTENSIONS (comma-separated).
+    VIRUSTOTAL_EXCLUSION_EXTENSIONS: set = set(
+        ext.strip()
+        for ext in os.getenv("MCP_SCANNER_VT_EXCLUSION_EXTENSIONS", "").split(",")
+        if ext.strip()
+    )
+
+    # Vulnerable Package Configuration
+    VULNERABLE_PACKAGE_VULNERABILITY_SERVICE: str = os.getenv(
+        "MCP_SCANNER_VULNERABLE_PACKAGE_SERVICE", "pypi"
+    )
+    VULNERABLE_PACKAGE_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_VULNERABLE_PACKAGE_TIMEOUT", "120")
     )
 
     # OAuth Configuration

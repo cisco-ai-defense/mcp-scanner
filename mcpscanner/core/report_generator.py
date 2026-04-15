@@ -21,6 +21,7 @@ for MCP security scan results, supporting multiple output formats and filtering 
 """
 
 import json
+import os
 from typing import Any, Dict, List, Optional, Union
 
 from .models import OutputFormat, SeverityFilter
@@ -186,28 +187,38 @@ class ReportGenerator:
         else:
             self.data = scan_data
 
-        self.server_url = self.data.get("server_url", "Unknown")
+        self.server_url = self.data.get(
+            "server_url",
+            self.data.get("scan_target", "Unknown"),
+        )
         self.scan_results = self.data.get("scan_results", [])
         self.requested_analyzers = self.data.get("requested_analyzers", [])
 
-        # Determine which analyzers were used by checking if any results have findings from them
         self.analyzers_used = set()
         for result in self.scan_results:
             findings = result.get("findings", {})
             for analyzer_key in findings.keys():
                 self.analyzers_used.add(analyzer_key)
 
-        # Convert requested analyzer names to the format used in findings
+        _ANALYZER_KEY_MAP = {
+            "YARA": "yara_analyzer",
+            "API": "api_analyzer",
+            "LLM": "llm_analyzer",
+            "BEHAVIORAL": "behavioral_analyzer",
+            "VULNERABLE_PACKAGE": "vulnerable_package_analyzer",
+            "VIRUSTOTAL": "virustotal_analyzer",
+        }
         self.requested_analyzer_keys = set()
         for analyzer in self.requested_analyzers:
-            if analyzer.upper() == "YARA":
-                self.requested_analyzer_keys.add("yara_analyzer")
-            elif analyzer.upper() == "API":
-                self.requested_analyzer_keys.add("api_analyzer")
-            elif analyzer.upper() == "LLM":
-                self.requested_analyzer_keys.add("llm_analyzer")
-            elif analyzer.upper() == "BEHAVIORAL":
-                self.requested_analyzer_keys.add("behavioral_analyzer")
+            key = _ANALYZER_KEY_MAP.get(str(analyzer).upper())
+            if hasattr(analyzer, "value"):
+                key = _ANALYZER_KEY_MAP.get(analyzer.value.upper(), key)
+            if key:
+                self.requested_analyzer_keys.add(key)
+
+        self.is_vuln_pkg_scan = "vulnerable_package_analyzer" in (
+            self.analyzers_used | self.requested_analyzer_keys
+        )
 
     def format_output(
         self,
@@ -265,7 +276,7 @@ class ReportGenerator:
             # Tool name filter
             if (
                 tool_filter
-                and tool_filter.lower() not in result.get("tool_name", "").lower()
+                and tool_filter.lower() not in result.get("tool_name", result.get("package_name", "")).lower()
             ):
                 continue
 
@@ -354,7 +365,7 @@ class ReportGenerator:
 
                 # Get item name based on type
                 if item_type == "tool":
-                    item_name = result.get("tool_name", "Unknown")
+                    item_name = result.get("tool_name", result.get("package_name", "Unknown"))
                 elif item_type == "prompt":
                     item_name = result.get("prompt_name", "Unknown")
                 elif item_type == "resource":
@@ -411,7 +422,7 @@ class ReportGenerator:
 
             # Get item name and description based on type
             if item_type == "tool":
-                item_name = result.get("tool_name", "Unknown")
+                item_name = result.get("tool_name", result.get("package_name", "Unknown"))
                 item_label = "Tool"
             elif item_type == "prompt":
                 item_name = result.get("prompt_name", "Unknown")
@@ -534,7 +545,7 @@ class ReportGenerator:
             return "\n".join(output)
 
         for result in results:
-            tool_name = result.get("tool_name", "Unknown")
+            tool_name = result.get("tool_name", result.get("package_name", "Unknown"))
             is_safe = result.get("is_safe", True)
             findings = result.get("findings", {})
 
@@ -590,7 +601,7 @@ class ReportGenerator:
                     analyzer_results[analyzer] = []
 
                 analyzer_results[analyzer].append(
-                    {"tool_name": result.get("tool_name", "Unknown"), "data": data}
+                    {"tool_name": result.get("tool_name", result.get("package_name", "Unknown")), "data": data}
                 )
 
         for analyzer, tools in analyzer_results.items():
@@ -651,7 +662,7 @@ class ReportGenerator:
 
                 severity_groups[severity].append(
                     {
-                        "tool_name": result.get("tool_name", "Unknown"),
+                        "tool_name": result.get("tool_name", result.get("package_name", "Unknown")),
                         "analyzer": analyzer,
                         "data": data,
                     }
@@ -703,12 +714,21 @@ class ReportGenerator:
             "behavioral_analyzer" in result.get("findings", {}) for result in results
         )
 
-        if has_config_results:
-            # Table header with Target Server column for config-based scans
+        # Check if this is a virustotal scan
+        is_virustotal = any(
+            "virustotal_analyzer" in result.get("findings", {}) for result in results
+        )
+
+        if self.is_vuln_pkg_scan:
+            header = f"{'Scan Target':<30} {'Package':<25} {'Status':<10} {'VULN_PKGS':<15} {'Severity':<10}"
+        elif has_config_results:
             header = f"{'Scan Target':<20} {'Target Server':<20} {'Tool Name':<18} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
         elif is_behavioral:
             # Behavioral scan: show only BEHAVIORAL column
             header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'BEHAVIORAL':<15} {'Severity':<10}"
+        elif is_virustotal:
+            # VirusTotal scan: show only VT column
+            header = f"{'Scan Target':<30} {'File':<30} {'Status':<10} {'VIRUSTOTAL':<15} {'Severity':<10}"
         else:
             # Table header without Target Server column for direct server scans
             header = f"{'Scan Target':<30} {'Tool Name':<20} {'Status':<10} {'API':<8} {'YARA':<8} {'LLM':<8} {'Severity':<10}"
@@ -723,13 +743,16 @@ class ReportGenerator:
             else:
                 scan_target_source = self.server_url
 
-            # For behavioral scans, extract just the filename
-            if is_behavioral and "behavioral:" in scan_target_source:
+            if self.is_vuln_pkg_scan and "vulnerable-package:" in scan_target_source:
+                full_path = scan_target_source.replace("vulnerable-package:", "")
+                scan_target_source = os.path.basename(full_path) or full_path[:28]
+            elif is_behavioral and "behavioral:" in scan_target_source:
                 # Extract filename from "behavioral:/path/to/file.py"
-                import os
-
                 full_path = scan_target_source.replace("behavioral:", "")
                 scan_target_source = os.path.basename(full_path)
+            elif is_virustotal and "virustotal:" in scan_target_source:
+                full_path = scan_target_source.replace("virustotal:", "")
+                scan_target_source = os.path.basename(full_path) or full_path[:28]
             else:
                 # Truncate for non-behavioral scans
                 scan_target_source = (
@@ -744,10 +767,10 @@ class ReportGenerator:
                     target_server = result["server_name"][:18]
                 else:
                     target_server = "unknown"
-                tool_name = result.get("tool_name", "Unknown")[:16]
+                tool_name = result.get("tool_name", result.get("package_name", "Unknown"))[:16]
             else:
                 # Direct server scan: no target server column
-                tool_name = result.get("tool_name", "Unknown")[:18]
+                tool_name = result.get("tool_name", result.get("package_name", "Unknown"))[:18]
             status = "SAFE" if result.get("is_safe", True) else "UNSAFE"
             findings = result.get("findings", {})
 
@@ -785,10 +808,18 @@ class ReportGenerator:
                 severity_emoji = severity_emojis.get(status, "🟢")
                 overall_severity = f"{severity_emoji} {status}"[:8]
 
-            if is_behavioral:
-                # Behavioral scan: show only behavioral analyzer status
+            if self.is_vuln_pkg_scan:
+                pkg_name = result.get("package_name", result.get("tool_name", "Unknown"))[:23]
+                vp_severity = get_analyzer_status("vulnerable_package_analyzer")[:13]
+                row = f"{scan_target_source:<30} {pkg_name:<25} {status:<10} {vp_severity:<15} {overall_severity:<10}"
+            elif is_behavioral:
                 behavioral_severity = get_analyzer_status("behavioral_analyzer")[:13]
                 row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {behavioral_severity:<15} {overall_severity:<10}"
+            elif is_virustotal:
+                # VirusTotal scan: show only VT analyzer status
+                vt_severity = get_analyzer_status("virustotal_analyzer")[:13]
+                file_name = result.get("tool_name", "Unknown")[:28]
+                row = f"{scan_target_source:<30} {file_name:<30} {status:<10} {vt_severity:<15} {overall_severity:<10}"
             elif has_config_results:
                 api_severity = get_analyzer_status("api_analyzer")[:6]
                 yara_severity = get_analyzer_status("yara_analyzer")[:6]
@@ -839,6 +870,8 @@ class ReportGenerator:
                 "api_analyzer": {"total": 0, "with_findings": 0},
                 "yara_analyzer": {"total": 0, "with_findings": 0},
                 "llm_analyzer": {"total": 0, "with_findings": 0},
+                "virustotal_analyzer": {"total": 0, "with_findings": 0},
+                "vulnerable_package_analyzer": {"total": 0, "with_findings": 0},
             },
         }
 

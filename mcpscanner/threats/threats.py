@@ -280,6 +280,34 @@ class ThreatMapping:
         },
     }
 
+    # VirusTotal Analyzer Threats
+    # Note: These are malware detections from VirusTotal hash lookups on binary files
+    VIRUSTOTAL_THREATS = {
+        "MALWARE": {
+            "scanner_category": "MALWARE",
+            "severity": "HIGH",
+            "aitech": "AITech-9.2",
+            "aitech_name": "Detection Evasion",
+            "aisubtech": "AISubtech-9.2.2",
+            "aisubtech_name": "Backdoors and Trojans",
+            "description": "Binary file detected as malicious by VirusTotal. Multiple antivirus engines flagged this file as malware, indicating it may contain backdoors, trojans, or other malicious payloads embedded within the MCP server package.",
+        },
+    }
+
+    # Vulnerable Package Analyzer Threats
+    # Note: These map known-vulnerable Python dependency findings
+    VULNERABLE_PACKAGE_THREATS = {
+        "VULNERABLE_DEPENDENCY": {
+            "scanner_category": "VULNERABLE DEPENDENCY",
+            "severity": "HIGH",
+            "aitech": "AITech-9.3",
+            "aitech_name": "Supply Chain Compromise",
+            "aisubtech": "AISubtech-9.3.1",
+            "aisubtech_name": "Malicious Package / Tool Injection",
+            "description": "Introduction of malicious or adversarial tools, APIs, or packages into the toolset, registry, or dependency chain used by a system or agent, enabling the model to unknowingly invoke compromised tools that can execute attacks or expose data.",
+        },
+    }
+
     # AI Defense API Analyzer Threats
     # Note: These are the actual classification values returned by Cisco AI Defense API
     AI_DEFENSE_THREATS = {
@@ -366,6 +394,119 @@ class ThreatMapping:
         },
     }
 
+    # Prompt Defense Analyzer Threats
+    # Note: These detect MISSING defensive measures against prompt attack vectors
+    PROMPT_DEFENSE_THREATS = {
+        "INSTRUCTION_OVERRIDE": {
+            "scanner_category": "PROMPT INJECTION",
+            "severity": "HIGH",
+            "aitech": "AITech-1.1",
+            "aitech_name": "Direct Prompt Injection",
+            "aisubtech": "AISubtech-1.1.1",
+            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
+            "description": "Missing defense against instruction override attacks where users attempt to replace or modify system instructions through direct prompt injection.",
+        },
+        "DATA_LEAKAGE": {
+            "scanner_category": "SECURITY VIOLATION",
+            "severity": "HIGH",
+            "aitech": "AITech-8.2",
+            "aitech_name": "Data Exfiltration / Exposure",
+            "aisubtech": "AISubtech-8.2.1",
+            "aisubtech_name": "Sensitive Information Disclosure",
+            "description": "Missing defense against data leakage where sensitive, confidential, or private information may be exposed through tool outputs or model responses.",
+        },
+        "ROLE_ESCAPE": {
+            "scanner_category": "PROMPT INJECTION",
+            "severity": "HIGH",
+            "aitech": "AITech-1.1",
+            "aitech_name": "Direct Prompt Injection",
+            "aisubtech": "AISubtech-1.1.1",
+            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
+            "description": "Missing defense against role escape attacks where the model is tricked into breaking out of its assigned persona or role constraints.",
+        },
+        "INDIRECT_INJECTION": {
+            "scanner_category": "PROMPT INJECTION",
+            "severity": "HIGH",
+            "aitech": "AITech-1.2",
+            "aitech_name": "Indirect Prompt Injection",
+            "aisubtech": "AISubtech-1.2.1",
+            "aisubtech_name": "Indirect Prompt Injection via External Content",
+            "description": "Missing defense against indirect prompt injection where malicious instructions are embedded in external content processed by the tool.",
+        },
+        "OUTPUT_WEAPONIZATION": {
+            "scanner_category": "HARMFUL CONTENT",
+            "severity": "HIGH",
+            "aitech": "AITech-3.1",
+            "aitech_name": "Harmful Content Generation",
+            "aisubtech": "AISubtech-3.1.1",
+            "aisubtech_name": "Generation of Harmful or Dangerous Content",
+            "description": "Missing defense against output weaponization where the model is manipulated into generating harmful, dangerous, or illegal content.",
+        },
+        "OUTPUT_MANIPULATION": {
+            "scanner_category": "PROMPT INJECTION",
+            "severity": "MEDIUM",
+            "aitech": "AITech-1.1",
+            "aitech_name": "Direct Prompt Injection",
+            "aisubtech": "AISubtech-1.1.1",
+            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
+            "description": "Missing defense against output manipulation where the structure, format, or integrity of tool outputs can be altered through prompt attacks.",
+        },
+        "MULTILANG_BYPASS": {
+            "scanner_category": "PROMPT INJECTION",
+            "severity": "MEDIUM",
+            "aitech": "AITech-1.1",
+            "aitech_name": "Direct Prompt Injection",
+            "aisubtech": "AISubtech-1.1.1",
+            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
+            "description": "Missing defense against multilingual bypass attacks where non-English or mixed-language prompts are used to circumvent safety filters.",
+        },
+        "UNICODE_ATTACK": {
+            "scanner_category": "PROMPT INJECTION",
+            "severity": "MEDIUM",
+            "aitech": "AITech-1.1",
+            "aitech_name": "Direct Prompt Injection",
+            "aisubtech": "AISubtech-1.1.1",
+            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
+            "description": "Missing defense against unicode-based attacks using homoglyphs, zero-width characters, or invisible characters to bypass input filters.",
+        },
+        "CONTEXT_OVERFLOW": {
+            "scanner_category": "DENIAL OF SERVICE",
+            "severity": "MEDIUM",
+            "aitech": "AITech-4.1",
+            "aitech_name": "Denial of Service",
+            "aisubtech": "AISubtech-4.1.1",
+            "aisubtech_name": "Context Window Overflow",
+            "description": "Missing defense against context overflow attacks where excessively long inputs are used to overflow context windows and degrade performance.",
+        },
+        "SOCIAL_ENGINEERING": {
+            "scanner_category": "PROMPT INJECTION",
+            "severity": "MEDIUM",
+            "aitech": "AITech-1.1",
+            "aitech_name": "Direct Prompt Injection",
+            "aisubtech": "AISubtech-1.1.1",
+            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
+            "description": "Missing defense against social engineering attacks using emotional manipulation, fake urgency, or authority impersonation to bypass safety measures.",
+        },
+        "INPUT_VALIDATION": {
+            "scanner_category": "INJECTION ATTACK",
+            "severity": "MEDIUM",
+            "aitech": "AITech-9.1",
+            "aitech_name": "Model or Agentic System Manipulation",
+            "aisubtech": "AISubtech-9.1.4",
+            "aisubtech_name": "Injection Attacks (SQL, Command Execution, XSS)",
+            "description": "Missing defense for input validation, sanitization, or filtering, leaving the tool vulnerable to injection attacks.",
+        },
+        "ABUSE_PREVENTION": {
+            "scanner_category": "DENIAL OF SERVICE",
+            "severity": "LOW",
+            "aitech": "AITech-4.1",
+            "aitech_name": "Denial of Service",
+            "aisubtech": "AISubtech-4.1.1",
+            "aisubtech_name": "Context Window Overflow",
+            "description": "Missing defense against abuse and resource exhaustion through rate limiting, throttling, or quota enforcement.",
+        },
+    }
+
     @classmethod
     def get_threat_mapping(cls, analyzer: str, threat_name: str) -> Dict[str, Any]:
         """
@@ -386,6 +527,9 @@ class ThreatMapping:
             "yara": cls.YARA_THREATS,
             "ai_defense": cls.AI_DEFENSE_THREATS,
             "behavioral": cls.BEHAVIORAL_THREATS,
+            "virustotal": cls.VIRUSTOTAL_THREATS,
+            "prompt_defense": cls.PROMPT_DEFENSE_THREATS,
+            "vulnerable_package": cls.VULNERABLE_PACKAGE_THREATS,
         }
 
         analyzer_lower = analyzer.lower()
@@ -425,3 +569,6 @@ LLM_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.LLM_THREATS)
 YARA_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.YARA_THREATS)
 API_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.AI_DEFENSE_THREATS)
 BEHAVIORAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.BEHAVIORAL_THREATS)
+VIRUSTOTAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VIRUSTOTAL_THREATS)
+PROMPT_DEFENSE_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.PROMPT_DEFENSE_THREATS)
+VULNERABLE_PACKAGE_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VULNERABLE_PACKAGE_THREATS)

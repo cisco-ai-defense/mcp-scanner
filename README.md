@@ -22,9 +22,12 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - **Multiple Modes:** Run scanner as a stand-alone CLI tool or REST API server
 - **Multi-Engine Security Analysis**: Use all three scanning engines together or independently based on your needs.
+- **Vulnerable Packages Scanning**: Scan Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) using pip-audit integration.
 - **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
+- **VirusTotal Binary Scanning**: Automatically detect malware in binary files (images, PDFs, executables, archives) bundled with MCP servers using VirusTotal hash lookups.
+- **Behavioural Code Scanning**: Scan Source code of MCP servers for detecting threats.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
@@ -42,6 +45,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - uv (Python package manager)
 - A valid Cisco AI Defense API Key (optional)
 - LLM Provider API Key (optional)
+- VirusTotal API Key (optional, for binary file malware scanning)
 
 ### Installing as a CLI tool
 
@@ -73,7 +77,7 @@ uv init --python 3.13 #if not already done
 uv add cisco-ai-mcp-scanner
 # then activate the virtual environment:
 ## macOS and Linux: source .venv/bin/activate
-## Windows CMD: .vemv\Scripts\activate
+## Windows CMD: .venv\Scripts\activate
 ## Windows PWSH: .venv\Scripts\Activate.ps1
 uv sync
 ```
@@ -135,6 +139,40 @@ export MCP_SCANNER_LLM_TIMEOUT=300
 ```
 Note: If you are using models from Azure Foundry, set the MCP_SCANNER_LLM_BASE_URL and MCP_SCANNER_LLM_MODEL environment variables, as Microsoft has deprecated the need for MCP_SCANNER_LLM_API_VERSION.
 
+#### VirusTotal Configuration (for file/directory malware scanning)
+
+The VirusTotal analyzer scans files and directories against VirusTotal's malware database using SHA256 hash lookups. It runs as a standalone analyzer via the `virustotal` subcommand or as part of `--analyzers virustotal`.
+
+```bash
+# VirusTotal API key (get one free at https://www.virustotal.com/)
+export VIRUSTOTAL_API_KEY="your_virustotal_api_key"
+
+# Optional: explicitly disable VirusTotal scanning even when API key is present.
+# When not set, scanning is auto-enabled if VIRUSTOTAL_API_KEY is configured.
+# Set to "false" to skip VT scanning without removing the API key (e.g. in CI).
+export MCP_SCANNER_VIRUSTOTAL_ENABLED=false
+
+# Optional: Upload unknown files to VirusTotal for scanning (default: false, privacy-friendly)
+export MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES=false
+
+# Optional: Max files to scan per directory (default: 10, set to 0 for unlimited)
+export MCP_SCANNER_VT_MAX_FILES=10
+```
+
+> **Note:** Without `VIRUSTOTAL_API_KEY`, files will not be scanned for malware. When enabled, the analyzer uses configurable inclusion/exclusion extension lists to determine which files to scan, skipping `__pycache__` and hidden directories.
+
+#### Stdio Connection Timeout
+
+When scanning stdio MCP servers, the scanner waits for the server process to start and respond. The default timeout is 60 seconds, which may be insufficient for servers that download large dependencies on first run. This setting only affects the stdio server connection; LLM/API call timeouts are controlled separately via `MCP_SCANNER_LLM_TIMEOUT`.
+
+```bash
+# Increase stdio server startup timeout (default: 60 seconds)
+export MCP_SCANNER_STDIO_TIMEOUT=180  # 3 minutes — useful for servers with heavy deps
+
+# Or use the CLI flag (overrides the environment variable)
+mcp-scanner --stdio-timeout 180 stdio --stdio-command uvx --stdio-arg mcp-clickhouse
+```
+
 #### Using a Local LLM (No API Key Required)
 
 If you are using a local LLM endpoint such as Ollama, vLLM, or LocalAI,
@@ -160,7 +198,10 @@ mcp-scanner --scan-known-configs --analyzers yara --format summary
 mcp-scanner --stdio-command uvx --stdio-arg=--from --stdio-arg=mcp-server-fetch --stdio-arg=mcp-server-fetch --analyzers yara --format summary
 
 # Remote server (deepwiki example)
-mcp-scanner --server-url https://mcp.deepwki.com/mcp --analyzers yara --format summary
+mcp-scanner --server-url https://mcp.deepwiki.com/mcp --analyzers yara --format summary
+
+# Suppress all output below ERROR (useful in CI/CD)
+mcp-scanner --log-level error --analyzers yara --format raw --server-url https://mcp.deepwiki.com/mcp
 
 # MCP Scanner as REST API
 mcp-scanner-api --host 0.0.0.0 --port 8080
@@ -171,10 +212,15 @@ mcp-scanner-api --host 0.0.0.0 --port 8080
 
 ```python
 import asyncio
-from mcpscanner import Config, Scanner
+import os
+from mcpscanner import Config, Scanner, set_log_level
 from mcpscanner.core.models import AnalyzerEnum
+import logging
 
 async def main():
+    # Suppress all mcpscanner logs below ERROR
+    set_log_level(logging.ERROR)
+
     # Create configuration with your API keys
     config = Config(
         api_key="your_cisco_api_key",
@@ -186,7 +232,7 @@ async def main():
 
     # Scan all tools on a remote server
     tool_results = await scanner.scan_remote_server_tools(
-        "https://mcp.deepwki.com/mcp",
+        "https://mcp.deepwiki.com/mcp",
         analyzers=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
     )
 
@@ -215,6 +261,16 @@ async def main():
     for result in resource_results:
         print(f"Resource: {result.resource_name}, Safe: {result.is_safe}, Status: {result.status}")
 
+    # Scan a stdio server while suppressing its stderr output
+    from mcpscanner.core.mcp_models import StdioServer
+    server = StdioServer(command="uvx", args=["mcp-server-fetch"])
+    with open(os.devnull, "w") as devnull:
+        stdio_results = await scanner.scan_stdio_server_tools(
+            server,
+            analyzers=[AnalyzerEnum.YARA],
+            errlog=devnull
+        )
+
 # Run the scanner
 asyncio.run(main())
 ```
@@ -222,13 +278,15 @@ asyncio.run(main())
 #### Subcommands Overview
 
 - **remote**: scan a remote MCP server (SSE or streamable HTTP). Supports `--server-url`, optional `--bearer-token`, `--header`.
-- **stdio**: launch and scan a stdio MCP server. Requires `--stdio-command`; accepts `--stdio-args`, `--stdio-env`, optional `--stdio-tool`.
+- **stdio**: launch and scan a stdio MCP server. Requires `--stdio-command`; accepts `--stdio-args`, `--stdio-env`, optional `--stdio-tool`, `--stdio-timeout`.
 - **config**: scan servers from a specific MCP config file. Requires `--config-path`; optional `--bearer-token`.
 - **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`, `--header`.
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
-- **supplychain**: scan source code of a MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
+- **virustotal**: scan files or directories for malware using VirusTotal hash lookups. Requires a `scan_path` argument (file or directory).
+- **supplychain**: scan source code of an MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
+- **vulnerable-package**: scan Python dependencies for known vulnerabilities using pip-audit. Requires a path to a requirements file or project directory.
 - **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
 Note: Top-level flags (e.g., `--server-url`, `--stdio-*`, `--config-path`, `--scan-known-configs`) remain supported when no subcommand is used, but subcommands are recommended.
@@ -271,6 +329,10 @@ mcp-scanner --analyzers yara --format summary \
   stdio --stdio-command uvx \
   --stdio-arg=--from --stdio-arg=mcp-server-fetch --stdio-arg=mcp-server-fetch \
   --stdio-tool fetch
+
+# Increase startup timeout for servers with heavy dependencies (default: 60s)
+mcp-scanner --stdio-timeout 180 --analyzers yara --format summary \
+  stdio --stdio-command uvx --stdio-arg mcp-clickhouse@0.1.13
 ```
 
 #### Use a Bearer token with remote servers (non-OAuth)
@@ -362,15 +424,46 @@ mcp-scanner --raw instructions --server-url http://127.0.0.1:8000/mcp
 mcp-scanner instructions --server-url https://your-server.com/mcp --bearer-token "$TOKEN"
 ```
 
-#### Behavioral Code Scanning
+#### VirusTotal Malware Scanning
+
+The VirusTotal analyzer scans files and directories against VirusTotal's malware database using SHA256 hash lookups. It supports configurable inclusion/exclusion extension lists and a per-directory file limit.
+
+```bash
+# Scan a single file
+mcp-scanner virustotal /path/to/suspicious_file.exe
+
+# Scan a directory
+mcp-scanner virustotal /path/to/mcp_server_package/
+
+# With detailed output
+mcp-scanner virustotal /path/to/mcp_server_package/ --format detailed
+
+# Table format
+mcp-scanner virustotal /path/to/mcp_server_package/ --format table
+
+# Save results to file
+mcp-scanner virustotal /path/to/file.bin --output vt_results.json --format raw
+```
+
+> **Note:** Requires `VIRUSTOTAL_API_KEY` environment variable. Free tier allows 4 requests/minute and 500 requests/day.
+
+#### Behavioral Code Scanning (Multi-Language)
 
 The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking.
 
-```bash
-# Scan a single Python file
-mcp-scanner behavioral /path/to/mcp_server.py
+**Supported Languages:** Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Rust, Ruby, PHP
 
-# Scan a directory
+```bash
+# Scan a single file (any supported language)
+mcp-scanner behavioral /path/to/mcp_server.py
+mcp-scanner behavioral /path/to/server.ts
+mcp-scanner behavioral /path/to/server.go
+mcp-scanner behavioral /path/to/McpService.java
+mcp-scanner behavioral /path/to/server.kt
+mcp-scanner behavioral /path/to/Tools.cs
+mcp-scanner behavioral /path/to/server.rs
+
+# Scan a directory (auto-detects language by extension)
 mcp-scanner behavioral /path/to/mcp_servers/
 
 # With specific output format
@@ -385,6 +478,32 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
+
+#### Vulnerable Packages Scanning
+
+The Vulnerable Packages Analyzer scans Python dependencies for known security vulnerabilities (CVE, PYSEC, GHSA) using pip-audit. It requires no API keys and works with requirements files or project directories.
+
+```bash
+# Scan a requirements file
+mcp-scanner vulnerable-package /path/to/requirements.txt
+
+# Scan a project directory (auto-detects requirements.txt or pyproject.toml)
+mcp-scanner vulnerable-package /path/to/project/
+
+# Use OSV vulnerability service instead of PyPI
+mcp-scanner vulnerable-package /path/to/requirements.txt --vulnerability-service osv
+
+# Detailed output with full vulnerability descriptions
+mcp-scanner vulnerable-package /path/to/requirements.txt --format detailed
+
+# Save results to file
+mcp-scanner vulnerable-package /path/to/requirements.txt --output results.json --format raw
+
+# Automatically fix vulnerable dependencies
+mcp-scanner vulnerable-package /path/to/requirements.txt --fix
+```
+
+Each vulnerability is mapped to the Cisco AI Threat Security Taxonomy under **AITech-9.3 / AISubtech-9.3.1 (Malicious Package / Tool Injection)**.
 
 #### Scan Static/Offline Files (CI/CD Mode)
 
@@ -447,6 +566,90 @@ mcp-scanner --analyzers readiness --detailed --server-url http://localhost:8000/
 ```
 
 See [Readiness Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/readiness-scanning.md) for complete technical details.
+
+### Prompt Defense Scanning
+
+The Prompt Defense Analyzer checks MCP tool descriptions and system prompts for **missing** defensive measures against 12 common attack vectors. It is pure regex — no API key or external dependencies required — and always runs by default.
+
+**Attack vectors checked:**
+1. Instruction Override (HIGH)
+2. Data Leakage (HIGH)
+3. Role Escape (HIGH)
+4. Indirect Injection (HIGH)
+5. Output Weaponization (HIGH)
+6. Output Manipulation (MEDIUM)
+7. Multilingual Bypass (MEDIUM)
+8. Unicode/Homoglyph Attack (MEDIUM)
+9. Context Overflow (MEDIUM)
+10. Social Engineering (MEDIUM)
+11. Input Validation (MEDIUM)
+12. Abuse Prevention (LOW)
+
+```bash
+# Prompt defense scan only (no API keys required)
+mcp-scanner --analyzers prompt_defense --server-url http://localhost:8000/mcp
+
+# Combined security + prompt defense scan
+mcp-scanner --analyzers yara,prompt_defense --server-url http://localhost:8000/mcp
+```
+
+Each missing defense maps to MCP Taxonomy codes (AITech / AISubtech) for standardized reporting.
+
+### Logging Control
+
+By default the CLI shows `WARNING`-level output (or `DEBUG` with `--verbose`). For finer control use `--log-level`:
+
+```bash
+# Show only errors (good for CI/CD)
+mcp-scanner --log-level error --analyzers yara --format raw --server-url https://mcp.deepwiki.com/mcp
+
+# Show warnings and above
+mcp-scanner --log-level warning --analyzers yara --format summary --scan-known-configs
+
+# Full debug output (equivalent to --verbose)
+mcp-scanner --log-level debug --analyzers yara --server-url https://mcp.deepwiki.com/mcp
+```
+
+`--log-level` takes precedence over `--verbose` when both are provided.
+
+#### Library Log Level (SDK)
+
+Library consumers can control the log level programmatically. Unlike
+`logging.getLogger("mcpscanner").setLevel(...)`, which does not propagate
+to child loggers, `set_log_level` updates **every** mcpscanner logger and
+handler:
+
+```python
+import logging
+from mcpscanner import set_log_level
+
+set_log_level(logging.ERROR)    # suppress everything below ERROR
+set_log_level(logging.DEBUG)    # show all debug output
+```
+
+#### Suppressing Stdio Server Stderr
+
+MCP servers launched via stdio may emit noisy output to stderr (startup
+banners, dependency logs, etc.). All stdio scan methods accept an `errlog`
+parameter to redirect or suppress this output:
+
+```python
+import os
+from mcpscanner import Scanner, Config
+from mcpscanner.core.mcp_models import StdioServer
+
+scanner = Scanner(Config())
+server = StdioServer(command="uvx", args=["mcp-server-fetch"])
+
+with open(os.devnull, "w") as devnull:
+    results = await scanner.scan_stdio_server_tools(server, errlog=devnull)
+    prompts = await scanner.scan_stdio_server_prompts(server, errlog=devnull)
+```
+
+The `errlog` parameter is supported on `scan_stdio_server_tools`,
+`scan_stdio_server_tool`, `scan_stdio_server_prompts`,
+`scan_stdio_server_prompt`, `scan_well_known_mcp_configs`, and
+`scan_mcp_config_file`.
 
 ### API Server Usage
 
@@ -542,6 +745,8 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
 - **[Behavioral Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
+- **[VirusTotal Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/virustotal-scanning.md)** - File and directory malware scanning with VirusTotal
+- **[Vulnerable Package Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/vulnerable-package-scanning.md)** - Python dependency vulnerability scanning with pip-audit
 - **[LLM Providers](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/llm-providers.md)** - LLM configuration for all providers
 - **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy
 - **[Authentication](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/authentication.md)** - OAuth and security configuration
@@ -552,8 +757,7 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 
 
 ## Contact Cisco for obtaining an AI Defense subscription
-
-https://www.cisco.com/site/us/en/products/security/ai-defense/index.html
+[https://www.cisco.com/c/en/us/products/security/ai-defense/request-demo.html](https://www.cisco.com/c/en/us/products/security/ai-defense/request-demo.html)
 
 ## License
 Distributed under the `Apache 2.0` License. See [LICENSE](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/LICENSE) for more information.
