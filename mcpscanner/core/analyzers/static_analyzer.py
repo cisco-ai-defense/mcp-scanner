@@ -94,6 +94,20 @@ class StaticAnalyzer:
                     f"Invalid JSON in {file_path}: {e.msg}", e.doc, e.pos
                 )
 
+    @staticmethod
+    def _get_finding_analyzer_name(analyzer) -> str:
+        """Get the analyzer name as used in SecurityFinding.analyzer field.
+
+        BaseAnalyzer subclasses may set self.name differently from the value
+        they write into finding.analyzer. This mapping ensures the names
+        reported in result.analyzers match the finding-level names so the
+        report generator groups them correctly.
+        """
+        name_map = {
+            "LLMAnalyzer": "LLM",
+        }
+        return name_map.get(analyzer.name, analyzer.name)
+
     async def _analyze_content(
         self, content: str, context: Optional[Dict[str, Any]] = None
     ) -> List[SecurityFinding]:
@@ -196,7 +210,7 @@ class StaticAnalyzer:
                 "is_safe": len(all_findings) == 0,
                 "findings": all_findings,
                 "status": "completed",
-                "analyzers": [a.name for a in self.analyzers],
+                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
             }
 
             results.append(result)
@@ -267,7 +281,7 @@ class StaticAnalyzer:
                 "is_safe": len(findings) == 0,
                 "findings": findings,
                 "status": "completed",
-                "analyzers": [a.name for a in self.analyzers],
+                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
             }
 
             results.append(result)
@@ -360,7 +374,7 @@ class StaticAnalyzer:
                 "is_safe": len(findings) == 0,
                 "findings": findings,
                 "status": "completed",
-                "analyzers": [a.name for a in self.analyzers],
+                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
             }
 
             results.append(result)

@@ -52,6 +52,7 @@ from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
+from mcpscanner.core.analyzers.meta_analyzer import MetaAnalyzer, apply_meta_analysis
 
 logger = get_logger(__name__)
 
@@ -140,6 +141,7 @@ def _build_config(
             if (
                 AnalyzerEnum.LLM in selected_analyzers
                 or AnalyzerEnum.BEHAVIORAL in selected_analyzers
+                or AnalyzerEnum.META in selected_analyzers
             )
             else ""
         ),
@@ -148,6 +150,7 @@ def _build_config(
             if (
                 AnalyzerEnum.LLM in selected_analyzers
                 or AnalyzerEnum.BEHAVIORAL in selected_analyzers
+                or AnalyzerEnum.META in selected_analyzers
             )
             else ""
         ),
@@ -1219,7 +1222,18 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package, meta (default: %(default)s)",
+    )
+
+    parser.add_argument(
+        "--enable-meta",
+        action="store_true",
+        help=(
+            "Enable the LLM meta-analyzer for second-pass analysis. "
+            "Reviews findings from all other analyzers to filter false positives, "
+            "prioritize by actual risk, and correlate related findings. "
+            "Requires MCP_SCANNER_LLM_API_KEY. Adds 'meta' to the analyzer list."
+        ),
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
@@ -1368,6 +1382,10 @@ async def main():
     # Convert to AnalyzerEnum list
     selected_analyzers = [AnalyzerEnum(name) for name in analyzer_names]
 
+    # Add META analyzer if --enable-meta flag is set
+    if getattr(args, "enable_meta", False) and AnalyzerEnum.META not in selected_analyzers:
+        selected_analyzers.append(AnalyzerEnum.META)
+
     # Validate behavioral analyzer requirements
     if AnalyzerEnum.BEHAVIORAL in selected_analyzers:
         if not args.source_path and not (
@@ -1515,6 +1533,72 @@ async def main():
                         findings=r["findings"],
                     )
                     all_results.append(resource_result)
+
+            if AnalyzerEnum.META in selected_analyzers and cfg.llm_provider_api_key:
+                from mcpscanner.core.result import ToolScanResult, PromptScanResult
+
+                meta_analyzer = MetaAnalyzer(cfg)
+                enriched_results = []
+                for result in all_results:
+                    if not result.findings:
+                        enriched_results.append(result)
+                        continue
+
+                    if isinstance(result, ToolScanResult):
+                        entity_context = {
+                            "type": "tool",
+                            "name": result.tool_name,
+                            "description": result.tool_description,
+                        }
+                    elif isinstance(result, PromptScanResult):
+                        entity_context = {
+                            "type": "prompt",
+                            "name": result.prompt_name,
+                            "description": result.prompt_description,
+                        }
+                    else:
+                        entity_context = {
+                            "type": "resource",
+                            "name": getattr(result, "resource_name", "unknown"),
+                        }
+
+                    tool_analyzers = list({f.analyzer for f in result.findings})
+                    try:
+                        meta_result = await meta_analyzer.analyze_findings(
+                            findings=result.findings,
+                            analyzers_used=tool_analyzers,
+                            entity_context=entity_context,
+                        )
+                        enriched_findings = apply_meta_analysis(
+                            result.findings, meta_result
+                        )
+                        if isinstance(result, ToolScanResult):
+                            enriched_results.append(
+                                ToolScanResult(
+                                    tool_name=result.tool_name,
+                                    tool_description=result.tool_description,
+                                    status=result.status,
+                                    analyzers=result.analyzers,
+                                    findings=enriched_findings,
+                                )
+                            )
+                        elif isinstance(result, PromptScanResult):
+                            enriched_results.append(
+                                PromptScanResult(
+                                    prompt_name=result.prompt_name,
+                                    prompt_description=result.prompt_description,
+                                    status=result.status,
+                                    analyzers=result.analyzers,
+                                    findings=enriched_findings,
+                                )
+                            )
+                        else:
+                            enriched_results.append(result)
+                    except Exception as e:
+                        logger.error(f"Meta-analysis failed for static result: {e}")
+                        enriched_results.append(result)
+
+                all_results = enriched_results
 
             results = await results_to_json(all_results)
 
