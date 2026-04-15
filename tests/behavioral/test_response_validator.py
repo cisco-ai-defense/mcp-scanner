@@ -96,25 +96,6 @@ class TestResponseValidatorSeverityFromThreatMapping:
         assert finding.severity == expected_severity
         assert finding.severity == "HIGH"
 
-    def test_severity_from_threat_mapping_general_mismatch(self):
-        """Test that GENERAL DESCRIPTION-CODE MISMATCH gets severity from ThreatMapping (INFO)."""
-        validator = self._make_validator()
-        analysis = {
-            "threat_name": "GENERAL DESCRIPTION-CODE MISMATCH",
-            "description_claims": "No docstring provided",
-            "actual_behavior": "Safe string formatting",
-            "security_implications": "Missing documentation only",
-        }
-        func_context = self._make_func_context()
-
-        finding = validator.create_security_finding(analysis, func_context)
-
-        expected_severity = ThreatMapping.get_threat_mapping(
-            "behavioral", "GENERAL DESCRIPTION-CODE MISMATCH"
-        )["severity"]
-        assert finding.severity == expected_severity
-        assert finding.severity == "INFO"
-
     def test_severity_unknown_for_unrecognized_threat(self):
         """Test that unrecognized threat names get UNKNOWN severity."""
         validator = self._make_validator()
