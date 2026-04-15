@@ -14,7 +14,7 @@ This directory contains detailed documentation for the MCP Scanner SDK.
 - **[Programmatic Usage](programmatic-usage.md)** - Examples and advanced programmatic usage
 - **[Static Scanning](static-scanning.md)** - Offline/CI-CD scanning mode for pre-generated JSON files
 - **[API Reference](api-reference.md)** - Complete REST API documentation and examples
-- **[Output Formats](output-formats.md)** - Detailed output format options and filtering
+- **[Output Formats & JSON Schema](output-formats.md)** - Output format options, filtering, and complete JSON output schema reference for CI/CD integration
 
 ## Quick Links
 
