@@ -257,19 +257,15 @@ class TestReadinessToolDefinitionParsing:
             [AnalyzerEnum.READINESS]
         )
 
-        # Should not have HEUR-001 (has timeout)
-        timeout_findings = [
-            f for f in result.findings
-            if f.details and f.details.get("rule_id") == "HEUR-001"
-        ]
-        assert len(timeout_findings) == 0
-
-        # Should not have HEUR-003 (has maxRetries)
-        retry_findings = [
-            f for f in result.findings
-            if f.details and f.details.get("rule_id") == "HEUR-003"
-        ]
-        assert len(retry_findings) == 0
+        # Should produce findings only for spec-grounded rules
+        for f in result.findings:
+            if f.details and f.details.get("rule_id"):
+                rule_id = f.details["rule_id"]
+                assert rule_id in [
+                    "HEUR-008", "HEUR-009", "HEUR-010", "HEUR-011",
+                    "HEUR-012", "HEUR-016", "HEUR-017", "HEUR-018",
+                    "HEUR-020",
+                ], f"Unexpected non-spec rule: {rule_id}"
 
 
 class TestReadinessScoreInFindings:
@@ -299,8 +295,7 @@ class TestReadinessScoreInFindings:
         analyzer = ReadinessAnalyzer()
         tool_def = {
             "name": "delete_all",
-            "description": "A",  # Very short, triggers multiple findings
-            "maxRetries": -1,  # Triggers HEUR-004 (HIGH)
+            "description": "delete everything and anything in the system",
         }
         content = json.dumps(tool_def)
         context = {"tool_name": "delete_all"}
@@ -361,65 +356,66 @@ class TestReadinessErrorHandling:
 
 
 class TestReadinessThreatCategories:
-    """Test threat category assignments."""
+    """Test threat category assignments for spec-grounded rules."""
 
     @pytest.mark.asyncio
-    async def test_timeout_threat_category(self):
-        """HEUR-001 and HEUR-002 should use MISSING_TIMEOUT_GUARD."""
+    async def test_output_schema_threat_category(self):
+        """HEUR-008 should use MISSING_ERROR_SCHEMA category."""
         analyzer = ReadinessAnalyzer()
         tool_def = {"name": "test", "description": "A test tool for something useful"}
         content = json.dumps(tool_def)
 
         findings = await analyzer.analyze(content, {"tool_name": "test"})
 
-        timeout_finding = None
+        output_finding = None
         for f in findings:
-            if f.details and f.details.get("rule_id") == "HEUR-001":
-                timeout_finding = f
+            if f.details and f.details.get("rule_id") == "HEUR-008":
+                output_finding = f
                 break
 
-        assert timeout_finding is not None
-        assert timeout_finding.threat_category == "MISSING_TIMEOUT_GUARD"
+        assert output_finding is not None
+        assert output_finding.threat_category == "MISSING_ERROR_SCHEMA"
 
     @pytest.mark.asyncio
-    async def test_retry_threat_category(self):
-        """HEUR-003 through HEUR-005 should use UNSAFE_RETRY_LOOP."""
+    async def test_dangerous_keywords_threat_category(self):
+        """HEUR-018 should use OVERLOADED_TOOL_SCOPE category."""
         analyzer = ReadinessAnalyzer()
         tool_def = {
-            "name": "test",
-            "description": "A test tool for something useful",
-            "maxRetries": -1,
+            "name": "delete_all",
+            "description": "Delete all records from the database",
         }
         content = json.dumps(tool_def)
 
-        findings = await analyzer.analyze(content, {"tool_name": "test"})
+        findings = await analyzer.analyze(content, {"tool_name": "delete_all"})
 
-        retry_finding = None
+        danger_finding = None
         for f in findings:
-            if f.details and f.details.get("rule_id") == "HEUR-004":
-                retry_finding = f
+            if f.details and f.details.get("rule_id") == "HEUR-018":
+                danger_finding = f
                 break
 
-        assert retry_finding is not None
-        assert retry_finding.threat_category == "UNSAFE_RETRY_LOOP"
+        assert danger_finding is not None
+        assert danger_finding.threat_category == "OVERLOADED_TOOL_SCOPE"
 
     @pytest.mark.asyncio
-    async def test_error_schema_threat_category(self):
-        """HEUR-006 through HEUR-008 should use MISSING_ERROR_SCHEMA."""
+    async def test_only_spec_grounded_rules_emitted(self):
+        """Only rules for MCP-spec fields should be present in findings."""
         analyzer = ReadinessAnalyzer()
         tool_def = {"name": "test", "description": "A test tool for something useful"}
         content = json.dumps(tool_def)
 
         findings = await analyzer.analyze(content, {"tool_name": "test"})
 
-        error_finding = None
+        spec_rules = {
+            "HEUR-008", "HEUR-009", "HEUR-010", "HEUR-011",
+            "HEUR-012", "HEUR-016", "HEUR-017", "HEUR-018", "HEUR-020",
+        }
         for f in findings:
-            if f.details and f.details.get("rule_id") == "HEUR-006":
-                error_finding = f
-                break
-
-        assert error_finding is not None
-        assert error_finding.threat_category == "MISSING_ERROR_SCHEMA"
+            rule_id = f.details.get("rule_id") if f.details else None
+            if rule_id:
+                assert rule_id in spec_rules, (
+                    f"Non-spec rule {rule_id} should not be emitted"
+                )
 
 
 class TestReadinessDefaultAnalyzers:

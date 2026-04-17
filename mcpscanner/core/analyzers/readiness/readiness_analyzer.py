@@ -23,41 +23,32 @@ heuristic checks and optional OPA policy evaluation.
 This analyzer focuses on operational reliability, NOT security vulnerabilities.
 It detects issues like missing timeouts, unsafe retry loops, and silent failures.
 
-Implements 20 core heuristic rules (HEUR-001 through HEUR-020):
+Implements 9 heuristic rules grounded in the MCP Tool specification.
 
-Timeout Guards (HEUR-001, HEUR-002):
-- Missing timeout configuration
-- Timeout values too long (>5 minutes)
+All rules validate only fields that exist in the MCP spec (name, description,
+inputSchema, outputSchema, annotations). Rules checking for non-spec fields
+(timeout, retries, rate limit, version, error schema, observability, auth)
+have been removed — those concerns are server/client implementation details,
+not tool schema properties.
 
-Retry Configuration (HEUR-003, HEUR-004, HEUR-005):
-- No retry limit defined
-- Unlimited or excessive retries
-- Missing backoff strategy
+Output Schema:
+- HEUR-008: Missing outputSchema (LOW)
 
-Error Handling (HEUR-006, HEUR-007, HEUR-008):
-- Missing error schema
-- Error schema without error code field
-- Missing output schema
+Description Quality:
+- HEUR-009: Vague or missing description (MEDIUM)
+- HEUR-010: Overloaded tool scope (HIGH)
 
-Description Quality (HEUR-009, HEUR-010):
-- Vague or missing descriptions
-- Overloaded tool scope indicators
+Input Validation (inputSchema):
+- HEUR-011: No required fields (LOW)
+- HEUR-012: No input validation hints (INFO)
 
-Input Validation (HEUR-011, HEUR-012):
-- No required fields defined
-- Missing input validation hints
+Resource Management:
+- HEUR-016: Resource cleanup not documented (MEDIUM)
+- HEUR-017: No idempotency — checks annotations.idempotentHint (INFO)
 
-Operational Config (HEUR-013, HEUR-014, HEUR-015):
-- No rate limiting
-- Missing version information
-- No observability configuration
-
-Resource Management (HEUR-016, HEUR-017):
-- Resource cleanup not documented
-- No idempotency indication
-
-Safety (HEUR-018, HEUR-019, HEUR-020):
-- Dangerous operation keywords
+Safety:
+- HEUR-018: Dangerous operation keywords — checks annotations.destructiveHint (HIGH/MEDIUM)
+- HEUR-020: Circular dependency risk (MEDIUM)
 - No authentication context
 - Circular dependency risk
 
@@ -258,47 +249,35 @@ class ReadinessAnalyzer(BaseAnalyzer):
     def _run_heuristic_checks(
         self, tool_def: Dict[str, Any], tool_name: str
     ) -> List[SecurityFinding]:
-        """Run all heuristic checks on the tool definition."""
+        """Run heuristic checks grounded in the MCP Tool specification.
+
+        Only checks fields that exist in the MCP spec: name, description,
+        inputSchema, outputSchema, and annotations.
+        """
         findings: List[SecurityFinding] = []
 
-        # Timeout Guards
-        findings.extend(self._check_missing_timeout(tool_def, tool_name))
-        findings.extend(self._check_timeout_too_long(tool_def, tool_name))
-
-        # Retry Configuration
-        findings.extend(self._check_no_retry_limit(tool_def, tool_name))
-        findings.extend(self._check_unlimited_retries(tool_def, tool_name))
-        findings.extend(self._check_no_backoff_strategy(tool_def, tool_name))
-
-        # Error Handling
-        findings.extend(self._check_missing_error_schema(tool_def, tool_name))
-        findings.extend(self._check_error_schema_missing_code(tool_def, tool_name))
+        # Output schema (outputSchema is an optional MCP spec field)
         findings.extend(self._check_no_output_schema(tool_def, tool_name))
 
-        # Description Quality
+        # Description quality (description is an MCP spec field)
         findings.extend(self._check_vague_description(tool_def, tool_name))
         findings.extend(self._check_too_many_capabilities(tool_def, tool_name))
 
-        # Input Validation
+        # Input validation (inputSchema is an MCP spec field)
         findings.extend(self._check_no_required_fields(tool_def, tool_name))
         findings.extend(self._check_no_input_validation_hints(tool_def, tool_name))
 
-        # Operational Config
-        findings.extend(self._check_no_rate_limit(tool_def, tool_name))
-        findings.extend(self._check_no_version(tool_def, tool_name))
-        findings.extend(self._check_no_observability(tool_def, tool_name))
-
-        # Resource Management
+        # Resource management (description-based heuristics)
         findings.extend(
             self._check_resource_cleanup_not_documented(tool_def, tool_name)
         )
+        # annotations.idempotentHint is an MCP spec field
         findings.extend(self._check_no_idempotency_indication(tool_def, tool_name))
 
-        # Safety
+        # Safety (annotations.destructiveHint is an MCP spec field)
         findings.extend(
             self._check_dangerous_operation_keywords(tool_def, tool_name)
         )
-        findings.extend(self._check_no_authentication_context(tool_def, tool_name))
         findings.extend(self._check_circular_dependency_risk(tool_def, tool_name))
 
         return findings
@@ -368,344 +347,6 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return max(0, score)
 
     # ===================================================================
-    # HEUR-001: Missing timeout (HIGH)
-    # ===================================================================
-    def _check_missing_timeout(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-001: Check for missing timeout configuration."""
-        findings: List[SecurityFinding] = []
-
-        timeout_fields = ["timeout", "timeoutMs", "timeout_ms", "timeoutSeconds"]
-        has_timeout = any(field in tool_def for field in timeout_fields)
-
-        # Also check nested config
-        config = tool_def.get("config", {})
-        has_timeout = has_timeout or any(field in config for field in timeout_fields)
-
-        if not has_timeout:
-            findings.append(
-                self.create_security_finding(
-                    severity="HIGH",
-                    summary=(
-                        f"Tool '{tool_name}' does not specify a timeout. "
-                        "Operations may hang indefinitely if external services "
-                        "become unresponsive."
-                    ),
-                    threat_category="MISSING_TIMEOUT_GUARD",
-                    details={
-                        "tool_name": tool_name,
-                        "rule_id": "HEUR-001",
-                        "location": f"tool.{tool_name}",
-                        "recommendation": (
-                            "Add a 'timeout' or 'timeoutMs' field with a reasonable "
-                            "value (e.g., 30000 for 30 seconds)"
-                        ),
-                    },
-                )
-            )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-002: Timeout too long (MEDIUM)
-    # ===================================================================
-    def _check_timeout_too_long(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-002: Check if timeout is greater than 300000ms (5 minutes)."""
-        findings: List[SecurityFinding] = []
-
-        timeout_fields = ["timeout", "timeoutMs", "timeout_ms"]
-        config = tool_def.get("config", {})
-
-        for field in timeout_fields:
-            timeout_value = tool_def.get(field) or config.get(field)
-            if timeout_value is not None and timeout_value > 300000:
-                findings.append(
-                    self.create_security_finding(
-                        severity="MEDIUM",
-                        summary=(
-                            f"Tool '{tool_name}' has {field}={timeout_value}ms "
-                            "(over 5 minutes). Long timeouts can cause extended hangs "
-                            "and poor user experience."
-                        ),
-                        threat_category="MISSING_TIMEOUT_GUARD",
-                        details={
-                            "tool_name": tool_name,
-                            "rule_id": "HEUR-002",
-                            "location": f"tool.{tool_name}.{field}",
-                            "field": field,
-                            "value": timeout_value,
-                            "recommendation": (
-                                "Consider reducing timeout to 30-60 seconds "
-                                "for better responsiveness"
-                            ),
-                        },
-                    )
-                )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-003: No retry limit (MEDIUM)
-    # ===================================================================
-    def _check_no_retry_limit(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-003: Check for missing retry limit configuration."""
-        findings: List[SecurityFinding] = []
-
-        retry_fields = [
-            "maxRetries",
-            "retries",
-            "max_retries",
-            "retryCount",
-            "retryLimit",
-            "retry_limit",
-        ]
-        has_retries = any(field in tool_def for field in retry_fields)
-
-        config = tool_def.get("config", {})
-        has_retries = has_retries or any(field in config for field in retry_fields)
-
-        # Also check for retryPolicy object
-        retry_policy = tool_def.get("retryPolicy") or config.get("retryPolicy")
-        if retry_policy and isinstance(retry_policy, dict):
-            has_retries = has_retries or any(
-                field in retry_policy for field in retry_fields
-            )
-
-        if not has_retries:
-            findings.append(
-                self.create_security_finding(
-                    severity="MEDIUM",
-                    summary=(
-                        f"Tool '{tool_name}' does not specify a retry limit. "
-                        "Without limits, retry logic may cause resource exhaustion "
-                        "or infinite loops."
-                    ),
-                    threat_category="UNSAFE_RETRY_LOOP",
-                    details={
-                        "tool_name": tool_name,
-                        "rule_id": "HEUR-003",
-                        "location": f"tool.{tool_name}",
-                        "recommendation": (
-                            "Add a 'maxRetries' or 'retryLimit' field with a "
-                            "reasonable value (e.g., 3)"
-                        ),
-                    },
-                )
-            )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-004: Unlimited retries (HIGH)
-    # ===================================================================
-    def _check_unlimited_retries(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-004: Check for unlimited retries (maxRetries == -1 or > 10)."""
-        findings: List[SecurityFinding] = []
-
-        retry_fields = ["maxRetries", "retries", "max_retries", "retryLimit"]
-        config = tool_def.get("config", {})
-        retry_policy = tool_def.get("retryPolicy") or config.get("retryPolicy") or {}
-
-        for field in retry_fields:
-            retry_value = (
-                tool_def.get(field)
-                or config.get(field)
-                or (retry_policy.get(field) if isinstance(retry_policy, dict) else None)
-            )
-
-            if retry_value is not None:
-                if retry_value == -1:
-                    findings.append(
-                        self.create_security_finding(
-                            severity="HIGH",
-                            summary=(
-                                f"Tool '{tool_name}' has {field}=-1, indicating "
-                                "unlimited retries. This can cause infinite loops "
-                                "and resource exhaustion."
-                            ),
-                            threat_category="UNSAFE_RETRY_LOOP",
-                            details={
-                                "tool_name": tool_name,
-                                "rule_id": "HEUR-004",
-                                "location": f"tool.{tool_name}.{field}",
-                                "field": field,
-                                "value": retry_value,
-                                "recommendation": (
-                                    "Set a finite retry limit (recommended: 3-5 retries)"
-                                ),
-                            },
-                        )
-                    )
-                elif retry_value > 10:
-                    findings.append(
-                        self.create_security_finding(
-                            severity="HIGH",
-                            summary=(
-                                f"Tool '{tool_name}' has {field}={retry_value}. "
-                                "Very high retry limits may cause extended delays "
-                                "during outages."
-                            ),
-                            threat_category="UNSAFE_RETRY_LOOP",
-                            details={
-                                "tool_name": tool_name,
-                                "rule_id": "HEUR-004",
-                                "location": f"tool.{tool_name}.{field}",
-                                "field": field,
-                                "value": retry_value,
-                                "recommendation": "Consider reducing retry limit to 3-5",
-                            },
-                        )
-                    )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-005: No backoff strategy (LOW)
-    # ===================================================================
-    def _check_no_backoff_strategy(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-005: Check for missing backoff strategy when retries are configured."""
-        findings: List[SecurityFinding] = []
-
-        # First check if retries are configured
-        retry_fields = ["maxRetries", "retries", "max_retries", "retryLimit"]
-        config = tool_def.get("config", {})
-        retry_policy = tool_def.get("retryPolicy") or config.get("retryPolicy") or {}
-
-        has_retries = any(
-            (
-                tool_def.get(field)
-                or config.get(field)
-                or (retry_policy.get(field) if isinstance(retry_policy, dict) else None)
-            )
-            for field in retry_fields
-        )
-
-        if has_retries:
-            # Check for backoff configuration
-            backoff_fields = [
-                "backoff",
-                "backoffMs",
-                "exponentialBackoff",
-                "backoffStrategy",
-                "retryDelay",
-                "retryBackoff",
-            ]
-            has_backoff = any(field in tool_def for field in backoff_fields)
-            has_backoff = has_backoff or any(field in config for field in backoff_fields)
-            has_backoff = has_backoff or (
-                isinstance(retry_policy, dict)
-                and any(field in retry_policy for field in backoff_fields)
-            )
-
-            if not has_backoff:
-                findings.append(
-                    self.create_security_finding(
-                        severity="LOW",
-                        summary=(
-                            f"Tool '{tool_name}' has retry logic but no backoff strategy. "
-                            "Without backoff, rapid retries can overwhelm failing services."
-                        ),
-                        threat_category="UNSAFE_RETRY_LOOP",
-                        details={
-                            "tool_name": tool_name,
-                            "rule_id": "HEUR-005",
-                            "location": f"tool.{tool_name}",
-                            "recommendation": (
-                                "Add exponential backoff configuration (e.g., backoffMs, "
-                                "exponentialBackoff) to avoid thundering herd problems"
-                            ),
-                        },
-                    )
-                )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-006: Missing error schema (MEDIUM)
-    # ===================================================================
-    def _check_missing_error_schema(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-006: Check for missing error response schema."""
-        findings: List[SecurityFinding] = []
-
-        error_schema_fields = ["errorSchema", "error_schema", "errors", "errorResponse"]
-        has_error_schema = any(field in tool_def for field in error_schema_fields)
-
-        if not has_error_schema:
-            findings.append(
-                self.create_security_finding(
-                    severity="MEDIUM",
-                    summary=(
-                        f"Tool '{tool_name}' does not define an error response schema. "
-                        "Without structured error responses, agents cannot "
-                        "programmatically handle failures."
-                    ),
-                    threat_category="MISSING_ERROR_SCHEMA",
-                    details={
-                        "tool_name": tool_name,
-                        "rule_id": "HEUR-006",
-                        "location": f"tool.{tool_name}",
-                        "recommendation": (
-                            "Add an 'errorSchema' field defining the structure of "
-                            "error responses with error codes and messages"
-                        ),
-                    },
-                )
-            )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-007: Error schema missing code field (LOW)
-    # ===================================================================
-    def _check_error_schema_missing_code(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-007: Check if error schema exists but lacks a 'code' property."""
-        findings: List[SecurityFinding] = []
-
-        error_schema_fields = ["errorSchema", "error_schema", "errors", "errorResponse"]
-
-        for field in error_schema_fields:
-            error_schema = tool_def.get(field)
-            if error_schema and isinstance(error_schema, dict):
-                properties = error_schema.get("properties", {})
-                if "code" not in properties and "errorCode" not in properties:
-                    findings.append(
-                        self.create_security_finding(
-                            severity="LOW",
-                            summary=(
-                                f"Tool '{tool_name}' has an error schema but it doesn't "
-                                "include a 'code' or 'errorCode' property. Error codes are "
-                                "essential for programmatic error handling."
-                            ),
-                            threat_category="MISSING_ERROR_SCHEMA",
-                            details={
-                                "tool_name": tool_name,
-                                "rule_id": "HEUR-007",
-                                "location": f"tool.{tool_name}.{field}.properties",
-                                "recommendation": (
-                                    "Add a 'code' property to the error schema "
-                                    "(e.g., string enum of error codes)"
-                                ),
-                            },
-                        )
-                    )
-                break  # Only check the first error schema found
-
-        return findings
-
-    # ===================================================================
     # HEUR-008: No output schema (LOW)
     # ===================================================================
     def _check_no_output_schema(
@@ -755,7 +396,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-009: Check if description is missing or too short (<20 chars)."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "")
+        description = tool_def.get("description") or ""
 
         if not description:
             findings.append(
@@ -837,7 +478,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-010: Check if description mentions >5 verbs or overload keywords."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = (tool_def.get("description") or "").lower()
 
         # Check for overload keywords
         overload_keywords = ["any", "all", "everything", "anything", "whatever"]
@@ -1034,137 +675,6 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-013: No rate limit (LOW)
-    # ===================================================================
-    def _check_no_rate_limit(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-013: Check for missing rate limit configuration."""
-        findings: List[SecurityFinding] = []
-
-        rate_limit_fields = [
-            "rateLimit",
-            "rate_limit",
-            "rateLimitPerMinute",
-            "throttle",
-            "maxCallsPerSecond",
-        ]
-        has_rate_limit = any(field in tool_def for field in rate_limit_fields)
-
-        config = tool_def.get("config", {})
-        has_rate_limit = has_rate_limit or any(
-            field in config for field in rate_limit_fields
-        )
-
-        if not has_rate_limit:
-            findings.append(
-                self.create_security_finding(
-                    severity="LOW",
-                    summary=(
-                        f"Tool '{tool_name}' does not specify rate limits. "
-                        "Without rate limits, rapid repeated calls may overwhelm "
-                        "external services or exhaust resources."
-                    ),
-                    threat_category="UNSAFE_RETRY_LOOP",
-                    details={
-                        "tool_name": tool_name,
-                        "rule_id": "HEUR-013",
-                        "location": f"tool.{tool_name}",
-                        "recommendation": (
-                            "Add a 'rateLimit' field specifying maximum calls per time period"
-                        ),
-                    },
-                )
-            )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-014: No version (LOW)
-    # ===================================================================
-    def _check_no_version(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-014: Check for missing version information."""
-        findings: List[SecurityFinding] = []
-
-        version_fields = ["version", "apiVersion", "api_version", "schemaVersion"]
-        has_version = any(field in tool_def for field in version_fields)
-
-        if not has_version:
-            findings.append(
-                self.create_security_finding(
-                    severity="LOW",
-                    summary=(
-                        f"Tool '{tool_name}' does not specify a version. "
-                        "Versioning helps track changes and ensure compatibility "
-                        "when tools evolve over time."
-                    ),
-                    threat_category="NO_OBSERVABILITY_HOOKS",
-                    details={
-                        "tool_name": tool_name,
-                        "rule_id": "HEUR-014",
-                        "location": f"tool.{tool_name}",
-                        "recommendation": (
-                            "Add a 'version' field (e.g., '1.0.0') following semantic versioning"
-                        ),
-                    },
-                )
-            )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-015: No observability config (LOW)
-    # ===================================================================
-    def _check_no_observability(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-015: Check for missing observability/monitoring configuration."""
-        findings: List[SecurityFinding] = []
-
-        observability_fields = [
-            "observability",
-            "logging",
-            "metrics",
-            "telemetry",
-            "tracing",
-            "monitoring",
-            "instrumentation",
-            "logger",
-        ]
-        has_observability = any(field in tool_def for field in observability_fields)
-
-        config = tool_def.get("config", {})
-        has_observability = has_observability or any(
-            field in config for field in observability_fields
-        )
-
-        if not has_observability:
-            findings.append(
-                self.create_security_finding(
-                    severity="LOW",
-                    summary=(
-                        f"Tool '{tool_name}' does not configure observability hooks "
-                        "(logging, metrics, tracing). Without observability, "
-                        "debugging production issues becomes extremely difficult."
-                    ),
-                    threat_category="NO_OBSERVABILITY_HOOKS",
-                    details={
-                        "tool_name": tool_name,
-                        "rule_id": "HEUR-015",
-                        "location": f"tool.{tool_name}",
-                        "recommendation": (
-                            "Add logging, metrics, or tracing configuration to enable "
-                            "monitoring and debugging in production"
-                        ),
-                    },
-                )
-            )
-
-        return findings
-
-    # ===================================================================
     # HEUR-016: Resource cleanup not documented (MEDIUM)
     # ===================================================================
     def _check_resource_cleanup_not_documented(
@@ -1173,7 +683,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-016: Check if description mentions resources but not cleanup."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = (tool_def.get("description") or "").lower()
 
         # Check if tool appears to use resources that need cleanup
         resource_indicators = [
@@ -1234,6 +744,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
 
     # ===================================================================
     # HEUR-017: No idempotency indication (INFO)
+    # The MCP spec provides annotations.idempotentHint for this purpose.
     # ===================================================================
     def _check_no_idempotency_indication(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -1241,9 +752,13 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-017: Check if tool appears to modify state but doesn't document idempotency."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = (tool_def.get("description") or "").lower()
+        annotations = tool_def.get("annotations") or {}
 
-        # Check if tool appears to be state-changing
+        # MCP spec provides annotations.idempotentHint
+        if annotations.get("idempotentHint") is not None:
+            return findings
+
         state_changing_verbs = [
             "create",
             "delete",
@@ -1260,8 +775,11 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         is_state_changing = any(verb in description for verb in state_changing_verbs)
 
+        # Also check if annotations.readOnlyHint is explicitly false
+        if annotations.get("readOnlyHint") is False:
+            is_state_changing = True
+
         if is_state_changing:
-            # Check if idempotency is documented
             idempotency_indicators = [
                 "idempotent",
                 "safe to retry",
@@ -1280,17 +798,18 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         severity="INFO",
                         summary=(
                             f"Tool '{tool_name}' appears to perform state-changing operations "
-                            "but doesn't indicate whether it's idempotent. This is important "
-                            "for retry logic - non-idempotent operations may cause duplicates."
+                            "but doesn't indicate whether it's idempotent. Consider setting "
+                            "annotations.idempotentHint (per the MCP spec) to inform clients."
                         ),
                         threat_category="NON_DETERMINISTIC_RESPONSE",
                         details={
                             "tool_name": tool_name,
                             "rule_id": "HEUR-017",
-                            "location": f"tool.{tool_name}.description",
+                            "location": f"tool.{tool_name}.annotations",
                             "recommendation": (
-                                "Document whether the operation is idempotent and safe to retry. "
-                                "If not idempotent, consider adding idempotency keys."
+                                "Set annotations.idempotentHint to true or false in your "
+                                "tool definition. This MCP spec field helps clients decide "
+                                "whether operations are safe to retry."
                             ),
                         },
                     )
@@ -1299,7 +818,8 @@ class ReadinessAnalyzer(BaseAnalyzer):
         return findings
 
     # ===================================================================
-    # HEUR-018: Dangerous operation keywords (HIGH)
+    # HEUR-018: Dangerous operation keywords (HIGH / MEDIUM)
+    # Severity depends on whether annotations.destructiveHint is set.
     # ===================================================================
     def _check_dangerous_operation_keywords(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -1307,9 +827,10 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-018: Check for dangerous keywords in name/description."""
         findings: List[SecurityFinding] = []
 
-        name = tool_def.get("name", "").lower()
-        description = tool_def.get("description", "").lower()
+        name = (tool_def.get("name") or "").lower()
+        description = (tool_def.get("description") or "").lower()
         combined = f"{name} {description}"
+        annotations = tool_def.get("annotations") or {}
 
         dangerous_keywords = [
             ("delete", "deletion operations"),
@@ -1330,13 +851,22 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 found_dangerous.append((keyword, meaning))
 
         if found_dangerous:
+            has_destructive_hint = annotations.get("destructiveHint") is True
+            severity = "MEDIUM" if has_destructive_hint else "HIGH"
+            hint_note = (
+                " The tool correctly declares annotations.destructiveHint=true."
+                if has_destructive_hint
+                else " Consider setting annotations.destructiveHint=true (per the MCP spec)."
+            )
+
             findings.append(
                 self.create_security_finding(
-                    severity="HIGH",
+                    severity=severity,
                     summary=(
                         f"Tool '{tool_name}' contains dangerous operation keywords: "
                         f"{', '.join(k for k, _ in found_dangerous)}. "
-                        "Tools performing destructive operations require extra safeguards."
+                        f"Tools performing destructive operations require extra safeguards."
+                        f"{hint_note}"
                     ),
                     threat_category="OVERLOADED_TOOL_SCOPE",
                     details={
@@ -1344,74 +874,11 @@ class ReadinessAnalyzer(BaseAnalyzer):
                         "rule_id": "HEUR-018",
                         "location": f"tool.{tool_name}",
                         "keywords": [k for k, m in found_dangerous],
+                        "destructiveHint": has_destructive_hint,
                         "recommendation": (
-                            "Add safeguards: require explicit confirmation, implement dry-run mode, "
-                            "add audit logging, or provide undo/rollback mechanisms"
-                        ),
-                    },
-                )
-            )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-019: No authentication context (INFO)
-    # ===================================================================
-    def _check_no_authentication_context(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-019: Check if tool accesses external resources but has no auth config."""
-        findings: List[SecurityFinding] = []
-
-        auth_fields = [
-            "auth",
-            "authentication",
-            "credentials",
-            "apiKey",
-            "api_key",
-            "token",
-        ]
-        has_auth = any(field in tool_def for field in auth_fields)
-
-        config = tool_def.get("config", {})
-        has_auth = has_auth or any(field in config for field in auth_fields)
-
-        # Check if description mentions external services
-        description = tool_def.get("description", "").lower()
-        external_indicators = [
-            "api",
-            "service",
-            "endpoint",
-            "http",
-            "rest",
-            "request",
-            "external",
-            "remote",
-            "third-party",
-            "cloud",
-            "server",
-        ]
-        mentions_external = any(
-            indicator in description for indicator in external_indicators
-        )
-
-        if mentions_external and not has_auth:
-            findings.append(
-                self.create_security_finding(
-                    severity="INFO",
-                    summary=(
-                        f"Tool '{tool_name}' appears to interact with external services "
-                        "but does not document authentication requirements. This may lead "
-                        "to authorization failures at runtime."
-                    ),
-                    threat_category="SILENT_FAILURE_PATH",
-                    details={
-                        "tool_name": tool_name,
-                        "rule_id": "HEUR-019",
-                        "location": f"tool.{tool_name}",
-                        "recommendation": (
-                            "Document authentication requirements (e.g., 'requires API_KEY "
-                            "environment variable', 'auth' field, or credential configuration)"
+                            "Set annotations.destructiveHint=true in your tool definition "
+                            "so clients can prompt for confirmation. Also consider implementing "
+                            "dry-run mode, audit logging, or undo/rollback mechanisms."
                         ),
                     },
                 )
@@ -1428,7 +895,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-020: Check if tool references itself or common circular patterns."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = (tool_def.get("description") or "").lower()
 
         # Check if tool name appears in its own description (potential self-reference)
         if tool_name and tool_name.lower() in description:
