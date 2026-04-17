@@ -137,7 +137,7 @@ include = ["mcpscanner*"]
 exclude = ["examples*", "evals*"]
 
 [tool.setuptools.package-data]
-"mcpscanner" = ["data/prompts/*.md", "data/yara_rules/*.yara", "data/yara_rules/*.yar"]
+"mcpscanner" = ["data/prompts/*.md", "data/yara_rules/*.yara", "data/yara_rules/*.yar", "data/atr/*.json"]
 
 # Code formatting and linting configuration
 [tool.black]
