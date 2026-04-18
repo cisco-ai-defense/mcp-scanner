@@ -61,6 +61,7 @@ from ..utils.command_utils import (
     resolve_executable_path,
 )
 from .analyzers.api_analyzer import ApiAnalyzer
+from .analyzers.atr_analyzer import ATRAnalyzer
 from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
@@ -156,6 +157,8 @@ class Scanner:
         self._readiness_analyzer = ReadinessAnalyzer()
         # Prompt defense analyzer always available (pure regex, no API keys needed)
         self._prompt_defense_analyzer = PromptDefenseAnalyzer()
+        # ATR analyzer always available (pure regex, no API keys needed)
+        self._atr_analyzer = ATRAnalyzer()
         self._custom_analyzers = custom_analyzers or []
 
         # Debug logging for analyzer initialization
@@ -174,6 +177,8 @@ class Scanner:
             active_analyzers.append("Readiness")
         if self._prompt_defense_analyzer:
             active_analyzers.append("PromptDefense")
+        if self._atr_analyzer:
+            active_analyzers.append("ATR")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
         logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
@@ -240,6 +245,12 @@ class Scanner:
         if AnalyzerEnum.PROMPT_DEFENSE in requested_analyzers and not self._prompt_defense_analyzer:
             missing_requirements.append(
                 "Prompt Defense analyzer requested but failed to initialize"
+            )
+
+        # ATR analyzer should always be available (pure regex, no API keys)
+        if AnalyzerEnum.ATR in requested_analyzers and not self._atr_analyzer:
+            missing_requirements.append(
+                "ATR analyzer requested but failed to initialize"
             )
 
         if missing_requirements:
@@ -349,6 +360,21 @@ class Scanner:
             except Exception as e:
                 logger.error(
                     f'YARA analysis failed on parameters: tool="{name}", error="{e}"'
+                )
+
+        if AnalyzerEnum.ATR in analyzers and self._atr_analyzer:
+            # Run ATR regex analysis on the tool description
+            try:
+                atr_context = {"tool_name": name, "content_type": "description"}
+                atr_findings = await self._atr_analyzer.analyze(
+                    description, atr_context
+                )
+                for finding in atr_findings:
+                    finding.analyzer = "ATR"
+                all_findings.extend(atr_findings)
+            except Exception as e:
+                logger.error(
+                    f'ATR analysis failed on description: tool="{name}", error="{e}"'
                 )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
