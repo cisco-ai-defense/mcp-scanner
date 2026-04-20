@@ -358,44 +358,58 @@ class ReportGenerator:
         output.append(f"Unsafe items: {unsafe_count}")
 
         unsafe_results = [r for r in results if not r.get("is_safe", True)]
+        safe_results = [r for r in results if r.get("is_safe", True)]
+
+        def _render_item(idx: int, result: Dict[str, Any]) -> str:
+            item_type = result.get("item_type", "tool")
+
+            if item_type == "tool":
+                item_name = result.get(
+                    "tool_name", result.get("package_name", "Unknown")
+                )
+            elif item_type == "prompt":
+                item_name = result.get("prompt_name", "Unknown")
+            elif item_type == "resource":
+                item_name = result.get("resource_name", "Unknown")
+            else:
+                item_name = "Unknown"
+
+            findings = result.get("findings", {})
+
+            highest_severity = "SAFE"
+            total_findings = 0
+            for analyzer_data in findings.values():
+                severity = analyzer_data.get("severity", "SAFE")
+                if self._get_severity_order(severity) > self._get_severity_order(
+                    highest_severity
+                ):
+                    highest_severity = severity
+                total_findings += analyzer_data.get("total_findings", 0)
+
+            if "server_name" in result and result["server_name"]:
+                return (
+                    f"{idx}. {item_name} ({item_type}) "
+                    f"(Server: {result['server_name']}) - "
+                    f"{highest_severity} ({total_findings} findings)"
+                )
+            return (
+                f"{idx}. {item_name} ({item_type}) - "
+                f"{highest_severity} ({total_findings} findings)"
+            )
 
         if unsafe_results:
             output.append("\n=== Unsafe Items ===")
             for i, result in enumerate(unsafe_results, 1):
-                item_type = result.get("item_type", "tool")
+                output.append(_render_item(i, result))
 
-                # Get item name based on type
-                if item_type == "tool":
-                    item_name = result.get("tool_name", result.get("package_name", "Unknown"))
-                elif item_type == "prompt":
-                    item_name = result.get("prompt_name", "Unknown")
-                elif item_type == "resource":
-                    item_name = result.get("resource_name", "Unknown")
-                else:
-                    item_name = "Unknown"
-
-                findings = result.get("findings", {})
-
-                # Get the highest severity and total findings count
-                highest_severity = "SAFE"
-                total_findings = 0
-                for analyzer_data in findings.values():
-                    severity = analyzer_data.get("severity", "SAFE")
-                    if self._get_severity_order(severity) > self._get_severity_order(
-                        highest_severity
-                    ):
-                        highest_severity = severity
-                    total_findings += analyzer_data.get("total_findings", 0)
-
-                # Show server name for config-based scans
-                if "server_name" in result and result["server_name"]:
-                    output.append(
-                        f"{i}. {item_name} ({item_type}) (Server: {result['server_name']}) - {highest_severity} ({total_findings} findings)"
-                    )
-                else:
-                    output.append(
-                        f"{i}. {item_name} ({item_type}) - {highest_severity} ({total_findings} findings)"
-                    )
+        # Also enumerate safe items so the summary reflects ALL tools detected
+        # during the scan, not only the ones flagged as malicious. Callers that
+        # want to hide safe items should pass show_safe=False, which filters
+        # them out before this method is reached.
+        if safe_results:
+            output.append("\n=== Safe Items ===")
+            for i, result in enumerate(safe_results, 1):
+                output.append(_render_item(i, result))
 
         return "\n".join(output)
 
