@@ -176,90 +176,160 @@ def _build_config(
     return Config(**config_params)
 
 
-async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
-    """Run behavioral analyzer on source code and format results.
+def _build_behavioral_results(
+    analyzer: Any,
+    findings: List[Any],
+    source_path: str,
+) -> List[Dict[str, Any]]:
+    """Build tool-style result dicts for every function analyzed by the behavioral analyzer.
+
+    The behavioral analyzer only emits a ``SecurityFinding`` when it detects a
+    docstring/behavior mismatch, which means functions that come back clean
+    would otherwise be invisible in the scan output. This helper uses
+    ``analyzer.analyzed_functions`` to ensure the returned list contains one
+    entry per tool discovered during the scan — safe tools (no findings) and
+    unsafe tools (with findings) alike.
 
     Args:
-        source_path: Path to Python file or directory to analyze
+        analyzer: A ``BehavioralCodeAnalyzer`` instance that has just completed
+            an ``analyze()`` call. Its ``analyzed_functions`` attribute is used
+            to enumerate every function the scan visited.
+        findings: The list of ``SecurityFinding`` objects returned by
+            ``analyzer.analyze(...)``.
+        source_path: The original path that was scanned (file or directory).
 
     Returns:
-        List of formatted result dictionaries
+        A list of result dictionaries matching the structure produced elsewhere
+        for tool scan results. Each dictionary exposes ``tool_name``,
+        ``tool_description``, ``status``, ``is_safe`` and ``findings``.
     """
-    from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
-
-    cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
-    analyzer = BehavioralCodeAnalyzer(cfg)
-
-    # Analyze the source file
-    findings = await analyzer.analyze(source_path, context={"file_path": source_path})
-
-    # Format results to match Scanner output structure
-    findings_by_function = {}
+    # Group findings by (source_file, function_name) so multi-file scans with
+    # identically named functions don't collide on a single result entry.
+    findings_by_key: Dict[tuple, List[Any]] = {}
     for finding in findings:
-        func_name = (
-            finding.details.get("function_name", "unknown")
-            if finding.details
-            else "unknown"
-        )
+        details = finding.details or {}
+        func_name = details.get("function_name", "unknown")
+        src_file = details.get("source_file", source_path)
+        findings_by_key.setdefault((src_file, func_name), []).append(finding)
 
-        if func_name not in findings_by_function:
-            findings_by_function[func_name] = []
-        findings_by_function[func_name].append(finding)
+    severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+    results: List[Dict[str, Any]] = []
+    seen_keys: set = set()
 
-    # Create ToolScanResult-like structure
-    results = []
-    for func_name, func_findings in findings_by_function.items():
-        severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
-        max_severity = max(
-            (f.severity for f in func_findings), key=lambda s: severity_order.get(s, 0)
-        )
+    # Iterate over every function the analyzer processed so that safe tools
+    # appear in the output even when no finding was produced for them.
+    analyzed_functions = getattr(analyzer, "analyzed_functions", []) or []
+    for analyzed in analyzed_functions:
+        func_name = analyzed.get("name", "unknown")
+        source_file = analyzed.get("source_file", source_path)
+        key = (source_file, func_name)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
 
-        source_file = (
-            func_findings[0].details.get("source_file", source_path)
-            if func_findings[0].details
+        display_name = (
+            os.path.basename(source_file)
+            if source_file and source_file != source_path
             else source_path
         )
-        display_name = (
-            os.path.basename(source_file) if source_file != source_path else source_path
-        )
 
-        # Collect unique MCP taxonomies from all findings
-        mcp_taxonomies = []
-        for finding in func_findings:
-            if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+        func_findings = findings_by_key.get(key, [])
+
+        if func_findings:
+            max_severity = max(
+                (f.severity for f in func_findings),
+                key=lambda s: severity_order.get(s, 0),
+            )
+
+            mcp_taxonomies: List[Dict[str, Any]] = []
+            for finding in func_findings:
+                taxonomy = getattr(finding, "mcp_taxonomy", None)
+                if not taxonomy:
+                    continue
                 taxonomy_key = (
-                    finding.mcp_taxonomy.get("aitech"),
-                    finding.mcp_taxonomy.get("aisubtech"),
+                    taxonomy.get("aitech"),
+                    taxonomy.get("aisubtech"),
                 )
                 existing_keys = [
                     (t.get("aitech"), t.get("aisubtech")) for t in mcp_taxonomies
                 ]
                 if taxonomy_key not in existing_keys:
-                    mcp_taxonomies.append(finding.mcp_taxonomy)
+                    mcp_taxonomies.append(taxonomy)
 
-        # Get threat/vulnerability classification from first finding
-        threat_vuln_classification = None
-        if func_findings and func_findings[0].details:
-            threat_vuln_classification = func_findings[0].details.get(
-                "threat_vulnerability_classification"
+            threat_vuln_classification = None
+            if func_findings[0].details:
+                threat_vuln_classification = func_findings[0].details.get(
+                    "threat_vulnerability_classification"
+                )
+
+            analyzer_finding: Dict[str, Any] = {
+                "severity": max_severity,
+                "threat_summary": func_findings[0].summary,
+                "threat_names": sorted(
+                    {f.threat_category for f in func_findings if f.threat_category}
+                ),
+                "total_findings": len(func_findings),
+                "source_file": source_file,
+                "mcp_taxonomies": mcp_taxonomies,
+            }
+            if threat_vuln_classification:
+                analyzer_finding["threat_vulnerability_classification"] = (
+                    threat_vuln_classification
+                )
+
+            results.append(
+                {
+                    "tool_name": func_name,
+                    "tool_description": f"MCP function from {display_name}",
+                    "status": "completed",
+                    "is_safe": False,
+                    "findings": {"behavioral_analyzer": analyzer_finding},
+                }
+            )
+        else:
+            # No mismatch detected for this tool — still surface it as a safe
+            # result so the scan output enumerates ALL tools that were found,
+            # not only the ones flagged as malicious.
+            results.append(
+                {
+                    "tool_name": func_name,
+                    "tool_description": f"MCP function from {display_name}",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {
+                        "behavioral_analyzer": {
+                            "severity": "SAFE",
+                            "threat_summary": "No behavioral mismatches detected",
+                            "threat_names": [],
+                            "total_findings": 0,
+                            "source_file": source_file,
+                            "mcp_taxonomies": [],
+                        }
+                    },
+                }
             )
 
-        analyzer_finding = {
-            "severity": max_severity,
-            "threat_summary": func_findings[0].summary,
-            "threat_names": list(
-                set([f.threat_category for f in func_findings])
-            ),  # Deduplicate
-            "total_findings": len(func_findings),
-            "source_file": source_file,
-            "mcp_taxonomies": mcp_taxonomies,
-        }
+    # Surface any findings that didn't match a recorded analyzed function
+    # (defensive: should be rare, but guarantees no finding is dropped).
+    for (src_file, func_name), func_findings in findings_by_key.items():
+        if (src_file, func_name) in seen_keys:
+            continue
+        seen_keys.add((src_file, func_name))
 
-        # Add threat/vulnerability classification if available
-        if threat_vuln_classification:
-            analyzer_finding["threat_vulnerability_classification"] = (
-                threat_vuln_classification
-            )
+        max_severity = max(
+            (f.severity for f in func_findings),
+            key=lambda s: severity_order.get(s, 0),
+        )
+        display_name = (
+            os.path.basename(src_file)
+            if src_file and src_file != source_path
+            else source_path
+        )
+        mcp_taxonomies = []
+        for finding in func_findings:
+            taxonomy = getattr(finding, "mcp_taxonomy", None)
+            if taxonomy and taxonomy not in mcp_taxonomies:
+                mcp_taxonomies.append(taxonomy)
 
         results.append(
             {
@@ -267,12 +337,23 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
                 "tool_description": f"MCP function from {display_name}",
                 "status": "completed",
                 "is_safe": False,
-                "findings": {"behavioral_analyzer": analyzer_finding},
+                "findings": {
+                    "behavioral_analyzer": {
+                        "severity": max_severity,
+                        "threat_summary": func_findings[0].summary,
+                        "threat_names": sorted(
+                            {f.threat_category for f in func_findings if f.threat_category}
+                        ),
+                        "total_findings": len(func_findings),
+                        "source_file": src_file,
+                        "mcp_taxonomies": mcp_taxonomies,
+                    }
+                },
             }
         )
 
     if not results:
-        results = [
+        results.append(
             {
                 "tool_name": "No MCP functions found",
                 "tool_description": f"No @mcp.tool() decorators found in {source_path}",
@@ -280,9 +361,30 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
                 "is_safe": True,
                 "findings": {},
             }
-        ]
+        )
 
     return results
+
+
+async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
+    """Run behavioral analyzer on source code and format results.
+
+    Args:
+        source_path: Path to Python file or directory to analyze
+
+    Returns:
+        List of formatted result dictionaries containing every MCP tool the
+        analyzer visited, regardless of whether it produced a finding. Tools
+        with no behavioral mismatch are included with ``is_safe=True``.
+    """
+    from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+
+    cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
+    analyzer = BehavioralCodeAnalyzer(cfg)
+
+    findings = await analyzer.analyze(source_path, context={"file_path": source_path})
+
+    return _build_behavioral_results(analyzer, findings, source_path)
 
 
 async def scan_mcp_server_direct(
@@ -1906,121 +2008,29 @@ async def main():
                 source_path, context={"file_path": source_path}
             )
 
-            # Format results to match Scanner output structure
-            # Group findings by function to create tool-like results
-            findings_by_function = {}
-            for finding in findings:
-                # Extract function name from details (not summary!)
-                func_name = (
-                    finding.details.get("function_name", "unknown")
-                    if finding.details
-                    else "unknown"
-                )
+            # Build a result entry for every analyzed MCP tool — including
+            # tools with no findings (is_safe=True). This ensures the scan
+            # output enumerates ALL tools detected during the scan, not only
+            # tools flagged as malicious.
+            results = _build_behavioral_results(analyzer, findings, source_path)
 
-                if func_name not in findings_by_function:
-                    findings_by_function[func_name] = []
-                findings_by_function[func_name].append(finding)
-
-            # Create ToolScanResult-like structure for each function
-            results = []
-            for func_name, func_findings in findings_by_function.items():
-                # Get highest severity
-                severity_order = {
-                    "HIGH": 3,
-                    "MEDIUM": 2,
-                    "LOW": 1,
-                    "SAFE": 0,
-                    "UNKNOWN": 0,
-                }
-                max_severity = max(
-                    (f.severity for f in func_findings),
-                    key=lambda s: severity_order.get(s, 0),
-                )
-
-                # Get source file from findings (for directory scans)
-                source_file = (
-                    func_findings[0].details.get("source_file", source_path)
-                    if func_findings[0].details
-                    else source_path
-                )
-
-                display_name = (
-                    os.path.basename(source_file)
-                    if source_file != source_path
-                    else source_path
-                )
-
-                # Collect all taxonomies from findings
-                mcp_taxonomies = []
-                for finding in func_findings:
-                    if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
-                        if finding.mcp_taxonomy not in mcp_taxonomies:
-                            mcp_taxonomies.append(finding.mcp_taxonomy)
-
-                # Get threat/vulnerability classification from first finding
-                threat_vuln_classification = None
-                if func_findings and func_findings[0].details:
-                    threat_vuln_classification = func_findings[0].details.get(
-                        "threat_vulnerability_classification"
-                    )
-
-                # Determine if safe based on severity
-                is_safe = max_severity in ["SAFE", "LOW"]
-
-                analyzer_finding = {
-                    "severity": max_severity,
-                    "threat_summary": func_findings[0].summary,
-                    "threat_names": list(
-                        set([f.threat_category for f in func_findings])
-                    ),  # Deduplicate
-                    "total_findings": len(func_findings),
-                    "source_file": source_file,  # Include source file in output
-                    "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
-                }
-
-                # Add threat/vulnerability classification if available
-                if threat_vuln_classification:
-                    analyzer_finding["threat_vulnerability_classification"] = (
-                        threat_vuln_classification
-                    )
-
-                results.append(
-                    {
-                        "tool_name": func_name,  # This should match the name from decorator params or function name
-                        "tool_description": f"MCP function from {display_name}",
-                        "status": "completed",
-                        "is_safe": is_safe,
-                        "findings": {"behavioral_analyzer": analyzer_finding},
-                    }
-                )
-
-            # If no findings, all functions are safe
-            if not results:
-                results.append(
-                    {
-                        "tool_name": source_path,
-                        "tool_description": "MCP server source code",
-                        "status": "completed",
-                        "is_safe": True,
-                        "findings": {},
-                    }
-                )
-
-            # Automatically filter out VULNERABILITY findings - only show THREATS
+            # Filter out VULNERABILITY findings — only surface THREATS — while
+            # always keeping safe results so every analyzed tool remains
+            # visible in the output.
             filtered_results = []
             for result in results:
-                # Check if result has behavioral_analyzer findings with classification
-                if "findings" in result and "behavioral_analyzer" in result["findings"]:
-                    analyzer_data = result["findings"]["behavioral_analyzer"]
-                    classification = analyzer_data.get(
-                        "threat_vulnerability_classification", ""
-                    ).upper()
+                if result.get("is_safe", False):
+                    filtered_results.append(result)
+                    continue
 
-                    # Only include THREAT findings, exclude VULNERABILITY
-                    if classification == "THREAT":
-                        filtered_results.append(result)
-                # Keep results without findings (safe results)
-                elif not result.get("findings"):
+                analyzer_data = result.get("findings", {}).get(
+                    "behavioral_analyzer", {}
+                )
+                classification = (
+                    analyzer_data.get("threat_vulnerability_classification") or ""
+                ).upper()
+
+                if classification == "THREAT":
                     filtered_results.append(result)
 
             results = filtered_results
