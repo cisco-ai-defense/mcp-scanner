@@ -26,7 +26,7 @@ Checks:
     MCPS-003: No message signing detected (CWE-345)
     MCPS-004: No replay protection (CWE-294)
     MCPS-005: Tool definitions lack integrity hashes (CWE-494)
-    MCPS-006: Tool poisoning in descriptions (CWE-74)
+    MCPS-006: (removed -- handled by existing LLM/YARA analyzers)
     MCPS-007: Spoofed agent identity accepted (CWE-290)
     MCPS-008: Fail-open semantics (CWE-636)
     MCPS-009: No rate limiting (CWE-770)
@@ -38,11 +38,7 @@ References:
         https://github.com/OWASP/AISVS
 """
 
-import asyncio
-import hashlib
 import json
-import re
-import ssl
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -51,20 +47,6 @@ import httpx
 
 from .base import BaseAnalyzer, SecurityFinding
 
-
-# Prompt injection patterns in tool descriptions
-_POISONING_PATTERNS = [
-    re.compile(r"ignore\s+(previous|all|above)", re.IGNORECASE),
-    re.compile(r"system\s+(command|prompt|override)", re.IGNORECASE),
-    re.compile(r"<script", re.IGNORECASE),
-    re.compile(r"javascript:", re.IGNORECASE),
-    re.compile(r"you\s+are\s+now", re.IGNORECASE),
-    re.compile(r"act\s+as", re.IGNORECASE),
-    re.compile(r"pretend\s+to\s+be", re.IGNORECASE),
-    re.compile(r"do\s+not\s+tell\s+the\s+user", re.IGNORECASE),
-    re.compile(r"IMPORTANT:.*call\s+", re.IGNORECASE),
-    re.compile(r"override.*policy", re.IGNORECASE),
-]
 
 
 class ProtocolAnalyzer(BaseAnalyzer):
@@ -127,7 +109,7 @@ class ProtocolAnalyzer(BaseAnalyzer):
             findings.extend(self._check_signing(tools_response, init_response))
             findings.extend(await self._check_replay(client, target))
             findings.extend(self._check_tool_integrity(tools_response))
-            findings.extend(self._check_tool_poisoning(tools_response))
+            # Tool description scanning handled by existing analyzers (LLM, YARA)
             findings.extend(await self._check_spoofed_identity(client, target))
             findings.extend(await self._check_fail_open(client, target))
             findings.extend(await self._check_rate_limiting(client, target))
@@ -390,43 +372,7 @@ class ProtocolAnalyzer(BaseAnalyzer):
             )
         ]
 
-    # ── MCPS-006: Tool Poisoning ────────────────────────────────
-
-    def _check_tool_poisoning(
-        self, tools_response: Optional[httpx.Response]
-    ) -> List[SecurityFinding]:
-        """Check tool descriptions for prompt injection patterns."""
-        tools = self._get_tools(tools_response)
-        if not tools:
-            return []
-
-        findings = []
-        for tool in tools:
-            if not isinstance(tool, dict):
-                continue
-            desc = tool.get("description", "")
-            name = tool.get("name", "unknown")
-
-            for pattern in _POISONING_PATTERNS:
-                if pattern.search(desc):
-                    findings.append(
-                        self.create_security_finding(
-                            severity="HIGH",
-                            summary=f"Tool '{name}' description contains prompt "
-                            f"injection pattern: {pattern.pattern}",
-                            threat_category="Tool Poisoning",
-                            details={
-                                "check_id": "MCPS-006",
-                                "cwe": "CWE-74",
-                                "tool_name": name,
-                                "pattern": pattern.pattern,
-                                "owasp_ref": "MCP Security Cheat Sheet Section 2",
-                            },
-                        )
-                    )
-                    break
-
-        return findings
+    # MCPS-006 (Tool Poisoning) removed -- handled by existing LLM/YARA analyzers
 
     # ── MCPS-007: Spoofed Identity ──────────────────────────────
 

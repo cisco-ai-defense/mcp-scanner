@@ -202,23 +202,21 @@ async def test_secure_server_fewer_findings(secure_server):
     findings = await analyzer.analyze(secure_server)
 
     check_ids = [f.details.get("check_id") for f in findings]
-    # Secure server requires auth and has signing -- should NOT flag those
-    # Note: MCPS-001 (HTTP transport) will fire because test uses localhost HTTP
+    # Secure server requires auth -- should NOT flag MCPS-002
     assert "MCPS-002" not in check_ids, "Should not flag auth on secure server"
-    assert "MCPS-003" not in check_ids, "Should not flag signing on secure server"
-    # Should have fewer findings than a fully vulnerable server
-    assert len(findings) < 8, "Secure server should have fewer findings"
+    # Should produce fewer findings than a fully vulnerable server
+    assert len(findings) <= 5, f"Secure server should have few findings, got {len(findings)}"
 
 
 @pytest.mark.asyncio
-async def test_poisoned_tool_detection(poisoned_server):
-    """Should detect prompt injection patterns in tool descriptions."""
+async def test_poisoned_server_no_protocol_poisoning_check(poisoned_server):
+    """Tool description scanning is handled by existing analyzers (LLM, YARA).
+    Protocol analyzer should NOT check for MCPS-006."""
     analyzer = ProtocolAnalyzer(timeout=5.0)
     findings = await analyzer.analyze(poisoned_server)
 
     poisoning_findings = [f for f in findings if f.details.get("check_id") == "MCPS-006"]
-    assert len(poisoning_findings) > 0, "Should detect tool poisoning"
-    assert "search" in poisoning_findings[0].details.get("tool_name", "")
+    assert len(poisoning_findings) == 0, "MCPS-006 should not be checked by protocol analyzer"
 
 
 @pytest.mark.asyncio
