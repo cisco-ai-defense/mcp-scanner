@@ -92,9 +92,13 @@ class SecureHandler(BaseHTTPRequestHandler):
     """A secure MCP server that rejects unauthenticated requests."""
 
     def do_POST(self):
+        # Always include signing headers (server signs all responses)
+        self.send_header_signature = True
+
         if not self.headers.get("Authorization"):
             self.send_response(401)
             self.send_header("Content-Type", "application/json")
+            self.send_header("X-MCPS-Signature", "auth-required")
             self.end_headers()
             self.wfile.write(
                 json.dumps({"error": {"code": -32001, "message": "Unauthorized"}}).encode()
@@ -199,8 +203,11 @@ async def test_secure_server_fewer_findings(secure_server):
 
     check_ids = [f.details.get("check_id") for f in findings]
     # Secure server requires auth and has signing -- should NOT flag those
+    # Note: MCPS-001 (HTTP transport) will fire because test uses localhost HTTP
     assert "MCPS-002" not in check_ids, "Should not flag auth on secure server"
     assert "MCPS-003" not in check_ids, "Should not flag signing on secure server"
+    # Should have fewer findings than a fully vulnerable server
+    assert len(findings) < 8, "Secure server should have fewer findings"
 
 
 @pytest.mark.asyncio
