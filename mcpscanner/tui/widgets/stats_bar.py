@@ -36,9 +36,10 @@ class StatsBar(Widget):
                 if sev != "SAFE":
                     severity_counts[sev] = severity_counts.get(sev, 0) + 1
 
-        high = severity_counts.get("HIGH", 0) + severity_counts.get("UNKNOWN", 0)
+        high = severity_counts.get("HIGH", 0)
         medium = severity_counts.get("MEDIUM", 0)
         low = severity_counts.get("LOW", 0)
+        unknown = severity_counts.get("UNKNOWN", 0)
 
         line = (
             f"[bold]Total:[/] {total}  "
@@ -47,6 +48,7 @@ class StatsBar(Widget):
             f"│  "
             f"[bold #f85149]H:[/] {high}  "
             f"[bold #d29922]M:[/] {medium}  "
-            f"[bold #e3b341]L:[/] {low}"
+            f"[bold #e3b341]L:[/] {low}  "
+            f"[bold #a371f7]U:[/] {unknown}"
         )
         yield Static(line)

@@ -34,10 +34,17 @@ class ResultsScreen(Screen):
         yield Header()
         with VerticalScroll(id="results-container"):
             with Horizontal(id="results-header"):
-                server = self.results_dict.get(
-                    "server_url", self.results_dict.get("mcp_server_repository", "")
+                artifact_label, artifact_value = _resolve_artifact(self.results_dict)
+                overall_safe = all(
+                    r.get("is_safe", True) for r in self.scan_results
+                ) if self.scan_results else True
+                status_color = "#3fb950" if overall_safe else "#f85149"
+                status_text = "SAFE" if overall_safe else "UNSAFE"
+                yield Static(
+                    f"  {artifact_label}: {artifact_value}   "
+                    f"[bold {status_color}]\\[{status_text}][/]",
+                    id="results-title",
                 )
-                yield Static(f"  Results: {server}", id="results-title")
                 with Horizontal(id="results-actions"):
                     yield Button("Export", id="export-btn", classes="-secondary")
                     yield Button("New Scan", id="new-scan-btn", variant="success")
@@ -49,20 +56,19 @@ class ResultsScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#results-table", DataTable)
-        table.add_columns("Status", "Name", "Severity", "Analyzer", "Threat")
+        table.add_columns("Tool Name", "Severity", "AITech ID - Name", "Analyzer", "Threat")
 
         for result in self.scan_results:
             name = result.get(
                 "tool_name",
                 result.get("package_name", result.get("prompt_name", "Unknown")),
             )
-            is_safe = result.get("is_safe", True)
-            status = "[#3fb950]SAFE[/]" if is_safe else "[#f85149]UNSAFE[/]"
 
             findings = result.get("findings", {})
             severities = []
             analyzers_used = []
             threats = []
+            aitech_entries: list[str] = []
 
             for analyzer_key, data in findings.items():
                 sev = data.get("severity", "SAFE")
@@ -73,13 +79,19 @@ class ResultsScreen(Screen):
                 for t in data.get("threat_names", []):
                     if t not in threats:
                         threats.append(t)
+                for entry in _extract_aitech(data):
+                    if entry not in aitech_entries:
+                        aitech_entries.append(entry)
 
             highest = _highest_severity(severities) if severities else "SAFE"
             severity_display = _severity_styled(highest)
             analyzer_display = ", ".join(analyzers_used[:3]) if analyzers_used else "—"
             threat_display = ", ".join(threats[:2]) if threats else "—"
+            aitech_display = ", ".join(aitech_entries[:2]) if aitech_entries else "—"
 
-            table.add_row(status, name, severity_display, analyzer_display, threat_display)
+            table.add_row(
+                name, severity_display, aitech_display, analyzer_display, threat_display
+            )
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.cursor_row is not None and 0 <= event.cursor_row < len(self.scan_results):
@@ -186,27 +198,84 @@ class ExportModal(Screen):
 
 
 def _highest_severity(severities: list[str]) -> str:
-    order = {"HIGH": 0, "UNKNOWN": 0, "MEDIUM": 1, "LOW": 2, "SAFE": 3}
-    return min(severities, key=lambda s: order.get(s, 3))
+    order = {"HIGH": 0, "UNKNOWN": 1, "MEDIUM": 2, "LOW": 3, "SAFE": 4}
+    return min(severities, key=lambda s: order.get(s, 4))
 
 
 def _severity_styled(severity: str) -> str:
-    colors = {
-        "HIGH": "#f85149",
-        "UNKNOWN": "#f85149",
-        "MEDIUM": "#d29922",
-        "LOW": "#e3b341",
-        "SAFE": "#3fb950",
-    }
-    color = colors.get(severity, "#8b949e")
+    color = _severity_color(severity)
     return f"[bold {color}]{severity}[/]"
 
 
 def _severity_color(severity: str) -> str:
     return {
         "HIGH": "#f85149",
-        "UNKNOWN": "#f85149",
+        "UNKNOWN": "#a371f7",
         "MEDIUM": "#d29922",
         "LOW": "#e3b341",
         "SAFE": "#3fb950",
     }.get(severity, "#8b949e")
+
+
+def _extract_aitech(analyzer_data: Dict[str, Any]) -> List[str]:
+    """Extract a list of "AITech-X.Y - Name" strings from analyzer findings.
+
+    Supports both the list form (`mcp_taxonomies`) emitted by `results_to_json`
+    and the singular dict form (`mcp_taxonomy` / `threats`) emitted by
+    `format_results_by_analyzer_json` for backwards compatibility.
+    """
+    entries: List[str] = []
+    taxonomies = analyzer_data.get("mcp_taxonomies")
+    if not isinstance(taxonomies, list):
+        taxonomies = []
+        single = analyzer_data.get("mcp_taxonomy") or analyzer_data.get("threats")
+        if isinstance(single, dict):
+            taxonomies = [single]
+
+    for tax in taxonomies:
+        if not isinstance(tax, dict):
+            continue
+        aitech_id = tax.get("aitech")
+        aitech_name = tax.get("aitech_name")
+        if aitech_id and aitech_name:
+            entries.append(f"{aitech_id} - {aitech_name}")
+        elif aitech_id:
+            entries.append(str(aitech_id))
+        elif aitech_name:
+            entries.append(str(aitech_name))
+    return entries
+
+
+def _resolve_artifact(results_dict: Dict[str, Any]) -> tuple[str, str]:
+    """Determine an appropriate label and value for the scanned artifact.
+
+    Returns a (label, value) tuple distinguishing remote URLs from local
+    files/configs/paths so the header reflects what was actually scanned.
+    """
+    raw = results_dict.get("server_url") or results_dict.get(
+        "mcp_server_repository", ""
+    )
+    raw_str = str(raw)
+
+    # Internal prefixes used by the TUI scan pipeline.
+    for prefix, label in (
+        ("vulnerable-packages:", "Server Artifact (path)"),
+        ("behavioral:", "Server Artifact (source)"),
+        ("virustotal:", "Server Artifact (path)"),
+        ("stdio:", "Server Artifact (stdio)"),
+    ):
+        if raw_str.startswith(prefix):
+            return label, raw_str[len(prefix):] or "—"
+
+    if raw_str == "well-known-configs":
+        return "Server Artifact (configs)", "well-known MCP client configs"
+
+    lowered = raw_str.lower()
+    if lowered.startswith(("http://", "https://", "ws://", "wss://", "sse://")):
+        return "Server Artifact (URL)", raw_str
+
+    if raw_str:
+        # Anything else is treated as a local path (config file, tools file, …).
+        return "Server Artifact (file)", raw_str
+
+    return "Server Artifact", "—"

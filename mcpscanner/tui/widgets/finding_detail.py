@@ -85,7 +85,7 @@ class FindingDetail(Widget):
 def _severity_color(severity: str) -> str:
     return {
         "HIGH": "#f85149",
-        "UNKNOWN": "#f85149",
+        "UNKNOWN": "#a371f7",
         "MEDIUM": "#d29922",
         "LOW": "#e3b341",
         "SAFE": "#3fb950",

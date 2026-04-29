@@ -30,11 +30,21 @@ MODE_TITLES = {
 class ScanConfigScreen(Screen):
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
+        Binding("ctrl+y", "toggle_analyzer('yara')", "YARA", show=False),
+        Binding("ctrl+a", "toggle_analyzer('api')", "API", show=False),
+        Binding("ctrl+l", "toggle_analyzer('llm')", "LLM", show=False),
     ]
 
     def __init__(self, mode: str) -> None:
         super().__init__()
         self.mode = mode
+
+    def action_toggle_analyzer(self, name: str) -> None:
+        try:
+            cb = self.query_one(f"#chk-{name}", Checkbox)
+            cb.value = not cb.value
+        except Exception:
+            pass
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -176,7 +186,10 @@ class ScanConfigScreen(Screen):
 
     def _analyzer_checkboxes(self) -> ComposeResult:
         with Vertical(classes="form-group"):
-            yield Label("Analyzers", classes="form-label")
+            yield Label(
+                "Analyzers  [#6e7681](click or Tab + Space to toggle · Ctrl+Y / Ctrl+A / Ctrl+L)[/]",
+                classes="form-label",
+            )
             with Horizontal(id="analyzer-checkboxes"):
                 yield Checkbox("YARA", value=True, id="chk-yara")
                 yield Checkbox("API", value=True, id="chk-api")

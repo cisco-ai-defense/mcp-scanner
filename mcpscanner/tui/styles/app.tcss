@@ -142,12 +142,36 @@ Select {
 }
 
 Checkbox {
-    background: transparent;
+    background: #0d1117;
+    border: tall #30363d;
+    padding: 0 1;
     margin-right: 2;
+    color: #e6edf3;
 }
 
 Checkbox:focus {
-    background: #21262d;
+    border: tall #049fd9;
+    background: #161b22;
+}
+
+Checkbox > .toggle--button {
+    color: #161b22;
+    background: #161b22;
+}
+
+Checkbox.-on > .toggle--button {
+    color: #3fb950;
+    background: #161b22;
+    text-style: bold;
+}
+
+Checkbox > .toggle--label {
+    color: #8b949e;
+}
+
+Checkbox.-on > .toggle--label {
+    color: #e6edf3;
+    text-style: bold;
 }
 
 RadioSet {
