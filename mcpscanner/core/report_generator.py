@@ -25,6 +25,7 @@ import os
 from typing import Any, Dict, List, Optional, Union
 
 from .models import OutputFormat, SeverityFilter
+from .result import get_highest_severity
 
 
 async def results_to_json(scan_results) -> List[Dict[str, Any]]:
@@ -376,15 +377,15 @@ class ReportGenerator:
 
             findings = result.get("findings", {})
 
-            highest_severity = "SAFE"
-            total_findings = 0
-            for analyzer_data in findings.values():
-                severity = analyzer_data.get("severity", "SAFE")
-                if self._get_severity_order(severity) > self._get_severity_order(
-                    highest_severity
-                ):
-                    highest_severity = severity
-                total_findings += analyzer_data.get("total_findings", 0)
+            severities = [
+                analyzer_data.get("severity", "UNKNOWN")
+                for analyzer_data in findings.values()
+            ]
+            highest_severity = self._get_highest_severity(severities)
+            total_findings = sum(
+                analyzer_data.get("total_findings", 0)
+                for analyzer_data in findings.values()
+            )
 
             if "server_name" in result and result["server_name"]:
                 return (
@@ -566,15 +567,16 @@ class ReportGenerator:
 
             # Get summary info
             total_findings = sum(f.get("total_findings", 0) for f in findings.values())
-            severities = [f.get("severity", "SAFE") for f in findings.values()]
+            severities = [f.get("severity", "UNKNOWN") for f in findings.values()]
             highest_severity = self._get_highest_severity(severities)
 
             # Use colored emojis based on severity
             severity_emojis = {
                 "HIGH": "🔴",
-                "UNKNOWN": "🔴",
+                "UNKNOWN": "🟣",
                 "MEDIUM": "🟠",
                 "LOW": "🟡",
+                "INFO": "🔵",
                 "SAFE": "🟢",
             }
             severity_icon = severity_emojis.get(highest_severity, "🟢")
@@ -808,14 +810,17 @@ class ReportGenerator:
             # Get overall severity with colored emoji
             severity_emojis = {
                 "HIGH": "🔴",
-                "UNKNOWN": "🔴",
+                "UNKNOWN": "🟣",
                 "MEDIUM": "🟠",
                 "LOW": "🟡",
+                "INFO": "🔵",
                 "SAFE": "🟢",
             }
 
             if findings:
-                severities = [f.get("severity", "SAFE") for f in findings.values()]
+                severities = [
+                    f.get("severity", "UNKNOWN") for f in findings.values()
+                ]
                 severity_text = self._get_highest_severity(severities)
                 severity_emoji = severity_emojis.get(severity_text, "🟢")
                 overall_severity = f"{severity_emoji} {severity_text}"[:8]
@@ -850,23 +855,17 @@ class ReportGenerator:
         return "\n".join(output)
 
     def _get_highest_severity(self, severities: List[str]) -> str:
-        """Get the highest severity from a list."""
-        severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "SAFE": 1}
-        highest = "SAFE"
-        highest_value = 0
+        """Roll up a list of severities into the single highest severity.
 
-        for severity in severities:
-            value = severity_order.get(severity.upper(), 0)
-            if value > highest_value:
-                highest_value = value
-                highest = severity.upper()
+        Delegates to :func:`mcpscanner.core.result.get_highest_severity` so the
+        rest of the codebase shares one severity model:
 
-        return highest
-
-    def _get_severity_order(self, severity: str) -> int:
-        """Get the numeric order value for a severity level."""
-        severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "SAFE": 1}
-        return severity_order.get(severity.upper(), 0)
+        - ``UNKNOWN`` is the pre-analysis default and is *displaced* by any
+          concrete severity (``HIGH``, ``MEDIUM``, ``LOW``, ``INFO``, ``SAFE``).
+        - With no concrete severities (empty list or only ``UNKNOWN`` entries),
+          the rollup is ``UNKNOWN``.
+        """
+        return get_highest_severity(severities)
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about the scan results."""
