@@ -56,7 +56,7 @@ class ResultsScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#results-table", DataTable)
-        table.add_columns("Tool Name", "Severity", "AITech ID - Name", "Analyzer", "Threat")
+        table.add_columns("Tool Name", "Severity", "Analyzer", "Threat", "AITech ID - Name")
 
         for result in self.scan_results:
             name = result.get(
@@ -90,7 +90,7 @@ class ResultsScreen(Screen):
             aitech_display = ", ".join(aitech_entries[:2]) if aitech_entries else "—"
 
             table.add_row(
-                name, severity_display, aitech_display, analyzer_display, threat_display
+                name, severity_display, analyzer_display, threat_display, aitech_display
             )
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:

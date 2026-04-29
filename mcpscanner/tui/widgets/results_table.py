@@ -26,7 +26,7 @@ class ResultsTable(Widget):
 
     def compose(self) -> ComposeResult:
         table = DataTable(id="findings-table", cursor_type="row")
-        table.add_columns("Tool Name", "Severity", "AITech ID - Name", "Analyzer", "Threat")
+        table.add_columns("Tool Name", "Severity", "Analyzer", "Threat", "AITech ID - Name")
         yield table
 
     def on_mount(self) -> None:
@@ -63,7 +63,7 @@ class ResultsTable(Widget):
                 name = name[:27] + "..."
 
             table.add_row(
-                name, severity_display, aitech_display, analyzer_display, threat_display
+                name, severity_display, analyzer_display, threat_display, aitech_display
             )
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
