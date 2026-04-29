@@ -16,20 +16,22 @@
 
 """LLM Meta-Analyzer for MCP Scanner.
 
-Performs second-pass LLM analysis on findings from multiple analyzers to:
-- Filter false positives based on contextual understanding
-- Prioritize findings by actual exploitability and impact
-- Correlate related findings across analyzers
-- Detect threats that other analyzers may have missed
-- Provide actionable remediation guidance
+Performs a second-pass LLM analysis with a single, narrow purpose:
+**filter false positives** from the findings produced by other analyzers.
 
-The meta-analyzer runs AFTER all other analyzers complete, reviewing their
-collective findings to provide expert-level security assessment.
+The meta-analyzer never:
+
+- Adds new findings (no "missed threats" enrichment).
+- Promotes, re-scores, or enriches true positives that an analyzer flagged.
+- Attaches recommendations, correlations, or risk assessments to findings.
+
+It only removes findings that the LLM judges to be benign given the entity
+context. If an analyzer did not flag something, the meta-analyzer will not
+synthesize a finding for it.
 
 Requirements:
     - Enable via CLI --enable-meta flag
     - Requires LLM API key (uses same config as LLM analyzer)
-    - Works best with 2+ analyzers for cross-correlation
 """
 
 from __future__ import annotations
@@ -218,122 +220,25 @@ class MetaAnalyzer:
             response = await self._make_llm_request(self._system_prompt, user_prompt)
             result = self._parse_response(response, findings)
 
-            result = await self._cover_remaining_findings(
-                result, findings, entity_context, analyzers_used, start_tag, end_tag
-            )
-
             self._logger.info(
-                "Meta-analysis complete: %d validated, %d false positives filtered, %d new threats detected",
-                len(result.validated_findings),
+                "Meta-analysis complete: %d false positive(s) flagged for filtering out of %d findings",
                 len(result.false_positives),
-                len(result.missed_threats),
+                len(findings),
             )
             return result
 
         except Exception as e:
-            self._logger.error("Meta-analysis failed: %s", e)
+            # On failure we deliberately do nothing: no FP suggestions means
+            # apply_meta_analysis will keep every analyzer finding as-is.
+            self._logger.error(
+                "Meta-analysis failed (%s); keeping all original findings.", e
+            )
             return MetaAnalysisResult(
-                validated_findings=[
-                    {"_index": i, "confidence": "MEDIUM", "confidence_reason": "Meta-analysis failed; preserving original finding"}
-                    for i in range(len(findings))
-                ],
                 overall_risk_assessment={
                     "risk_level": "UNKNOWN",
                     "summary": f"Meta-analysis failed: {e}. Original findings preserved.",
                 },
             )
-
-    async def _cover_remaining_findings(
-        self,
-        result: MetaAnalysisResult,
-        findings: List[SecurityFinding],
-        entity_context: Dict[str, Any],
-        analyzers_used: List[str],
-        start_tag: str,
-        end_tag: str,
-    ) -> MetaAnalysisResult:
-        """Send a follow-up request for any findings the first pass didn't classify."""
-        all_indices = set(range(len(findings)))
-
-        covered = set()
-        for vf in result.validated_findings:
-            idx = vf.get("_index")
-            if isinstance(idx, int):
-                covered.add(idx)
-        for fp in result.false_positives:
-            idx = fp.get("_index")
-            if isinstance(idx, int):
-                covered.add(idx)
-
-        remaining = sorted(all_indices - covered)
-        if not remaining:
-            return result
-
-        self._logger.info(
-            "Meta follow-up: %d/%d findings uncovered, sending follow-up request",
-            len(remaining),
-            len(findings),
-        )
-
-        remaining_data = []
-        for orig_idx in remaining:
-            f = findings[orig_idx]
-            remaining_data.append({
-                "_index": orig_idx,
-                "severity": f.severity,
-                "summary": f.summary[:200],
-                "threat_category": f.threat_category,
-                "analyzer": f.analyzer,
-            })
-        remaining_json = json.dumps(remaining_data, indent=2)
-
-        entity_name = entity_context.get("name", "Unknown")
-        entity_type = entity_context.get("type", "entity")
-
-        followup_prompt = f"""## Follow-Up: Classify Remaining Findings
-
-The previous analysis covered {len(covered)}/{len(findings)} findings. The following {len(remaining)} findings were NOT classified.
-
-Classify each into EITHER `validated_findings` or `false_positives`.
-
-### Entity Context
-{start_tag}
-{entity_type.title()}: {entity_name}
-Description: {entity_context.get('description', 'N/A')}
-{end_tag}
-
-### Unclassified Findings
-```json
-{remaining_json}
-```
-
-Respond with a JSON object. Use COMPACT format for validated entries:
-```json
-{{
-  "validated_findings": [
-    {{"_index": N, "confidence": "HIGH|MEDIUM|LOW", "confidence_reason": "brief reason", "exploitability": "brief", "impact": "brief"}}
-  ],
-  "false_positives": [
-    {{"_index": N, "false_positive_reason": "brief reason"}}
-  ]
-}}
-```
-Every `_index` above MUST appear in exactly one list."""
-
-        try:
-            followup_response = await self._make_llm_request(self._system_prompt, followup_prompt)
-            followup_result = self._parse_response(followup_response, findings)
-            result.validated_findings.extend(followup_result.validated_findings)
-            result.false_positives.extend(followup_result.false_positives)
-            self._logger.info(
-                "Meta follow-up complete: +%d validated, +%d false positives",
-                len(followup_result.validated_findings),
-                len(followup_result.false_positives),
-            )
-        except Exception as e:
-            self._logger.warning("Meta follow-up failed: %s — uncovered findings pass through as-is", e)
-
-        return result
 
     def _serialize_findings(self, findings: List[SecurityFinding]) -> str:
         """Serialize findings to JSON for the prompt."""
@@ -377,9 +282,20 @@ Every `_index` above MUST appear in exactly one list."""
             params_json = json.dumps(parameters, indent=2)
             context_block += f"\n**Parameters Schema:**\n```json\n{params_json}\n```"
 
-        return f"""## Meta-Analysis Request
+        return f"""## Meta-Analysis Request — False Positive Filtering Only
 
-You have {num_findings} findings from {len(analyzers_used)} analyzers. Your job is to **filter the noise and prioritize what matters**.
+You have {num_findings} findings from {len(analyzers_used)} analyzers. Your **only** job is to identify which of these findings are **false positives** that should be filtered out.
+
+You MUST NOT:
+- Suggest new threats the analyzers missed.
+- Re-score, prioritize, correlate, or otherwise enrich true positives.
+- Recommend remediation steps.
+- Promote a benign finding to a higher severity.
+
+You MUST:
+- Treat every finding the analyzers flagged as a candidate true positive by default.
+- Only mark a finding as a false positive when the actual entity context shows it is genuinely benign (e.g., keyword match in safe documentation, standard parameter name, safe library usage for stated purpose).
+- Leave ambiguous findings alone — when in doubt, do NOT mark as FP.
 
 ### Analyzers Used
 {", ".join(analyzers_used)}
@@ -394,32 +310,19 @@ You have {num_findings} findings from {len(analyzers_used)} analyzers. Your job 
 {findings_data}
 ```
 
-### Your Task (IN ORDER OF IMPORTANCE)
+### Required Output (compact)
 
-1. **CORRELATE AND GROUP** (Most Important)
-   - Group related findings into `correlations`
-   - Keep ALL grouped findings in `validated_findings` — correlations are for GROUPING, not removing
+Respond with ONLY a JSON object with a single `false_positives` list. Indices not present are kept as-is.
 
-2. **FILTER GENUINE FALSE POSITIVES**
-   - VERIFY each finding against the actual entity context above
-   - Only mark as FP if the content is genuinely benign
-   - Do NOT mark a finding as FP just because another analyzer already covers it
+```json
+{{
+  "false_positives": [
+    {{"_index": N, "false_positive_reason": "brief reason this finding is benign in context"}}
+  ]
+}}
+```
 
-3. **PRIORITIZE BY ACTUAL RISK**
-   - What should the developer fix FIRST? Put it at index 0 in priority_order
-
-4. **MAKE ACTIONABLE RECOMMENDATIONS**
-   - Every recommendation needs a specific fix
-
-5. **DETECT MISSED THREATS** (ONLY if obvious)
-   - Leave missed_threats EMPTY unless there's something critical all analyzers missed
-
-**IMPORTANT: COMPACT OUTPUT FORMAT**
-- Use COMPACT format for `validated_findings`: only `_index`, `confidence`, `confidence_reason`, `exploitability`, `impact`.
-- Output `overall_risk_assessment` and `correlations` FIRST in the JSON.
-- Classify every finding (`_index` 0 to {num_findings - 1}) into either `validated_findings` or `false_positives`.
-
-Respond with a JSON object following the schema in the system prompt."""
+If no findings are false positives, return `{{"false_positives": []}}`."""
 
     async def _make_llm_request(self, system_prompt: str, user_prompt: str) -> str:
         """Make a request to the LLM API with retry logic."""
@@ -473,27 +376,26 @@ Respond with a JSON object following the schema in the system prompt."""
             raise last_exception
         raise RuntimeError("All retries exhausted")
 
-    def _parse_response(self, response: str, original_findings: List[SecurityFinding]) -> MetaAnalysisResult:
-        """Parse the LLM meta-analysis response."""
+    def _parse_response(
+        self, response: str, original_findings: List[SecurityFinding]
+    ) -> MetaAnalysisResult:
+        """Parse the LLM meta-analysis response.
+
+        Only the ``false_positives`` field is consumed; any other fields the
+        model may emit are ignored to keep the analyzer's behavior narrow.
+        """
         try:
             json_data = self._extract_json_from_response(response)
-            result = MetaAnalysisResult(
-                validated_findings=json_data.get("validated_findings", []),
-                false_positives=json_data.get("false_positives", []),
-                missed_threats=json_data.get("missed_threats", []),
-                priority_order=json_data.get("priority_order", []),
-                correlations=json_data.get("correlations", []),
-                recommendations=json_data.get("recommendations", []),
-                overall_risk_assessment=json_data.get("overall_risk_assessment", {}),
-            )
-            return result
-        except (json.JSONDecodeError, ValueError) as e:
-            self._logger.error("Failed to parse meta-analysis response: %s", e)
             return MetaAnalysisResult(
-                validated_findings=[
-                    {"_index": i, "confidence": "MEDIUM", "confidence_reason": "Response parse failed; preserving finding"}
-                    for i in range(len(original_findings))
-                ],
+                false_positives=list(json_data.get("false_positives", [])),
+            )
+        except (json.JSONDecodeError, ValueError) as e:
+            # On parse failure, return an empty result so no findings are filtered.
+            self._logger.error(
+                "Failed to parse meta-analysis response (%s); keeping all findings.",
+                e,
+            )
+            return MetaAnalysisResult(
                 overall_risk_assessment={
                     "risk_level": "UNKNOWN",
                     "summary": "Failed to parse meta-analysis response",
@@ -572,124 +474,52 @@ def apply_meta_analysis(
     original_findings: List[SecurityFinding],
     meta_result: MetaAnalysisResult,
 ) -> List[SecurityFinding]:
-    """Apply meta-analysis results by enriching existing analyzer findings in place.
+    """Apply meta-analysis results to a list of analyzer findings.
 
-    The meta-analyzer does NOT produce its own output section. Instead it:
-    1. Marks false positives with ``meta_false_positive`` in the originating
-       analyzer's finding details.
-    2. Adds validation metadata (confidence, exploitability, impact) to
-       validated findings from the originating analyzer.
-    3. Attaches priority ranking from the meta-analysis to each finding.
-    4. Adds missed threats as new findings attributed to the ``LLM`` analyzer
-       so they appear under the existing LLM output section.
-    5. Stores correlations, recommendations, and overall risk assessment as
-       metadata on the highest-priority existing finding.
+    Scope is intentionally minimal: this function only **filters out
+    findings the meta-analyzer judged to be false positives**. Findings the
+    meta-analyzer did not classify (or classified as true positives) are
+    returned unchanged. Nothing is enriched, prioritized, correlated, or
+    synthesized — if no analyzer flagged something, it does not appear in
+    the output.
+
+    A small audit trail (``meta_false_positive=True`` plus ``meta_reason``)
+    is recorded on each filtered finding's details before it is dropped, so
+    callers that retain the raw findings list separately can still inspect
+    why a finding was removed.
 
     Args:
         original_findings: Original findings from all analyzers.
         meta_result: Results from meta-analysis.
 
     Returns:
-        All findings with meta-analysis metadata added (no new analyzer section).
+        Findings list with meta-analyzer-identified false positives removed.
     """
     fp_data: Dict[int, Dict[str, Any]] = {}
     for fp in meta_result.false_positives:
         idx = fp.get("_index")
         if isinstance(idx, int):
             fp_data[idx] = {
-                "reason": fp.get("reason") or fp.get("false_positive_reason") or "Identified as likely false positive",
+                "reason": (
+                    fp.get("reason")
+                    or fp.get("false_positive_reason")
+                    or "Identified as likely false positive"
+                ),
                 "confidence": fp.get("confidence"),
             }
 
-    enrichments: Dict[int, Dict[str, Any]] = {}
-    for vf in meta_result.validated_findings:
-        idx = vf.get("_index")
-        if isinstance(idx, int):
-            enrichments[idx] = {
-                "meta_validated": True,
-                "meta_confidence": vf.get("confidence"),
-                "meta_confidence_reason": vf.get("confidence_reason"),
-                "meta_exploitability": vf.get("exploitability"),
-                "meta_impact": vf.get("impact"),
-            }
-
-    priority_lookup: Dict[int, int] = {}
-    for rank, idx in enumerate(meta_result.priority_order, start=1):
-        if isinstance(idx, int):
-            priority_lookup[idx] = rank
-
-    result_findings: List[SecurityFinding] = []
+    kept_findings: List[SecurityFinding] = []
     for i, finding in enumerate(original_findings):
-        if finding.details is None:
-            finding.details = {}
-
         if i in fp_data:
+            # Annotate before dropping so the audit trail survives on the
+            # original SecurityFinding object even though it is not returned.
+            if finding.details is None:
+                finding.details = {}
             finding.details["meta_false_positive"] = True
             finding.details["meta_reason"] = fp_data[i]["reason"]
             if fp_data[i].get("confidence") is not None:
                 finding.details["meta_confidence"] = fp_data[i]["confidence"]
-        else:
-            finding.details["meta_false_positive"] = False
-            if i in enrichments:
-                for key, value in enrichments[i].items():
-                    if value is not None:
-                        finding.details[key] = value
-            else:
-                finding.details["meta_reviewed"] = True
+            continue
+        kept_findings.append(finding)
 
-        if i in priority_lookup:
-            finding.details["meta_priority"] = priority_lookup[i]
-
-        result_findings.append(finding)
-
-    # Missed threats are attributed to "LLM" so they fold into the
-    # existing LLM analyzer output instead of creating a separate section.
-    for threat_data in meta_result.missed_threats:
-        severity = threat_data.get("severity", "HIGH").upper()
-        valid_severities = {"HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "UNKNOWN"}
-        if severity not in valid_severities:
-            severity = "HIGH"
-
-        category = threat_data.get("threat_category", threat_data.get("category", "SECURITY VIOLATION"))
-        title = threat_data.get("title", "Threat detected by meta-analysis")
-        description = threat_data.get("description", "")
-
-        new_finding = SecurityFinding(
-            severity=severity,
-            summary=f"{title}: {description}" if description else title,
-            analyzer="LLM",
-            threat_category=category,
-            details={
-                "meta_detected": True,
-                "threat_type": category,
-                "detection_reason": threat_data.get("detection_reason", ""),
-                "meta_confidence": threat_data.get("confidence", "MEDIUM"),
-                "meta_false_positive": False,
-                "remediation": threat_data.get("remediation"),
-            },
-        )
-        result_findings.append(new_finding)
-
-    # Attach correlations, recommendations, and risk assessment as metadata
-    # on the highest-priority existing finding so nothing creates a new
-    # analyzer section in the output.
-    if meta_result.correlations or meta_result.recommendations or meta_result.overall_risk_assessment:
-        target_finding = None
-        for finding in result_findings:
-            if finding.details and finding.details.get("meta_priority") == 1:
-                target_finding = finding
-                break
-        if target_finding is None and result_findings:
-            target_finding = result_findings[0]
-
-        if target_finding is not None:
-            if target_finding.details is None:
-                target_finding.details = {}
-            if meta_result.correlations:
-                target_finding.details["meta_correlations"] = meta_result.correlations
-            if meta_result.recommendations:
-                target_finding.details["meta_recommendations"] = meta_result.recommendations
-            if meta_result.overall_risk_assessment:
-                target_finding.details["meta_risk_assessment"] = meta_result.overall_risk_assessment
-
-    return result_findings
+    return kept_findings
