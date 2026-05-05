@@ -6,6 +6,8 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Static
 
+from mcpscanner.tui.utils.severity import SEVERITY_COLOR
+
 
 class StatsBar(Widget):
     DEFAULT_CSS = """
@@ -41,14 +43,19 @@ class StatsBar(Widget):
         low = severity_counts.get("LOW", 0)
         unknown = severity_counts.get("UNKNOWN", 0)
 
+        c_safe = SEVERITY_COLOR["SAFE"]
+        c_high = SEVERITY_COLOR["HIGH"]
+        c_med = SEVERITY_COLOR["MEDIUM"]
+        c_low = SEVERITY_COLOR["LOW"]
+        c_unknown = SEVERITY_COLOR["UNKNOWN"]
         line = (
             f"[bold]Total:[/] {total}  "
-            f"[bold #3fb950]Safe:[/] {safe}  "
-            f"[bold #f85149]Unsafe:[/] {unsafe}  "
+            f"[bold {c_safe}]Safe:[/] {safe}  "
+            f"[bold {c_high}]Unsafe:[/] {unsafe}  "
             f"│  "
-            f"[bold #f85149]H:[/] {high}  "
-            f"[bold #d29922]M:[/] {medium}  "
-            f"[bold #e3b341]L:[/] {low}  "
-            f"[bold #a371f7]U:[/] {unknown}"
+            f"[bold {c_high}]H:[/] {high}  "
+            f"[bold {c_med}]M:[/] {medium}  "
+            f"[bold {c_low}]L:[/] {low}  "
+            f"[bold {c_unknown}]U:[/] {unknown}"
         )
         yield Static(line)

@@ -16,6 +16,12 @@ from textual.widgets import (
     Static,
 )
 
+from mcpscanner.tui.utils.severity import (
+    SEVERITY_COLOR,
+    highest_severity as _highest_severity,
+    severity_color as _severity_color,
+    severity_styled as _severity_styled,
+)
 from mcpscanner.tui.widgets.stats_bar import StatsBar
 
 
@@ -38,7 +44,9 @@ class ResultsScreen(Screen):
                 overall_safe = all(
                     r.get("is_safe", True) for r in self.scan_results
                 ) if self.scan_results else True
-                status_color = "#3fb950" if overall_safe else "#f85149"
+                status_color = (
+                    SEVERITY_COLOR["SAFE"] if overall_safe else SEVERITY_COLOR["HIGH"]
+                )
                 status_text = "SAFE" if overall_safe else "UNSAFE"
                 yield Static(
                     f"  {artifact_label}: {artifact_value}   "
@@ -107,7 +115,7 @@ class ResultsScreen(Screen):
             result.get("vulnerability_description", result.get("prompt_description", "")),
         )
         is_safe = result.get("is_safe", True)
-        status_color = "#3fb950" if is_safe else "#f85149"
+        status_color = SEVERITY_COLOR["SAFE"] if is_safe else SEVERITY_COLOR["HIGH"]
         status_text = "SAFE" if is_safe else "UNSAFE"
 
         lines = [f"[bold {status_color}]{status_text}[/]  [bold]{name}[/]"]
@@ -194,37 +202,6 @@ class ExportModal(Screen):
 
     def action_dismiss(self) -> None:
         self.dismiss()
-
-
-def _highest_severity(severities: list[str]) -> str:
-    """Roll up a list of severities into the single highest one.
-
-    Mirrors the model used by :func:`mcpscanner.core.result.get_highest_severity`:
-    ``UNKNOWN`` represents "not yet analyzed / analyzer didn't run" and is
-    *displaced* by any concrete severity (``HIGH``/``MEDIUM``/``LOW``/``INFO``/
-    ``SAFE``). When only ``UNKNOWN`` entries are present (or the list is
-    empty), the rollup is ``UNKNOWN``.
-    """
-    order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INFO": 3, "SAFE": 4}
-    concrete = [s for s in severities if s and s.upper() in order]
-    if concrete:
-        return min(concrete, key=lambda s: order[s.upper()]).upper()
-    return "UNKNOWN"
-
-
-def _severity_styled(severity: str) -> str:
-    color = _severity_color(severity)
-    return f"[bold {color}]{severity}[/]"
-
-
-def _severity_color(severity: str) -> str:
-    return {
-        "HIGH": "#f85149",
-        "UNKNOWN": "#a371f7",
-        "MEDIUM": "#d29922",
-        "LOW": "#e3b341",
-        "SAFE": "#3fb950",
-    }.get(severity, "#8b949e")
 
 
 def _extract_aitech(analyzer_data: Dict[str, Any]) -> List[str]:

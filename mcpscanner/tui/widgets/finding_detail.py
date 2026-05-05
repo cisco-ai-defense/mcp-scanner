@@ -7,6 +7,11 @@ from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Static
 
+from mcpscanner.tui.utils.severity import (
+    SEVERITY_COLOR,
+    severity_color as _severity_color,
+)
+
 
 class FindingDetail(Widget):
     DEFAULT_CSS = """
@@ -37,7 +42,7 @@ class FindingDetail(Widget):
         is_safe = result.get("is_safe", True)
 
         lines = []
-        status_color = "#3fb950" if is_safe else "#f85149"
+        status_color = SEVERITY_COLOR["SAFE"] if is_safe else SEVERITY_COLOR["HIGH"]
         status_text = "SAFE" if is_safe else "UNSAFE"
         lines.append(f"[bold {status_color}]{status_text}[/]  [bold]{name}[/]")
         lines.append("")
@@ -80,13 +85,3 @@ class FindingDetail(Widget):
             lines.append("")
 
         self._content.update("\n".join(lines))
-
-
-def _severity_color(severity: str) -> str:
-    return {
-        "HIGH": "#f85149",
-        "UNKNOWN": "#a371f7",
-        "MEDIUM": "#d29922",
-        "LOW": "#e3b341",
-        "SAFE": "#3fb950",
-    }.get(severity, "#8b949e")
