@@ -31,10 +31,6 @@ from typing import Iterable
 
 from mcpscanner.core.result import get_highest_severity
 
-#: Hex color for any severity not in :data:`SEVERITY_COLOR` (the GitHub
-#: "muted" gray, used for unrecognized labels).
-UNKNOWN_COLOR = "#8b949e"
-
 #: Mapping from canonical severity label -> hex color used in the TUI.
 #:
 #: The palette mirrors the GitHub semantic-color set:
@@ -54,9 +50,19 @@ SEVERITY_COLOR: dict[str, str] = {
     "UNKNOWN": "#a371f7",
 }
 
+#: Color used for any severity that is missing/empty/unrecognized.
+#: Per the rollup contract, "we don't know" maps to the UNKNOWN color so the
+#: UI never silently green-lights (or red-flags) a value it can't classify.
+UNKNOWN_COLOR = SEVERITY_COLOR["UNKNOWN"]
+
 
 def severity_color(severity: str) -> str:
-    """Return the hex color for ``severity``, or :data:`UNKNOWN_COLOR`."""
+    """Return the hex color for ``severity``.
+
+    Falls back to :data:`UNKNOWN_COLOR` (the UNKNOWN purple) for empty or
+    unrecognized labels, matching the rule applied to severity emojis in
+    :mod:`mcpscanner.core.report_generator`.
+    """
     if not severity:
         return UNKNOWN_COLOR
     return SEVERITY_COLOR.get(severity.upper(), UNKNOWN_COLOR)
