@@ -71,9 +71,8 @@ class ResultsScreen(Screen):
             aitech_entries: list[str] = []
 
             for analyzer_key, data in findings.items():
-                sev = data.get("severity", "SAFE")
-                if sev != "SAFE":
-                    severities.append(sev)
+                sev = data.get("severity", "UNKNOWN")
+                severities.append(sev)
                 short_name = analyzer_key.replace("_analyzer", "").upper()
                 analyzers_used.append(short_name)
                 for t in data.get("threat_names", []):
@@ -83,7 +82,7 @@ class ResultsScreen(Screen):
                     if entry not in aitech_entries:
                         aitech_entries.append(entry)
 
-            highest = _highest_severity(severities) if severities else "SAFE"
+            highest = _highest_severity(severities)
             severity_display = _severity_styled(highest)
             analyzer_display = ", ".join(analyzers_used[:3]) if analyzers_used else "—"
             threat_display = ", ".join(threats[:2]) if threats else "—"
@@ -198,8 +197,19 @@ class ExportModal(Screen):
 
 
 def _highest_severity(severities: list[str]) -> str:
-    order = {"HIGH": 0, "UNKNOWN": 1, "MEDIUM": 2, "LOW": 3, "SAFE": 4}
-    return min(severities, key=lambda s: order.get(s, 4))
+    """Roll up a list of severities into the single highest one.
+
+    Mirrors the model used by :func:`mcpscanner.core.result.get_highest_severity`:
+    ``UNKNOWN`` represents "not yet analyzed / analyzer didn't run" and is
+    *displaced* by any concrete severity (``HIGH``/``MEDIUM``/``LOW``/``INFO``/
+    ``SAFE``). When only ``UNKNOWN`` entries are present (or the list is
+    empty), the rollup is ``UNKNOWN``.
+    """
+    order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INFO": 3, "SAFE": 4}
+    concrete = [s for s in severities if s and s.upper() in order]
+    if concrete:
+        return min(concrete, key=lambda s: order[s.upper()]).upper()
+    return "UNKNOWN"
 
 
 def _severity_styled(severity: str) -> str:
