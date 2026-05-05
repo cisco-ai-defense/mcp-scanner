@@ -578,7 +578,7 @@ class ReportGenerator:
                 "INFO": "🔵",
                 "SAFE": "🟢",
             }
-            severity_icon = severity_emojis.get(highest_severity, "🟢")
+            severity_icon = severity_emojis.get(highest_severity, "🟣")
             output.append(f"{severity_icon} {tool_name} ({highest_severity})")
 
             if total_findings > 0:
@@ -684,14 +684,20 @@ class ReportGenerator:
                     }
                 )
 
-        # Sort by severity priority
-        severity_order = ["HIGH", "UNKNOWN", "MEDIUM", "LOW", "SAFE"]
+        # Sort by severity priority. UNKNOWN goes last because per the
+        # rollup contract it represents "not yet analyzed" rather than a
+        # confirmed concrete severity, so a tool with both UNKNOWN and any
+        # concrete finding would have already been bucketed into the
+        # concrete bucket; surfacing UNKNOWN-only items at the bottom keeps
+        # the eye on confirmed risk first.
+        severity_order = ["HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "UNKNOWN"]
         severity_emojis = {
             "HIGH": "🔴",
-            "UNKNOWN": "🔴",
             "MEDIUM": "🟠",
             "LOW": "🟡",
+            "INFO": "🔵",
             "SAFE": "🟢",
+            "UNKNOWN": "🟣",
         }
 
         for severity in severity_order:
@@ -699,7 +705,7 @@ class ReportGenerator:
                 continue
 
             items = severity_groups[severity]
-            emoji = severity_emojis.get(severity, "🔴")
+            emoji = severity_emojis.get(severity, "🟣")
             output.append(f"{emoji} {severity} SEVERITY ({len(items)} items)")
 
             for item in items:
@@ -821,10 +827,10 @@ class ReportGenerator:
                     f.get("severity", "UNKNOWN") for f in findings.values()
                 ]
                 severity_text = get_highest_severity(severities)
-                severity_emoji = severity_emojis.get(severity_text, "🟢")
+                severity_emoji = severity_emojis.get(severity_text, "🟣")
                 overall_severity = f"{severity_emoji} {severity_text}"[:8]
             else:
-                severity_emoji = severity_emojis.get(status, "🟢")
+                severity_emoji = severity_emojis.get(status, "🟣")
                 overall_severity = f"{severity_emoji} {status}"[:8]
 
             if self.is_vuln_pkg_scan:
