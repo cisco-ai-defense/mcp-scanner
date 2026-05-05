@@ -27,7 +27,6 @@ from typing import List
 
 import pytest
 
-from mcpscanner.core.report_generator import ReportGenerator
 from mcpscanner.core.result import get_highest_severity
 
 
@@ -77,30 +76,25 @@ def test_get_highest_severity_ignores_falsy_entries() -> None:
     assert get_highest_severity(["", None, "MEDIUM"]) == "MEDIUM"  # type: ignore[list-item]
 
 
-class _ReportGeneratorStub(ReportGenerator):
-    """Bypass ReportGenerator.__init__ — we only need the helper method."""
+def test_report_generator_uses_shared_helper() -> None:
+    """ReportGenerator must delegate severity rollup to get_highest_severity
+    rather than maintaining its own implementation. Guards against the helper
+    drifting back into a private duplicate inside report_generator.py.
+    """
+    import inspect
 
-    def __init__(self) -> None:  # noqa: D401 - intentional no-op
-        pass
+    from mcpscanner.core import report_generator as rg
 
+    # No private wrapper named _get_highest_severity should live on the class.
+    assert not hasattr(rg.ReportGenerator, "_get_highest_severity"), (
+        "ReportGenerator._get_highest_severity has been removed; callers "
+        "should use mcpscanner.core.result.get_highest_severity directly."
+    )
 
-def test_report_generator_helper_delegates_to_shared_logic() -> None:
-    """ReportGenerator._get_highest_severity must mirror get_highest_severity."""
-    stub = _ReportGeneratorStub()
-
-    cases = [
-        [],
-        ["UNKNOWN"],
-        ["SAFE", "UNKNOWN"],
-        ["LOW", "UNKNOWN"],
-        ["MEDIUM", "UNKNOWN"],
-        ["HIGH", "UNKNOWN"],
-        ["INFO", "LOW", "MEDIUM", "HIGH"],
-    ]
-    for severities in cases:
-        assert stub._get_highest_severity(severities) == get_highest_severity(
-            severities
-        )
+    # And the module should import the shared helper so call sites can use it.
+    src = inspect.getsource(rg)
+    assert "from .result import get_highest_severity" in src
+    assert "get_highest_severity(" in src
 
 
 def test_unknown_does_not_outrank_concrete_severities() -> None:

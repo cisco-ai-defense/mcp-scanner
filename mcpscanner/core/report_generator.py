@@ -380,7 +380,7 @@ class ReportGenerator:
                 analyzer_data.get("severity", "UNKNOWN")
                 for analyzer_data in findings.values()
             ]
-            highest_severity = self._get_highest_severity(severities)
+            highest_severity = get_highest_severity(severities)
             total_findings = sum(
                 analyzer_data.get("total_findings", 0)
                 for analyzer_data in findings.values()
@@ -567,7 +567,7 @@ class ReportGenerator:
             # Get summary info
             total_findings = sum(f.get("total_findings", 0) for f in findings.values())
             severities = [f.get("severity", "UNKNOWN") for f in findings.values()]
-            highest_severity = self._get_highest_severity(severities)
+            highest_severity = get_highest_severity(severities)
 
             # Use colored emojis based on severity
             severity_emojis = {
@@ -820,7 +820,7 @@ class ReportGenerator:
                 severities = [
                     f.get("severity", "UNKNOWN") for f in findings.values()
                 ]
-                severity_text = self._get_highest_severity(severities)
+                severity_text = get_highest_severity(severities)
                 severity_emoji = severity_emojis.get(severity_text, "🟢")
                 overall_severity = f"{severity_emoji} {severity_text}"[:8]
             else:
@@ -852,19 +852,6 @@ class ReportGenerator:
             output.append(row)
 
         return "\n".join(output)
-
-    def _get_highest_severity(self, severities: List[str]) -> str:
-        """Roll up a list of severities into the single highest severity.
-
-        Delegates to :func:`mcpscanner.core.result.get_highest_severity` so the
-        rest of the codebase shares one severity model:
-
-        - ``UNKNOWN`` is the pre-analysis default and is *displaced* by any
-          concrete severity (``HIGH``, ``MEDIUM``, ``LOW``, ``INFO``, ``SAFE``).
-        - With no concrete severities (empty list or only ``UNKNOWN`` entries),
-          the rollup is ``UNKNOWN``.
-        """
-        return get_highest_severity(severities)
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about the scan results."""
