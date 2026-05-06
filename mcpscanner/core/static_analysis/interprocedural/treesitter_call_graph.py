@@ -21,39 +21,159 @@ Kotlin, C#, Ruby, Rust, and PHP codebases.
 """
 
 import logging
+import threading
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tree_sitter import Language, Parser, Node
 
 
+# Module-level cache for tree-sitter ``Parser`` and ``Language`` instances.
+# Constructing these is non-trivial (each call re-imports the language module
+# and instantiates a fresh parser) and we previously paid that cost per file
+# inside ``_get_parser`` and ``NativeAnalyzer._analyze_tree_sitter``. Caching
+# them per language drops large-repo scan latency proportional to file count.
+# Access is guarded by a lock because ``BehavioralCodeAnalyzer`` builds
+# per-language call graphs concurrently via ``asyncio.to_thread``.
+_PARSER_CACHE: Dict[str, Tuple["Parser", "Language"]] = {}
+_PARSER_CACHE_LOCK = threading.Lock()
+
+
+def _load_language(language: str) -> Optional["Language"]:
+    """Import the tree-sitter language module for ``language`` and build a Language.
+
+    Returns ``None`` if the corresponding ``tree_sitter_<language>`` package
+    is not installed; callers fall back to the next-best analysis path. The
+    PHP and TypeScript modules expose their grammar under language-specific
+    factory names which is why they need a small shim.
+    """
+    try:
+        if language == "javascript":
+            import tree_sitter_javascript as mod
+            return Language(mod.language())
+        if language == "typescript":
+            import tree_sitter_typescript as mod
+            return Language(mod.language_typescript())
+        if language == "go":
+            import tree_sitter_go as mod
+            return Language(mod.language())
+        if language == "java":
+            import tree_sitter_java as mod
+            return Language(mod.language())
+        if language == "kotlin":
+            import tree_sitter_kotlin as mod
+            return Language(mod.language())
+        if language == "c_sharp":
+            import tree_sitter_c_sharp as mod
+            return Language(mod.language())
+        if language == "ruby":
+            import tree_sitter_ruby as mod
+            return Language(mod.language())
+        if language == "rust":
+            import tree_sitter_rust as mod
+            return Language(mod.language())
+        if language == "php":
+            import tree_sitter_php as mod
+            return Language(mod.language_php())
+    except ImportError:
+        return None
+    return None
+
+
+def get_cached_parser(language: str) -> Optional["Parser"]:
+    """Return a process-wide cached tree-sitter ``Parser`` for ``language``.
+
+    Returns ``None`` when the language module isn't available so callers can
+    short-circuit the whole tree-sitter path. The cache is intentionally
+    populated lazily so the import cost is paid only for languages the user
+    actually scans.
+    """
+    cached = _PARSER_CACHE.get(language)
+    if cached is not None:
+        return cached[0]
+    with _PARSER_CACHE_LOCK:
+        cached = _PARSER_CACHE.get(language)
+        if cached is not None:
+            return cached[0]
+        lang = _load_language(language)
+        if lang is None:
+            return None
+        parser = Parser(lang)
+        _PARSER_CACHE[language] = (parser, lang)
+        return parser
+
+
 @dataclass
 class TSCallGraph:
-    """Call graph for tree-sitter languages."""
-    
+    """Call graph for tree-sitter languages.
+
+    Mirrors the indices added to the Python ``CallGraph`` class so reachability
+    queries, name resolution, and fan-out edges all run in O(out-degree)
+    instead of O(edges). The duplicate-edge guard also keeps memory footprint
+    bounded when the same call site is encountered by both the function-context
+    extractor and the cross-file analyzer.
+    """
+
     functions: Dict[str, Node] = field(default_factory=dict)  # full_name -> function node
-    calls: List[tuple] = field(default_factory=list)  # (caller, callee) pairs
+    calls: List[Tuple[str, str]] = field(default_factory=list)  # (caller, callee) pairs
     entry_points: Set[str] = field(default_factory=set)  # Entry point functions
-    
+
+    # Performance indices: forward / reverse adjacency + short-name lookup.
+    _callees: Dict[str, List[str]] = field(default_factory=lambda: defaultdict(list))
+    _callers: Dict[str, List[str]] = field(default_factory=lambda: defaultdict(list))
+    _edges: Set[Tuple[str, str]] = field(default_factory=set)
+    _functions_by_short: Dict[str, List[str]] = field(
+        default_factory=lambda: defaultdict(list)
+    )
+    # Guards index mutations when ``add_file`` is invoked concurrently by
+    # ``BehavioralCodeAnalyzer``'s thread pool. The lock is held only for
+    # the brief index updates, not for the heavy parser work.
+    _mutation_lock: threading.Lock = field(default_factory=threading.Lock)
+
     def add_function(self, name: str, node: Node, file_path: Path, is_entry: bool = False) -> None:
         """Add a function definition."""
         full_name = f"{file_path}::{name}"
-        self.functions[full_name] = node
-        if is_entry:
-            self.entry_points.add(full_name)
-    
+        with self._mutation_lock:
+            if full_name in self.functions:
+                if is_entry:
+                    self.entry_points.add(full_name)
+                return
+            self.functions[full_name] = node
+            if is_entry:
+                self.entry_points.add(full_name)
+            # Mirror the Python graph's dual-key indexing so resolver lookups
+            # can match both ``Class.method`` and the bare ``method``.
+            self._functions_by_short[name].append(full_name)
+            if "." in name:
+                self._functions_by_short[name.rsplit(".", 1)[-1]].append(full_name)
+
     def add_call(self, caller: str, callee: str) -> None:
-        """Add a function call edge."""
-        self.calls.append((caller, callee))
-    
+        """Add a function call edge (deduped)."""
+        edge = (caller, callee)
+        with self._mutation_lock:
+            if edge in self._edges:
+                return
+            self._edges.add(edge)
+            self.calls.append(edge)
+            self._callees[caller].append(callee)
+            self._callers[callee].append(caller)
+
     def get_callees(self, func_name: str) -> List[str]:
         """Get functions called by a function."""
-        return [callee for caller, callee in self.calls if caller == func_name]
-    
+        callees = self._callees.get(func_name)
+        return list(callees) if callees else []
+
     def get_callers(self, func_name: str) -> List[str]:
         """Get functions that call a function."""
-        return [caller for caller, callee in self.calls if callee == func_name]
+        callers = self._callers.get(func_name)
+        return list(callers) if callers else []
+
+    def get_functions_by_short_name(self, short_name: str) -> List[str]:
+        """Return all fully-qualified function names matching ``short_name``."""
+        candidates = self._functions_by_short.get(short_name)
+        return list(candidates) if candidates else []
 
 
 class TreeSitterCallGraphAnalyzer:
@@ -107,51 +227,20 @@ class TreeSitterCallGraphAnalyzer:
         self.call_graph = TSCallGraph()
         self.files: Dict[Path, tuple] = {}  # file_path -> (tree, source_bytes)
         self.import_map: Dict[Path, List[str]] = {}
+        # Reachability cache; mirrors the Python ``CallGraphAnalyzer`` so the
+        # second BFS over the same entry point during cross-file enrichment
+        # is a dictionary lookup.
+        self._reachable_cache: Dict[str, Set[str]] = {}
         self.logger = logging.getLogger(__name__)
-        
-        self._parser: Optional[Parser] = None
-        self._lang: Optional[Language] = None
-    
+
     def _get_parser(self) -> Optional[Parser]:
-        """Get or create parser for the language."""
-        if self._parser:
-            return self._parser
-        
-        try:
-            if self.language == "javascript":
-                import tree_sitter_javascript as mod
-                self._lang = Language(mod.language())
-            elif self.language == "typescript":
-                import tree_sitter_typescript as mod
-                self._lang = Language(mod.language_typescript())
-            elif self.language == "go":
-                import tree_sitter_go as mod
-                self._lang = Language(mod.language())
-            elif self.language == "java":
-                import tree_sitter_java as mod
-                self._lang = Language(mod.language())
-            elif self.language == "kotlin":
-                import tree_sitter_kotlin as mod
-                self._lang = Language(mod.language())
-            elif self.language == "c_sharp":
-                import tree_sitter_c_sharp as mod
-                self._lang = Language(mod.language())
-            elif self.language == "ruby":
-                import tree_sitter_ruby as mod
-                self._lang = Language(mod.language())
-            elif self.language == "rust":
-                import tree_sitter_rust as mod
-                self._lang = Language(mod.language())
-            elif self.language == "php":
-                import tree_sitter_php as mod
-                self._lang = Language(mod.language_php())
-            else:
-                return None
-            
-            self._parser = Parser(self._lang)
-            return self._parser
-        except ImportError:
-            return None
+        """Get the cached tree-sitter parser for this language.
+
+        Delegates to the module-level ``get_cached_parser`` so all analyzers
+        for the same language share one ``Parser``/``Language`` pair instead
+        of paying the import + factory cost per ``add_file``.
+        """
+        return get_cached_parser(self.language)
     
     def add_file(self, file_path: Path, source_code: str) -> bool:
         """Add a file to the analysis."""
@@ -268,69 +357,83 @@ class TreeSitterCallGraphAnalyzer:
         return ""
     
     def _resolve_call(self, file_path: Path, call_name: str) -> Optional[str]:
-        """Resolve a call to its full qualified name."""
-        # Check same file
-        for func_name in self.call_graph.functions:
-            if func_name.endswith(f"::{call_name}"):
-                if func_name.startswith(str(file_path)):
-                    return func_name
-        
-        # Check all files (for cross-file calls)
-        for func_name in self.call_graph.functions:
-            if func_name.endswith(f"::{call_name}"):
-                return func_name
-        
-        return None
-    
-    def get_reachable_functions(self, start_func: str) -> List[str]:
-        """Get all functions reachable from a starting function."""
-        reachable = set()
-        to_visit = [start_func]
-        visited = set()
-        
+        """Resolve a call to its full qualified name using the short-name index.
+
+        Same-file matches still take precedence; this just removes the O(N)
+        scan that the previous two-pass linear search performed for every
+        call site in every file.
+        """
+        candidates = self.call_graph.get_functions_by_short_name(call_name)
+        if not candidates:
+            return None
+        file_prefix = str(file_path)
+        for fn in candidates:
+            if fn.startswith(file_prefix):
+                return fn
+        return candidates[0]
+
+    def _reachable_set(self, start_func: str) -> Set[str]:
+        """Compute and cache the BFS-reachable set from ``start_func``."""
+        cached = self._reachable_cache.get(start_func)
+        if cached is not None:
+            return cached
+
+        reachable: Set[str] = set()
+        to_visit: List[str] = [start_func]
         while to_visit:
             current = to_visit.pop()
-            if current in visited:
+            if current in reachable:
                 continue
-            
-            visited.add(current)
             reachable.add(current)
-            
             for callee in self.call_graph.get_callees(current):
-                if callee not in visited:
+                if callee not in reachable:
                     to_visit.append(callee)
-        
-        return list(reachable)
-    
+
+        self._reachable_cache[start_func] = reachable
+        return reachable
+
+    def get_reachable_functions(self, start_func: str) -> List[str]:
+        """Get all functions reachable from a starting function."""
+        return list(self._reachable_set(start_func))
+
     def analyze_cross_file_flows(self, entry_point: str, param_names: List[str]) -> Dict[str, Any]:
-        """Analyze parameter flow across files from an entry point."""
-        reachable = self.get_reachable_functions(entry_point)
-        
-        param_influenced = set()
-        cross_file_flows = []
-        
-        for func_name in reachable:
-            if func_name == entry_point:
-                continue
-            
-            for caller, callee in self.call_graph.calls:
-                if callee == func_name and (caller == entry_point or caller in param_influenced):
-                    param_influenced.add(func_name)
-                    
-                    caller_file = caller.split("::")[0] if "::" in caller else "unknown"
-                    callee_file = callee.split("::")[0] if "::" in callee else "unknown"
-                    
-                    if caller_file != callee_file:
-                        cross_file_flows.append({
-                            "from_function": caller,
-                            "to_function": callee,
-                            "from_file": caller_file,
-                            "to_file": callee_file,
-                        })
-        
+        """Analyze parameter flow across files from an entry point.
+
+        Walks forward through the call graph using the precomputed adjacency
+        index instead of scanning every edge for every reachable function.
+        """
+        del param_names  # heuristic propagates influence transitively
+
+        reachable = self._reachable_set(entry_point)
+
+        param_influenced: Set[str] = set()
+        cross_file_flows: List[Dict[str, Any]] = []
+        queue: List[str] = [entry_point]
+        seen_callers: Set[str] = {entry_point}
+        while queue:
+            caller = queue.pop()
+            for callee in self.call_graph.get_callees(caller):
+                if callee == caller or callee not in reachable:
+                    continue
+                param_influenced.add(callee)
+                caller_file = caller.split("::")[0] if "::" in caller else "unknown"
+                callee_file = callee.split("::")[0] if "::" in callee else "unknown"
+                if caller_file != callee_file:
+                    cross_file_flows.append({
+                        "from_function": caller,
+                        "to_function": callee,
+                        "from_file": caller_file,
+                        "to_file": callee_file,
+                    })
+                if callee not in seen_callers:
+                    seen_callers.add(callee)
+                    queue.append(callee)
+
         return {
-            "reachable_functions": reachable,
+            "reachable_functions": list(reachable),
             "param_influenced_functions": list(param_influenced),
             "cross_file_flows": cross_file_flows,
-            "total_files_involved": len(set(f.split("::")[0] for f in reachable if "::" in f)),
+            "total_files_involved": len(
+                set(f.split("::")[0] for f in reachable if "::" in f)
+            ),
         }

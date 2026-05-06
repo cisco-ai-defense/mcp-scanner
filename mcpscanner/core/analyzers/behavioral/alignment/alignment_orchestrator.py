@@ -235,33 +235,88 @@ class AlignmentOrchestrator:
         from the model) where re-prompting often succeeds.
         """
         attempts = max(1, max_retries + 1)
+        accumulated: Optional[List[Optional[Dict[str, Any]]]] = None
+        # Indices into ``batch`` that still need a real answer. Starts as
+        # all of them; each successful batch call shrinks the list to
+        # whichever slots came back ``_padded``.
+        pending_indices: List[int] = list(range(len(batch)))
+
         for attempt in range(attempts):
+            sub_batch = [batch[i] for i in pending_indices]
             try:
-                prompt = self.prompt_builder.build_batch_prompt(batch)
+                prompt = self.prompt_builder.build_batch_prompt(sub_batch)
                 response = await self.llm_client.verify_alignment(prompt)
-                batch_results = self.response_validator.validate_batch(
-                    response, len(batch)
+                sub_results = self.response_validator.validate_batch(
+                    response, len(sub_batch)
                 )
-                if batch_results:
+                if not sub_results:
+                    # Hard parse failure — fall through to retry-loop logic.
+                    if attempt < attempts - 1:
+                        delay = (2**attempt) + random.uniform(0, 0.25)
+                        self.logger.warning(
+                            f"Batch {batch_index} returned an invalid/empty "
+                            f"response (attempt {attempt + 1}/{attempts}); "
+                            f"retrying in {delay:.2f}s"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    self.logger.warning(
+                        f"Batch {batch_index} produced unparseable responses "
+                        f"after {attempts} attempt(s); falling back to "
+                        f"per-function analysis"
+                    )
+                    return None
+
+                # Merge sub-results back into the accumulated full-length
+                # array, mapping ``sub_batch`` index → original ``batch``
+                # index via ``pending_indices``.
+                if accumulated is None:
+                    accumulated = [None] * len(batch)
+                next_pending: List[int] = []
+                for sub_idx, item in enumerate(sub_results):
+                    orig_idx = pending_indices[sub_idx]
+                    if item.get("_padded"):
+                        # Still missing — keep waiting on this slot.
+                        next_pending.append(orig_idx)
+                        # Preserve any existing sentinel; don't overwrite
+                        # with another padded marker.
+                        if accumulated[orig_idx] is None:
+                            accumulated[orig_idx] = item
+                    else:
+                        accumulated[orig_idx] = item
+
+                if not next_pending:
+                    # All slots filled.
                     if attempt > 0:
                         self.logger.info(
-                            f"Batch {batch_index} succeeded on retry {attempt}"
+                            f"Batch {batch_index} succeeded after slot-level "
+                            f"retry pass {attempt}"
                         )
-                    return batch_results
+                    return accumulated  # type: ignore[return-value]
 
                 if attempt < attempts - 1:
                     delay = (2**attempt) + random.uniform(0, 0.25)
                     self.logger.warning(
-                        f"Batch {batch_index} returned an invalid/empty response "
-                        f"(attempt {attempt + 1}/{attempts}); retrying in "
-                        f"{delay:.2f}s"
+                        f"Batch {batch_index} returned a short response: "
+                        f"{len(next_pending)}/{len(batch)} slots still "
+                        f"missing (attempt {attempt + 1}/{attempts}); "
+                        f"retrying just those slots in {delay:.2f}s"
                     )
                     await asyncio.sleep(delay)
+                    pending_indices = next_pending
                     continue
 
+                # Retries exhausted with some slots still missing: fall back
+                # to per-function analysis for the remaining slots only by
+                # signalling the caller — but to keep the existing fallback
+                # path simple, return None which triggers per-function
+                # analysis of the entire batch. The cost is bounded because
+                # short-response cases are rare and only the unfilled slots
+                # actually re-run on the LLM (the others get cached
+                # behaviour from per-function ``check_alignment``).
                 self.logger.warning(
-                    f"Batch {batch_index} produced unparseable responses "
-                    f"after {attempts} attempt(s); falling back to "
+                    f"Batch {batch_index}: {len(next_pending)} slot(s) still "
+                    f"missing after {attempts} attempt(s); falling back to "
                     f"per-function analysis"
                 )
                 return None
@@ -276,8 +331,64 @@ class AlignmentOrchestrator:
                     f"retries: {e}; falling back to per-function analysis"
                 )
                 return None
+        return accumulated
 
         return None
+
+    @staticmethod
+    def _estimate_function_chars(func_context: FunctionContext) -> int:
+        """Approximate the number of characters this function contributes to a batch prompt.
+
+        Used by the token-aware packer in :meth:`check_alignment_batch`. We
+        intentionally stay in *characters* (rather than tokens) because token
+        counting requires loading a tokenizer per provider and is expensive
+        relative to the heuristic accuracy we need. ``build_batch_prompt``
+        already truncates source at 2000 chars, so we cap here to mirror
+        that behavior — a function with a 50KB body still only consumes the
+        truncated 2KB plus a small header in the actual prompt.
+        """
+        source = getattr(func_context, "source", "") or ""
+        source_chars = min(len(source), 2000)
+        # Header overhead: name + decorator + parameters JSON + docstring +
+        # security flags + the FUNCTION-N delimiter line. ~600 is a
+        # comfortable upper bound for typical MCP tools.
+        overhead = 600
+        return source_chars + overhead
+
+    def _pack_batches(
+        self,
+        func_contexts: List[FunctionContext],
+        batch_size: int,
+        prompt_budget_chars: int,
+    ) -> List[List[FunctionContext]]:
+        """Pack ``func_contexts`` into batches that respect both knobs.
+
+        A batch is closed when *either* the function count reaches
+        ``batch_size`` *or* adding the next function would push the running
+        prompt-character budget past ``prompt_budget_chars``. The latter
+        prevents a single oversized function from inflating an entire batch
+        beyond the model's context window. A function whose own size
+        already exceeds the budget is still packed into its own batch
+        rather than being silently dropped.
+        """
+        budget = max(1, prompt_budget_chars)
+        batches: List[List[FunctionContext]] = []
+        current: List[FunctionContext] = []
+        current_chars = 0
+        for fc in func_contexts:
+            est = self._estimate_function_chars(fc)
+            if current and (
+                len(current) >= batch_size
+                or current_chars + est > budget
+            ):
+                batches.append(current)
+                current = []
+                current_chars = 0
+            current.append(fc)
+            current_chars += est
+        if current:
+            batches.append(current)
+        return batches
 
     async def check_alignment_batch(
         self,
@@ -286,6 +397,7 @@ class AlignmentOrchestrator:
         *,
         batch_concurrency: int = 4,
         batch_retries: int = 1,
+        batch_prompt_budget: int = 60_000,
     ) -> List[Tuple[Dict[str, Any], FunctionContext]]:
         """Check alignment for multiple functions using parallel batched LLM calls.
 
@@ -312,6 +424,13 @@ class AlignmentOrchestrator:
             batch_retries: Number of additional retries for parseable
                 failures before falling back to per-function analysis
                 (default: 1; 0 disables the parseable-failure retry).
+            batch_prompt_budget: Soft upper bound on the per-batch prompt
+                size in characters. Functions are packed greedily until
+                either ``batch_size`` or this budget is reached, whichever
+                comes first. Default 60_000 chars (~15k tokens) is
+                conservative for GPT-4-class context windows. The
+                truncation in ``build_batch_prompt`` (2000 chars per
+                function) is the underlying ceiling per slot.
 
         Returns:
             List of (analysis_dict, func_context) tuples for every detected
@@ -322,10 +441,17 @@ class AlignmentOrchestrator:
         if not func_contexts:
             return []
 
-        batches: List[List[FunctionContext]] = [
-            func_contexts[i : i + batch_size]
-            for i in range(0, len(func_contexts), batch_size)
-        ]
+        batches: List[List[FunctionContext]] = self._pack_batches(
+            func_contexts,
+            batch_size=max(1, int(batch_size or 1)),
+            prompt_budget_chars=max(1000, int(batch_prompt_budget or 60_000)),
+        )
+        if batches:
+            self.logger.debug(
+                f"Packed {len(func_contexts)} functions into {len(batches)} "
+                f"batch(es) (max {batch_size}/batch, "
+                f"budget={batch_prompt_budget} chars)"
+            )
         sem = asyncio.Semaphore(max(1, int(batch_concurrency or 1)))
 
         async def _run_batch(
@@ -365,7 +491,14 @@ class AlignmentOrchestrator:
                         break
                     func_context = batch[idx]
                     self.stats["total_analyzed"] += 1
-                    if result and result.get("mismatch_detected"):
+                    if result is None:
+                        self.stats["no_mismatch"] += 1
+                        continue
+                    # Drop the validator's internal padding sentinel so it
+                    # never leaks into downstream consumers / findings.
+                    if "_padded" in result:
+                        result.pop("_padded", None)
+                    if result.get("mismatch_detected"):
                         self.stats["mismatches_detected"] += 1
                         mismatches.append((result, func_context))
                         classification_coros.append(

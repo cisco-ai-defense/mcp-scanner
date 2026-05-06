@@ -145,6 +145,12 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     f"(read concurrency={warm_concurrency})"
                 )
 
+                # Phase 1 — gather size info synchronously so very-large
+                # files are skipped before we pay any parser cost. The size
+                # check stays sequential because ``os.path.getsize`` is
+                # essentially free; the heavyweight call-graph ``add_file``
+                # work is dispatched into a thread pool below.
+                eligible: List[tuple[str, str]] = []  # (file, language_kind)
                 total_size = 0
                 for src_file in source_files:
                     try:
@@ -153,28 +159,72 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                         if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
                             self.logger.error(
-                                f"Very large file detected, skipping: {src_file} ({file_size:,} bytes)"
+                                f"Very large file detected, skipping: {src_file} "
+                                f"({file_size:,} bytes)"
                             )
                             continue
-                        elif file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
+                        if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
                             self.logger.debug(
                                 f"Large file detected: {src_file} ({file_size:,} bytes)"
                             )
 
-                        source_code = read_text_cached(src_file)
-
                         ext = Path(src_file).suffix.lower()
                         if ext in self._PYTHON_EXTENSIONS and py_call_graph_analyzer:
-                            py_call_graph_analyzer.add_file(Path(src_file), source_code)
+                            eligible.append((src_file, "python"))
                         elif ext in self._EXT_TO_TS_LANGUAGE:
-                            lang = self._EXT_TO_TS_LANGUAGE[ext]
-                            ts_call_graph_analyzers[lang].add_file(
-                                Path(src_file), source_code
-                            )
+                            eligible.append((src_file, self._EXT_TO_TS_LANGUAGE[ext]))
                     except Exception as e:
                         self.logger.warning(
-                            f"Failed to add file {src_file} to cross-file analyzer: {e}"
+                            f"Failed to inspect {src_file} for cross-file analysis: {e}"
                         )
+
+                # Phase 2 — parse + register each file's contribution to its
+                # language's call graph in a thread pool. ``ast.parse`` and
+                # tree-sitter parsing release the GIL only weakly but still
+                # benefit from overlapping with the cached file-reads done
+                # earlier; the call-graph mutations are guarded by a lock
+                # inside ``CallGraph`` / ``TSCallGraph`` so concurrent
+                # ``add_file`` calls cannot corrupt the indices. Concurrency
+                # reuses ``file_concurrency`` so users have one knob.
+                add_file_concurrency = max(
+                    1, int(context.get("file_concurrency", 4) or 1)
+                )
+                add_file_sem = asyncio.Semaphore(add_file_concurrency)
+
+                def _add_file_sync(src_file: str, kind: str) -> None:
+                    """Parse one file and register it with the right call graph.
+
+                    Runs inside ``asyncio.to_thread`` so the surrounding
+                    event loop stays responsive while the heavy
+                    parser/type-analysis work executes off-loop.
+                    """
+                    source_code = read_text_cached(src_file)
+                    if kind == "python" and py_call_graph_analyzer is not None:
+                        py_call_graph_analyzer.add_file(Path(src_file), source_code)
+                    elif kind in ts_call_graph_analyzers:
+                        ts_call_graph_analyzers[kind].add_file(
+                            Path(src_file), source_code
+                        )
+
+                async def _add_file_async(src_file: str, kind: str) -> None:
+                    async with add_file_sem:
+                        try:
+                            await asyncio.to_thread(_add_file_sync, src_file, kind)
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Failed to add file {src_file} to cross-file "
+                                f"analyzer: {e}"
+                            )
+
+                if eligible:
+                    self.logger.debug(
+                        f"Parsing {len(eligible)} files into call graph(s) "
+                        f"with concurrency={add_file_concurrency}"
+                    )
+                    await asyncio.gather(
+                        *(_add_file_async(s, k) for s, k in eligible),
+                        return_exceptions=False,
+                    )
 
                 self.logger.debug(
                     f"Total directory size: {total_size:,} bytes across {len(source_files)} files"
@@ -546,18 +596,26 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 1, int(context.get("batch_concurrency", 4) or 1)
             )
             batch_retries = max(0, int(context.get("batch_retries", 1) or 0))
+            # Token-aware packing budget (in characters; keeps the heuristic
+            # tokenizer-agnostic). Tuned alongside ``--batch-size`` so a few
+            # large functions don't blow up the prompt context window.
+            batch_prompt_budget = max(
+                1000, int(context.get("batch_prompt_budget", 60_000) or 60_000)
+            )
 
             if use_batching and len(func_contexts) > 1:
                 self.logger.debug(
                     f"Using batched analysis with batch_size={batch_size}, "
                     f"batch_concurrency={batch_concurrency}, "
-                    f"batch_retries={batch_retries}"
+                    f"batch_retries={batch_retries}, "
+                    f"batch_prompt_budget={batch_prompt_budget}"
                 )
                 batch_results = await self.alignment_orchestrator.check_alignment_batch(
                     func_contexts,
                     batch_size=batch_size,
                     batch_concurrency=batch_concurrency,
                     batch_retries=batch_retries,
+                    batch_prompt_budget=batch_prompt_budget,
                 )
                 for analysis, ctx in batch_results:
                     finding = self._create_security_finding(analysis, ctx, file_path)

@@ -47,14 +47,22 @@ class PythonParser(BaseParser):
     def parse(self) -> ast.AST:
         """Parse Python source code into AST.
 
+        Routed through the shared ``ast_cache`` so the same file isn't
+        re-parsed by ``ContextExtractor`` and ``NativeAnalyzer`` later in
+        the pipeline. The cache key combines ``file_path`` and a content
+        digest, so a stale cached entry can never collide with a freshly
+        edited source.
+
         Returns:
             Python AST
 
         Raises:
             SyntaxError: If source code has syntax errors
         """
+        from ..ast_cache import get_python_ast
+
         try:
-            return ast.parse(self.source_code, filename=str(self.file_path))
+            return get_python_ast(self.source_code, self.file_path)
         except SyntaxError as e:
             raise SyntaxError(f"Failed to parse {self.file_path}: {e}") from e
 

@@ -183,6 +183,7 @@ async def _run_behavioral_analyzer_on_source(
     file_read_concurrency: int = 32,
     batch_concurrency: int = 4,
     batch_retries: int = 1,
+    batch_prompt_budget: int = 60_000,
 ) -> List[Dict[str, Any]]:
     """Run behavioral analyzer on source code and format results.
 
@@ -196,6 +197,7 @@ async def _run_behavioral_analyzer_on_source(
             alignment verification within a single file.
         batch_retries: Additional retries for unparseable batch responses
             before falling back to per-function analysis.
+        batch_prompt_budget: Soft per-batch prompt size cap, in characters.
 
     Returns:
         List of formatted result dictionaries
@@ -211,6 +213,7 @@ async def _run_behavioral_analyzer_on_source(
     #   * file_read_concurrency  — parallel prefetch into the shared file cache
     #   * batch_concurrency      — parallel LLM batches per file
     #   * batch_retries          — extra retries for unparseable batch responses
+    #   * batch_prompt_budget    — soft per-batch prompt char cap (token-aware packer)
     findings = await analyzer.analyze(
         source_path,
         context={
@@ -219,6 +222,7 @@ async def _run_behavioral_analyzer_on_source(
             "file_read_concurrency": max(1, int(file_read_concurrency or 1)),
             "batch_concurrency": max(1, int(batch_concurrency or 1)),
             "batch_retries": max(0, int(batch_retries or 0)),
+            "batch_prompt_budget": max(1000, int(batch_prompt_budget or 60_000)),
         },
     )
 
@@ -346,7 +350,7 @@ async def scan_mcp_server_direct(
 
     try:
         config = _build_config(analyzers, endpoint_url)
-        scanner = Scanner(config, rules_dir=rules_path)
+        scanner = Scanner(config, rules_dir=rules_path)  # quick-scan helper; uses default unbounded fan-out
 
         # Scan all tools on the server
         start_time = time.time()
@@ -1153,6 +1157,19 @@ async def main():
             "disable parseable-failure retries. Default: %(default)s."
         ),
     )
+    p_behavioral.add_argument(
+        "--batch-prompt-budget",
+        type=int,
+        default=60_000,
+        metavar="CHARS",
+        help=(
+            "Soft per-batch prompt size cap, in characters. Functions are "
+            "packed greedily until either --batch-size or this budget is "
+            "hit, whichever comes first. Lower this if your provider has a "
+            "tight context window or if individual functions are large; "
+            "raise it for models with bigger context. Default: %(default)s."
+        ),
+    )
 
     # vulnerable-package subcommand - scan Python dependencies for known vulnerabilities
     p_vuln_pkgs = subparsers.add_parser(
@@ -1313,6 +1330,22 @@ async def main():
     )
     parser.add_argument(
         "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    parser.add_argument(
+        "--tool-concurrency",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Maximum number of tools / prompts / resources analyzed in "
+            "parallel within one scan. Default 0 keeps the historical "
+            "unbounded fan-out (every item dispatched at once). Set to a "
+            "positive integer when scanning a server that exposes hundreds "
+            "of tools so the LLM provider doesn't get hammered with "
+            "simultaneous requests, which can trigger 429 rate limits and "
+            "force retry loops to soak wall-clock time. A value of 8-16 "
+            "is a reasonable starting point for most providers."
+        ),
     )
     parser.add_argument(
         "--raw", "-r", action="store_true", help="Print raw JSON output to terminal"
@@ -1598,7 +1631,7 @@ async def main():
 
         elif args.cmd == "remote":
             cfg = _build_config(selected_analyzers)
-            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
             # Parse custom headers and create auth
             custom_headers = _parse_custom_headers(
                 getattr(args, "custom_headers", None)
@@ -1611,7 +1644,7 @@ async def main():
 
         elif args.cmd == "stdio":
             cfg = _build_config(selected_analyzers)
-            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
             env_dict = {}
             for item in args.stdio_env or []:
                 if "=" in item:
@@ -1653,7 +1686,7 @@ async def main():
 
         elif args.cmd == "config":
             cfg = _build_config(selected_analyzers)
-            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             scan_results = await scanner.scan_mcp_config_file(
                 args.config_path,
@@ -1665,7 +1698,7 @@ async def main():
 
         elif args.cmd == "known-configs":
             cfg = _build_config(selected_analyzers)
-            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
             results_by_cfg = await scanner.scan_well_known_mcp_configs(
                 analyzers=selected_analyzers,
@@ -1685,7 +1718,7 @@ async def main():
 
         elif args.cmd == "prompts":
             cfg = _build_config(selected_analyzers)
-            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
             # Parse custom headers and create auth
             custom_headers = _parse_custom_headers(
                 getattr(args, "custom_headers", None)
@@ -1756,7 +1789,7 @@ async def main():
 
         elif args.cmd == "resources":
             cfg = _build_config(selected_analyzers)
-            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
             # Parse custom headers and create auth
             custom_headers = _parse_custom_headers(
                 getattr(args, "custom_headers", None)
@@ -1836,7 +1869,7 @@ async def main():
 
         elif args.cmd == "instructions":
             cfg = _build_config(selected_analyzers)
-            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
 
             # Scan server instructions
@@ -2001,6 +2034,13 @@ async def main():
                     ),
                     "batch_retries": max(
                         0, int(getattr(args, "batch_retries", 1) or 0)
+                    ),
+                    "batch_prompt_budget": max(
+                        1000,
+                        int(
+                            getattr(args, "batch_prompt_budget", 60_000)
+                            or 60_000
+                        ),
                     ),
                 },
             )
@@ -2238,7 +2278,7 @@ async def main():
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
             cfg = _build_config(selected_analyzers)
-            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
             env_dict = {}
             for item in args.stdio_env or []:
                 if "=" in item:
@@ -2280,7 +2320,7 @@ async def main():
 
         elif args.scan_known_configs or args.config_path:
             cfg = _build_config(selected_analyzers)
-            scanner = Scanner(cfg, rules_dir=args.rules_path)
+            scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
             if args.config_path:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                 scan_results = await scanner.scan_mcp_config_file(
@@ -2327,12 +2367,15 @@ async def main():
                     ),
                     batch_concurrency=getattr(args, "batch_concurrency", 4),
                     batch_retries=getattr(args, "batch_retries", 1),
+                    batch_prompt_budget=getattr(
+                        args, "batch_prompt_budget", 60_000
+                    ),
                 )
             else:
                 # Run the security scan against a server URL
                 if args.bearer_token:
                     cfg = _build_config(selected_analyzers)
-                    scanner = Scanner(cfg, rules_dir=args.rules_path)
+                    scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
                     results_raw = await scanner.scan_remote_server_tools(
                         args.server_url,
                         auth=Auth.bearer(args.bearer_token),
@@ -2343,7 +2386,7 @@ async def main():
                     cfg = _build_config(
                         selected_analyzers, endpoint_url=args.endpoint_url
                     )
-                    scanner = Scanner(cfg, rules_dir=args.rules_path)
+                    scanner = Scanner(cfg, rules_dir=args.rules_path, tool_concurrency=getattr(args, "tool_concurrency", 0))
                     auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                     results_raw = await scanner.scan_remote_server_tools(
                         args.server_url, auth=auth, analyzers=selected_analyzers

@@ -120,6 +120,7 @@ class Scanner:
         config: Config,
         rules_dir: Optional[str] = None,
         custom_analyzers: Optional[List[BaseAnalyzer]] = None,
+        tool_concurrency: int = 0,
     ):
         """Initialize a new Scanner instance.
 
@@ -127,8 +128,20 @@ class Scanner:
             config (Config): The configuration for the scanner.
             rules_dir (Optional[str]): Custom path to YARA rules directory.
             custom_analyzers (Optional[List[BaseAnalyzer]]): A list of custom analyzer instances.
+            tool_concurrency (int): Maximum number of tools / prompts /
+                resources analyzed in parallel within one ``scan_remote_*``
+                call. ``0`` (the default) preserves the historical
+                "unbounded" behavior — every item dispatches at once. Set
+                this to a positive integer when scanning a server that
+                exposes hundreds of tools so the LLM provider doesn't get
+                hammered with simultaneous requests, which can trigger 429
+                rate limits and force the analyzer's retry loops to soak
+                wall-clock time.
         """
         self._config = config
+        # Stored on the instance so per-call ``_gather_bounded`` can pick it
+        # up without threading another argument through every scan path.
+        self._tool_concurrency = max(0, int(tool_concurrency or 0))
         self._api_analyzer = ApiAnalyzer(config) if config.api_key else None
         self._yara_analyzer = YaraAnalyzer(rules_dir=rules_dir)
 
@@ -281,6 +294,42 @@ class Scanner:
             "doesn't have",
         )
         return any(token in combined_message for token in tokens)
+
+    async def _gather_bounded(
+        self,
+        coros: List[Any],
+        *,
+        return_exceptions: bool = False,
+    ) -> List[Any]:
+        """``asyncio.gather`` with optional concurrency throttling.
+
+        When ``self._tool_concurrency`` is ``> 0`` the coroutines are
+        wrapped with an ``asyncio.Semaphore`` so at most that many run
+        simultaneously. The default of ``0`` (set by ``__init__``) keeps
+        backwards-compatible unbounded fan-out for callers that don't opt
+        in to the ``--tool-concurrency`` knob.
+
+        ``return_exceptions`` is forwarded to ``asyncio.gather`` so call
+        sites can pick the same semantics they had before throttling was
+        introduced (most legacy ``scan_remote_*`` paths re-raise; the
+        ``_run_analyzer_tasks`` style swallows and logs).
+        """
+        if not coros:
+            return []
+        if self._tool_concurrency <= 0:
+            return await asyncio.gather(
+                *coros, return_exceptions=return_exceptions
+            )
+
+        sem = asyncio.Semaphore(self._tool_concurrency)
+
+        async def _runner(c):
+            async with sem:
+                return await c
+
+        return await asyncio.gather(
+            *(_runner(c) for c in coros), return_exceptions=return_exceptions
+        )
 
     @staticmethod
     async def _run_analyzer_tasks(
@@ -1134,14 +1183,16 @@ class Scanner:
                     return []
                 raise
 
-            # Create analysis tasks for each tool
+            # Create analysis tasks for each tool. ``_gather_bounded``
+            # honours ``Scanner(tool_concurrency=N)`` so large remote
+            # servers (hundreds of tools) don't fan out unbounded work to
+            # the LLM provider; ``return_exceptions=False`` preserves the
+            # original raise-on-error semantics for this path.
             scan_tasks = [
                 self._analyze_tool(tool, analyzers, http_headers)
                 for tool in tool_list.tools
             ]
-
-            # Run all tasks concurrently
-            scan_results = await asyncio.gather(*scan_tasks)
+            scan_results = await self._gather_bounded(scan_tasks)
             return scan_results
 
         except Exception as e:
@@ -1341,13 +1392,14 @@ class Scanner:
                         return []
                     raise
 
-                # Create analysis tasks for each tool
+                # Create analysis tasks for each tool. Throttled by the
+                # shared ``_gather_bounded`` helper when ``tool_concurrency``
+                # is set; otherwise behaves identically to the prior
+                # unbounded ``asyncio.gather`` call.
                 scan_tasks = [
                     self._analyze_tool(tool, analyzers) for tool in tool_list.tools
                 ]
-
-                # Run all tasks concurrently
-                scan_results = await asyncio.gather(*scan_tasks)
+                scan_results = await self._gather_bounded(scan_tasks)
                 return scan_results
 
             # Run the connection and scanning in an isolated task
@@ -1949,14 +2001,13 @@ class Scanner:
                         return []
                     raise
 
-                # Create analysis tasks for each prompt
+                # Create analysis tasks for each prompt. Same throttling as
+                # the tool fan-out above.
                 scan_tasks = [
                     self._analyze_prompt(prompt, analyzers)
                     for prompt in prompt_list.prompts
                 ]
-
-                # Run all tasks concurrently
-                scan_results = await asyncio.gather(*scan_tasks)
+                scan_results = await self._gather_bounded(scan_tasks)
                 return scan_results
 
             # Run the connection and scanning in an isolated task
