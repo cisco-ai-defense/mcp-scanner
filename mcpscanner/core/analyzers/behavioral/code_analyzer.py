@@ -184,18 +184,44 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         f"Detected large codebase ({total_size:,} bytes). Analysis performance may be affected."
                     )
 
-                # Build call graphs
+                # Build call graphs concurrently across languages. Each call
+                # graph builder is a CPU-bound, GIL-friendly operation
+                # (Python's ``ast`` parsing for the Python analyzer;
+                # tree-sitter native code for the others) and operates on a
+                # *distinct* analyzer instance, so there is no shared state
+                # to coordinate. ``asyncio.to_thread`` lets the event loop
+                # overlap them without blocking other awaitable work.
+                cg_build_tasks = []
+                cg_build_labels: List[str] = []
                 if py_call_graph_analyzer:
-                    call_graph = py_call_graph_analyzer.build_call_graph()
-                    self.logger.debug(
-                        f"Built Python call graph with {len(call_graph.functions)} functions"
+                    cg_build_tasks.append(
+                        asyncio.to_thread(py_call_graph_analyzer.build_call_graph)
                     )
+                    cg_build_labels.append("python")
 
                 for lang, ts_analyzer in ts_call_graph_analyzers.items():
-                    ts_cg = ts_analyzer.build_call_graph()
-                    self.logger.debug(
-                        f"Built {lang} call graph with {len(ts_cg.functions)} functions"
+                    cg_build_tasks.append(
+                        asyncio.to_thread(ts_analyzer.build_call_graph)
                     )
+                    cg_build_labels.append(lang)
+
+                if cg_build_tasks:
+                    cg_build_results = await asyncio.gather(
+                        *cg_build_tasks, return_exceptions=True
+                    )
+                    for label, cg_result in zip(cg_build_labels, cg_build_results):
+                        if isinstance(cg_result, BaseException):
+                            self.logger.warning(
+                                f"Call graph build failed for {label}: {cg_result}"
+                            )
+                            continue
+                        try:
+                            n_functions = len(cg_result.functions)
+                        except AttributeError:
+                            n_functions = 0
+                        self.logger.debug(
+                            f"Built {label} call graph with {n_functions} functions"
+                        )
 
                 # Analyze files concurrently with a bounded semaphore so the
                 # call graph builds happen once but per-file LLM/extraction
@@ -509,15 +535,29 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         func_context, file_path, context["cross_file_analyzer"]
                     )
 
-            # Use batched analysis for efficiency (reduces LLM calls)
-            # Batch size of 5 functions per LLM request
+            # Use batched analysis for efficiency (reduces LLM calls). Batches
+            # are dispatched concurrently inside the orchestrator with a
+            # bounded semaphore (batch_concurrency) and parseable-failure
+            # retry budget (batch_retries) — both surfaced via context so
+            # they can be tuned from the CLI without touching this layer.
             use_batching = context.get("use_batching", True)
             batch_size = context.get("batch_size", 5)
+            batch_concurrency = max(
+                1, int(context.get("batch_concurrency", 4) or 1)
+            )
+            batch_retries = max(0, int(context.get("batch_retries", 1) or 0))
 
             if use_batching and len(func_contexts) > 1:
-                self.logger.debug(f"Using batched analysis with batch_size={batch_size}")
+                self.logger.debug(
+                    f"Using batched analysis with batch_size={batch_size}, "
+                    f"batch_concurrency={batch_concurrency}, "
+                    f"batch_retries={batch_retries}"
+                )
                 batch_results = await self.alignment_orchestrator.check_alignment_batch(
-                    func_contexts, batch_size=batch_size
+                    func_contexts,
+                    batch_size=batch_size,
+                    batch_concurrency=batch_concurrency,
+                    batch_retries=batch_retries,
                 )
                 for analysis, ctx in batch_results:
                     finding = self._create_security_finding(analysis, ctx, file_path)

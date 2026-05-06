@@ -282,6 +282,61 @@ class Scanner:
         )
         return any(token in combined_message for token in tokens)
 
+    @staticmethod
+    async def _run_analyzer_tasks(
+        tasks: List[Tuple[str, str, "asyncio.coroutines"]],
+        target_label: str,
+        target_name: str,
+    ) -> Tuple[List[Any], List[str]]:
+        """Run a set of analyzer coroutines concurrently and merge findings.
+
+        Each entry in ``tasks`` is a ``(analyzer_name, error_label, coroutine)``
+        triple where:
+          * ``analyzer_name`` is what we tag emitted findings with (e.g.
+            ``"API"``, ``"YARA"``, ``"LLM"``, custom analyzer ``.name``).
+          * ``error_label`` is a short human description used only in error
+            log lines (e.g. ``"YARA analysis on description"``).
+          * ``coroutine`` is the awaitable returned by an analyzer's
+            ``analyze(...)`` call.
+
+        Behavior matches the original sequential code exactly:
+          * Findings from each analyzer have ``finding.analyzer`` overwritten
+            with ``analyzer_name`` before being merged.
+          * Exceptions from any single analyzer are caught and logged
+            (matching the per-block ``try/except`` the call sites used to
+            have); the remaining analyzers still complete.
+
+        Wall-clock cost goes from ``sum(t_i)`` to ``max(t_i)`` per target,
+        which is the dominant savings for tools with multiple LLM-backed
+        analyzers (LLM + READINESS + PROMPT_DEFENSE) enabled.
+
+        Returns:
+            Tuple of:
+              * merged list of findings (with ``finding.analyzer`` tagged).
+              * list of analyzer_name values whose coroutines completed
+                without raising (useful for tracking custom-analyzer
+                success, where "ran cleanly with zero findings" is a
+                distinct outcome from "raised").
+        """
+        if not tasks:
+            return [], []
+        coros = [t[2] for t in tasks]
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        merged: List[Any] = []
+        succeeded: List[str] = []
+        for (analyzer_name, error_label, _), result in zip(tasks, results):
+            if isinstance(result, BaseException):
+                logger.error(
+                    f'{error_label} failed: {target_label}="{target_name}", '
+                    f'error="{result}"'
+                )
+                continue
+            succeeded.append(analyzer_name)
+            for finding in result:
+                finding.analyzer = analyzer_name
+            merged.extend(result)
+        return merged, succeeded
+
     async def _analyze_tool(
         self,
         tool: MCPTool,
@@ -297,134 +352,116 @@ class Scanner:
         Returns:
             ScanResult: The result of the analysis.
         """
-        all_findings = []
         name = tool.name
         description = tool.description
         tool_json = tool.model_dump_json()
         tool_data = json.loads(tool_json)
 
+        # Build the list of independent analyzer coroutines to dispatch in
+        # parallel. Each entry is (analyzer_label, error_label, coroutine).
+        # The coroutines are independent — every analyzer reads from the
+        # already-materialized ``description``/``tool_data`` and writes only
+        # to its own findings list — so they're safe to run concurrently.
+        tasks: List[Tuple[str, str, Any]] = []
+
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
-            # Run API analysis on the description
-            try:
-                api_context = {"tool_name": name, "content_type": "description"}
-                api_findings = await self._api_analyzer.analyze(
-                    description, api_context
+            api_context = {"tool_name": name, "content_type": "description"}
+            tasks.append(
+                (
+                    "API",
+                    "API analysis on description",
+                    self._api_analyzer.analyze(description, api_context),
                 )
-                for finding in api_findings:
-                    finding.analyzer = "API"
-                all_findings.extend(api_findings)
-            except Exception as e:
-                logger.error(
-                    f'API analysis failed on description: tool="{name}", error="{e}"'
-                )
+            )
 
         if AnalyzerEnum.YARA in analyzers:
-            # Run YARA analysis on the description
-            try:
-                yara_desc_context = {"tool_name": name, "content_type": "description"}
-                yara_desc_findings = await self._yara_analyzer.analyze(
-                    description, yara_desc_context
+            yara_desc_context = {"tool_name": name, "content_type": "description"}
+            tasks.append(
+                (
+                    "YARA",
+                    "YARA analysis on description",
+                    self._yara_analyzer.analyze(description, yara_desc_context),
                 )
-                for finding in yara_desc_findings:
-                    finding.analyzer = "YARA"
-                all_findings.extend(yara_desc_findings)
-            except Exception as e:
-                logger.error(
-                    f'YARA analysis failed on description: tool="{name}", error="{e}"'
+            )
+            # YARA on parameters: derive a description-stripped JSON view
+            # *before* dispatch so each coroutine is fully self-contained.
+            params_data = {k: v for k, v in tool_data.items() if k != "description"}
+            tool_json_str = json.dumps(params_data)
+            yara_params_context = {"tool_name": name, "content_type": "parameters"}
+            tasks.append(
+                (
+                    "YARA",
+                    "YARA analysis on parameters",
+                    self._yara_analyzer.analyze(tool_json_str, yara_params_context),
                 )
-
-            # Run YARA analysis on the tool parameters
-            try:
-                # Remove description from the JSON as it is already analyzed
-                if "description" in tool_data:
-                    del tool_data["description"]
-                tool_json_str = json.dumps(tool_data)
-                yara_params_context = {"tool_name": name, "content_type": "parameters"}
-                yara_params_findings = await self._yara_analyzer.analyze(
-                    tool_json_str, yara_params_context
-                )
-                for finding in yara_params_findings:
-                    finding.analyzer = "YARA"
-                all_findings.extend(yara_params_findings)
-            except Exception as e:
-                logger.error(
-                    f'YARA analysis failed on parameters: tool="{name}", error="{e}"'
-                )
+            )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
-            # Run LLM analysis on the complete tool information
-            try:
-                # Format content for comprehensive analysis
-                analysis_content = f"Tool Name: {name}\n"
-                analysis_content += f"Description: {description}\n"
-                if "inputSchema" in tool_data:
-                    analysis_content += f"Parameters Schema: {json.dumps(tool_data['inputSchema'], indent=2)}\n"
-
-                llm_context = {"tool_name": name, "content_type": "comprehensive"}
-                llm_findings = await self._llm_analyzer.analyze(
-                    analysis_content, llm_context
+            analysis_content = f"Tool Name: {name}\n"
+            analysis_content += f"Description: {description}\n"
+            if "inputSchema" in tool_data:
+                analysis_content += (
+                    f"Parameters Schema: {json.dumps(tool_data['inputSchema'], indent=2)}\n"
                 )
-                for finding in llm_findings:
-                    finding.analyzer = "LLM"
-                all_findings.extend(llm_findings)
-            except Exception as e:
-                logger.error(f'LLM analysis failed: tool="{name}", error="{e}"')
+            llm_context = {"tool_name": name, "content_type": "comprehensive"}
+            tasks.append(
+                (
+                    "LLM",
+                    "LLM analysis",
+                    self._llm_analyzer.analyze(analysis_content, llm_context),
+                )
+            )
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for tool \"'{name}'\" but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
 
         if AnalyzerEnum.READINESS in analyzers and self._readiness_analyzer:
-            # Run READINESS analysis on the complete tool definition
-            try:
-                # Pass the parsed tool data for comprehensive heuristic checks
-                readiness_context = {
-                    "tool_name": name,
-                    "content_type": "tool_definition",
-                    "tool_definition": tool_data,
-                }
-                readiness_findings = await self._readiness_analyzer.analyze(
-                    tool_json, readiness_context
+            readiness_context = {
+                "tool_name": name,
+                "content_type": "tool_definition",
+                "tool_definition": tool_data,
+            }
+            tasks.append(
+                (
+                    "READINESS",
+                    "Readiness analysis",
+                    self._readiness_analyzer.analyze(tool_json, readiness_context),
                 )
-                for finding in readiness_findings:
-                    finding.analyzer = "READINESS"
-                all_findings.extend(readiness_findings)
-            except Exception as e:
-                logger.error(f'Readiness analysis failed: tool="{name}", error="{e}"')
+            )
 
         if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
-            # Run PROMPT_DEFENSE analysis on the tool description
-            try:
-                pd_context = {"tool_name": name, "content_type": "description"}
-                pd_findings = await self._prompt_defense_analyzer.analyze(
-                    description, pd_context
+            pd_context = {"tool_name": name, "content_type": "description"}
+            tasks.append(
+                (
+                    "PromptDefense",
+                    "Prompt defense analysis",
+                    self._prompt_defense_analyzer.analyze(description, pd_context),
                 )
-                for finding in pd_findings:
-                    finding.analyzer = "PromptDefense"
-                all_findings.extend(pd_findings)
-            except Exception as e:
-                logger.error(f'Prompt defense analysis failed: tool="{name}", error="{e}"')
+            )
 
-        # Run custom analyzers
-        custom_analyzer_names = []
+        custom_candidate_names: List[str] = []
         for analyzer in self._custom_analyzers:
-            try:
-                custom_context = {"tool_name": name, "content_type": "description"}
-                # Add HTTP headers to context for custom analyzers
-                if http_headers:
-                    custom_context["http_headers"] = http_headers
-                findings = await analyzer.analyze(description, custom_context)
-                for finding in findings:
-                    finding.analyzer = analyzer.name
-                all_findings.extend(findings)
-                # Track which custom analyzers were successfully run
-                custom_analyzer_names.append(analyzer.name)
-            except Exception as e:
-                logger.error(
-                    f'Custom analyzer "{analyzer.name}" failed: tool="{name}", error="{e}"'
+            custom_context = {"tool_name": name, "content_type": "description"}
+            if http_headers:
+                custom_context["http_headers"] = http_headers
+            tasks.append(
+                (
+                    analyzer.name,
+                    f'Custom analyzer "{analyzer.name}"',
+                    analyzer.analyze(description, custom_context),
                 )
+            )
+            custom_candidate_names.append(analyzer.name)
 
-        # Combine enum analyzers and custom analyzer names
+        all_findings, succeeded_labels = await self._run_analyzer_tasks(
+            tasks, "tool", name
+        )
+        succeeded_set = set(succeeded_labels)
+        custom_analyzer_names = [
+            n for n in custom_candidate_names if n in succeeded_set
+        ]
+
         all_analyzers = list(analyzers) + custom_analyzer_names
 
         return ToolScanResult(
@@ -451,7 +488,6 @@ class Scanner:
         Returns:
             PromptScanResult: The result of the analysis.
         """
-        all_findings = []
         name = prompt.name
         description = prompt.description or ""
 
@@ -465,112 +501,92 @@ class Scanner:
             )
             prompt_data = {"name": name, "description": description}
 
+        tasks: List[Tuple[str, str, Any]] = []
+
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
-            # Run API analysis on the description
-            try:
-                api_context = {"prompt_name": name, "content_type": "description"}
-                api_findings = await self._api_analyzer.analyze(
-                    description, api_context
+            api_context = {"prompt_name": name, "content_type": "description"}
+            tasks.append(
+                (
+                    "API",
+                    "API analysis on prompt description",
+                    self._api_analyzer.analyze(description, api_context),
                 )
-                for finding in api_findings:
-                    finding.analyzer = "API"
-                all_findings.extend(api_findings)
-            except Exception as e:
-                logger.error(
-                    f'API analysis failed on prompt description: prompt="{name}", error="{e}"'
-                )
+            )
 
         if AnalyzerEnum.YARA in analyzers:
-            # Run YARA analysis on the description
-            try:
-                yara_desc_context = {"prompt_name": name, "content_type": "description"}
-                yara_desc_findings = await self._yara_analyzer.analyze(
-                    description, yara_desc_context
+            yara_desc_context = {"prompt_name": name, "content_type": "description"}
+            tasks.append(
+                (
+                    "YARA",
+                    "YARA analysis on prompt description",
+                    self._yara_analyzer.analyze(description, yara_desc_context),
                 )
-                for finding in yara_desc_findings:
-                    finding.analyzer = "YARA"
-                all_findings.extend(yara_desc_findings)
-            except Exception as e:
-                logger.error(
-                    f'YARA analysis failed on prompt description: prompt="{name}", error="{e}"'
+            )
+            args_data = {k: v for k, v in prompt_data.items() if k != "description"}
+            prompt_json_str = json.dumps(args_data)
+            yara_params_context = {"prompt_name": name, "content_type": "arguments"}
+            tasks.append(
+                (
+                    "YARA",
+                    "YARA analysis on prompt arguments",
+                    self._yara_analyzer.analyze(
+                        prompt_json_str, yara_params_context
+                    ),
                 )
-
-            # Run YARA analysis on the prompt arguments/structure
-            try:
-                # Remove description from the JSON as it is already analyzed
-                if "description" in prompt_data:
-                    del prompt_data["description"]
-                prompt_json_str = json.dumps(prompt_data)
-                yara_params_context = {"prompt_name": name, "content_type": "arguments"}
-                yara_params_findings = await self._yara_analyzer.analyze(
-                    prompt_json_str, yara_params_context
-                )
-                for finding in yara_params_findings:
-                    finding.analyzer = "YARA"
-                all_findings.extend(yara_params_findings)
-            except Exception as e:
-                logger.error(
-                    f'YARA analysis failed on prompt arguments: prompt="{name}", error="{e}"'
-                )
+            )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
-            # Run LLM analysis on the complete prompt information
-            try:
-                # Format content for comprehensive analysis
-                analysis_content = f"Prompt Name: {name}\n"
-                analysis_content += f"Description: {description}\n"
-                if "arguments" in prompt_data and prompt_data["arguments"]:
-                    analysis_content += (
-                        f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
-                    )
-
-                llm_context = {"prompt_name": name, "content_type": "comprehensive"}
-                llm_findings = await self._llm_analyzer.analyze(
-                    analysis_content, llm_context
+            analysis_content = f"Prompt Name: {name}\n"
+            analysis_content += f"Description: {description}\n"
+            if "arguments" in prompt_data and prompt_data["arguments"]:
+                analysis_content += (
+                    f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
                 )
-                for finding in llm_findings:
-                    finding.analyzer = "LLM"
-                all_findings.extend(llm_findings)
-            except Exception as e:
-                logger.error(f'LLM analysis failed: prompt="{name}", error="{e}"')
+            llm_context = {"prompt_name": name, "content_type": "comprehensive"}
+            tasks.append(
+                (
+                    "LLM",
+                    "LLM analysis",
+                    self._llm_analyzer.analyze(analysis_content, llm_context),
+                )
+            )
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for prompt '{name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
 
         if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
-            # Run PROMPT_DEFENSE analysis on the prompt description
-            try:
-                pd_context = {"tool_name": name, "content_type": "description"}
-                pd_findings = await self._prompt_defense_analyzer.analyze(
-                    description, pd_context
+            pd_context = {"tool_name": name, "content_type": "description"}
+            tasks.append(
+                (
+                    "PromptDefense",
+                    "Prompt defense analysis",
+                    self._prompt_defense_analyzer.analyze(description, pd_context),
                 )
-                for finding in pd_findings:
-                    finding.analyzer = "PromptDefense"
-                all_findings.extend(pd_findings)
-            except Exception as e:
-                logger.error(f'Prompt defense analysis failed: prompt="{name}", error="{e}"')
+            )
 
-        # Run custom analyzers
-        custom_analyzer_names = []
+        custom_candidate_names: List[str] = []
         for analyzer in self._custom_analyzers:
-            try:
-                custom_context = {"prompt_name": name, "content_type": "description"}
-                # Add HTTP headers to context for custom analyzers
-                if http_headers:
-                    custom_context["http_headers"] = http_headers
-                findings = await analyzer.analyze(description, custom_context)
-                for finding in findings:
-                    finding.analyzer = analyzer.name
-                all_findings.extend(findings)
-                # Track which custom analyzers were successfully run
-                custom_analyzer_names.append(analyzer.name)
-            except Exception as e:
-                logger.error(
-                    f'Custom analyzer "{analyzer.name}" failed: prompt="{name}", error="{e}"'
+            custom_context = {"prompt_name": name, "content_type": "description"}
+            if http_headers:
+                custom_context["http_headers"] = http_headers
+            tasks.append(
+                (
+                    analyzer.name,
+                    f'Custom analyzer "{analyzer.name}"',
+                    analyzer.analyze(description, custom_context),
                 )
+            )
+            custom_candidate_names.append(analyzer.name)
 
-        # Combine enum analyzers and custom analyzer names
+        all_findings, succeeded_labels = await self._run_analyzer_tasks(
+            tasks, "prompt", name
+        )
+        succeeded_set = set(succeeded_labels)
+        custom_analyzer_names = [
+            n for n in custom_candidate_names if n in succeeded_set
+        ]
+
         all_analyzers = list(analyzers) + custom_analyzer_names
 
         return PromptScanResult(
@@ -601,109 +617,89 @@ class Scanner:
         Returns:
             InstructionsScanResult: The result of the analysis.
         """
-        all_findings = []
+        tasks: List[Tuple[str, str, Any]] = []
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
-            # Run API analysis on the instructions
-            try:
-                api_context = {
-                    "server_name": server_name,
-                    "content_type": "instructions",
-                }
-                api_findings = await self._api_analyzer.analyze(
-                    instructions, api_context
+            api_context = {
+                "server_name": server_name,
+                "content_type": "instructions",
+            }
+            tasks.append(
+                (
+                    "API",
+                    "API analysis on instructions",
+                    self._api_analyzer.analyze(instructions, api_context),
                 )
-                for finding in api_findings:
-                    finding.analyzer = "API"
-                all_findings.extend(api_findings)
-            except Exception as e:
-                logger.error(
-                    f'API analysis failed on instructions: server="{server_name}", error="{e}"'
-                )
+            )
 
         if AnalyzerEnum.YARA in analyzers:
-            # Run YARA analysis on the instructions
-            try:
-                yara_context = {
-                    "server_name": server_name,
-                    "content_type": "instructions",
-                }
-                yara_findings = await self._yara_analyzer.analyze(
-                    instructions, yara_context
+            yara_context = {
+                "server_name": server_name,
+                "content_type": "instructions",
+            }
+            tasks.append(
+                (
+                    "YARA",
+                    "YARA analysis on instructions",
+                    self._yara_analyzer.analyze(instructions, yara_context),
                 )
-                for finding in yara_findings:
-                    finding.analyzer = "YARA"
-                all_findings.extend(yara_findings)
-            except Exception as e:
-                logger.error(
-                    f'YARA analysis failed on instructions: server="{server_name}", error="{e}"'
-                )
+            )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
-            # Run LLM analysis on the instructions
-            try:
-                # Format content for comprehensive analysis
-                analysis_content = f"Server Name: {server_name}\n"
-                analysis_content += f"Protocol Version: {protocol_version}\n"
-                analysis_content += f"Instructions: {instructions}\n"
-
-                llm_context = {
-                    "server_name": server_name,
-                    "content_type": "instructions",
-                }
-                llm_findings = await self._llm_analyzer.analyze(
-                    analysis_content, llm_context
+            analysis_content = f"Server Name: {server_name}\n"
+            analysis_content += f"Protocol Version: {protocol_version}\n"
+            analysis_content += f"Instructions: {instructions}\n"
+            llm_context = {
+                "server_name": server_name,
+                "content_type": "instructions",
+            }
+            tasks.append(
+                (
+                    "LLM",
+                    "LLM analysis on instructions",
+                    self._llm_analyzer.analyze(analysis_content, llm_context),
                 )
-                for finding in llm_findings:
-                    finding.analyzer = "LLM"
-                all_findings.extend(llm_findings)
-            except Exception as e:
-                logger.error(
-                    f'LLM analysis failed on instructions: server="{server_name}", error="{e}"'
-                )
+            )
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for instructions from '{server_name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
 
         if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
-            # Run PROMPT_DEFENSE analysis on the server instructions
-            try:
-                pd_context = {"tool_name": server_name, "content_type": "instructions"}
-                pd_findings = await self._prompt_defense_analyzer.analyze(
-                    instructions, pd_context
+            pd_context = {"tool_name": server_name, "content_type": "instructions"}
+            tasks.append(
+                (
+                    "PromptDefense",
+                    "Prompt defense analysis on instructions",
+                    self._prompt_defense_analyzer.analyze(instructions, pd_context),
                 )
-                for finding in pd_findings:
-                    finding.analyzer = "PromptDefense"
-                all_findings.extend(pd_findings)
-            except Exception as e:
-                logger.error(
-                    f'Prompt defense analysis failed on instructions: server="{server_name}", error="{e}"'
-                )
+            )
 
-        # Run custom analyzers
-        custom_analyzer_names = []
+        custom_candidate_names: List[str] = []
         for analyzer in self._custom_analyzers:
-            try:
-                custom_context = {
-                    "server_name": server_name,
-                    "content_type": "instructions",
-                }
-                # Add HTTP headers to context for custom analyzers
-                if http_headers:
-                    custom_context["http_headers"] = http_headers
-                findings = await analyzer.analyze(instructions, custom_context)
-                for finding in findings:
-                    finding.analyzer = analyzer.name
-                all_findings.extend(findings)
-                # Track which custom analyzers were successfully run
-                custom_analyzer_names.append(analyzer.name)
-            except Exception as e:
-                logger.error(
-                    f'Custom analyzer "{analyzer.name}" failed on instructions: server="{server_name}", error="{e}"'
+            custom_context = {
+                "server_name": server_name,
+                "content_type": "instructions",
+            }
+            if http_headers:
+                custom_context["http_headers"] = http_headers
+            tasks.append(
+                (
+                    analyzer.name,
+                    f'Custom analyzer "{analyzer.name}" on instructions',
+                    analyzer.analyze(instructions, custom_context),
                 )
+            )
+            custom_candidate_names.append(analyzer.name)
 
-        # Combine enum analyzers and custom analyzer names
+        all_findings, succeeded_labels = await self._run_analyzer_tasks(
+            tasks, "server", server_name
+        )
+        succeeded_set = set(succeeded_labels)
+        custom_analyzer_names = [
+            n for n in custom_candidate_names if n in succeeded_set
+        ]
+
         all_analyzers = list(analyzers) + custom_analyzer_names
 
         return InstructionsScanResult(
@@ -2075,8 +2071,6 @@ class Scanner:
         Returns:
             ResourceScanResult: The result of the analysis.
         """
-        all_findings = []
-
         # Extract text from HTML if needed
         analysis_content = resource_content
         if resource_mime_type == "text/html":
@@ -2103,86 +2097,78 @@ class Scanner:
                 )
                 analysis_content = resource_content
 
+        tasks: List[Tuple[str, str, Any]] = []
+
         # Only API and LLM analyzers are used for resources
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
-            # Run API analysis on the resource content
-            try:
-                api_context = {
-                    "resource_uri": resource_uri,
-                    "resource_name": resource_name,
-                    "resource_description": resource_description,
-                    "mime_type": resource_mime_type,
-                }
-                api_findings = await self._api_analyzer.analyze(
-                    analysis_content, api_context
+            api_context = {
+                "resource_uri": resource_uri,
+                "resource_name": resource_name,
+                "resource_description": resource_description,
+                "mime_type": resource_mime_type,
+            }
+            tasks.append(
+                (
+                    "API",
+                    "API analysis on resource",
+                    self._api_analyzer.analyze(analysis_content, api_context),
                 )
-                for finding in api_findings:
-                    finding.analyzer = "API"
-                all_findings.extend(api_findings)
-            except Exception as e:
-                logger.error(
-                    f'API analysis failed on resource: uri="{resource_uri}", error="{e}"'
-                )
+            )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
-            # Run LLM analysis on the resource content
-            try:
-                # Format content for comprehensive analysis
-                llm_content = f"Resource URI: {resource_uri}\n"
-                llm_content += f"Resource Name: {resource_name}\n"
-                if resource_description:
-                    llm_content += f"Description: {resource_description}\n"
-                llm_content += f"MIME Type: {resource_mime_type}\n"
-                llm_content += (
-                    f"Content:\n{analysis_content[:2000]}\n"  # Limit content size
-                )
+            llm_content = f"Resource URI: {resource_uri}\n"
+            llm_content += f"Resource Name: {resource_name}\n"
+            if resource_description:
+                llm_content += f"Description: {resource_description}\n"
+            llm_content += f"MIME Type: {resource_mime_type}\n"
+            llm_content += f"Content:\n{analysis_content[:2000]}\n"
 
-                llm_context = {
-                    "resource_uri": resource_uri,
-                    "resource_name": resource_name,
-                    "resource_description": resource_description,
-                    "mime_type": resource_mime_type,
-                }
-                llm_findings = await self._llm_analyzer.analyze(
-                    llm_content, llm_context
+            llm_context = {
+                "resource_uri": resource_uri,
+                "resource_name": resource_name,
+                "resource_description": resource_description,
+                "mime_type": resource_mime_type,
+            }
+            tasks.append(
+                (
+                    "LLM",
+                    "LLM analysis on resource",
+                    self._llm_analyzer.analyze(llm_content, llm_context),
                 )
-                for finding in llm_findings:
-                    finding.analyzer = "LLM"
-                all_findings.extend(llm_findings)
-            except Exception as e:
-                logger.error(
-                    f'LLM analysis failed: resource="{resource_uri}", error="{e}"'
-                )
+            )
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for resource '{resource_uri}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
 
-        # Run custom analyzers
-        custom_analyzer_names = []
+        custom_candidate_names: List[str] = []
         for analyzer in self._custom_analyzers:
-            try:
-                custom_context = {
-                    "resource_uri": resource_uri,
-                    "resource_name": resource_name,
-                    "resource_description": resource_description,
-                    "mime_type": resource_mime_type,
-                }
-                # Add HTTP headers to context for custom analyzers
-                if http_headers:
-                    custom_context["http_headers"] = http_headers
-                findings = await analyzer.analyze(analysis_content, custom_context)
-                for finding in findings:
-                    finding.analyzer = analyzer.name
-                all_findings.extend(findings)
-                # Track which custom analyzers were successfully run
-                custom_analyzer_names.append(analyzer.name)
-            except Exception as e:
-                logger.error(
-                    f'Custom analyzer "{analyzer.name}" failed: resource="{resource_uri}", error="{e}"'
+            custom_context = {
+                "resource_uri": resource_uri,
+                "resource_name": resource_name,
+                "resource_description": resource_description,
+                "mime_type": resource_mime_type,
+            }
+            if http_headers:
+                custom_context["http_headers"] = http_headers
+            tasks.append(
+                (
+                    analyzer.name,
+                    f'Custom analyzer "{analyzer.name}" on resource',
+                    analyzer.analyze(analysis_content, custom_context),
                 )
+            )
+            custom_candidate_names.append(analyzer.name)
 
-        # Combine enum analyzers and custom analyzer names (filter out YARA if present)
+        all_findings, succeeded_labels = await self._run_analyzer_tasks(
+            tasks, "resource", resource_uri
+        )
+        succeeded_set = set(succeeded_labels)
+        custom_analyzer_names = [
+            n for n in custom_candidate_names if n in succeeded_set
+        ]
+
+        # Filter out YARA if present (resources don't run YARA)
         active_analyzers = [
             a for a in analyzers if a in [AnalyzerEnum.API, AnalyzerEnum.LLM]
         ]

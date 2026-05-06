@@ -181,6 +181,8 @@ async def _run_behavioral_analyzer_on_source(
     *,
     file_concurrency: int = 4,
     file_read_concurrency: int = 32,
+    batch_concurrency: int = 4,
+    batch_retries: int = 1,
 ) -> List[Dict[str, Any]]:
     """Run behavioral analyzer on source code and format results.
 
@@ -190,6 +192,10 @@ async def _run_behavioral_analyzer_on_source(
             LLM alignment + dataflow pipeline.
         file_read_concurrency: Max concurrent disk reads when prefetching
             source into the shared file content cache.
+        batch_concurrency: Max LLM batches dispatched in parallel during
+            alignment verification within a single file.
+        batch_retries: Additional retries for unparseable batch responses
+            before falling back to per-function analysis.
 
     Returns:
         List of formatted result dictionaries
@@ -199,16 +205,20 @@ async def _run_behavioral_analyzer_on_source(
     cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
     analyzer = BehavioralCodeAnalyzer(cfg)
 
-    # Analyze the source file. Forward the per-scan tuning knobs
-    # (file_concurrency for parallel LLM/dataflow analysis;
-    # file_read_concurrency for the prefetch into the shared
-    # in-process file cache) through the context dict.
+    # Analyze the source file. Forward the per-scan tuning knobs through
+    # the context dict:
+    #   * file_concurrency       — parallel LLM/dataflow analysis across files
+    #   * file_read_concurrency  — parallel prefetch into the shared file cache
+    #   * batch_concurrency      — parallel LLM batches per file
+    #   * batch_retries          — extra retries for unparseable batch responses
     findings = await analyzer.analyze(
         source_path,
         context={
             "file_path": source_path,
             "file_concurrency": max(1, int(file_concurrency or 1)),
             "file_read_concurrency": max(1, int(file_read_concurrency or 1)),
+            "batch_concurrency": max(1, int(batch_concurrency or 1)),
+            "batch_retries": max(0, int(batch_retries or 0)),
         },
     )
 
@@ -1117,6 +1127,32 @@ async def main():
             "slow network filesystems. Default: %(default)s."
         ),
     )
+    p_behavioral.add_argument(
+        "--batch-concurrency",
+        type=int,
+        default=4,
+        metavar="N",
+        help=(
+            "Max LLM batches in flight at once during alignment "
+            "verification. Each batch contains up to --batch-size functions; "
+            "raising this multiplies LLM throughput when your provider has "
+            "headroom. Lower it if you hit rate limits. Default: "
+            "%(default)s."
+        ),
+    )
+    p_behavioral.add_argument(
+        "--batch-retries",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Number of additional retries when an LLM batch returns an "
+            "unparseable/empty response, before falling back to "
+            "per-function analysis. The LLM client itself separately "
+            "retries transient HTTP errors with backoff. Set to 0 to "
+            "disable parseable-failure retries. Default: %(default)s."
+        ),
+    )
 
     # vulnerable-package subcommand - scan Python dependencies for known vulnerabilities
     p_vuln_pkgs = subparsers.add_parser(
@@ -1944,9 +1980,11 @@ async def main():
             source_path = args.source_path
 
             # Analyze the source file. Forward the per-scan tuning knobs
-            # (file_concurrency for parallel LLM/dataflow analysis;
-            # file_read_concurrency for the prefetch into the shared
-            # in-process file cache) through the context dict.
+            # through the context dict:
+            #   * file_concurrency       — parallel LLM/dataflow across files
+            #   * file_read_concurrency  — parallel prefetch into file cache
+            #   * batch_concurrency      — parallel LLM batches per file
+            #   * batch_retries          — retries for unparseable batches
             findings = await analyzer.analyze(
                 source_path,
                 context={
@@ -1957,6 +1995,12 @@ async def main():
                     "file_read_concurrency": max(
                         1,
                         int(getattr(args, "file_read_concurrency", 32) or 1),
+                    ),
+                    "batch_concurrency": max(
+                        1, int(getattr(args, "batch_concurrency", 4) or 1)
+                    ),
+                    "batch_retries": max(
+                        0, int(getattr(args, "batch_retries", 1) or 0)
                     ),
                 },
             )
@@ -2088,7 +2132,11 @@ async def main():
                     print(f"Results saved to {args.output}")
 
         elif args.cmd == "vulnerable-package":
-            import os
+            # Note: ``os`` is imported at module top; do not re-import here,
+            # because a function-local rebinding turns ``os`` into a local
+            # variable for the *entire* enclosing function (Python scoping),
+            # which would mask earlier uses of ``os.path.basename(...)`` in
+            # other branches with an UnboundLocalError.
             from mcpscanner.core.analyzers.vulnerable_package_analyzer import VulnerablePackageAnalyzer
             from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
 
@@ -2277,6 +2325,8 @@ async def main():
                     file_read_concurrency=getattr(
                         args, "file_read_concurrency", 32
                     ),
+                    batch_concurrency=getattr(args, "batch_concurrency", 4),
+                    batch_retries=getattr(args, "batch_retries", 1),
                 )
             else:
                 # Run the security scan against a server URL
