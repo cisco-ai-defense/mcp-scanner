@@ -176,11 +176,20 @@ def _build_config(
     return Config(**config_params)
 
 
-async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
+async def _run_behavioral_analyzer_on_source(
+    source_path: str,
+    *,
+    file_concurrency: int = 4,
+    file_read_concurrency: int = 32,
+) -> List[Dict[str, Any]]:
     """Run behavioral analyzer on source code and format results.
 
     Args:
-        source_path: Path to Python file or directory to analyze
+        source_path: Path to Python file or directory to analyze.
+        file_concurrency: Max files analyzed in parallel through the
+            LLM alignment + dataflow pipeline.
+        file_read_concurrency: Max concurrent disk reads when prefetching
+            source into the shared file content cache.
 
     Returns:
         List of formatted result dictionaries
@@ -190,8 +199,18 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
     cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
     analyzer = BehavioralCodeAnalyzer(cfg)
 
-    # Analyze the source file
-    findings = await analyzer.analyze(source_path, context={"file_path": source_path})
+    # Analyze the source file. Forward the per-scan tuning knobs
+    # (file_concurrency for parallel LLM/dataflow analysis;
+    # file_read_concurrency for the prefetch into the shared
+    # in-process file cache) through the context dict.
+    findings = await analyzer.analyze(
+        source_path,
+        context={
+            "file_path": source_path,
+            "file_concurrency": max(1, int(file_concurrency or 1)),
+            "file_read_concurrency": max(1, int(file_read_concurrency or 1)),
+        },
+    )
 
     # Format results to match Scanner output structure
     findings_by_function = {}
@@ -1075,6 +1094,29 @@ async def main():
         default="summary",
         help="Output format (default: %(default)s)",
     )
+    p_behavioral.add_argument(
+        "--file-concurrency",
+        type=int,
+        default=4,
+        metavar="N",
+        help=(
+            "Max files analyzed in parallel through the behavioral pipeline "
+            "(LLM alignment + dataflow). Lower this if you hit LLM rate "
+            "limits; raise it on hosted/regional deployments with higher "
+            "RPM ceilings. Default: %(default)s."
+        ),
+    )
+    p_behavioral.add_argument(
+        "--file-read-concurrency",
+        type=int,
+        default=32,
+        metavar="N",
+        help=(
+            "Max files prefetched in parallel into the in-process content "
+            "cache before analysis begins. Tune up for fast SSDs, down for "
+            "slow network filesystems. Default: %(default)s."
+        ),
+    )
 
     # vulnerable-package subcommand - scan Python dependencies for known vulnerabilities
     p_vuln_pkgs = subparsers.add_parser(
@@ -1901,9 +1943,22 @@ async def main():
 
             source_path = args.source_path
 
-            # Analyze the source file
+            # Analyze the source file. Forward the per-scan tuning knobs
+            # (file_concurrency for parallel LLM/dataflow analysis;
+            # file_read_concurrency for the prefetch into the shared
+            # in-process file cache) through the context dict.
             findings = await analyzer.analyze(
-                source_path, context={"file_path": source_path}
+                source_path,
+                context={
+                    "file_path": source_path,
+                    "file_concurrency": max(
+                        1, int(getattr(args, "file_concurrency", 4) or 1)
+                    ),
+                    "file_read_concurrency": max(
+                        1,
+                        int(getattr(args, "file_read_concurrency", 32) or 1),
+                    ),
+                },
             )
 
             # Format results to match Scanner output structure
@@ -2216,7 +2271,13 @@ async def main():
             # Check if behavioral analyzer with source path
             if AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
                 # Run behavioral analyzer on source code
-                results = await _run_behavioral_analyzer_on_source(args.source_path)
+                results = await _run_behavioral_analyzer_on_source(
+                    args.source_path,
+                    file_concurrency=getattr(args, "file_concurrency", 4),
+                    file_read_concurrency=getattr(
+                        args, "file_read_concurrency", 32
+                    ),
+                )
             else:
                 # Run the security scan against a server URL
                 if args.bearer_token:

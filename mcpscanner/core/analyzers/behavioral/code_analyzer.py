@@ -26,6 +26,7 @@ This analyzer:
 4. Uses LLM to detect semantic mismatches between description and implementation
 """
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -34,6 +35,11 @@ from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ...static_analysis.context_extractor import ContextExtractor
+from ...static_analysis.file_cache import (
+    cache_stats,
+    read_text_cached,
+    warm_cache_async,
+)
 from ...static_analysis.native_analyzer import NativeAnalyzer
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
 from ...static_analysis.interprocedural.treesitter_call_graph import (
@@ -123,6 +129,22 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 for lang in ts_files_by_lang:
                     ts_call_graph_analyzers[lang] = TreeSitterCallGraphAnalyzer(lang)
 
+                # Warm the shared file content cache once with concurrent
+                # reads. Every downstream consumer (call-graph builder,
+                # ContextExtractor, NativeAnalyzer, _analyze_file) goes
+                # through `read_text_cached`, so each file is read at most
+                # once per scan even though multiple stages need its source.
+                warm_concurrency = max(
+                    1, int(context.get("file_read_concurrency", 32) or 1)
+                )
+                cached_files = await warm_cache_async(
+                    source_files, concurrency=warm_concurrency
+                )
+                self.logger.debug(
+                    f"File cache warmed: {cached_files}/{len(source_files)} files prefetched "
+                    f"(read concurrency={warm_concurrency})"
+                )
+
                 total_size = 0
                 for src_file in source_files:
                     try:
@@ -139,8 +161,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                                 f"Large file detected: {src_file} ({file_size:,} bytes)"
                             )
 
-                        with open(src_file, "r", encoding="utf-8") as f:
-                            source_code = f.read()
+                        source_code = read_text_cached(src_file)
 
                         ext = Path(src_file).suffix.lower()
                         if ext in self._PYTHON_EXTENSIONS and py_call_graph_analyzer:
@@ -176,30 +197,55 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         f"Built {lang} call graph with {len(ts_cg.functions)} functions"
                     )
 
-                # Analyze each file with its language-appropriate call graph
-                for src_file in source_files:
+                # Analyze files concurrently with a bounded semaphore so the
+                # call graph builds happen once but per-file LLM/extraction
+                # work overlaps. Concurrency level is tunable via context
+                # ("file_concurrency"); defaults to 4 which is conservative
+                # for typical LLM rate limits.
+                file_concurrency = max(
+                    1, int(context.get("file_concurrency", 4) or 1)
+                )
+                file_sem = asyncio.Semaphore(file_concurrency)
+
+                async def _analyze_one(src_file: str) -> List[SecurityFinding]:
                     self.logger.debug(f"Analyzing file: {src_file}")
                     ext = Path(src_file).suffix.lower()
                     if ext in self._PYTHON_EXTENSIONS:
-                        file_cga = py_call_graph_analyzer
+                        cga = py_call_graph_analyzer
                     elif ext in self._EXT_TO_TS_LANGUAGE:
-                        lang = self._EXT_TO_TS_LANGUAGE[ext]
-                        file_cga = ts_call_graph_analyzers.get(lang)
+                        cga = ts_call_graph_analyzers.get(
+                            self._EXT_TO_TS_LANGUAGE[ext]
+                        )
                     else:
-                        file_cga = None
+                        cga = None
+                    async with file_sem:
+                        return await self._analyze_file(src_file, context, cga)
 
-                    file_findings = await self._analyze_file(
-                        src_file, context, file_cga
-                    )
-                    all_findings.extend(file_findings)
+                self.logger.debug(
+                    f"Analyzing {len(source_files)} files with concurrency={file_concurrency}"
+                )
+                per_file_findings = await asyncio.gather(
+                    *(_analyze_one(s) for s in source_files),
+                    return_exceptions=False,
+                )
+                for findings in per_file_findings:
+                    all_findings.extend(findings)
+
+                # Surface file-cache statistics at the end of the directory
+                # scan so users (and CI) can see how much disk I/O was saved.
+                # A healthy run has entries == #source_files and hits ≥
+                # #source_files (each file is read once for the call-graph
+                # build and again from _analyze_file).
+                self.logger.debug(
+                    "File cache stats after directory scan: %s", cache_stats()
+                )
 
             # Check if content is a single file
             elif os.path.isfile(content):
                 ext = Path(content).suffix.lower()
                 cross_file_analyzer = None
                 try:
-                    with open(content, "r", encoding="utf-8") as f:
-                        source_code = f.read()
+                    source_code = read_text_cached(content)
 
                     if ext in self._PYTHON_EXTENSIONS:
                         cga = CallGraphAnalyzer()
@@ -354,8 +400,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             List of SecurityFinding objects
         """
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                source_code = f.read()
+            source_code = read_text_cached(file_path)
 
             file_context = context.copy()
             file_context["file_path"] = file_path
