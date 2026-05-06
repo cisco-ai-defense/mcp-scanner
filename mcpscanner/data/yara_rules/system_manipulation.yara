@@ -23,7 +23,7 @@ rule system_manipulation{
         $permission_manipulation = /\b(chmod\s+(777|4755|6755|[ug]?\+s)|(chown|chgrp)\s+(root|0)|setuid|setgid)\b/i
 
         // System directory and file access
-        $critical_system_access = /(\/etc\/(passwd|pwd|shadow|hosts)\/|(\/usr)?\/s?bin\/|\/(tmp|var|root)\/|C:\\\\Windows\\\\System32\b)/i
+        $critical_system_access = /(\/etc\/(passwd|pwd|shadow|hosts)\b|(\/usr)?\/s?bin\/|\/(tmp|var|root)\/|C:\\\\Windows\\\\System32\b)/i
 
         // Privilege escalation patterns
         $privilege_escalation = /\b(sudo\s+.*-[si]|su\s+-|runuser\b|doas\b)/i
