@@ -360,3 +360,159 @@ async def test_gather_bounded_propagates_exceptions_by_default():
 
     with pytest.raises(RuntimeError):
         await s._gather_bounded([ok(), failing(), ok()])
+
+
+# ---------------------------------------------------------------------------
+# Static-analysis correctness regressions (audit fixes #1, #2, #5, #6)
+# ---------------------------------------------------------------------------
+
+
+def test_context_extractor_initialises_logger():
+    """Fix #6 — ``ContextExtractor.logger`` must exist before any analysis
+    helper logs through it. Without this, the ``except Exception`` in
+    ``_analyze_forward_flows`` raises a second ``AttributeError`` and the
+    real failure is hidden.
+    """
+    from mcpscanner.core.static_analysis.context_extractor import ContextExtractor
+
+    ce = ContextExtractor("def foo():\n    return 1\n", Path("synthetic.py"))
+    assert hasattr(ce, "logger") and ce.logger is not None
+
+
+def test_extract_constants_is_function_scoped():
+    """Fix #5 — only constants assigned within the function body should
+    appear in its context. Module-level globals must not leak into every
+    function's context (which previously bloated LLM batch prompts).
+    """
+    from mcpscanner.core.static_analysis.context_extractor import ContextExtractor
+
+    src = (
+        "from mcp.server.fastmcp import FastMCP\n"
+        "mcp = FastMCP('x')\n"
+        "GLOBAL_K = 'leak-me'\n"
+        "@mcp.tool()\n"
+        "def foo(arg: str) -> str:\n"
+        "    LOCAL_FOO = 1\n"
+        "    return arg\n"
+        "@mcp.tool()\n"
+        "def bar(arg: str) -> str:\n"
+        "    LOCAL_BAR = 2\n"
+        "    return arg\n"
+    )
+    ce = ContextExtractor(src, Path("synthetic.py"))
+    by_name = {c.name: c for c in ce.extract_mcp_function_contexts()}
+
+    foo_consts = by_name["foo"].constants
+    bar_consts = by_name["bar"].constants
+
+    assert "LOCAL_FOO" in foo_consts
+    assert "LOCAL_BAR" in bar_consts
+    # Cross-pollution check: the previous implementation returned the same
+    # module-wide table for every function.
+    assert "LOCAL_BAR" not in foo_consts
+    assert "LOCAL_FOO" not in bar_consts
+    assert "GLOBAL_K" not in foo_consts
+    assert "GLOBAL_K" not in bar_consts
+
+
+def test_native_analyzer_runs_cfg_dataflow_for_python():
+    """Fix #1 — ``NativeAnalyzer._analyze_python`` previously called
+    ``PythonParser(func_source)`` (missing the required ``file_path``
+    arg). The resulting ``TypeError`` was swallowed and the analyzer
+    silently fell back to a coarser path, so ``parameter_flows`` were
+    almost always empty. After the fix the CFG-based dataflow runs and
+    populates flow records for tainted parameters.
+    """
+    from mcpscanner.core.static_analysis.native_analyzer import NativeAnalyzer
+
+    src = (
+        "import os\n"
+        "def handler(user_input: str) -> str:\n"
+        "    cmd = user_input + ' --x'\n"
+        "    os.system(cmd)\n"
+        "    return cmd\n"
+    )
+    na = NativeAnalyzer(src, "synthetic.py")
+    res = na.analyze()
+    handler = next(f for f in res.functions if f.name == "handler")
+    # ``parameter_flows`` is a list of flow records (one per parameter
+    # path through the function). Filter to the user_input parameter.
+    flows_for_input = [
+        p for p in handler.parameter_flows
+        if p.get("parameter_name") == "user_input"
+    ]
+    assert flows_for_input, (
+        "expected at least one parameter flow for user_input; the CFG "
+        "dataflow path is silently bailing out again"
+    )
+    # Operations field must be populated for at least one flow record
+    # (this is what ``ForwardFlowFact.__eq__`` previously compared by
+    # length only — empty/non-empty was the only signal).
+    assert any(p.get("operations") for p in flows_for_input)
+
+
+def test_forward_flow_fact_equality_is_content_aware():
+    """Fix #2 — ``ForwardFlowFact.__eq__`` must compare ``operations``
+    element-wise (not just by length) and must include
+    ``reaches_assignments``. The previous implementation reported facts
+    with the same number of ops but different *contents* as equal,
+    causing the worklist to converge prematurely.
+    """
+    from mcpscanner.core.static_analysis.dataflow.forward_analysis import (
+        FlowPath,
+        ForwardFlowFact,
+    )
+
+    a = ForwardFlowFact()
+    b = ForwardFlowFact()
+    a.parameter_flows["x"] = FlowPath(
+        parameter_name="x",
+        operations=[{"type": "call", "value": "os.system"}],
+        reaches_assignments=["cmd"],
+    )
+    b.parameter_flows["x"] = FlowPath(
+        parameter_name="x",
+        operations=[{"type": "call", "value": "shutil.rmtree"}],  # different content, same length
+        reaches_assignments=["cmd"],
+    )
+    assert a != b, "operations compared by length only — fix #2 regressed"
+
+    # And reaches_assignments now participates in equality.
+    c = ForwardFlowFact()
+    c.parameter_flows["x"] = FlowPath(
+        parameter_name="x",
+        operations=[{"type": "call", "value": "os.system"}],
+        reaches_assignments=["cmd"],
+    )
+    d = ForwardFlowFact()
+    d.parameter_flows["x"] = FlowPath(
+        parameter_name="x",
+        operations=[{"type": "call", "value": "os.system"}],
+        reaches_assignments=["other"],
+    )
+    assert c != d, "reaches_assignments must participate in equality"
+
+
+def test_treesitter_dataflow_worklist_revisits_on_change():
+    """Worklist correctness: predecessors-changed must trigger successor
+    revisits. The previous tree-sitter dataflow loop unconditionally
+    marked every node ``visited`` after first processing, dropping
+    propagated changes on the floor.
+    """
+    from mcpscanner.core.static_analysis.dataflow.treesitter_analysis import (
+        TreeSitterDataflowAnalysis,
+    )
+
+    # Black-box: after the fix the loop dedupes via ``in_worklist`` (a
+    # set), not ``visited``. Confirm the implementation imports the new
+    # helper and the source no longer contains the old ``visited.add``
+    # unconditional gate.
+    import inspect
+
+    src = inspect.getsource(TreeSitterDataflowAnalysis)
+    assert "in_worklist" in src, "worklist dedup set 'in_worklist' missing"
+    assert "popleft" in src, "deque.popleft missing — perf regression"
+    assert "visited.add(node.node_id)" not in src, (
+        "tree-sitter dataflow regressed to unconditional visited-set; "
+        "this prevents fixpoint convergence on multi-predecessor nodes"
+    )

@@ -48,6 +48,11 @@ def _load_language(language: str) -> Optional["Language"]:
     is not installed; callers fall back to the next-best analysis path. The
     PHP and TypeScript modules expose their grammar under language-specific
     factory names which is why they need a small shim.
+
+    ``tsx`` and ``swift`` were added to support every language declared by
+    ``NativeAnalyzer.EXTENSION_MAP`` and ``TreeSitterParser`` so the unified
+    parser cache can be the single source of truth for tree-sitter
+    initialisation across the codebase.
     """
     try:
         if language == "javascript":
@@ -56,6 +61,9 @@ def _load_language(language: str) -> Optional["Language"]:
         if language == "typescript":
             import tree_sitter_typescript as mod
             return Language(mod.language_typescript())
+        if language == "tsx":
+            import tree_sitter_typescript as mod
+            return Language(mod.language_tsx())
         if language == "go":
             import tree_sitter_go as mod
             return Language(mod.language())
@@ -77,6 +85,9 @@ def _load_language(language: str) -> Optional["Language"]:
         if language == "php":
             import tree_sitter_php as mod
             return Language(mod.language_php())
+        if language == "swift":
+            import tree_sitter_swift as mod
+            return Language(mod.language())
     except ImportError:
         return None
     return None

@@ -588,11 +588,20 @@ class NativeAnalyzer:
         mcpscanner.core.static_analysis.dataflow and taint modules.
         """
         try:
-            # Create a function-specific source for the parser
+            # Re-parse just the function body so the dataflow analyzer sees a
+            # CFG scoped to one function. ``PythonParser`` requires
+            # ``(file_path, source_code)``; the prior single-arg invocation
+            # raised ``TypeError`` immediately and was silently swallowed by
+            # the ``except`` below, meaning the full CFG-based dataflow path
+            # has never run in production. We synthesize a deterministic
+            # filename based on the original file + function name so cache
+            # entries don't collide with the module-level parse already
+            # cached under ``self.file_path``.
             func_source = ast.unparse(node)
-            func_parser = PythonParser(func_source)
+            synthetic_path = self.file_path.parent / f"{self.file_path.stem}__{getattr(node, 'name', 'func')}.py"
+            func_parser = PythonParser(synthetic_path, func_source)
             func_parser.parse()
-            
+
             # Use ForwardDataflowAnalysis for proper CFG-based analysis
             tracker = ForwardDataflowAnalysis(func_parser, param_names)
             flows = tracker.analyze_forward_flows()

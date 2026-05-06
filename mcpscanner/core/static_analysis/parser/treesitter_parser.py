@@ -25,59 +25,11 @@ Supported languages: TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, P
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tree_sitter import Language, Parser, Node, Tree
+from tree_sitter import Parser, Node, Tree
 
 from .base import BaseParser
 from ..types import Position, Range
-
-
-# Language module cache
-_LANGUAGE_CACHE: Dict[str, Language] = {}
-
-
-def _get_language(lang_name: str) -> Optional[Language]:
-    """Get tree-sitter Language for a language name."""
-    if lang_name in _LANGUAGE_CACHE:
-        return _LANGUAGE_CACHE[lang_name]
-    
-    try:
-        if lang_name == "javascript":
-            import tree_sitter_javascript as mod
-            lang = Language(mod.language())
-        elif lang_name == "typescript":
-            import tree_sitter_typescript as mod
-            lang = Language(mod.language_typescript())
-        elif lang_name == "tsx":
-            import tree_sitter_typescript as mod
-            lang = Language(mod.language_tsx())
-        elif lang_name == "go":
-            import tree_sitter_go as mod
-            lang = Language(mod.language())
-        elif lang_name == "java":
-            import tree_sitter_java as mod
-            lang = Language(mod.language())
-        elif lang_name == "kotlin":
-            import tree_sitter_kotlin as mod
-            lang = Language(mod.language())
-        elif lang_name == "c_sharp":
-            import tree_sitter_c_sharp as mod
-            lang = Language(mod.language())
-        elif lang_name == "ruby":
-            import tree_sitter_ruby as mod
-            lang = Language(mod.language())
-        elif lang_name == "rust":
-            import tree_sitter_rust as mod
-            lang = Language(mod.language())
-        elif lang_name == "php":
-            import tree_sitter_php as mod
-            lang = Language(mod.language_php())
-        else:
-            return None
-        
-        _LANGUAGE_CACHE[lang_name] = lang
-        return lang
-    except ImportError:
-        return None
+from ..interprocedural.treesitter_call_graph import get_cached_parser
 
 
 # File extension to language mapping
@@ -183,13 +135,21 @@ class TreeSitterParser(BaseParser):
         self._parser: Optional[Parser] = None
     
     def _get_parser(self) -> Optional[Parser]:
-        """Get or create parser for the language."""
-        if self._parser:
+        """Return the process-wide cached parser for ``self.language``.
+
+        Previously this class kept its own per-instance Parser plus a
+        module-local ``_LANGUAGE_CACHE``. That cache and
+        ``treesitter_call_graph._PARSER_CACHE`` were independent, so a single
+        scan paid the tree-sitter language load cost twice (once during
+        call-graph building, once during NativeAnalyzer extraction). Routing
+        every caller through ``get_cached_parser`` makes the cache the
+        single source of truth and shares grammar memory across analyzers.
+        """
+        if self._parser is not None:
             return self._parser
-        
-        lang = _get_language(self.language)
-        if lang:
-            self._parser = Parser(lang)
+        if not self.language:
+            return None
+        self._parser = get_cached_parser(self.language)
         return self._parser
     
     def parse(self) -> Tree:
