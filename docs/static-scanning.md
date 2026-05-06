@@ -113,6 +113,35 @@ asyncio.run(scan())
 }
 ```
 
+#### Resource Contents (`resources/read` output)
+```json
+{
+  "contents": [
+    {
+      "uri": "file:///path/to/resource",
+      "mimeType": "text/plain",
+      "text": "Resource contents to scan"
+    }
+  ]
+}
+```
+
+You can also include text content inline with a `resources` entry:
+
+```json
+{
+  "resources": [
+    {
+      "uri": "file:///path/to/resource",
+      "name": "Resource name",
+      "description": "Resource description",
+      "mimeType": "text/plain",
+      "text": "Resource contents to scan"
+    }
+  ]
+}
+```
+
 ## CI/CD Integration
 
 ### GitHub Actions Example
@@ -291,7 +320,7 @@ results = await static.scan_tools_file("tools.json")
 ## Limitations
 
 - ❌ Cannot scan actual tool execution behavior
-- ❌ Only analyzes metadata, not runtime behavior
+- ❌ Only analyzes provided snapshots, not runtime behavior
 - ❌ Requires manual generation of JSON snapshots
 - ❌ May miss context-dependent vulnerabilities
 
