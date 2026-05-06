@@ -16,8 +16,9 @@
 
 """Semantic analysis for tree-sitter languages.
 
-Provides name resolution and type inference for TypeScript, JavaScript, Go,
-Java, Kotlin, C#, Ruby, Rust, and PHP.
+Provides name resolution and type inference for TypeScript (incl. TSX),
+JavaScript, Go, C#, and Rust. Java/Kotlin/Ruby/PHP entries were dropped
+when behavioural code scanning removed support for those languages.
 """
 
 from dataclasses import dataclass, field
@@ -114,25 +115,17 @@ class TreeSitterSemanticAnalyzer:
         "javascript": set(),  # JS has no type annotations
         "typescript": {"type_annotation", "type_identifier", "predefined_type"},
         "go": {"type_identifier", "pointer_type", "slice_type", "map_type"},
-        "java": {"type_identifier", "generic_type", "array_type"},
-        "kotlin": {"type_identifier", "nullable_type"},
         "c_sharp": {"type", "predefined_type", "nullable_type"},
-        "ruby": set(),  # Ruby has no type annotations
         "rust": {"type_identifier", "reference_type", "generic_type"},
-        "php": {"type_list", "named_type", "primitive_type"},
     }
-    
+
     # Variable declaration types per language
     VAR_DECL_TYPES = {
         "javascript": {"variable_declarator", "lexical_declaration"},
         "typescript": {"variable_declarator", "lexical_declaration"},
         "go": {"short_var_declaration", "var_spec"},
-        "java": {"variable_declarator", "local_variable_declaration"},
-        "kotlin": {"property_declaration", "variable_declaration"},
         "c_sharp": {"variable_declarator", "local_declaration_statement"},
-        "ruby": {"assignment", "lhs"},
         "rust": {"let_declaration"},
-        "php": {"simple_variable", "variable_name"},
     }
     
     def __init__(self, language: str, root_node: Node, source_bytes: bytes, param_names: List[str] = None):

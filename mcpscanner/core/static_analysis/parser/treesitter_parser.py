@@ -19,7 +19,14 @@
 This parser provides language-agnostic parsing functionality using tree-sitter,
 following the same BaseParser interface as PythonParser.
 
-Supported languages: TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, PHP
+Supported languages: TypeScript (incl. TSX), JavaScript, Go, C#, Rust.
+
+Java/Kotlin/Ruby/PHP support was removed because real-world MCP servers
+authored in those languages are vanishingly rare and the per-language
+node-type tables / tree-sitter grammars carried meaningful binary, install,
+and maintenance cost. Re-adding a language is mechanical: extend
+``EXTENSION_TO_LANGUAGE``, ``_get_language``, and the four node-type maps
+on ``TreeSitterParser`` together with the matching pyproject extra.
 """
 
 from pathlib import Path
@@ -53,24 +60,12 @@ def _get_language(lang_name: str) -> Optional[Language]:
         elif lang_name == "go":
             import tree_sitter_go as mod
             lang = Language(mod.language())
-        elif lang_name == "java":
-            import tree_sitter_java as mod
-            lang = Language(mod.language())
-        elif lang_name == "kotlin":
-            import tree_sitter_kotlin as mod
-            lang = Language(mod.language())
         elif lang_name == "c_sharp":
             import tree_sitter_c_sharp as mod
-            lang = Language(mod.language())
-        elif lang_name == "ruby":
-            import tree_sitter_ruby as mod
             lang = Language(mod.language())
         elif lang_name == "rust":
             import tree_sitter_rust as mod
             lang = Language(mod.language())
-        elif lang_name == "php":
-            import tree_sitter_php as mod
-            lang = Language(mod.language_php())
         else:
             return None
         
@@ -80,7 +75,8 @@ def _get_language(lang_name: str) -> Optional[Language]:
         return None
 
 
-# File extension to language mapping
+# File extension to language mapping. Java/Kotlin/Ruby/PHP entries were
+# removed when behavioural code scanning dropped support for those languages.
 EXTENSION_TO_LANGUAGE = {
     ".js": "javascript",
     ".mjs": "javascript",
@@ -88,77 +84,56 @@ EXTENSION_TO_LANGUAGE = {
     ".ts": "typescript",
     ".tsx": "tsx",
     ".go": "go",
-    ".java": "java",
-    ".kt": "kotlin",
-    ".kts": "kotlin",
     ".cs": "c_sharp",
-    ".rb": "ruby",
     ".rs": "rust",
-    ".php": "php",
 }
 
 
 class TreeSitterParser(BaseParser):
     """Parser for multiple languages using tree-sitter.
-    
+
     Provides the same interface as PythonParser but works with
-    tree-sitter for TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, PHP.
+    tree-sitter for TypeScript (incl. TSX), JavaScript, Go, C#, and Rust.
     """
-    
+
     # Function node types per language
     FUNCTION_TYPES = {
         "javascript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
         "typescript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
         "tsx": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
         "go": {"function_declaration", "method_declaration"},
-        "java": {"method_declaration", "constructor_declaration"},
-        "kotlin": {"function_declaration", "secondary_constructor"},
         "c_sharp": {"method_declaration", "constructor_declaration", "local_function_statement"},
-        "ruby": {"method", "singleton_method"},
         "rust": {"function_item"},
-        "php": {"function_definition", "method_declaration"},
     }
-    
+
     # Call expression types per language
     CALL_TYPES = {
         "javascript": {"call_expression", "new_expression"},
         "typescript": {"call_expression", "new_expression"},
         "tsx": {"call_expression", "new_expression"},
         "go": {"call_expression"},
-        "java": {"method_invocation", "object_creation_expression"},
-        "kotlin": {"call_expression"},
         "c_sharp": {"invocation_expression", "object_creation_expression"},
-        "ruby": {"call", "method_call"},
         "rust": {"call_expression", "macro_invocation"},
-        "php": {"function_call_expression", "member_call_expression", "scoped_call_expression"},
     }
-    
+
     # Import node types per language
     IMPORT_TYPES = {
         "javascript": {"import_statement"},
         "typescript": {"import_statement"},
         "tsx": {"import_statement"},
         "go": {"import_declaration"},
-        "java": {"import_declaration"},
-        "kotlin": {"import_header"},
         "c_sharp": {"using_directive"},
-        "ruby": {"call"},  # require/require_relative
         "rust": {"use_declaration"},
-        "php": {"namespace_use_declaration"},
     }
-    
+
     # Assignment types per language
     ASSIGNMENT_TYPES = {
         "javascript": {"variable_declarator", "assignment_expression", "augmented_assignment_expression"},
         "typescript": {"variable_declarator", "assignment_expression", "augmented_assignment_expression"},
         "tsx": {"variable_declarator", "assignment_expression", "augmented_assignment_expression"},
         "go": {"short_var_declaration", "assignment_statement", "var_spec"},
-        "java": {"variable_declarator", "assignment_expression"},
-        "kotlin": {"property_declaration", "variable_declaration"},
         "c_sharp": {"variable_declarator", "assignment_expression"},
-        "ruby": {"assignment"},
         "rust": {"let_declaration", "assignment_expression"},
-        "php": {"assignment_expression", "simple_variable"},
     }
     
     def __init__(self, file_path: Path, source_code: str, language: str = None) -> None:
