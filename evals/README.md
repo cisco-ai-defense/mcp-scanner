@@ -14,19 +14,19 @@ evals/
     │   ├── backdoor/
     │   ├── … (14 threat-category folders total)
     │   │
-    │   └── Multi-language snippets (phase-1 mirror: one file per threat category × language):
+    │   └── Multi-language snippets (mirrors of the Python corpus, same basename):
     │       javascript/<threat-category>/*.js
     │       typescript/<threat-category>/*.ts
     │       go/<threat-category>/*.go
     │       rust/<threat-category>/*.rs
-    │       csharp/<threat-category>/*.cs
+    │       csharp/<threat-category>/*.cs (PascalCase stem, e.g. FooBar.cs)
     │
     └── scripts/
         ├── run_behavioral_scan.py
         └── scan_results.json (generated)
 ```
 
-At last update: **141** Python samples under `data/<category>/`; **70** extra files (**14 × 5** languages) under `data/{javascript,typescript,go,rust,csharp}/`. Samples are evaluator fixtures (malicious-pattern illustrations); downstream projects are not expected to compile every snippet as-is unless they vendor the referenced SDKs.
+Counts (last updated with this corpus): **141** legacy `.py` files under `data/<category>/`; **714** mirrored snippets across the five language roots (**143** each under `javascript`, `typescript`, `go`, and `rust`; **142** under `csharp`). The extra mirrors relative to strictly “141 × basename” stems are supplementary samples (for example **`handlebars_template_injection_dynamic`** in JavaScript and TypeScript only, and **`unsafe_deserialization_untrusted_format`** without a matching `.py`). Samples are evaluator fixtures (malicious-pattern illustrations); downstream projects are not expected to compile every snippet as-is unless they vendor the referenced SDKs.
 
 ## Behavioral Analysis Evaluation
 
@@ -64,7 +64,7 @@ uv run python run_behavioral_scan.py
 
 **Default behaviour** scans only the legacy Python tree (`data/<threat-category>/*.py`). Language-folder roots (`javascript`, `typescript`, `go`, `rust`, `csharp`) are skipped automatically so they are not mistaken for categories.
 
-Include the multi-language mirror (adds **70** files when all five are present):
+Include the multi-language corpus (adds **~714** mirror files across the five language roots—use subsets with `--languages` when testing):
 
 ```bash
 uv run python run_behavioral_scan.py --all-languages
@@ -161,9 +161,9 @@ The `scan_results.json` file contains:
 
 ### Data Directory
 
-Optional **multi-language** mirrors live under `data/<language>/<category>/` (**14** files per language in phase 1, **70** total across five roots).
+Mirrors live under `data/<language>/<category>/` with the **same basename** as the Python reference file where the scenario aligns ( **`snake_case.ext`** outside C#; **`PascalCase.cs`**).
 
-Phase-1 **template-injection** uses language-local engines where applicable: Handlebars (**JavaScript**/**TypeScript**), Go **`text/template`**, **Rust** **Tera**, **C#** **Razor** (`RazorEngineCore`). Phase-1 **unauthorized-code-execution** reflects Python `yaml.unsafe_load` / `pickle` themes with deserialization analogues (**js-yaml** `load` + **BSON**, **YAML + gob**, **serde_yaml + bincode**, **YamlDotNet + BinaryFormatter**) rather than subprocess-only samples.
+**template-injection** uses language-local engines where applicable (Handlebars/Jinja-equivalent, Go **`text/template`**, **Rust** **Tera**, **C#** Razor / `RazorEngineCore`). **unauthorized-code-execution** includes analogues for Python **`yaml.unsafe_load`** / pickle-style themes (**js-yaml** `load` + **BSON**, **YAML + gob**, **serde_yaml + bincode**, **YamlDotNet + BinaryFormatter**, etc.), not subprocess-only mirrors.
 
 Static smoke (**no LLM**): fixtures are readable by the tree-sitter-backed static path (`NativeAnalyzer`).
 
@@ -262,7 +262,7 @@ If you encounter rate limits, consider:
 
 - **Average time per file**: 10-30 seconds (depends on LLM provider)
 - **Total runtime for Python-only (~141 files)**: roughly ~30-60 minutes
-- **`--all-languages`** adds **70** mirrored snippets (~211 files total with default Python pass); plan LLM quotas accordingly
+- **`--all-languages`** adds **~714** mirrored snippets (**~855** files total alongside the Python pass); plan LLM quotas accordingly
 - **Recommended**: Run during off-peak hours or use batch processing
 
 ## Contributing

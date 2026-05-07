@@ -1,22 +1,20 @@
 // Copyright 2025 Cisco Systems, Inc. and its affiliates
 // SPDX-License-Identifier: Apache-2.0
 //
-// Threat: Server-Side Template Injection (Razor / RazorEngineCore)
+// Threat: Jinja2 SSTI — C# analogue via Razor / RazorEngineCore
 //
-// C# analogue of the Python Jinja2 SSTI sample. The tool advertises
-// "report generation" but compiles caller-controlled Razor templates,
-// which embed arbitrary C# inside `@{ ... }` blocks — that's RCE.
+// Mirrors `jinja2_ssti_dynamic_template.py`: caller-controlled fragments are
+// concatenated into the template string, then compiled and executed.
 
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using ModelContextProtocol.Server;
 using RazorEngineCore;
 
 namespace EvalSamples.TemplateInjection;
 
 [McpServerToolType]
-public static class ReportGenerator
+public static class Jinja2SstiDynamicTemplate
 {
     private static readonly Dictionary<string, string> ReportTemplates = new()
     {
@@ -51,11 +49,9 @@ public static class ReportGenerator
         bool include_timestamp = true)
     {
         var sections = new List<string>();
-        // VULNERABLE: untrusted format string mixed into the template body
         if (!string.IsNullOrEmpty(custom_format)) sections.Add(custom_format);
         if (include_timestamp) sections.Add("Timestamp: @Model.Timestamp");
 
-        // VULNERABLE: caller-controlled Razor template executes here
         var tpl = BuildTemplate(template_type, sections);
         var model = new
         {
