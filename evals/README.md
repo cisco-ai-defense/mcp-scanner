@@ -7,25 +7,26 @@ This directory contains evaluation datasets and scripts for testing the MCP Scan
 ```
 evals/
 └── behavioral-analysis/
-    ├── data/           # Malicious MCP server test cases (141 files)
-    │   ├── arbitrary-resource-read-write/
+    ├── data/
+    │   │
+    │   │  Legacy Python corpus (same layout as historically):
+    │   ├── arbitrary-resource-read-write/   (*.py …)
     │   ├── backdoor/
-    │   ├── data-exfiltration/
-    │   ├── defense-evasion/
-    │   ├── general-description-code-mismatch/
-    │   ├── goal-manipulation/
-    │   ├── injection-attacks/
-    │   ├── prompt-injection/
-    │   ├── resource-exhaustion/
-    │   ├── template-injection/
-    │   ├── tool-poisoning/
-    │   ├── unauthorized-code-execution/
-    │   ├── unauthorized-network-access/
-    │   └── unauthorized-system-access/
+    │   ├── … (14 threat-category folders total)
+    │   │
+    │   └── Multi-language snippets (phase-1 mirror: one file per threat category × language):
+    │       javascript/<threat-category>/*.js
+    │       typescript/<threat-category>/*.ts
+    │       go/<threat-category>/*.go
+    │       rust/<threat-category>/*.rs
+    │       csharp/<threat-category>/*.cs
+    │
     └── scripts/
         ├── run_behavioral_scan.py
         └── scan_results.json (generated)
 ```
+
+At last update: **141** Python samples under `data/<category>/`; **70** extra files (**14 × 5** languages) under `data/{javascript,typescript,go,rust,csharp}/`. Samples are evaluator fixtures (malicious-pattern illustrations); downstream projects are not expected to compile every snippet as-is unless they vendor the referenced SDKs.
 
 ## Behavioral Analysis Evaluation
 
@@ -61,6 +62,22 @@ cd evals/behavioral-analysis/scripts
 uv run python run_behavioral_scan.py
 ```
 
+**Default behaviour** scans only the legacy Python tree (`data/<threat-category>/*.py`). Language-folder roots (`javascript`, `typescript`, `go`, `rust`, `csharp`) are skipped automatically so they are not mistaken for categories.
+
+Include the multi-language mirror (adds **70** files when all five are present):
+
+```bash
+uv run python run_behavioral_scan.py --all-languages
+# or selectively:
+uv run python run_behavioral_scan.py --languages javascript,typescript,go
+```
+
+Scan only JS/TS and skip Python:
+
+```bash
+uv run python run_behavioral_scan.py --no-python --languages javascript,typescript
+```
+
 ### Example Output
 
 ```
@@ -70,9 +87,9 @@ Behavioral Analysis Evaluation Scanner
 
 📂 Data directory: /path/to/evals/behavioral-analysis/data
 🤖 LLM Model: azure/gpt-4.1
-📊 Found 14 threat categories
+📊 Corpora scanned: python (14 categories)
 
-📁 Scanning arbitrary-resource-read-write: 10 files
+📁 Scanning arbitrary-resource-read-write [python] (data/arbitrary-resource-read-write): 10 files
   🔍 arbitrary_file_copy_sensitive_data.py... ✅ DETECTED (3 findings)
   🔍 arbitrary_file_deletion_recursive.py... ✅ DETECTED (2 findings)
   🔍 path_traversal_directory_enumeration.py... ✅ DETECTED (4 findings)
@@ -144,7 +161,23 @@ The `scan_results.json` file contains:
 
 ### Data Directory
 
-The `data/` directory contains 141 malicious MCP server implementations organized by threat type:
+Optional **multi-language** mirrors live under `data/<language>/<category>/` (**14** files per language in phase 1, **70** total across five roots).
+
+Phase-1 **template-injection** uses language-local engines where applicable: Handlebars (**JavaScript**/**TypeScript**), Go **`text/template`**, **Rust** **Tera**, **C#** **Razor** (`RazorEngineCore`). Phase-1 **unauthorized-code-execution** reflects Python `yaml.unsafe_load` / `pickle` themes with deserialization analogues (**js-yaml** `load` + **BSON**, **YAML + gob**, **serde_yaml + bincode**, **YamlDotNet + BinaryFormatter**) rather than subprocess-only samples.
+
+Static smoke (**no LLM**): fixtures are readable by the tree-sitter-backed static path (`NativeAnalyzer`).
+
+```bash
+python3 -c "
+from pathlib import Path
+from mcpscanner.core.static_analysis import NativeAnalyzer
+root = Path('evals/behavioral-analysis/data')
+for p in sorted(root.rglob('*')):
+    if p.suffix in {'.js','.ts','.go','.rs','.cs'}:
+        NativeAnalyzer(p.read_text(encoding='utf-8'), p.name)
+print('multi-language NativeAnalyzer parse: OK')
+"
+```
 
 | Category | Description | Files |
 |----------|-------------|-------|
@@ -165,15 +198,21 @@ The `data/` directory contains 141 malicious MCP server implementations organize
 
 ## Adding New Test Cases
 
-To add new malicious server implementations:
+**Python** (reference corpus):
 
-1. Choose the appropriate threat category in `data/`
-2. Create a new Python file with a descriptive name
-3. Implement the malicious MCP server pattern
-4. Add Apache 2.0 license header
-5. Run the evaluation script to verify detection
+1. Choose the threat category folder under `behavioral-analysis/data/<category>/`
+2. Add a new `.py` file with Apache-2.0 header and the malicious MCP pattern
+3. Run `run_behavioral_scan.py` when your LLM env is configured
 
-Example:
+**Multi-language** (mirrored corpora):
+
+1. Add/update the snippet under each language tree you care about:
+   `data/javascript/<category>/your_sample.js`,
+   `data/typescript/<category>/your_sample.ts`, etc.
+2. Prefer the same basename across languages when the scenarios are intentionally aligned.
+3. Run with `uv run python run_behavioral_scan.py --all-languages` (or `--languages ...`) alongside the Python pass.
+
+Example (Python-only):
 
 ```bash
 # Create new test case
@@ -222,7 +261,8 @@ If you encounter rate limits, consider:
 ## Performance Notes
 
 - **Average time per file**: 10-30 seconds (depends on LLM provider)
-- **Total runtime for 141 files**: ~30-60 minutes
+- **Total runtime for Python-only (~141 files)**: roughly ~30-60 minutes
+- **`--all-languages`** adds **70** mirrored snippets (~211 files total with default Python pass); plan LLM quotas accordingly
 - **Recommended**: Run during off-peak hours or use batch processing
 
 ## Contributing
