@@ -41,6 +41,7 @@ import httpx
 from ...threats.threats import ThreatMapping
 from .base import SecurityFinding
 from ...utils.file_magic import detect_magic
+from ...utils.path_safety import filter_safe_paths, safe_resolve_root
 
 logger = logging.getLogger(__name__)
 
@@ -613,13 +614,38 @@ class VirusTotalAnalyzer:
         """
         files: List[str] = []
         path = Path(directory)
+        # Resolve the scan root once so per-file membership checks compare
+        # against the canonical (symlink-free) form. Files whose resolved
+        # target lies outside the scan root are dropped — otherwise a
+        # symlink inside ``directory`` pointing at a sensitive file
+        # outside it would be hashed and (with vt_scan_files enabled)
+        # uploaded to VirusTotal. See utils/path_safety.py.
+        resolved_root = safe_resolve_root(directory)
 
+        candidates: List[Path] = []
         for file_path in path.rglob("*"):
-            if file_path.is_file():
-                if "__pycache__" not in str(file_path) and not any(
-                    part.startswith(".") for part in file_path.parts
-                ):
-                    files.append(str(file_path))
+            # Use ``is_file(follow_symlinks=False)`` so we judge the link
+            # itself, not its target — the resolution is enforced by
+            # ``filter_safe_paths`` immediately below. We still accept
+            # symlinks at this stage so that intra-root symlinks (a valid
+            # use case) survive; it is the *escape* check that gates them.
+            try:
+                is_regular = file_path.is_file()
+            except OSError:
+                continue
+            if not is_regular:
+                continue
+
+            if "__pycache__" not in str(file_path) and not any(
+                part.startswith(".") for part in file_path.parts
+            ):
+                candidates.append(file_path)
+
+        safe_candidates, _skipped = filter_safe_paths(
+            candidates, resolved_root, audit_label="virustotal"
+        )
+        for file_path in safe_candidates:
+            files.append(str(file_path))
 
         return sorted(files)
 
