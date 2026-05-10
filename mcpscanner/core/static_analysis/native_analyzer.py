@@ -268,13 +268,21 @@ class NativeAnalyzer:
     # =========================================================================
 
     def _analyze_python(self) -> NativeAnalysisResult:
-        """Analyze Python source code using built-in ast module."""
+        """Analyze Python source code using built-in ast module.
+
+        The AST is fetched through the shared ``ast_cache`` so the same file
+        previously parsed by ``CallGraphAnalyzer`` / ``ContextExtractor``
+        does not pay another full ``ast.parse`` here. Cache misses fall back
+        to a normal parse and populate the cache for subsequent callers.
+        """
+        from .ast_cache import get_python_ast
+
         functions = []
         errors = []
         partial = False
 
         try:
-            tree = ast.parse(self.source_code, filename=str(self.file_path))
+            tree = get_python_ast(self.source_code, self.file_path)
             module_imports = self._py_extract_imports(tree)
 
             for node in ast.walk(tree):
@@ -580,11 +588,20 @@ class NativeAnalyzer:
         mcpscanner.core.static_analysis.dataflow and taint modules.
         """
         try:
-            # Create a function-specific source for the parser
+            # Re-parse just the function body so the dataflow analyzer sees a
+            # CFG scoped to one function. ``PythonParser`` requires
+            # ``(file_path, source_code)``; the prior single-arg invocation
+            # raised ``TypeError`` immediately and was silently swallowed by
+            # the ``except`` below, meaning the full CFG-based dataflow path
+            # has never run in production. We synthesize a deterministic
+            # filename based on the original file + function name so cache
+            # entries don't collide with the module-level parse already
+            # cached under ``self.file_path``.
             func_source = ast.unparse(node)
-            func_parser = PythonParser(func_source)
+            synthetic_path = self.file_path.parent / f"{self.file_path.stem}__{getattr(node, 'name', 'func')}.py"
+            func_parser = PythonParser(synthetic_path, func_source)
             func_parser.parse()
-            
+
             # Use ForwardDataflowAnalysis for proper CFG-based analysis
             tracker = ForwardDataflowAnalysis(func_parser, param_names)
             flows = tracker.analyze_forward_flows()
@@ -724,29 +741,34 @@ class NativeAnalyzer:
     # =========================================================================
 
     def _analyze_tree_sitter(self) -> NativeAnalysisResult:
-        """Analyze source code using tree-sitter AST (generic for all languages)."""
-        # Get the language module
-        lang_mod = _get_language_module(self.language)
-        if lang_mod is None:
-            return NativeAnalysisResult(
-                success=False,
-                language=self.language,
-                errors=[f"tree-sitter-{self.language} not available. Install: pip install tree-sitter-{self.language.replace('_', '-')}"],
-            )
+        """Analyze source code using tree-sitter AST (generic for all languages).
+
+        Uses the shared module-level parser cache from
+        ``interprocedural.treesitter_call_graph`` so each language's ``Parser``
+        and ``Language`` are constructed once per process rather than once per
+        file. This is meaningful on big repos where ``NativeAnalyzer`` runs as
+        the per-function-context fallback after the call-graph build.
+        """
+        # Local import to avoid a hard dependency cycle at module import time;
+        # the call-graph module also depends on this module's helpers
+        # transitively through the analyzer.
+        from .interprocedural.treesitter_call_graph import get_cached_parser
 
         functions = []
         errors = []
 
-        try:
-            # Get the language object
-            if self.language == "typescript":
-                lang = Language(lang_mod.language_typescript())
-            elif self.language == "php":
-                lang = Language(lang_mod.language_php())
-            else:
-                lang = Language(lang_mod.language())
+        parser = get_cached_parser(self.language)
+        if parser is None:
+            return NativeAnalysisResult(
+                success=False,
+                language=self.language,
+                errors=[
+                    f"tree-sitter-{self.language} not available. Install: "
+                    f"pip install tree-sitter-{self.language.replace('_', '-')}"
+                ],
+            )
 
-            parser = Parser(lang)
+        try:
             tree = parser.parse(self.source_bytes)
 
             # Extract imports from AST

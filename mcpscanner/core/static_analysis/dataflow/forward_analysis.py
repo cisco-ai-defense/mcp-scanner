@@ -74,9 +74,16 @@ class ForwardFlowFact:
         )
 
     def __eq__(self, other: object) -> bool:
-        """Check equality.
+        """Check equality for fixpoint convergence.
 
-        Compares both shape_env and parameter_flows for proper fixpoint detection.
+        ``DataFlowAnalyzer.analyze`` uses ``out_fact != previous`` as its
+        convergence signal, so this comparison is correctness-critical: if
+        we report two distinct facts as equal the worklist stops too early
+        and the result is an underapproximation; if we report identical
+        facts as different we churn until the iteration cap is hit. The
+        previous version compared ``operations`` only by length and
+        omitted ``reaches_assignments`` entirely, both of which were
+        possible sources of premature termination.
         """
         if not isinstance(other, ForwardFlowFact):
             return False
@@ -84,18 +91,21 @@ class ForwardFlowFact:
         if self.shape_env != other.shape_env:
             return False
 
-        # Check parameter_flows keys
         if set(self.parameter_flows.keys()) != set(other.parameter_flows.keys()):
             return False
 
-        # Compare flow paths (simplified comparison - check if same operations reached)
-        for param in self.parameter_flows:
-            self_flow = self.parameter_flows[param]
+        for param, self_flow in self.parameter_flows.items():
             other_flow = other.parameter_flows[param]
 
+            # ``operations`` are ordered tuples of taint events; compare
+            # element-wise, not by count. ``reaches_assignments`` was
+            # previously dropped from the comparison entirely.
             if (
-                len(self_flow.operations) != len(other_flow.operations)
+                self_flow.operations != other_flow.operations
                 or set(self_flow.reaches_calls) != set(other_flow.reaches_calls)
+                or set(self_flow.reaches_assignments) != set(
+                    other_flow.reaches_assignments
+                )
                 or self_flow.reaches_returns != other_flow.reaches_returns
                 or self_flow.reaches_external != other_flow.reaches_external
             ):

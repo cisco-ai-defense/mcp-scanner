@@ -17,6 +17,7 @@
 """Dataflow analysis framework."""
 
 import ast
+from collections import deque
 from typing import Any, Generic, TypeVar
 
 from ..parser.base import BaseParser
@@ -269,7 +270,11 @@ class DataFlowAnalyzer(Generic[T]):
             self.in_facts[node.id] = initial_fact
             self.out_facts[node.id] = initial_fact
 
-        worklist = list(self.cfg.nodes)
+        # ``deque`` gives O(1) popleft so the worklist iteration is linear
+        # in the number of revisits rather than quadratic. Behaviour matches
+        # the previous list-based FIFO exactly: ``in_worklist`` still
+        # dedupes successors/predecessors, and visit order is unchanged.
+        worklist: "deque[CFGNode]" = deque(self.cfg.nodes)
         in_worklist = {node.id for node in worklist}
 
         iteration_count = 0
@@ -287,7 +292,7 @@ class DataFlowAnalyzer(Generic[T]):
                 )
                 break
 
-            node = worklist.pop(0)
+            node = worklist.popleft()
             in_worklist.discard(node.id)
 
             if forward:

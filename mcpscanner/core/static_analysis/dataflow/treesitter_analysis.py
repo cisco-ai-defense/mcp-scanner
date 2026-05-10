@@ -21,6 +21,7 @@ tree-sitter supported languages, providing the same level of taint
 tracking as the Python-specific ForwardDataflowAnalysis.
 """
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 from tree_sitter import Node
@@ -182,32 +183,46 @@ class TreeSitterDataflowAnalysis:
         if self.cfg.entry:
             self.facts[self.cfg.entry.node_id] = entry_fact
         
-        # Worklist algorithm
-        worklist = [self.cfg.entry] if self.cfg.entry else []
-        visited = set()
+        # Iterative worklist: a node must be revisited every time one of
+        # its predecessors' out-facts changes — otherwise dataflow can't
+        # converge. The previous implementation marked nodes ``visited``
+        # the first time they were processed and skipped every subsequent
+        # visit, so any change propagated through a predecessor was
+        # silently dropped. We now dedupe via ``in_worklist`` (matching the
+        # pattern used by ``DataFlowAnalyzer.analyze`` in cfg/builder.py)
+        # so a node sits in the queue at most once but can re-enter when a
+        # change requires it. ``deque.popleft`` keeps this O(1).
+        worklist: "deque[Any]" = deque()
+        in_worklist: set = set()
+        if self.cfg.entry is not None:
+            worklist.append(self.cfg.entry)
+            in_worklist.add(self.cfg.entry.node_id)
         max_iterations = len(self.cfg.nodes) * 10  # Prevent infinite loops
         iterations = 0
-        
+
         while worklist and iterations < max_iterations:
             iterations += 1
-            node = worklist.pop(0)
-            
-            if node is None or node.node_id in visited:
+            node = worklist.popleft()
+            in_worklist.discard(node.node_id)
+
+            if node is None:
                 continue
-            
-            # Get input fact (merge from predecessors)
+
             in_fact = self._get_input_fact(node)
-            
-            # Transfer function
             out_fact = self._transfer(node, in_fact)
-            
-            # Check for changes
+
             old_fact = self.facts.get(node.node_id)
             if old_fact is None or self._facts_changed(old_fact, out_fact):
                 self.facts[node.node_id] = out_fact
-                worklist.extend(node.successors)
-            
-            visited.add(node.node_id)
+                # Re-enqueue successors so they pick up the new fact. The
+                # ``in_worklist`` guard prevents the same successor from
+                # being queued multiple times before it gets its turn.
+                for succ in node.successors:
+                    if succ is None:
+                        continue
+                    if succ.node_id not in in_worklist:
+                        worklist.append(succ)
+                        in_worklist.add(succ.node_id)
         
         # Collect results from all nodes
         return self._collect_results()

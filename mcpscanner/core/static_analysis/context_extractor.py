@@ -163,6 +163,11 @@ class ContextExtractor:
         self.file_path = Path(file_path)
         self.analyzer = PythonParser(self.file_path, source_code)
         self.const_prop = ConstantPropagationAnalysis(self.analyzer)
+        # ``_analyze_forward_flows`` and other helpers log via ``self.logger``;
+        # without this initialiser any error in the inner ``try`` was raising
+        # a second ``AttributeError`` from the ``except`` block, masking the
+        # original failure.
+        self.logger = logging.getLogger(__name__)
 
         # Use provided patterns or defaults (convert to lowercase for case-insensitive matching)
         self.file_patterns = [
@@ -705,18 +710,45 @@ class ContextExtractor:
             return []
 
     def _extract_constants(self, node: ast.FunctionDef) -> Dict[str, Any]:
-        """Extract constant values.
+        """Extract constant values defined inside ``node``.
 
-        Args:
-            node: Function definition node
+        The previous implementation returned the constant-propagation
+        analyzer's *module-wide* table for every function, so every
+        :class:`FunctionContext` ended up tagged with constants that
+        belonged to other functions in the same file. That bloated
+        downstream LLM batch prompts (relevant to ``--batch-prompt-budget``)
+        and made every function look like it referenced everything.
 
-        Returns:
-            Dictionary of constants
+        We now collect constants by name from the AST of ``node`` itself
+        and intersect with the analyzer's resolved constants, so only
+        names actually assigned within this function are reported.
         """
-        constants = {}
-        for var_name, value in self.const_prop.constants.items():
-            constants[var_name] = value
-        return constants
+        # Gather names assigned anywhere in the function body. Walking the
+        # function subtree once here is cheap relative to the LLM cost we
+        # save by trimming the per-function constants payload.
+        local_names: set[str] = set()
+        for child in ast.walk(node):
+            if isinstance(child, ast.Assign):
+                for target in child.targets:
+                    if isinstance(target, ast.Name):
+                        local_names.add(target.id)
+            elif isinstance(child, (ast.AugAssign, ast.AnnAssign)):
+                target = child.target
+                if isinstance(target, ast.Name):
+                    local_names.add(target.id)
+            # Walrus / comprehension binding — also function-local.
+            elif isinstance(child, ast.NamedExpr) and isinstance(child.target, ast.Name):
+                local_names.add(child.target.id)
+        # Function parameters count as locals too; if constant prop
+        # specialised them, surface them in this function's context.
+        for arg in node.args.args:
+            local_names.add(arg.arg)
+
+        return {
+            name: value
+            for name, value in self.const_prop.constants.items()
+            if name in local_names
+        }
 
     def _analyze_variable_dependencies(
         self, node: ast.FunctionDef

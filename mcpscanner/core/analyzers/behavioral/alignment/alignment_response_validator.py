@@ -214,9 +214,14 @@ class AlignmentResponseValidator:
 
                 results.append(item)
 
-            # Pad with empty results if we got fewer than expected
+            # Pad with empty results if we got fewer than expected. Mark
+            # padded slots so callers (specifically ``_process_one_batch``)
+            # can distinguish "model legitimately said no mismatch" from
+            # "model returned a short array" and retry only the missing
+            # slots instead of either dropping findings or re-running the
+            # entire batch.
             while len(results) < expected_count:
-                results.append({"mismatch_detected": False})
+                results.append({"mismatch_detected": False, "_padded": True})
 
             self.logger.debug(f"Validated batch response with {len(results)} results")
             return results

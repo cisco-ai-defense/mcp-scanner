@@ -153,8 +153,16 @@ class AlignmentLLMClient:
                 "api_key": self._api_key,
             }
 
-            # Only enable JSON mode for supported models/providers
-            # Azure OpenAI with older API versions may not support this
+            # Only enable JSON mode for non-Azure providers. Azure's
+            # ``response_format={"type": "json_object"}`` forces the model
+            # to emit a top-level JSON *object*, but our batched alignment
+            # prompts ask for a JSON *array* — enabling it on Azure makes
+            # every batch parse fail and trip the per-function fallback,
+            # negating the batching speedup. Provider prompt-cache plumbing
+            # would let us split per-call shapes safely; until then the
+            # safest behaviour is to leave Azure responses unconstrained
+            # and rely on the validator's array-extraction + slot-level
+            # retry for parse robustness.
             if not self._model.startswith("azure/"):
                 request_params["response_format"] = {"type": "json_object"}
 
