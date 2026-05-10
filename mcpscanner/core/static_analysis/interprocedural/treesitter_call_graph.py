@@ -16,8 +16,10 @@
 
 """Cross-file call graph analysis for tree-sitter languages.
 
-Provides interprocedural analysis across TypeScript, JavaScript, Go, Java,
-Kotlin, C#, Ruby, Rust, and PHP codebases.
+Provides interprocedural analysis across TypeScript (incl. TSX),
+JavaScript, Go, C#, and Rust codebases. Java/Kotlin/Ruby/PHP support was
+removed in this module along with their pyproject extras and node-type
+maps; see ``parser/treesitter_parser.py`` for the rationale.
 """
 
 import logging
@@ -58,47 +60,35 @@ class TSCallGraph:
 
 class TreeSitterCallGraphAnalyzer:
     """Cross-file call graph analysis for tree-sitter languages.
-    
-    Supports: TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, PHP
+
+    Supports: TypeScript (incl. TSX), JavaScript, Go, C#, Rust.
     """
-    
+
     # Function node types per language
     FUNCTION_TYPES = {
         "javascript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
         "typescript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
         "go": {"function_declaration", "method_declaration"},
-        "java": {"method_declaration", "constructor_declaration"},
-        "kotlin": {"function_declaration", "secondary_constructor"},
         "c_sharp": {"method_declaration", "constructor_declaration", "local_function_statement"},
-        "ruby": {"method", "singleton_method"},
         "rust": {"function_item"},
-        "php": {"function_definition", "method_declaration"},
     }
-    
+
     # Call expression types per language
     CALL_TYPES = {
         "javascript": {"call_expression", "new_expression"},
         "typescript": {"call_expression", "new_expression"},
         "go": {"call_expression"},
-        "java": {"method_invocation", "object_creation_expression"},
-        "kotlin": {"call_expression"},
         "c_sharp": {"invocation_expression", "object_creation_expression"},
-        "ruby": {"call", "method_call"},
         "rust": {"call_expression", "macro_invocation"},
-        "php": {"function_call_expression", "member_call_expression", "scoped_call_expression"},
     }
-    
+
     # Import node types per language
     IMPORT_TYPES = {
         "javascript": {"import_statement", "call_expression"},  # call_expression for require()
         "typescript": {"import_statement", "call_expression"},
         "go": {"import_declaration"},
-        "java": {"import_declaration"},
-        "kotlin": {"import_header"},
         "c_sharp": {"using_directive"},
-        "ruby": {"call"},  # require/require_relative
         "rust": {"use_declaration"},
-        "php": {"namespace_use_declaration"},
     }
     
     def __init__(self, language: str):
@@ -127,24 +117,12 @@ class TreeSitterCallGraphAnalyzer:
             elif self.language == "go":
                 import tree_sitter_go as mod
                 self._lang = Language(mod.language())
-            elif self.language == "java":
-                import tree_sitter_java as mod
-                self._lang = Language(mod.language())
-            elif self.language == "kotlin":
-                import tree_sitter_kotlin as mod
-                self._lang = Language(mod.language())
             elif self.language == "c_sharp":
                 import tree_sitter_c_sharp as mod
-                self._lang = Language(mod.language())
-            elif self.language == "ruby":
-                import tree_sitter_ruby as mod
                 self._lang = Language(mod.language())
             elif self.language == "rust":
                 import tree_sitter_rust as mod
                 self._lang = Language(mod.language())
-            elif self.language == "php":
-                import tree_sitter_php as mod
-                self._lang = Language(mod.language_php())
             else:
                 return None
             

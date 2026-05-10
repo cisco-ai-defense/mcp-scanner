@@ -18,7 +18,14 @@
 
 This module provides Control Flow Graph construction that works with
 any tree-sitter parsed language, enabling full dataflow analysis
-across TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, and PHP.
+across TypeScript (incl. TSX), JavaScript, Go, C#, and Rust.
+
+Java/Kotlin/Ruby/PHP entries were dropped from ``STATEMENT_TYPES`` when
+the rest of the behavioural code-scanning pipeline removed support for
+those languages. ``BRANCH_TYPES`` and ``EXIT_TYPES`` are intentionally
+left language-agnostic — they're consulted only after a language-specific
+parser produces an AST, so leftover tokens (e.g. ``when_expression``,
+``until``) match nothing and are harmless.
 """
 
 from dataclasses import dataclass, field
@@ -96,37 +103,16 @@ class TreeSitterCFGBuilder:
             "return_statement", "if_statement", "for_statement", "switch_statement",
             "select_statement", "go_statement", "defer_statement",
         },
-        "java": {
-            "expression_statement", "local_variable_declaration",
-            "return_statement", "if_statement", "for_statement", "enhanced_for_statement",
-            "while_statement", "do_statement", "switch_expression", "try_statement",
-            "throw_statement", "break_statement", "continue_statement",
-        },
-        "kotlin": {
-            "expression", "property_declaration", "variable_declaration",
-            "return_expression", "if_expression", "for_statement", "while_statement",
-            "do_while_statement", "when_expression", "try_expression",
-            "throw_expression", "break_expression", "continue_expression",
-        },
         "c_sharp": {
             "expression_statement", "local_declaration_statement",
             "return_statement", "if_statement", "for_statement", "foreach_statement",
             "while_statement", "do_statement", "switch_statement", "try_statement",
             "throw_statement", "break_statement", "continue_statement",
         },
-        "ruby": {
-            "expression", "assignment", "return", "if", "unless", "case",
-            "for", "while", "until", "begin", "rescue", "raise",
-        },
         "rust": {
             "expression_statement", "let_declaration",
             "return_expression", "if_expression", "for_expression", "while_expression",
             "loop_expression", "match_expression", "break_expression", "continue_expression",
-        },
-        "php": {
-            "expression_statement", "echo_statement", "return_statement",
-            "if_statement", "for_statement", "foreach_statement", "while_statement",
-            "do_statement", "switch_statement", "try_statement", "throw_expression",
         },
     }
     

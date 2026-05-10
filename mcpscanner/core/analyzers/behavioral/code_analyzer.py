@@ -272,17 +272,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             return []
 
     # Maps file extensions to tree-sitter language identifiers used by
-    # TreeSitterCallGraphAnalyzer. Python is handled separately via CallGraphAnalyzer.
+    # TreeSitterCallGraphAnalyzer. Python is handled separately via
+    # CallGraphAnalyzer. Java/Kotlin/Ruby/PHP entries were dropped when
+    # behavioural code scanning narrowed its supported-language set —
+    # see mcpscanner/core/static_analysis/parser/treesitter_parser.py.
     _EXT_TO_TS_LANGUAGE = {
         ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
         ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
         ".go": "go",
-        ".java": "java",
-        ".kt": "kotlin", ".kts": "kotlin",
         ".cs": "c_sharp",
-        ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
         ".rs": "rust",
-        ".php": "php", ".phtml": "php",
     }
 
     _PYTHON_EXTENSIONS = {".py", ".pyw"}
@@ -290,8 +289,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     def _find_source_files(self, directory: str) -> List[str]:
         """Find all supported source files in a directory.
 
-        Supports Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby,
-        Rust, and PHP files.
+        Supports Python, TypeScript (incl. TSX), JavaScript, Go, C#, and
+        Rust files.
 
         Args:
             directory: Directory path to search
@@ -400,12 +399,12 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     ) -> List[SecurityFinding]:
         """Analyze source code for docstring/behavior mismatches.
 
-        Supports Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby,
-        Rust, and PHP. Uses ContextExtractor for MCP-decorated Python functions,
+        Supports Python, TypeScript (incl. TSX), JavaScript, Go, C#, and
+        Rust. Uses ContextExtractor for MCP-decorated Python functions,
         falls back to NativeAnalyzer when:
         - ContextExtractor fails (syntax errors, unsupported patterns)
         - No MCP decorators found but analysis is still needed
-        - Non-Python files (TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, PHP)
+        - Non-Python files (TypeScript, JavaScript, Go, C#, Rust)
 
         Args:
             source_code: Source code to analyze

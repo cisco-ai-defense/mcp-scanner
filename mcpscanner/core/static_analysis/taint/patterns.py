@@ -16,6 +16,10 @@
 
 """Comprehensive taint patterns for all supported languages.
 
+Supported languages: Python, JavaScript/TypeScript, Go, C#, Rust.
+Java/Kotlin/Ruby/PHP entries were dropped when the rest of the
+behavioural code-scanning pipeline removed support for those languages.
+
 Security patterns for:
 - Command injection (CWE-78)
 - SQL injection (CWE-89)
@@ -81,38 +85,6 @@ class TaintPatterns:
         "os.Getenv",
     })
     
-    # Java sources
-    JAVA_SOURCES: Set[str] = field(default_factory=lambda: {
-        # Servlet
-        "HttpServletRequest.getParameter", "HttpServletRequest.getParameterValues",
-        "HttpServletRequest.getQueryString", "HttpServletRequest.getHeader",
-        "HttpServletRequest.getCookies", "HttpServletRequest.getInputStream",
-        "HttpServletRequest.getReader",
-        # Spring
-        "@RequestBody", "@PathVariable", "@RequestParam", "@RequestHeader",
-        "@CookieValue", "@ModelAttribute",
-        # AWS Lambda
-        "APIGatewayProxyRequestEvent",
-    })
-    
-    # Ruby sources
-    RUBY_SOURCES: Set[str] = field(default_factory=lambda: {
-        # Rails
-        "params", "request.params", "request.body",
-        "cookies", "request.cookies",
-        "request.headers", "request.env",
-        # Sinatra
-        "params", "request",
-    })
-    
-    # PHP sources
-    PHP_SOURCES: Set[str] = field(default_factory=lambda: {
-        "$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_FILES",
-        "$_SERVER", "$_ENV",
-        "file_get_contents('php://input')",
-        "php://input",
-    })
-    
     # C# sources
     CSHARP_SOURCES: Set[str] = field(default_factory=lambda: {
         # ASP.NET
@@ -159,24 +131,6 @@ class TaintPatterns:
             "exec.Command", "exec.CommandContext",
             "os.StartProcess", "syscall.Exec",
         },
-        "java": {
-            "Runtime.exec", "Runtime.getRuntime().exec",
-            "ProcessBuilder.command", "ProcessBuilder.start",
-            "Process",
-        },
-        "ruby": {
-            "system", "exec", "spawn", "`", "Kernel.system", "Kernel.exec",
-            "Kernel.spawn", "Kernel.`",
-            "IO.popen", "Open3.capture2", "Open3.capture2e", "Open3.capture3",
-            "Open3.popen2", "Open3.popen2e", "Open3.popen3",
-            "Process.spawn", "Process.exec", "PTY.spawn",
-            "Gem::Util.popen",
-        },
-        "php": {
-            "exec", "system", "passthru", "shell_exec", "popen", "proc_open",
-            "pcntl_exec", "expect_popen",
-            "`",  # backticks
-        },
         "csharp": {
             "Process.Start", "ProcessStartInfo",
             "System.Diagnostics.Process.Start",
@@ -204,23 +158,6 @@ class TaintPatterns:
             "tx.Query", "tx.QueryRow", "tx.Exec",
             "stmt.Query", "stmt.QueryRow", "stmt.Exec",
         },
-        "java": {
-            "Statement.execute", "Statement.executeQuery", "Statement.executeUpdate",
-            "Connection.prepareStatement", "Connection.createStatement",
-            "JdbcTemplate.query", "JdbcTemplate.update",
-            "EntityManager.createNativeQuery",
-        },
-        "ruby": {
-            "execute", "exec_query", "select_all", "select_one",
-            "find_by_sql", "count_by_sql",
-            "ActiveRecord::Base.connection.execute",
-        },
-        "php": {
-            "mysql_query", "mysqli_query", "pg_query",
-            "PDO::query", "PDO::exec",
-            "$pdo->query", "$pdo->exec",
-            "$mysqli->query",
-        },
         "csharp": {
             "SqlCommand", "ExecuteReader", "ExecuteNonQuery", "ExecuteScalar",
             "SqlDataAdapter",
@@ -240,20 +177,6 @@ class TaintPatterns:
             "vm.runInContext", "vm.runInNewContext", "vm.runInThisContext",
         },
         "go": {},  # Go doesn't have eval
-        "java": {
-            "ScriptEngine.eval", "Interpreter.eval",
-            "GroovyShell.evaluate", "GroovyShell.parse",
-        },
-        "ruby": {
-            "eval", "instance_eval", "class_eval", "module_eval",
-            "Kernel.eval", "binding.eval",
-            "send", "public_send", "__send__",
-        },
-        "php": {
-            "eval", "assert", "create_function",
-            "preg_replace",  # with /e modifier
-            "call_user_func", "call_user_func_array",
-        },
         "csharp": {
             "CSharpCodeProvider.CompileAssemblyFromSource",
             "Assembly.Load",
@@ -286,27 +209,6 @@ class TaintPatterns:
             "ioutil.ReadFile", "ioutil.WriteFile", "ioutil.ReadAll",
             "io.ReadAll", "io.Copy",
             "filepath.Join",  # can be safe if validated
-        },
-        "java": {
-            "File", "FileReader", "FileWriter", "FileInputStream", "FileOutputStream",
-            "BufferedReader", "BufferedWriter",
-            "Files.readAllBytes", "Files.readAllLines", "Files.write",
-            "Files.copy", "Files.move", "Files.delete",
-            "Paths.get", "Path.of",
-            "ClassPathResource", "ResourceUtils.getFile",
-        },
-        "ruby": {
-            "File.open", "File.read", "File.write", "File.delete",
-            "File.new", "File.binread", "File.binwrite",
-            "IO.read", "IO.write", "IO.binread", "IO.binwrite",
-            "FileUtils.cp", "FileUtils.mv", "FileUtils.rm",
-        },
-        "php": {
-            "file_get_contents", "file_put_contents", "file",
-            "fopen", "fread", "fwrite", "fgets", "fgetc",
-            "readfile", "include", "include_once", "require", "require_once",
-            "unlink", "rmdir", "mkdir",
-            "copy", "rename", "move_uploaded_file",
         },
         "csharp": {
             "File.ReadAllText", "File.ReadAllTextAsync", "File.ReadAllBytes",
@@ -345,27 +247,6 @@ class TaintPatterns:
             "http.NewRequest", "http.Client.Do", "http.Client.Get",
             "net.Dial", "net.DialTCP", "net.DialUDP",
         },
-        "java": {
-            "URL.openConnection", "URL.openStream",
-            "HttpURLConnection", "HttpsURLConnection",
-            "HttpClient.send", "HttpClient.sendAsync",
-            "RestTemplate.getForObject", "RestTemplate.postForObject",
-            "WebClient.get", "WebClient.post",
-        },
-        "ruby": {
-            "Net::HTTP.get", "Net::HTTP.post", "Net::HTTP.start",
-            "open-uri", "OpenURI.open_uri",
-            "HTTParty.get", "HTTParty.post",
-            "RestClient.get", "RestClient.post",
-            "Faraday.get", "Faraday.post",
-        },
-        "php": {
-            "file_get_contents",  # with URL
-            "curl_exec", "curl_init", "curl_setopt",
-            "fopen",  # with URL
-            "fsockopen", "pfsockopen",
-            "stream_socket_client",
-        },
         "csharp": {
             "HttpClient.GetAsync", "HttpClient.PostAsync",
             "HttpClient.GetStringAsync", "HttpClient.SendAsync",
@@ -395,20 +276,6 @@ class TaintPatterns:
         "go": {
             "gob.Decode", "gob.NewDecoder",
             "json.Unmarshal",  # generally safe
-        },
-        "java": {
-            "ObjectInputStream.readObject",
-            "XMLDecoder.readObject",
-            "XStream.fromXML",
-            "ObjectMapper.readValue",  # Jackson - can be unsafe
-        },
-        "ruby": {
-            "Marshal.load", "Marshal.restore",
-            "YAML.load", "YAML.unsafe_load",
-        },
-        "php": {
-            "unserialize",
-            "json_decode",  # generally safe
         },
         "csharp": {
             "BinaryFormatter.Deserialize",
@@ -458,34 +325,6 @@ class TaintPatterns:
             # HTML
             "html.EscapeString",
         },
-        "java": {
-            # Path
-            "FilenameUtils.getName",
-            "Paths.get().normalize()",
-            # HTML
-            "StringEscapeUtils.escapeHtml",
-            "HtmlUtils.htmlEscape",
-            # Type conversion
-            "Integer.parseInt", "Long.parseLong",
-        },
-        "ruby": {
-            # Command
-            "Shellwords.escape", "Shellwords.shellescape",
-            # HTML
-            "ERB::Util.html_escape", "CGI.escapeHTML",
-            # SQL - parameterized queries
-            "sanitize_sql",
-        },
-        "php": {
-            # Command
-            "escapeshellcmd", "escapeshellarg",
-            # SQL
-            "mysqli_real_escape_string", "PDO::quote",
-            # HTML
-            "htmlspecialchars", "htmlentities",
-            # Path
-            "basename", "realpath",
-        },
         "csharp": {
             # HTML
             "HttpUtility.HtmlEncode", "WebUtility.HtmlEncode",
@@ -509,9 +348,9 @@ def get_sinks_for_language(language: str, category: str) -> Set[str]:
     """Get sink patterns for a language and category.
     
     Args:
-        language: Language name (python, javascript, go, java, ruby, php, csharp, rust, kotlin)
+        language: Language name (python, javascript, typescript, tsx, go, csharp, c_sharp, rust)
         category: Sink category (command, sql, eval, file, network, deserialization)
-    
+
     Returns:
         Set of sink function/method names
     """
@@ -520,9 +359,7 @@ def get_sinks_for_language(language: str, category: str) -> Set[str]:
         lang = "javascript"
     elif lang == "c_sharp":
         lang = "csharp"
-    elif lang == "kotlin":
-        lang = "java"  # Kotlin uses JVM, same sinks as Java
-    
+
     category_map = {
         "command": TAINT_PATTERNS.COMMAND_SINKS,
         "sql": TAINT_PATTERNS.SQL_SINKS,
