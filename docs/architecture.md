@@ -17,6 +17,12 @@ The MCP Scanner is organized into the following components:
 - **VirusTotalAnalyzer**: Standalone file/directory malware scanner using VirusTotal SHA256 hash lookups with configurable inclusion/exclusion extension lists.
 - **VulnerablePackageAnalyzer**: Scans Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) by running pip-audit as a subprocess. Supports requirements files, project directories, and installed environments. Maps findings to AITech-9.3 / AISubtech-9.3.1 (Malicious Package / Tool Injection).
 
+## User Interfaces
+
+- **CLI** (`mcpscanner/cli.py`): Command-line interface with Click, supporting all scan modes, output formats, and subcommands.
+- **API Server** (`mcpscanner/server.py`): REST API server with FastAPI for integrating scanning into web applications and CI/CD pipelines.
+- **TUI** (`mcpscanner/tui/`): Interactive Terminal User Interface built with Textual. Provides guided, multi-screen scanning with a Welcome screen, dynamic configuration forms, live progress display, and a results DataTable with export. See [TUI Documentation](tui.md).
+
 ## Utility Methods
 
 All utility methods support Union types (v2.0.0+), accepting `ToolScanResult`, `PromptScanResult`, or `ResourceScanResult`:

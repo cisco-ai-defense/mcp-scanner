@@ -13,6 +13,7 @@ This directory contains detailed documentation for the MCP Scanner SDK.
 - **[Authentication](authentication.md)** - OAuth setup, explicit auth control, and security configuration
 - **[Programmatic Usage](programmatic-usage.md)** - Examples and advanced programmatic usage
 - **[Static Scanning](static-scanning.md)** - Offline/CI-CD scanning mode for pre-generated JSON files
+- **[TUI](tui.md)** - Interactive Terminal User Interface for guided scanning
 - **[API Reference](api-reference.md)** - Complete REST API documentation and examples
 - **[Output Formats & JSON Schema](output-formats.md)** - Output format options, filtering, and complete JSON output schema reference for CI/CD integration
 

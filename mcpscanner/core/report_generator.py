@@ -25,6 +25,7 @@ import os
 from typing import Any, Dict, List, Optional, Union
 
 from .models import OutputFormat, SeverityFilter
+from .result import get_highest_severity
 
 
 async def results_to_json(scan_results) -> List[Dict[str, Any]]:
@@ -189,7 +190,8 @@ class ReportGenerator:
 
         self.server_url = self.data.get(
             "server_url",
-            self.data.get("scan_target", "Unknown"),
+            self.data.get("scan_target",
+                self.data.get("mcp_server_repository", "Unknown")),
         )
         self.scan_results = self.data.get("scan_results", [])
         self.requested_analyzers = self.data.get("requested_analyzers", [])
@@ -357,44 +359,58 @@ class ReportGenerator:
         output.append(f"Unsafe items: {unsafe_count}")
 
         unsafe_results = [r for r in results if not r.get("is_safe", True)]
+        safe_results = [r for r in results if r.get("is_safe", True)]
+
+        def _render_item(idx: int, result: Dict[str, Any]) -> str:
+            item_type = result.get("item_type", "tool")
+
+            if item_type == "tool":
+                item_name = result.get(
+                    "tool_name", result.get("package_name", "Unknown")
+                )
+            elif item_type == "prompt":
+                item_name = result.get("prompt_name", "Unknown")
+            elif item_type == "resource":
+                item_name = result.get("resource_name", "Unknown")
+            else:
+                item_name = "Unknown"
+
+            findings = result.get("findings", {})
+
+            severities = [
+                analyzer_data.get("severity", "UNKNOWN")
+                for analyzer_data in findings.values()
+            ]
+            highest_severity = get_highest_severity(severities)
+            total_findings = sum(
+                analyzer_data.get("total_findings", 0)
+                for analyzer_data in findings.values()
+            )
+
+            if "server_name" in result and result["server_name"]:
+                return (
+                    f"{idx}. {item_name} ({item_type}) "
+                    f"(Server: {result['server_name']}) - "
+                    f"{highest_severity} ({total_findings} findings)"
+                )
+            return (
+                f"{idx}. {item_name} ({item_type}) - "
+                f"{highest_severity} ({total_findings} findings)"
+            )
 
         if unsafe_results:
             output.append("\n=== Unsafe Items ===")
             for i, result in enumerate(unsafe_results, 1):
-                item_type = result.get("item_type", "tool")
+                output.append(_render_item(i, result))
 
-                # Get item name based on type
-                if item_type == "tool":
-                    item_name = result.get("tool_name", result.get("package_name", "Unknown"))
-                elif item_type == "prompt":
-                    item_name = result.get("prompt_name", "Unknown")
-                elif item_type == "resource":
-                    item_name = result.get("resource_name", "Unknown")
-                else:
-                    item_name = "Unknown"
-
-                findings = result.get("findings", {})
-
-                # Get the highest severity and total findings count
-                highest_severity = "SAFE"
-                total_findings = 0
-                for analyzer_data in findings.values():
-                    severity = analyzer_data.get("severity", "SAFE")
-                    if self._get_severity_order(severity) > self._get_severity_order(
-                        highest_severity
-                    ):
-                        highest_severity = severity
-                    total_findings += analyzer_data.get("total_findings", 0)
-
-                # Show server name for config-based scans
-                if "server_name" in result and result["server_name"]:
-                    output.append(
-                        f"{i}. {item_name} ({item_type}) (Server: {result['server_name']}) - {highest_severity} ({total_findings} findings)"
-                    )
-                else:
-                    output.append(
-                        f"{i}. {item_name} ({item_type}) - {highest_severity} ({total_findings} findings)"
-                    )
+        # Also enumerate safe items so the summary reflects ALL tools detected
+        # during the scan, not only the ones flagged as malicious. Callers that
+        # want to hide safe items should pass show_safe=False, which filters
+        # them out before this method is reached.
+        if safe_results:
+            output.append("\n=== Safe Items ===")
+            for i, result in enumerate(safe_results, 1):
+                output.append(_render_item(i, result))
 
         return "\n".join(output)
 
@@ -551,18 +567,19 @@ class ReportGenerator:
 
             # Get summary info
             total_findings = sum(f.get("total_findings", 0) for f in findings.values())
-            severities = [f.get("severity", "SAFE") for f in findings.values()]
-            highest_severity = self._get_highest_severity(severities)
+            severities = [f.get("severity", "UNKNOWN") for f in findings.values()]
+            highest_severity = get_highest_severity(severities)
 
             # Use colored emojis based on severity
             severity_emojis = {
                 "HIGH": "🔴",
-                "UNKNOWN": "🔴",
+                "UNKNOWN": "🟣",
                 "MEDIUM": "🟠",
                 "LOW": "🟡",
+                "INFO": "🔵",
                 "SAFE": "🟢",
             }
-            severity_icon = severity_emojis.get(highest_severity, "🟢")
+            severity_icon = severity_emojis.get(highest_severity, "🟣")
             output.append(f"{severity_icon} {tool_name} ({highest_severity})")
 
             if total_findings > 0:
@@ -668,14 +685,20 @@ class ReportGenerator:
                     }
                 )
 
-        # Sort by severity priority
-        severity_order = ["HIGH", "UNKNOWN", "MEDIUM", "LOW", "SAFE"]
+        # Sort by severity priority. UNKNOWN goes last because per the
+        # rollup contract it represents "not yet analyzed" rather than a
+        # confirmed concrete severity, so a tool with both UNKNOWN and any
+        # concrete finding would have already been bucketed into the
+        # concrete bucket; surfacing UNKNOWN-only items at the bottom keeps
+        # the eye on confirmed risk first.
+        severity_order = ["HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "UNKNOWN"]
         severity_emojis = {
             "HIGH": "🔴",
-            "UNKNOWN": "🔴",
             "MEDIUM": "🟠",
             "LOW": "🟡",
+            "INFO": "🔵",
             "SAFE": "🟢",
+            "UNKNOWN": "🟣",
         }
 
         for severity in severity_order:
@@ -683,7 +706,7 @@ class ReportGenerator:
                 continue
 
             items = severity_groups[severity]
-            emoji = severity_emojis.get(severity, "🔴")
+            emoji = severity_emojis.get(severity, "🟣")
             output.append(f"{emoji} {severity} SEVERITY ({len(items)} items)")
 
             for item in items:
@@ -793,19 +816,22 @@ class ReportGenerator:
             # Get overall severity with colored emoji
             severity_emojis = {
                 "HIGH": "🔴",
-                "UNKNOWN": "🔴",
+                "UNKNOWN": "🟣",
                 "MEDIUM": "🟠",
                 "LOW": "🟡",
+                "INFO": "🔵",
                 "SAFE": "🟢",
             }
 
             if findings:
-                severities = [f.get("severity", "SAFE") for f in findings.values()]
-                severity_text = self._get_highest_severity(severities)
-                severity_emoji = severity_emojis.get(severity_text, "🟢")
+                severities = [
+                    f.get("severity", "UNKNOWN") for f in findings.values()
+                ]
+                severity_text = get_highest_severity(severities)
+                severity_emoji = severity_emojis.get(severity_text, "🟣")
                 overall_severity = f"{severity_emoji} {severity_text}"[:8]
             else:
-                severity_emoji = severity_emojis.get(status, "🟢")
+                severity_emoji = severity_emojis.get(status, "🟣")
                 overall_severity = f"{severity_emoji} {status}"[:8]
 
             if self.is_vuln_pkg_scan:
@@ -833,25 +859,6 @@ class ReportGenerator:
             output.append(row)
 
         return "\n".join(output)
-
-    def _get_highest_severity(self, severities: List[str]) -> str:
-        """Get the highest severity from a list."""
-        severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "SAFE": 1}
-        highest = "SAFE"
-        highest_value = 0
-
-        for severity in severities:
-            value = severity_order.get(severity.upper(), 0)
-            if value > highest_value:
-                highest_value = value
-                highest = severity.upper()
-
-        return highest
-
-    def _get_severity_order(self, severity: str) -> int:
-        """Get the numeric order value for a severity level."""
-        severity_order = {"HIGH": 5, "UNKNOWN": 4, "MEDIUM": 3, "LOW": 2, "SAFE": 1}
-        return severity_order.get(severity.upper(), 0)
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about the scan results."""
