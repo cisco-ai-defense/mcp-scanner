@@ -22,15 +22,30 @@ This script scans all malicious MCP server implementations in the data directory
 to evaluate the behavioral analyzer's detection capabilities.
 """
 
+import argparse
 import asyncio
 import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Sequence
 
 from mcpscanner import Config
 from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+
+# Top-level directories under data/ that nest `data/<language>/<threat-category>/...`
+# rather than `data/<threat-category>/*.py`.
+LANGUAGE_ROOTS: frozenset[str] = frozenset(
+    {"javascript", "typescript", "go", "rust", "csharp"}
+)
+
+LANG_EXTENSIONS: Dict[str, Sequence[str]] = {
+    "javascript": (".js",),
+    "typescript": (".ts",),
+    "go": (".go",),
+    "rust": (".rs",),
+    "csharp": (".cs",),
+}
 
 
 async def scan_file(analyzer: BehavioralCodeAnalyzer, filepath: Path) -> Dict[str, Any]:
@@ -67,33 +82,84 @@ async def scan_file(analyzer: BehavioralCodeAnalyzer, filepath: Path) -> Dict[st
 
 
 async def scan_category(
-    analyzer: BehavioralCodeAnalyzer, category_dir: Path
+    analyzer: BehavioralCodeAnalyzer,
+    category_dir: Path,
+    *,
+    extensions: Sequence[str],
+    scan_label: str | None = None,
 ) -> List[Dict[str, Any]]:
-    """Scan all files in a threat category directory."""
-    results = []
+    """Scan evaluation files under a threat-category directory."""
+    label = scan_label if scan_label else category_dir.name
+    targets: List[Path] = []
+    for ext in extensions:
+        targets.extend(sorted(category_dir.glob(f"*{ext}")))
 
-    # Find all Python files in the category
-    py_files = list(category_dir.glob("*.py"))
+    results: List[Dict[str, Any]] = []
+    display = (
+        str(category_dir.relative_to(category_dir.parent.parent))
+        if "data" in category_dir.parts
+        else category_dir.name
+    )
 
-    print(f"\n📁 Scanning {category_dir.name}: {len(py_files)} files")
+    print(f"\n📁 Scanning {label} ({display}): {len(targets)} files")
 
-    for py_file in py_files:
-        print(f"  🔍 {py_file.name}...", end=" ")
-        result = await scan_file(analyzer, py_file)
+    for file_path in targets:
+        print(f"  🔍 {file_path.name}...", end=" ")
+        result = await scan_file(analyzer, file_path)
         results.append(result)
 
         if result.get("status") == "error":
-            print(f"❌ ERROR")
+            print("❌ ERROR")
         elif result.get("is_safe"):
-            print(f"⚠️  MISSED (no findings)")
+            print("⚠️  MISSED (no findings)")
         else:
             print(f"✅ DETECTED ({result['findings_count']} findings)")
 
     return results
 
 
-async def main():
+def _parse_cli() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run BehavioralCodeAnalyzer across eval corpus (Python plus optional languages).",
+    )
+    parser.add_argument(
+        "--languages",
+        default=None,
+        metavar="LIST",
+        help=(
+            "Comma-separated extra language roots under data/, e.g. "
+            "'javascript,typescript,go,rust,csharp'. "
+            "Each layout is data/<language>/<threat-category>/*.{ext}"
+        ),
+    )
+    parser.add_argument(
+        "--all-languages",
+        action="store_true",
+        help=f"Equivalent to --languages {','.join(sorted(LANG_EXTENSIONS))}",
+    )
+    parser.add_argument(
+        "--no-python",
+        action="store_true",
+        help="Skip legacy Python corpus at data/<threat-category>/*.py",
+    )
+    return parser.parse_args()
+
+
+async def main() -> int:
     """Main function to run behavioral scans."""
+    opts = _parse_cli()
+    langs: List[str] = []
+    if opts.all_languages:
+        langs = sorted(LANG_EXTENSIONS.keys())
+    elif opts.languages:
+        langs = [s.strip().lower() for s in opts.languages.split(",") if s.strip()]
+
+    for lang in langs:
+        if lang not in LANG_EXTENSIONS:
+            print(f"❌ Unknown language root '{lang}'. Expected one of:")
+            print(f"   {', '.join(sorted(LANG_EXTENSIONS))}")
+            return 2
+
     print("=" * 80)
     print("Behavioral Analysis Evaluation Scanner")
     print("=" * 80)
@@ -132,31 +198,68 @@ async def main():
 
     analyzer = BehavioralCodeAnalyzer(config)
 
-    # Get all threat category directories
-    categories = sorted([d for d in data_dir.iterdir() if d.is_dir()])
+    all_results: Dict[str, List[Dict[str, Any]]] = {}
+    total_files = total_detected = total_missed = total_errors = 0
 
-    print(f"📊 Found {len(categories)} threat categories")
+    corpus_labels: List[str] = []
 
-    # Scan each category
-    all_results = {}
-    total_files = 0
-    total_detected = 0
-    total_missed = 0
-    total_errors = 0
+    # Legacy Python: data/<threat-category>/*.py  (excluding language-folder roots)
+    if not opts.no_python:
+        py_categories = sorted(
+            [
+                d
+                for d in data_dir.iterdir()
+                if d.is_dir() and d.name not in LANGUAGE_ROOTS
+            ]
+        )
+        corpus_labels.append(f"python ({len(py_categories)} categories)")
+        for category_dir in py_categories:
+            key = category_dir.name
+            category_results = await scan_category(
+                analyzer,
+                category_dir,
+                extensions=(".py",),
+                scan_label=f"{key} [python]",
+            )
+            all_results.setdefault(key, []).extend(category_results)
+            total_files += len(category_results)
+            for result in category_results:
+                if result.get("status") == "error":
+                    total_errors += 1
+                elif result.get("is_safe"):
+                    total_missed += 1
+                else:
+                    total_detected += 1
 
-    for category_dir in categories:
-        category_results = await scan_category(analyzer, category_dir)
-        all_results[category_dir.name] = category_results
+    # Optional multi-language subtrees: data/<language>/<threat-category>/*
+    for lang in langs:
+        exts = LANG_EXTENSIONS[lang]
+        lang_root = data_dir / lang
+        if not lang_root.is_dir():
+            print(f"\n⚠️  Skip missing language folder: {lang_root}")
+            continue
+        corpus_labels.append(lang)
+        for category_dir in sorted(d for d in lang_root.iterdir() if d.is_dir()):
+            key = f"{lang}/{category_dir.name}"
+            category_results = await scan_category(
+                analyzer,
+                category_dir,
+                extensions=exts,
+                scan_label=key,
+            )
+            all_results.setdefault(key, []).extend(category_results)
+            total_files += len(category_results)
+            for result in category_results:
+                if result.get("status") == "error":
+                    total_errors += 1
+                elif result.get("is_safe"):
+                    total_missed += 1
+                else:
+                    total_detected += 1
 
-        # Update statistics
-        total_files += len(category_results)
-        for result in category_results:
-            if result.get("status") == "error":
-                total_errors += 1
-            elif result.get("is_safe"):
-                total_missed += 1
-            else:
-                total_detected += 1
+    print(f"\n📊 Corpora scanned: {', '.join(corpus_labels) if corpus_labels else 'none'}")
+
+    detection_rate_pct: float | None = None
 
     # Print summary
     print("\n" + "=" * 80)
@@ -168,8 +271,12 @@ async def main():
     print(f"❌ Errors: {total_errors}")
 
     if total_files > 0:
-        detection_rate = (total_detected / total_files) * 100
-        print(f"\n🎯 Detection Rate: {detection_rate:.1f}%")
+        detection_rate_pct = (total_detected / total_files) * 100
+        print(f"\n🎯 Detection Rate: {detection_rate_pct:.1f}%")
+
+    detection_rate_display = (
+        f"{detection_rate_pct:.1f}%" if detection_rate_pct is not None else "N/A"
+    )
 
     # Save detailed results to JSON
     output_file = script_dir / "scan_results.json"
@@ -181,9 +288,7 @@ async def main():
                     "detected": total_detected,
                     "missed": total_missed,
                     "errors": total_errors,
-                    "detection_rate": (
-                        f"{detection_rate:.1f}%" if total_files > 0 else "N/A"
-                    ),
+                    "detection_rate": detection_rate_display,
                 },
                 "results_by_category": all_results,
             },
