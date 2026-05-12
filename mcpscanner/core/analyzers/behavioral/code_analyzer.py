@@ -75,6 +75,12 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # Initialize alignment orchestrator (handles all LLM interaction)
         self.alignment_orchestrator = AlignmentOrchestrator(config)
 
+        # Tracks every MCP tool/function that was analyzed during the most recent
+        # analyze() call, regardless of whether a finding was produced. This lets
+        # callers report on ALL tools detected during a scan (safe and unsafe),
+        # not only the ones that triggered a SecurityFinding.
+        self.analyzed_functions: List[Dict[str, Any]] = []
+
         self.logger.debug(
             "BehavioralCodeAnalyzer initialized with alignment verification"
         )
@@ -93,6 +99,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """
         try:
             all_findings = []
+            # Reset per-call so consumers see only tools from this invocation.
+            self.analyzed_functions = []
 
             # Check if content is a directory
             if os.path.isdir(content):
@@ -475,6 +483,20 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             if not func_contexts:
                 self.logger.debug(f"No functions found in {file_path}")
                 return findings
+
+            # Record every function we are about to analyze so that callers
+            # can enumerate all tools detected during the scan (including
+            # functions that later come back clean with no findings).
+            for fc in func_contexts:
+                self.analyzed_functions.append(
+                    {
+                        "name": getattr(fc, "name", "unknown"),
+                        "decorator_types": list(getattr(fc, "decorator_types", []) or []),
+                        "line_number": getattr(fc, "line_number", 0),
+                        "source_file": file_path,
+                        "docstring": getattr(fc, "docstring", None) or "",
+                    }
+                )
 
             self.logger.debug(f"Analyzing {len(func_contexts)} functions in {file_path}")
 

@@ -62,6 +62,7 @@ class AnalyzerEnum(str, Enum):
     READINESS = "readiness"
     PROMPT_DEFENSE = "prompt_defense"
     VULNERABLE_PACKAGE = "vulnerable_package"
+    META = "meta"
 
 
 class AnalysisContext(BaseModel):

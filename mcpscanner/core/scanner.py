@@ -63,6 +63,7 @@ from ..utils.command_utils import (
 from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer
 from .analyzers.llm_analyzer import LLMAnalyzer
+from .analyzers.meta_analyzer import MetaAnalyzer, apply_meta_analysis
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .analyzers.virustotal_analyzer import VirusTotalAnalyzer
@@ -156,6 +157,8 @@ class Scanner:
         self._readiness_analyzer = ReadinessAnalyzer()
         # Prompt defense analyzer always available (pure regex, no API keys needed)
         self._prompt_defense_analyzer = PromptDefenseAnalyzer()
+        # Meta-analyzer: initialized lazily when META is in the requested analyzers
+        self._meta_analyzer = None
         self._custom_analyzers = custom_analyzers or []
 
         # Debug logging for analyzer initialization
@@ -242,12 +245,258 @@ class Scanner:
                 "Prompt Defense analyzer requested but failed to initialize"
             )
 
+        # META analyzer requires LLM API key (reuses LLM config)
+        if AnalyzerEnum.META in requested_analyzers:
+            is_bedrock = self._config.llm_model and "bedrock/" in self._config.llm_model
+            if not self._config.llm_provider_api_key and not is_bedrock:
+                missing_requirements.append(
+                    "Meta analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
+                )
+            else:
+                # Lazily initialize meta-analyzer when first needed
+                if self._meta_analyzer is None:
+                    try:
+                        self._meta_analyzer = MetaAnalyzer(self._config)
+                        logger.debug("Meta analyzer initialized successfully")
+                    except Exception as e:
+                        missing_requirements.append(
+                            f"Meta analyzer failed to initialize: {e}"
+                        )
+
         if missing_requirements:
             error_msg = (
                 "Cannot proceed with scan - missing required configuration:\n"
                 + "\n".join(f"  • {req}" for req in missing_requirements)
             )
             raise ValueError(error_msg)
+
+    async def _run_meta_analysis_on_results(
+        self,
+        scan_results: List[ToolScanResult],
+        analyzers: List[AnalyzerEnum],
+    ) -> List[ToolScanResult]:
+        """Run meta-analysis on all scan results if META analyzer is enabled.
+
+        Meta-analysis runs per-tool: it reviews all findings for each tool
+        across all analyzers and enriches them with validation, correlation,
+        and prioritization metadata.
+
+        Args:
+            scan_results: The tool scan results from primary analyzers.
+            analyzers: The list of analyzers that were used.
+
+        Returns:
+            The scan results with meta-analysis enrichments applied.
+        """
+        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+            return scan_results
+
+        enriched_results = []
+        for result in scan_results:
+            if not result.findings:
+                enriched_results.append(result)
+                continue
+
+            # Build entity context from the tool scan result
+            entity_context = {
+                "type": "tool",
+                "name": result.tool_name,
+                "description": result.tool_description,
+            }
+
+            # Collect analyzer names that produced findings for this tool
+            tool_analyzers = list({f.analyzer for f in result.findings})
+
+            try:
+                meta_result = await self._meta_analyzer.analyze_findings(
+                    findings=result.findings,
+                    analyzers_used=tool_analyzers,
+                    entity_context=entity_context,
+                )
+
+                enriched_findings = apply_meta_analysis(result.findings, meta_result)
+
+                enriched_result = ToolScanResult(
+                    tool_name=result.tool_name,
+                    tool_description=result.tool_description,
+                    status=result.status,
+                    analyzers=result.analyzers,
+                    findings=enriched_findings,
+                    server_source=result.server_source,
+                    server_name=result.server_name,
+                )
+                enriched_results.append(enriched_result)
+            except Exception as e:
+                logger.error(
+                    f'Meta-analysis failed for tool "{result.tool_name}": {e}'
+                )
+                enriched_results.append(result)
+
+        return enriched_results
+
+    async def _run_meta_analysis_on_prompt_results(
+        self,
+        scan_results: List[PromptScanResult],
+        analyzers: List[AnalyzerEnum],
+    ) -> List[PromptScanResult]:
+        """Run meta-analysis on prompt scan results if META analyzer is enabled."""
+        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+            return scan_results
+
+        enriched_results = []
+        for result in scan_results:
+            if not result.findings:
+                enriched_results.append(result)
+                continue
+
+            entity_context = {
+                "type": "prompt",
+                "name": result.prompt_name,
+                "description": result.prompt_description,
+            }
+            tool_analyzers = list({f.analyzer for f in result.findings})
+
+            try:
+                meta_result = await self._meta_analyzer.analyze_findings(
+                    findings=result.findings,
+                    analyzers_used=tool_analyzers,
+                    entity_context=entity_context,
+                )
+                enriched_findings = apply_meta_analysis(result.findings, meta_result)
+                enriched_result = PromptScanResult(
+                    prompt_name=result.prompt_name,
+                    prompt_description=result.prompt_description,
+                    status=result.status,
+                    analyzers=result.analyzers,
+                    findings=enriched_findings,
+                    server_source=result.server_source,
+                    server_name=result.server_name,
+                )
+                enriched_results.append(enriched_result)
+            except Exception as e:
+                logger.error(f'Meta-analysis failed for prompt "{result.prompt_name}": {e}')
+                enriched_results.append(result)
+
+        return enriched_results
+
+    async def _run_meta_analysis_on_resource_results(
+        self,
+        scan_results: List[ResourceScanResult],
+        analyzers: List[AnalyzerEnum],
+    ) -> List[ResourceScanResult]:
+        """Run meta-analysis on resource scan results if META analyzer is enabled."""
+        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+            return scan_results
+
+        enriched_results = []
+        for result in scan_results:
+            if not result.findings:
+                enriched_results.append(result)
+                continue
+
+            entity_context = {
+                "type": "resource",
+                "name": result.resource_name,
+                "uri": result.resource_uri,
+                "mime_type": result.resource_mime_type,
+            }
+            res_analyzers = list({f.analyzer for f in result.findings})
+
+            try:
+                meta_result = await self._meta_analyzer.analyze_findings(
+                    findings=result.findings,
+                    analyzers_used=res_analyzers,
+                    entity_context=entity_context,
+                )
+                enriched_findings = apply_meta_analysis(result.findings, meta_result)
+                enriched_result = ResourceScanResult(
+                    resource_uri=result.resource_uri,
+                    resource_name=result.resource_name,
+                    resource_mime_type=result.resource_mime_type,
+                    status=result.status,
+                    analyzers=result.analyzers,
+                    findings=enriched_findings,
+                    server_source=result.server_source,
+                    server_name=result.server_name,
+                )
+                enriched_results.append(enriched_result)
+            except Exception as e:
+                logger.error(f'Meta-analysis failed for resource "{result.resource_uri}": {e}')
+                enriched_results.append(result)
+
+        return enriched_results
+
+    async def _run_meta_analysis_on_instructions_result(
+        self,
+        result: InstructionsScanResult,
+        analyzers: List[AnalyzerEnum],
+    ) -> InstructionsScanResult:
+        """Run meta-analysis on instructions scan result if META analyzer is enabled."""
+        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+            return result
+
+        if not result.findings:
+            return result
+
+        entity_context = {
+            "type": "instructions",
+            "name": result.server_name,
+            "description": result.instructions[:500] if result.instructions else "",
+        }
+        instr_analyzers = list({f.analyzer for f in result.findings})
+
+        try:
+            meta_result = await self._meta_analyzer.analyze_findings(
+                findings=result.findings,
+                analyzers_used=instr_analyzers,
+                entity_context=entity_context,
+            )
+            enriched_findings = apply_meta_analysis(result.findings, meta_result)
+            return InstructionsScanResult(
+                instructions=result.instructions,
+                server_name=result.server_name,
+                protocol_version=result.protocol_version,
+                status=result.status,
+                analyzers=result.analyzers,
+                findings=enriched_findings,
+                server_source=result.server_source,
+            )
+        except Exception as e:
+            logger.error(f'Meta-analysis failed for instructions from "{result.server_name}": {e}')
+            return result
+
+    async def _run_meta_analysis_on_single_tool(
+        self,
+        result: ToolScanResult,
+        analyzers: List[AnalyzerEnum],
+    ) -> ToolScanResult:
+        """Run meta-analysis on a single tool scan result."""
+        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+            return result
+        results = await self._run_meta_analysis_on_results([result], analyzers)
+        return results[0]
+
+    async def _run_meta_analysis_on_single_prompt(
+        self,
+        result: PromptScanResult,
+        analyzers: List[AnalyzerEnum],
+    ) -> PromptScanResult:
+        """Run meta-analysis on a single prompt scan result."""
+        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+            return result
+        results = await self._run_meta_analysis_on_prompt_results([result], analyzers)
+        return results[0]
+
+    async def _run_meta_analysis_on_single_resource(
+        self,
+        result: ResourceScanResult,
+        analyzers: List[AnalyzerEnum],
+    ) -> ResourceScanResult:
+        """Run meta-analysis on a single resource scan result."""
+        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+            return result
+        results = await self._run_meta_analysis_on_resource_results([result], analyzers)
+        return results[0]
 
     @staticmethod
     def _is_missing_capability_error(error: Exception) -> bool:
@@ -424,8 +673,12 @@ class Scanner:
                     f'Custom analyzer "{analyzer.name}" failed: tool="{name}", error="{e}"'
                 )
 
-        # Combine enum analyzers and custom analyzer names
-        all_analyzers = list(analyzers) + custom_analyzer_names
+        # Combine enum analyzers and custom analyzer names, excluding META
+        # since meta-analysis enriches existing findings rather than producing
+        # its own output section
+        all_analyzers = [
+            a for a in analyzers if a != AnalyzerEnum.META
+        ] + custom_analyzer_names
 
         return ToolScanResult(
             tool_name=name,
@@ -570,8 +823,10 @@ class Scanner:
                     f'Custom analyzer "{analyzer.name}" failed: prompt="{name}", error="{e}"'
                 )
 
-        # Combine enum analyzers and custom analyzer names
-        all_analyzers = list(analyzers) + custom_analyzer_names
+        # Combine enum analyzers and custom analyzer names, excluding META
+        all_analyzers = [
+            a for a in analyzers if a != AnalyzerEnum.META
+        ] + custom_analyzer_names
 
         return PromptScanResult(
             prompt_name=name,
@@ -703,8 +958,10 @@ class Scanner:
                     f'Custom analyzer "{analyzer.name}" failed on instructions: server="{server_name}", error="{e}"'
                 )
 
-        # Combine enum analyzers and custom analyzer names
-        all_analyzers = list(analyzers) + custom_analyzer_names
+        # Combine enum analyzers and custom analyzer names, excluding META
+        all_analyzers = [
+            a for a in analyzers if a != AnalyzerEnum.META
+        ] + custom_analyzer_names
 
         return InstructionsScanResult(
             instructions=instructions,
@@ -1076,6 +1333,10 @@ class Scanner:
 
             # Analyze the tool
             result = await self._analyze_tool(target_tool, analyzers, http_headers)
+
+            # Run meta-analysis if enabled
+            result = await self._run_meta_analysis_on_single_tool(result, analyzers)
+
             return result
 
         except ValueError:
@@ -1146,6 +1407,12 @@ class Scanner:
 
             # Run all tasks concurrently
             scan_results = await asyncio.gather(*scan_tasks)
+
+            # Run meta-analysis if enabled (post-pass on all results)
+            scan_results = await self._run_meta_analysis_on_results(
+                list(scan_results), analyzers
+            )
+
             return scan_results
 
         except Exception as e:
@@ -1352,6 +1619,12 @@ class Scanner:
 
                 # Run all tasks concurrently
                 scan_results = await asyncio.gather(*scan_tasks)
+
+                # Run meta-analysis if enabled (post-pass on all results)
+                scan_results = await self._run_meta_analysis_on_results(
+                    list(scan_results), analyzers
+                )
+
                 return scan_results
 
             # Run the connection and scanning in an isolated task
@@ -1426,6 +1699,10 @@ class Scanner:
 
             # Analyze the tool
             result = await self._analyze_tool(target_tool, analyzers)
+
+            # Run meta-analysis if enabled
+            result = await self._run_meta_analysis_on_single_tool(result, analyzers)
+
             return result
 
         except ValueError:
@@ -1726,6 +2003,11 @@ class Scanner:
                         )
                     )
 
+            # Run meta-analysis if enabled (post-pass on prompt results)
+            scan_results = await self._run_meta_analysis_on_prompt_results(
+                scan_results, analyzers
+            )
+
             return scan_results
 
         except Exception as e:
@@ -1794,6 +2076,10 @@ class Scanner:
 
             # Analyze the prompt
             result = await self._analyze_prompt(target_prompt, analyzers, http_headers)
+
+            # Run meta-analysis if enabled
+            result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
+
             return result
 
         except ValueError:
@@ -1890,6 +2176,10 @@ class Scanner:
                 analyzers=analyzers,
                 http_headers=http_headers,
             )
+
+            # Run meta-analysis if enabled
+            result = await self._run_meta_analysis_on_instructions_result(result, analyzers)
+
             return result
 
         except ValueError:
@@ -1961,6 +2251,12 @@ class Scanner:
 
                 # Run all tasks concurrently
                 scan_results = await asyncio.gather(*scan_tasks)
+
+                # Run meta-analysis if enabled (post-pass on prompt results)
+                scan_results = await self._run_meta_analysis_on_prompt_results(
+                    list(scan_results), analyzers
+                )
+
                 return scan_results
 
             # Run the connection and scanning in an isolated task
@@ -2039,6 +2335,10 @@ class Scanner:
 
             # Analyze the prompt
             result = await self._analyze_prompt(target_prompt, analyzers)
+
+            # Run meta-analysis if enabled
+            result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
+
             return result
 
         except ValueError:
@@ -2182,9 +2482,10 @@ class Scanner:
                     f'Custom analyzer "{analyzer.name}" failed: resource="{resource_uri}", error="{e}"'
                 )
 
-        # Combine enum analyzers and custom analyzer names (filter out YARA if present)
+        # Combine enum analyzers and custom analyzer names (filter out YARA and META)
         active_analyzers = [
-            a for a in analyzers if a in [AnalyzerEnum.API, AnalyzerEnum.LLM]
+            a for a in analyzers
+            if a in [AnalyzerEnum.API, AnalyzerEnum.LLM]
         ]
         all_analyzers = active_analyzers + custom_analyzer_names
 
@@ -2372,6 +2673,11 @@ class Scanner:
                         )
                     )
 
+            # Run meta-analysis if enabled (post-pass on all resource results)
+            results = await self._run_meta_analysis_on_resource_results(
+                results, analyzers
+            )
+
             return results
 
         except Exception as e:
@@ -2527,6 +2833,10 @@ class Scanner:
                     analyzers,
                     http_headers,
                 )
+
+                # Run meta-analysis if enabled
+                result = await self._run_meta_analysis_on_single_resource(result, analyzers)
+
                 return result
 
             except asyncio.TimeoutError:
