@@ -101,7 +101,9 @@ class SecureHandler(BaseHTTPRequestHandler):
             self.send_header("X-MCPS-Signature", "auth-required")
             self.end_headers()
             self.wfile.write(
-                json.dumps({"error": {"code": -32001, "message": "Unauthorized"}}).encode()
+                json.dumps(
+                    {"error": {"code": -32001, "message": "Unauthorized"}}
+                ).encode()
             )
             return
 
@@ -150,6 +152,134 @@ class PoisonedHandler(BaseHTTPRequestHandler):
         pass
 
 
+class StatefulStreamableHttpHandler(BaseHTTPRequestHandler):
+    """A stateful MCP HTTP server that requires lifecycle headers."""
+
+    mcp_protocol_version = ProtocolAnalyzer.DEFAULT_PROTOCOL_VERSION
+    session_id = "test-session-123"
+    methods_seen = []
+    rejected_missing_session = 0
+    rejected_missing_protocol = 0
+
+    @classmethod
+    def reset(cls):
+        cls.methods_seen = []
+        cls.rejected_missing_session = 0
+        cls.rejected_missing_protocol = 0
+
+    def _write_json(self, status, body, extra_headers=None):
+        data = json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        if extra_headers:
+            for name, value in extra_headers.items():
+                self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _has_session_headers(self):
+        if self.headers.get("MCP-Session-Id") != self.session_id:
+            type(self).rejected_missing_session += 1
+            self._write_json(
+                400,
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32000,
+                        "message": "missing MCP session id",
+                    },
+                },
+            )
+            return False
+
+        if self.headers.get("MCP-Protocol-Version") != self.mcp_protocol_version:
+            type(self).rejected_missing_protocol += 1
+            self._write_json(
+                400,
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32000,
+                        "message": "missing MCP protocol version",
+                    },
+                },
+            )
+            return False
+
+        return True
+
+    def do_POST(self):
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length)
+
+        try:
+            req = json.loads(body)
+            method = req.get("method")
+            request_id = req.get("id")
+        except Exception:
+            method = None
+            request_id = None
+
+        type(self).methods_seen.append(method)
+
+        if method == "initialize":
+            self._write_json(
+                200,
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "protocolVersion": self.mcp_protocol_version,
+                        "capabilities": {"tools": {"listChanged": True}},
+                        "serverInfo": {
+                            "name": "stateful-test-server",
+                            "version": "1.0.0",
+                        },
+                    },
+                },
+                {"MCP-Session-Id": self.session_id},
+            )
+            return
+
+        if not self._has_session_headers():
+            return
+
+        if method == "notifications/initialized":
+            self._write_json(202, {})
+            return
+
+        if method == "tools/list":
+            self._write_json(
+                200,
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "read_file",
+                                "description": "Read files from disk",
+                            }
+                        ]
+                    },
+                },
+            )
+            return
+
+        # The analyzer's fail-open probe should still reach the server after
+        # lifecycle headers are attached to the request.
+        self._write_json(
+            200,
+            {"jsonrpc": "2.0", "id": request_id, "result": {"status": "ok"}},
+        )
+
+    def log_message(self, format, *args):
+        pass
+
+
 def _start_server(handler_class, port):
     """Start a test HTTP server in a background thread."""
     server = HTTPServer(("127.0.0.1", port), handler_class)
@@ -179,6 +309,15 @@ def poisoned_server():
     server.shutdown()
 
 
+@pytest.fixture
+def stateful_http_server():
+    StatefulStreamableHttpHandler.reset()
+    server = _start_server(StatefulStreamableHttpHandler, 0)
+    host, port = server.server_address
+    yield f"http://{host}:{port}"
+    server.shutdown()
+
+
 @pytest.mark.asyncio
 async def test_vulnerable_server_findings(vulnerable_server):
     """Vulnerable server should produce multiple findings."""
@@ -196,6 +335,29 @@ async def test_vulnerable_server_findings(vulnerable_server):
 
 
 @pytest.mark.asyncio
+async def test_stateful_http_session_lifecycle_supported(stateful_http_server):
+    """Stateful HTTP servers should be probed after MCP initialization."""
+    analyzer = ProtocolAnalyzer(timeout=5.0)
+    findings = await analyzer.analyze(stateful_http_server)
+    check_ids = [f.details.get("check_id") for f in findings]
+
+    assert StatefulStreamableHttpHandler.methods_seen[0] == "initialize"
+    assert "notifications/initialized" in StatefulStreamableHttpHandler.methods_seen
+    assert StatefulStreamableHttpHandler.rejected_missing_session == 0
+    assert StatefulStreamableHttpHandler.rejected_missing_protocol == 0
+
+    first_tools_list = StatefulStreamableHttpHandler.methods_seen.index("tools/list")
+    initialized = StatefulStreamableHttpHandler.methods_seen.index(
+        "notifications/initialized"
+    )
+    assert initialized < first_tools_list
+
+    assert "MCPS-004" in check_ids, "Should replay-check with the session header"
+    assert "MCPS-005" in check_ids, "Should inspect tools after initialization"
+    assert "MCPS-009" in check_ids, "Should rate-limit-check with the session header"
+
+
+@pytest.mark.asyncio
 async def test_secure_server_fewer_findings(secure_server):
     """Secure server should produce fewer findings than vulnerable server."""
     analyzer = ProtocolAnalyzer(timeout=5.0)
@@ -205,7 +367,9 @@ async def test_secure_server_fewer_findings(secure_server):
     # Secure server requires auth -- should NOT flag MCPS-002
     assert "MCPS-002" not in check_ids, "Should not flag auth on secure server"
     # Should produce fewer findings than a fully vulnerable server
-    assert len(findings) <= 5, f"Secure server should have few findings, got {len(findings)}"
+    assert (
+        len(findings) <= 5
+    ), f"Secure server should have few findings, got {len(findings)}"
 
 
 @pytest.mark.asyncio
@@ -215,8 +379,12 @@ async def test_poisoned_server_no_protocol_poisoning_check(poisoned_server):
     analyzer = ProtocolAnalyzer(timeout=5.0)
     findings = await analyzer.analyze(poisoned_server)
 
-    poisoning_findings = [f for f in findings if f.details.get("check_id") == "MCPS-006"]
-    assert len(poisoning_findings) == 0, "MCPS-006 should not be checked by protocol analyzer"
+    poisoning_findings = [
+        f for f in findings if f.details.get("check_id") == "MCPS-006"
+    ]
+    assert (
+        len(poisoning_findings) == 0
+    ), "MCPS-006 should not be checked by protocol analyzer"
 
 
 @pytest.mark.asyncio

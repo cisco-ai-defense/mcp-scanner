@@ -44,9 +44,9 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import httpx
+from mcp.types import LATEST_PROTOCOL_VERSION
 
 from .base import BaseAnalyzer, SecurityFinding
-
 
 
 class ProtocolAnalyzer(BaseAnalyzer):
@@ -56,6 +56,10 @@ class ProtocolAnalyzer(BaseAnalyzer):
     to a running MCP server and probes its protocol-level security posture
     through JSON-RPC requests.
     """
+
+    DEFAULT_PROTOCOL_VERSION = LATEST_PROTOCOL_VERSION
+    PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version"
+    SESSION_ID_HEADER = "MCP-Session-Id"
 
     def __init__(self, timeout: float = 10.0):
         """Initialize the protocol analyzer.
@@ -90,29 +94,55 @@ class ProtocolAnalyzer(BaseAnalyzer):
             verify=True,
             limits=httpx.Limits(max_connections=5),
         ) as client:
-            # Gather initial data
-            tools_response = await self._rpc(client, target, "tools/list")
             init_response = await self._rpc(
                 client,
                 target,
                 "initialize",
                 {
-                    "protocolVersion": "2025-03-26",
+                    "protocolVersion": self.DEFAULT_PROTOCOL_VERSION,
                     "capabilities": {},
                     "clientInfo": {"name": "mcp-scanner-protocol", "version": "1.0"},
                 },
+            )
+            protocol_version = self._get_protocol_version(init_response)
+            session_id = self._get_session_id(init_response)
+            session_headers = self._mcp_session_headers(protocol_version, session_id)
+
+            if self._is_successful_response(init_response):
+                await self._rpc(
+                    client,
+                    target,
+                    "notifications/initialized",
+                    request_id=None,
+                    headers=session_headers,
+                )
+
+            # Gather data after the MCP lifecycle handshake. Stateful HTTP servers
+            # can reject non-initialize requests that do not include the session ID.
+            tools_response = await self._rpc(
+                client,
+                target,
+                "tools/list",
+                params={},
+                headers=session_headers,
             )
 
             # Run all checks
             findings.extend(self._check_transport(target))
             findings.extend(self._check_auth(tools_response))
             findings.extend(self._check_signing(tools_response, init_response))
-            findings.extend(await self._check_replay(client, target))
+            findings.extend(await self._check_replay(client, target, session_headers))
             findings.extend(self._check_tool_integrity(tools_response))
             # Tool description scanning handled by existing analyzers (LLM, YARA)
-            findings.extend(await self._check_spoofed_identity(client, target))
-            findings.extend(await self._check_fail_open(client, target))
-            findings.extend(await self._check_rate_limiting(client, target))
+            findings.extend(
+                await self._check_spoofed_identity(client, target, session_headers)
+            )
+            findings.extend(
+                await self._check_fail_open(client, target, session_headers)
+            )
+            findings.extend(
+                await self._check_rate_limiting(client, target, session_headers)
+            )
 
         return findings
 
@@ -124,6 +154,8 @@ class ProtocolAnalyzer(BaseAnalyzer):
         url: str,
         method: str,
         params: Optional[Dict] = None,
+        request_id: Optional[Any] = 1,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Optional[httpx.Response]:
         """Send a JSON-RPC 2.0 request to the MCP server.
 
@@ -132,31 +164,79 @@ class ProtocolAnalyzer(BaseAnalyzer):
             url: The server URL.
             method: The JSON-RPC method name.
             params: Optional parameters.
+            request_id: Optional request ID. Omit for notifications.
+            headers: Optional additional HTTP headers.
 
         Returns:
             The HTTP response, or None on error.
         """
         payload = {
             "jsonrpc": "2.0",
-            "id": 1,
             "method": method,
         }
-        if params:
+        if request_id is not None:
+            payload["id"] = request_id
+        if params is not None:
             payload["params"] = params
 
         try:
             resp = await client.post(
                 url,
                 json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                },
+                headers=self._json_rpc_headers(headers),
             )
             return resp
         except Exception as e:
             self.logger.debug(f"RPC call {method} failed: {e}")
             return None
+
+    def _json_rpc_headers(
+        self, extra_headers: Optional[Dict[str, str]] = None
+    ) -> Dict[str, str]:
+        """Build headers for MCP JSON-RPC HTTP requests."""
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        return headers
+
+    def _mcp_session_headers(
+        self, protocol_version: Optional[str], session_id: Optional[str]
+    ) -> Dict[str, str]:
+        """Build MCP lifecycle headers for post-initialize HTTP requests."""
+        headers = {}
+        if protocol_version:
+            headers[self.PROTOCOL_VERSION_HEADER] = protocol_version
+        if session_id:
+            headers[self.SESSION_ID_HEADER] = session_id
+        return headers
+
+    def _get_protocol_version(self, resp: Optional[httpx.Response]) -> str:
+        """Return the negotiated protocol version from initialize."""
+        body = self._parse_body(resp)
+        if body and isinstance(body, dict):
+            result = body.get("result", {})
+            if isinstance(result, dict):
+                protocol_version = result.get("protocolVersion")
+                if isinstance(protocol_version, str) and protocol_version:
+                    return protocol_version
+        return self.DEFAULT_PROTOCOL_VERSION
+
+    def _get_session_id(self, resp: Optional[httpx.Response]) -> Optional[str]:
+        """Return the MCP HTTP session ID assigned during initialize."""
+        if resp is None:
+            return None
+        return resp.headers.get(self.SESSION_ID_HEADER)
+
+    def _is_successful_response(self, resp: Optional[httpx.Response]) -> bool:
+        """Return True when a JSON-RPC response does not contain an error."""
+        if resp is None or resp.status_code >= 400:
+            return False
+
+        body = self._parse_body(resp)
+        return not (isinstance(body, dict) and body.get("error"))
 
     def _parse_body(self, resp: Optional[httpx.Response]) -> Any:
         """Parse a JSON-RPC response body, handling SSE format.
@@ -298,7 +378,10 @@ class ProtocolAnalyzer(BaseAnalyzer):
     # ── MCPS-004: Replay Protection ─────────────────────────────
 
     async def _check_replay(
-        self, client: httpx.AsyncClient, target: str
+        self,
+        client: httpx.AsyncClient,
+        target: str,
+        session_headers: Optional[Dict[str, str]] = None,
     ) -> List[SecurityFinding]:
         """Check if the server rejects replayed requests."""
         payload = {
@@ -313,12 +396,12 @@ class ProtocolAnalyzer(BaseAnalyzer):
             r1 = await client.post(
                 target,
                 content=body,
-                headers={"Content-Type": "application/json"},
+                headers=self._json_rpc_headers(session_headers),
             )
             r2 = await client.post(
                 target,
                 content=body,
-                headers={"Content-Type": "application/json"},
+                headers=self._json_rpc_headers(session_headers),
             )
 
             if r1.status_code == 200 and r2.status_code == 200:
@@ -377,15 +460,20 @@ class ProtocolAnalyzer(BaseAnalyzer):
     # ── MCPS-007: Spoofed Identity ──────────────────────────────
 
     async def _check_spoofed_identity(
-        self, client: httpx.AsyncClient, target: str
+        self,
+        client: httpx.AsyncClient,
+        target: str,
+        session_headers: Optional[Dict[str, str]] = None,
     ) -> List[SecurityFinding]:
         """Check if the server accepts spoofed agent identity headers."""
-        spoofed_headers = {
-            "Content-Type": "application/json",
-            "X-Agent-ID": "spoofed-admin-agent",
-            "X-Agent-Role": "admin",
-            "X-Agent-Trust-Level": "4",
-        }
+        spoofed_headers = self._json_rpc_headers(session_headers)
+        spoofed_headers.update(
+            {
+                "X-Agent-ID": "spoofed-admin-agent",
+                "X-Agent-Role": "admin",
+                "X-Agent-Trust-Level": "4",
+            }
+        )
         payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
 
         try:
@@ -415,11 +503,19 @@ class ProtocolAnalyzer(BaseAnalyzer):
     # ── MCPS-008: Fail-Open Semantics ───────────────────────────
 
     async def _check_fail_open(
-        self, client: httpx.AsyncClient, target: str
+        self,
+        client: httpx.AsyncClient,
+        target: str,
+        session_headers: Optional[Dict[str, str]] = None,
     ) -> List[SecurityFinding]:
         """Check if the server fails open on invalid input."""
         invalid_payloads = [
-            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "../../../../etc/passwd", "arguments": {}}},
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "../../../../etc/passwd", "arguments": {}},
+            },
             {"not_jsonrpc": True},
             "this is not json",
         ]
@@ -430,10 +526,14 @@ class ProtocolAnalyzer(BaseAnalyzer):
                     resp = await client.post(
                         target,
                         content=payload,
-                        headers={"Content-Type": "application/json"},
+                        headers=self._json_rpc_headers(session_headers),
                     )
                 else:
-                    resp = await client.post(target, json=payload)
+                    resp = await client.post(
+                        target,
+                        json=payload,
+                        headers=self._json_rpc_headers(session_headers),
+                    )
 
                 if resp.status_code == 200:
                     body = self._parse_body(resp)
@@ -460,7 +560,10 @@ class ProtocolAnalyzer(BaseAnalyzer):
     # ── MCPS-009: Rate Limiting ─────────────────────────────────
 
     async def _check_rate_limiting(
-        self, client: httpx.AsyncClient, target: str
+        self,
+        client: httpx.AsyncClient,
+        target: str,
+        session_headers: Optional[Dict[str, str]] = None,
     ) -> List[SecurityFinding]:
         """Check if the server enforces rate limiting."""
         payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
@@ -469,7 +572,11 @@ class ProtocolAnalyzer(BaseAnalyzer):
 
         for _ in range(10):
             try:
-                resp = await client.post(target, json=payload)
+                resp = await client.post(
+                    target,
+                    json=payload,
+                    headers=self._json_rpc_headers(session_headers),
+                )
                 if resp.status_code == 429:
                     rate_limited = True
                     break
