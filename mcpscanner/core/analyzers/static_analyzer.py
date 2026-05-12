@@ -461,16 +461,19 @@ class StaticAnalyzer:
                 "analyzers": [],
             }
 
-        # Check MIME type filter
+        # Check MIME type filter — resource isn't scanned, return a "skipped"
+        # result that matches the shape used by the skip_blob_only branch above.
+        # Bug fix: previously this branch referenced an undefined `findings`
+        # variable, since `findings` is only assigned by the analysis path below.
         if allowed_mime_types and resource_mime not in allowed_mime_types:
             return {
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
                 "resource_mime_type": resource_mime,
-                "is_safe": len(findings) == 0,
-                "findings": findings,
-                "status": "completed",
-                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
+                "is_safe": True,
+                "findings": [],
+                "status": "skipped",
+                "analyzers": [],
             }
 
         # Analyze resource metadata and text content when present.
