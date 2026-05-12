@@ -548,6 +548,21 @@ mcp-scanner --analyzers yara --format summary static --tools output/tools.json
 }
 ```
 
+For resources, static scanning accepts either `resources/list` metadata or a
+`resources/read` content snapshot:
+
+```json
+{
+  "contents": [
+    {
+      "uri": "file:///path/to/document.txt",
+      "mimeType": "text/plain",
+      "text": "Resource contents to scan"
+    }
+  ]
+}
+```
+
 For more details, see [Static Scanning Documentation](docs/static-scanning.md) and [examples/static_scanning_example.py](examples/static_scanning_example.py).
 
 #### Readiness Scanning

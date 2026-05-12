@@ -22,7 +22,7 @@ without connecting to a live server. Useful for CI/CD pipelines and offline scan
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .base import BaseAnalyzer, SecurityFinding
 from ..models import AnalyzerEnum
@@ -293,9 +293,9 @@ class StaticAnalyzer:
         file_path: Union[str, Path],
         allowed_mime_types: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Scan a JSON file containing MCP resources/list output.
+        """Scan a JSON file containing MCP resources/list or resources/read output.
 
-        Expected JSON format:
+        Expected resources/list JSON format:
         {
           "resources": [
             {
@@ -303,6 +303,17 @@ class StaticAnalyzer:
               "name": "Resource name",
               "description": "Resource description",
               "mimeType": "text/plain"
+            }
+          ]
+        }
+
+        Expected resources/read JSON format:
+        {
+          "contents": [
+            {
+              "uri": "file:///path/to/resource",
+              "mimeType": "text/plain",
+              "text": "Resource contents"
             }
           ]
         }
@@ -321,53 +332,138 @@ class StaticAnalyzer:
         """
         data = self._load_json_file(file_path)
 
-        if "resources" not in data:
+        has_resources = "resources" in data
+        has_contents = "contents" in data
+
+        if not has_resources and not has_contents:
             raise ValueError(
-                f"Invalid resources file: missing 'resources' key in {file_path}"
+                f"Invalid resources file: missing 'resources' or 'contents' key in {file_path}"
             )
 
-        if not isinstance(data["resources"], list):
+        if has_resources and not isinstance(data["resources"], list):
             raise ValueError(
                 f"Invalid resources file: 'resources' must be an array in {file_path}"
             )
 
+        if has_contents and not isinstance(data["contents"], list):
+            raise ValueError(
+                f"Invalid resources file: 'contents' must be an array in {file_path}"
+            )
+
         results = []
+        contents_by_uri = self._group_resource_contents(data.get("contents", []))
 
-        for resource_data in data["resources"]:
-            resource_uri = resource_data.get("uri", "unknown")
-            resource_name = resource_data.get("name", "unknown")
-            resource_description = resource_data.get("description", "")
-            resource_mime = resource_data.get("mimeType", "application/octet-stream")
+        if has_resources:
+            for resource_data in data["resources"]:
+                resource_uri = resource_data.get("uri", "unknown")
+                embedded_contents = resource_data.get("contents", [])
+                content_items = (
+                    list(embedded_contents)
+                    if isinstance(embedded_contents, list)
+                    else []
+                )
+                content_items.extend(contents_by_uri.pop(str(resource_uri), []))
+                results.append(
+                    await self._scan_resource_data(
+                        resource_data,
+                        allowed_mime_types=allowed_mime_types,
+                        content_items=content_items,
+                        skip_blob_only=False,
+                    )
+                )
 
-            # Check MIME type filter
-            if allowed_mime_types and resource_mime not in allowed_mime_types:
-                result = {
-                    "resource_uri": resource_uri,
-                    "resource_name": resource_name,
-                    "resource_mime_type": resource_mime,
-                    "is_safe": True,
-                    "findings": [],
-                    "status": "skipped",
-                    "analyzers": [],
-                }
-                results.append(result)
+        for content_items in contents_by_uri.values():
+            if not content_items:
                 continue
+            results.append(
+                await self._scan_resource_data(
+                    content_items[0],
+                    allowed_mime_types=allowed_mime_types,
+                    content_items=content_items,
+                    skip_blob_only=True,
+                )
+            )
 
-            # Analyze resource metadata
-            analysis_content = f"Resource URI: {resource_uri}\n"
-            analysis_content += f"Name: {resource_name}\n"
-            analysis_content += f"Description: {resource_description}\n"
-            analysis_content += f"MIME Type: {resource_mime}\n"
+        return results
 
-            context = {
+    @staticmethod
+    def _group_resource_contents(
+        contents: List[Dict[str, Any]],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for item in contents:
+            if not isinstance(item, dict):
+                continue
+            uri = str(item.get("uri", "unknown"))
+            grouped.setdefault(uri, []).append(item)
+        return grouped
+
+    @staticmethod
+    def _resource_text_content(
+        resource_data: Dict[str, Any],
+        content_items: List[Dict[str, Any]],
+    ) -> Tuple[str, bool]:
+        text_parts = []
+        saw_blob = bool(resource_data.get("blob"))
+
+        for key in ("text", "content"):
+            value = resource_data.get(key)
+            if isinstance(value, str):
+                text_parts.append(value)
+
+        for item in content_items:
+            if not isinstance(item, dict):
+                continue
+            if item is resource_data:
+                continue
+            text = item.get("text")
+            if isinstance(text, str):
+                text_parts.append(text)
+            if item.get("blob"):
+                saw_blob = True
+
+        return "\n".join(text_parts), saw_blob
+
+    async def _scan_resource_data(
+        self,
+        resource_data: Dict[str, Any],
+        allowed_mime_types: Optional[List[str]],
+        content_items: Optional[List[Dict[str, Any]]] = None,
+        skip_blob_only: bool = False,
+    ) -> Dict[str, Any]:
+        content_items = content_items or []
+        first_content = content_items[0] if content_items else {}
+
+        if not isinstance(resource_data, dict):
+            resource_data = {}
+
+        resource_uri = resource_data.get("uri") or first_content.get("uri") or "unknown"
+        resource_uri = str(resource_uri)
+        resource_name = (
+            resource_data.get("name") or first_content.get("name") or resource_uri
+        )
+        resource_description = resource_data.get("description", "")
+        text_content, saw_blob = self._resource_text_content(
+            resource_data, content_items
+        )
+        resource_mime = resource_data.get("mimeType") or first_content.get("mimeType")
+        if not resource_mime:
+            resource_mime = "text/plain" if text_content else "application/octet-stream"
+
+        if skip_blob_only and saw_blob and not text_content:
+            return {
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
-                "content_type": "resource",
+                "resource_mime_type": resource_mime,
+                "is_safe": True,
+                "findings": [],
+                "status": "skipped",
+                "analyzers": [],
             }
 
-            findings = await self._analyze_content(analysis_content, context)
-
-            result = {
+        # Check MIME type filter
+        if allowed_mime_types and resource_mime not in allowed_mime_types:
+            return {
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
                 "resource_mime_type": resource_mime,
@@ -377,6 +473,29 @@ class StaticAnalyzer:
                 "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
             }
 
-            results.append(result)
+        # Analyze resource metadata and text content when present.
+        analysis_content = f"Resource URI: {resource_uri}\n"
+        analysis_content += f"Name: {resource_name}\n"
+        analysis_content += f"Description: {resource_description}\n"
+        analysis_content += f"MIME Type: {resource_mime}\n"
+        if text_content:
+            analysis_content += f"Content:\n{text_content}\n"
 
-        return results
+        context = {
+            "resource_uri": resource_uri,
+            "resource_name": resource_name,
+            "content_type": "resource",
+            "has_resource_content": bool(text_content),
+        }
+
+        findings = await self._analyze_content(analysis_content, context)
+
+        return {
+            "resource_uri": resource_uri,
+            "resource_name": resource_name,
+            "resource_mime_type": resource_mime,
+            "is_safe": len(findings) == 0,
+            "findings": findings,
+            "status": "completed",
+            "analyzers": [a.name for a in self.analyzers],
+        }

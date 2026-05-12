@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Union
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
+from ....utils.path_safety import filter_safe_paths, safe_resolve_root
 from ...static_analysis.context_extractor import ContextExtractor
 from ...static_analysis.native_analyzer import NativeAnalyzer
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
@@ -308,9 +309,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """
         source_files = []
         path = Path(directory)
+        # Resolve the scan root once; every candidate is checked against this
+        # canonical path so symlinks that point outside the scan root are
+        # rejected before the analyzer ever opens the file. See
+        # mcpscanner/utils/path_safety.py for the rationale.
+        resolved_root = safe_resolve_root(directory)
 
         extensions = self._PYTHON_EXTENSIONS | set(self._EXT_TO_TS_LANGUAGE.keys())
 
+        candidates: List[Path] = []
         for ext in extensions:
             for source_file in path.rglob(f"*{ext}"):
                 file_str = str(source_file)
@@ -319,7 +326,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     and "node_modules" not in file_str
                     and not any(part.startswith(".") for part in source_file.parts)
                 ):
-                    source_files.append(file_str)
+                    candidates.append(source_file)
+
+        safe_candidates, _skipped = filter_safe_paths(
+            candidates, resolved_root, audit_label="behavioral"
+        )
+        for source_file in safe_candidates:
+            source_files.append(str(source_file))
 
         return sorted(source_files)
 
@@ -332,14 +345,22 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         Returns:
             List of Python file paths
         """
-        python_files = []
+        python_files: List[str] = []
         path = Path(directory)
+        resolved_root = safe_resolve_root(directory)
 
+        candidates: List[Path] = []
         for py_file in path.rglob("*.py"):
             if "__pycache__" not in str(py_file) and not any(
                 part.startswith(".") for part in py_file.parts
             ):
-                python_files.append(str(py_file))
+                candidates.append(py_file)
+
+        safe_candidates, _skipped = filter_safe_paths(
+            candidates, resolved_root, audit_label="behavioral"
+        )
+        for py_file in safe_candidates:
+            python_files.append(str(py_file))
 
         return sorted(python_files)
 
