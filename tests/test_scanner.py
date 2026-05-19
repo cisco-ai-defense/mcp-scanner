@@ -1042,3 +1042,261 @@ def test_resource_scan_result_failed_status():
 
     assert result.status == "failed"
     assert result.is_safe is True  # No findings means safe, even if failed
+
+
+# ---------------------------------------------------------------------------
+# Missing-capability detection + capability gating
+# ---------------------------------------------------------------------------
+#
+# These tests cover two related fixes for noisy 500-style errors when an MCP
+# server (e.g. BigQuery's https://bigquery.googleapis.com/mcp) connects fine
+# but doesn't implement resources/list or prompts/list:
+#
+#   1. _is_missing_capability_error: also recognize the MCP Python SDK's
+#      synthetic JSON-RPC code 32600 + "Session terminated" message, which
+#      mcp/client/streamable_http.py emits when the server replies HTTP 404
+#      to a JSON-RPC POST (the common real-world response for unsupported
+#      methods, even though the spec says -32601).
+#
+#   2. _server_supports_capability + a capability gate in the four scan
+#      entrypoints (resources/_resource/prompts/_prompt) that short-circuits
+#      to [] / ValueError before the failing network call when the server's
+#      InitializeResult didn't advertise the capability.
+
+
+from types import SimpleNamespace
+from mcpscanner.core.scanner import Scanner
+
+try:
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+except ImportError:  # pragma: no cover - tested env always has mcp installed
+    McpError = None
+    ErrorData = None
+
+
+def _mcp_error(code: int, message: str):
+    """Build a real McpError when mcp is installed, otherwise a duck-typed one."""
+    if McpError is not None and ErrorData is not None:
+        return McpError(ErrorData(code=code, message=message))
+    err = Exception(message)
+    err.error = SimpleNamespace(code=code, message=message)
+    return err
+
+
+class TestIsMissingCapabilityError:
+    """Pure unit tests on the static classifier."""
+
+    def test_spec_compliant_minus_32601(self):
+        assert Scanner._is_missing_capability_error(
+            _mcp_error(-32601, "Method not found")
+        )
+
+    def test_synthetic_session_terminated_is_treated_as_missing(self):
+        # This is the exact shape the MCP Python SDK fabricates when an MCP
+        # server (e.g. BigQuery) returns HTTP 404 for a JSON-RPC POST.
+        assert Scanner._is_missing_capability_error(
+            _mcp_error(32600, "Session terminated")
+        )
+
+    def test_synthetic_session_terminated_is_case_insensitive(self):
+        assert Scanner._is_missing_capability_error(
+            _mcp_error(32600, "SESSION TERMINATED")
+        )
+
+    def test_32600_without_session_terminated_is_NOT_missing(self):
+        # Must not widen the heuristic: a real session-management failure
+        # (e.g. expired token mid-session) must still bubble.
+        assert not Scanner._is_missing_capability_error(
+            _mcp_error(32600, "Invalid request")
+        )
+
+    def test_message_token_unsupported(self):
+        assert Scanner._is_missing_capability_error(
+            _mcp_error(-32603, "feature unsupported on this server")
+        )
+
+    def test_unrelated_error_is_not_missing(self):
+        assert not Scanner._is_missing_capability_error(
+            _mcp_error(-32603, "internal server error")
+        )
+
+    def test_plain_exception_with_token_in_str(self):
+        # The pattern matcher must still work on non-McpError exceptions
+        # whose __str__ carries one of the tokens.
+        assert Scanner._is_missing_capability_error(
+            ValueError("server does not have a prompts handler")
+        )
+
+
+class TestServerSupportsCapability:
+    """Pure unit tests on the InitializeResult gate helper."""
+
+    def test_returns_none_when_session_has_no_init_result(self):
+        session = SimpleNamespace()
+        assert Scanner._server_supports_capability(session, "resources") is None
+
+    def test_returns_none_when_capabilities_attr_missing(self):
+        session = SimpleNamespace(_init_result=SimpleNamespace())
+        assert Scanner._server_supports_capability(session, "resources") is None
+
+    def test_returns_false_when_capability_not_advertised(self):
+        # Server only advertised tools — no resources/prompts.
+        caps = SimpleNamespace(tools=SimpleNamespace(), resources=None, prompts=None)
+        session = SimpleNamespace(_init_result=SimpleNamespace(capabilities=caps))
+        assert Scanner._server_supports_capability(session, "resources") is False
+        assert Scanner._server_supports_capability(session, "prompts") is False
+        assert Scanner._server_supports_capability(session, "tools") is True
+
+    def test_returns_true_for_empty_capability_object(self):
+        # An empty but non-None ServerCapabilities.resources still signals
+        # "the server has the resources capability, with default options".
+        caps = SimpleNamespace(resources=SimpleNamespace())
+        session = SimpleNamespace(_init_result=SimpleNamespace(capabilities=caps))
+        assert Scanner._server_supports_capability(session, "resources") is True
+
+
+# ---------------------------------------------------------------------------
+# Capability gate wired into the four scan entrypoints
+# ---------------------------------------------------------------------------
+
+def _session_with_capabilities(**advertised):
+    """Build a fake session whose InitializeResult advertises only the
+    given capabilities (each key is a capability name; value is whatever
+    the SDK would attach there, typically a ServerCapabilities sub-model).
+    Unset capabilities default to None — matching the real shape.
+    """
+    caps = SimpleNamespace(
+        tools=advertised.get("tools"),
+        resources=advertised.get("resources"),
+        prompts=advertised.get("prompts"),
+    )
+    session = AsyncMock()
+    session._init_result = SimpleNamespace(capabilities=caps)
+    return session
+
+
+# Explicit analyzer list avoids the LLM-requires-API-key validation path,
+# which is orthogonal to what we're testing here.
+_CAP_TEST_ANALYZERS = [AnalyzerEnum.YARA]
+
+
+@pytest.mark.asyncio
+async def test_scan_resources_short_circuits_when_capability_not_advertised(config):
+    """Server (e.g. BigQuery) advertised only tools → return [] without
+    calling list_resources(), which is the call that would otherwise blow up."""
+    scanner = Scanner(config)
+    session = _session_with_capabilities(tools=SimpleNamespace())
+
+    mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
+    mock_close = AsyncMock()
+    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
+         patch.object(scanner, "_close_mcp_session", mock_close):
+        results = await scanner.scan_remote_server_resources(
+            "https://bigquery.googleapis.com/mcp", analyzers=_CAP_TEST_ANALYZERS,
+        )
+
+    assert results == []
+    # The whole point: we never attempted the failing JSON-RPC call.
+    session.list_resources.assert_not_called()
+    mock_close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scan_prompts_short_circuits_when_capability_not_advertised(config):
+    scanner = Scanner(config)
+    session = _session_with_capabilities(tools=SimpleNamespace())
+
+    mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
+    mock_close = AsyncMock()
+    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
+         patch.object(scanner, "_close_mcp_session", mock_close):
+        results = await scanner.scan_remote_server_prompts(
+            "https://bigquery.googleapis.com/mcp", analyzers=_CAP_TEST_ANALYZERS,
+        )
+
+    assert results == []
+    session.list_prompts.assert_not_called()
+    mock_close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scan_resource_raises_value_error_when_capability_not_advertised(config):
+    """Single-resource scan can't return [] (the contract is a single
+    result), so we expect a ValueError so callers can map it to a 4xx
+    instead of a 500."""
+    scanner = Scanner(config)
+    session = _session_with_capabilities(tools=SimpleNamespace())
+
+    mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
+    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
+         patch.object(scanner, "_close_mcp_session", AsyncMock()):
+        with pytest.raises(ValueError, match="did not advertise resources capability"):
+            await scanner.scan_remote_server_resource(
+                "https://bigquery.googleapis.com/mcp",
+                "file:///some/resource",
+                analyzers=_CAP_TEST_ANALYZERS,
+            )
+    session.list_resources.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scan_prompt_raises_value_error_when_capability_not_advertised(config):
+    scanner = Scanner(config)
+    session = _session_with_capabilities(tools=SimpleNamespace())
+
+    mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
+    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
+         patch.object(scanner, "_close_mcp_session", AsyncMock()):
+        with pytest.raises(ValueError, match="did not advertise prompts capability"):
+            await scanner.scan_remote_server_prompt(
+                "https://bigquery.googleapis.com/mcp",
+                "some_prompt",
+                analyzers=_CAP_TEST_ANALYZERS,
+            )
+    session.list_prompts.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Synthetic "Session terminated" handling at the network-call layer
+# ---------------------------------------------------------------------------
+# When the server advertised the capability (or didn't initialize cleanly)
+# but list_resources/list_prompts still raises the synthetic shape, the
+# scanner should treat it as missing and return [] / raise ValueError,
+# not bubble a 500.
+
+
+@pytest.mark.asyncio
+async def test_scan_resources_returns_empty_on_synthetic_session_terminated(config):
+    scanner = Scanner(config)
+    # Server advertised resources (so we won't short-circuit on the gate)
+    # but list_resources nonetheless raises the SDK-synthetic shape.
+    session = _session_with_capabilities(resources=SimpleNamespace())
+    session.list_resources.side_effect = _mcp_error(32600, "Session terminated")
+
+    mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
+    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
+         patch.object(scanner, "_close_mcp_session", AsyncMock()):
+        results = await scanner.scan_remote_server_resources(
+            "https://bigquery.googleapis.com/mcp", analyzers=_CAP_TEST_ANALYZERS,
+        )
+
+    assert results == []
+    session.list_resources.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_scan_prompts_returns_empty_on_synthetic_session_terminated(config):
+    scanner = Scanner(config)
+    session = _session_with_capabilities(prompts=SimpleNamespace())
+    session.list_prompts.side_effect = _mcp_error(32600, "Session terminated")
+
+    mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
+    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
+         patch.object(scanner, "_close_mcp_session", AsyncMock()):
+        results = await scanner.scan_remote_server_prompts(
+            "https://bigquery.googleapis.com/mcp", analyzers=_CAP_TEST_ANALYZERS,
+        )
+
+    assert results == []
+    session.list_prompts.assert_called_once()
