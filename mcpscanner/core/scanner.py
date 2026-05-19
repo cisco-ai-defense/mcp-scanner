@@ -500,7 +500,23 @@ class Scanner:
 
     @staticmethod
     def _is_missing_capability_error(error: Exception) -> bool:
-        """Return True when the server reports a capability is unavailable."""
+        """Return True when the server reports a capability is unavailable.
+
+        Covers three real-world shapes of "this method isn't implemented":
+
+        1. Spec-compliant JSON-RPC ``-32601`` ("Method not found").
+        2. Free-form message tokens (some servers return ``-32603`` with a
+           ``"unsupported"``-style message).
+        3. The MCP Python SDK's synthetic ``32600`` + ``"Session terminated"``
+           that ``mcp/client/streamable_http.py`` emits when the server
+           replies to a JSON-RPC POST with a plain HTTP 404. Many real-world
+           MCP servers (BigQuery, several Google APIs, some Cloudflare/GitHub
+           endpoints) return 404 for unimplemented ``resources/list`` or
+           ``prompts/list`` instead of a proper ``-32601`` error, and the SDK
+           relabels that as a session-terminated error. Treat the synthetic
+           shape as a missing-capability signal so callers can return ``[]``
+           instead of bubbling a misleading 500.
+        """
         messages = [str(error)]
         code = getattr(error, "code", None)
 
@@ -521,6 +537,13 @@ class Scanner:
         if code == -32601:
             return True
 
+        # SDK-synthetic shape for "server returned HTTP 404 for this method".
+        # We require BOTH the code and the canonical message so we don't
+        # silently swallow real mid-session terminations (which can use the
+        # same 32600 code with different messages).
+        if code == 32600 and "session terminated" in combined_message:
+            return True
+
         tokens = (
             "method not found",
             "methodnotfound",
@@ -530,6 +553,31 @@ class Scanner:
             "doesn't have",
         )
         return any(token in combined_message for token in tokens)
+
+    @staticmethod
+    def _server_supports_capability(
+        session: Any, capability: str
+    ) -> Optional[bool]:
+        """Check whether the server advertised support for a capability.
+
+        Reads the ``InitializeResult.capabilities`` that ``_get_mcp_session``
+        stashes on the session as ``_init_result``. Returns:
+
+        * ``True``  — server explicitly advertised this capability.
+        * ``False`` — server explicitly omitted it; we can short-circuit.
+        * ``None``  — we don't have init info; caller must fall back to the
+                     try/except path on the actual JSON-RPC call.
+        """
+        init_result = getattr(session, "_init_result", None)
+        if init_result is None:
+            return None
+        capabilities = getattr(init_result, "capabilities", None)
+        if capabilities is None:
+            return None
+        # ServerCapabilities is a pydantic model; missing optional fields
+        # default to None. A non-None object (even if empty) signals the
+        # server advertised the capability.
+        return getattr(capabilities, capability, None) is not None
 
     async def _analyze_tool(
         self,
@@ -1973,6 +2021,13 @@ class Scanner:
         try:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
+            # Capability gate: see scan_remote_server_resources for rationale.
+            if self._server_supports_capability(session, "prompts") is False:
+                logger.info(
+                    f"Server '{server_url}' did not advertise prompts capability; skipping prompt scan"
+                )
+                return []
+
             # List all prompts
             try:
                 prompt_list = await session.list_prompts()
@@ -2055,6 +2110,12 @@ class Scanner:
         session = None
         try:
             client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # Capability gate (same rationale as scan_remote_server_prompts).
+            if self._server_supports_capability(session, "prompts") is False:
+                message = f"Server '{server_url}' did not advertise prompts capability; cannot scan '{prompt_name}'."
+                logger.warning(message)
+                raise ValueError(message)
 
             # List all prompts and find the target prompt
             try:
@@ -2545,6 +2606,16 @@ class Scanner:
         try:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
+            # Capability gate: if the InitializeResult didn't advertise
+            # resources support, don't bother calling list_resources — many
+            # real servers return HTTP 404 for the unsupported method which
+            # the MCP SDK relabels as "Session terminated".
+            if self._server_supports_capability(session, "resources") is False:
+                logger.info(
+                    f"Server '{server_url}' did not advertise resources capability; skipping resource scan"
+                )
+                return []
+
             # List all resources
             try:
                 resource_list = await session.list_resources()
@@ -2739,6 +2810,12 @@ class Scanner:
         session = None
         try:
             client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # Capability gate (same rationale as scan_remote_server_resources).
+            if self._server_supports_capability(session, "resources") is False:
+                message = f"Server '{server_url}' did not advertise resources capability; cannot scan '{resource_uri}'."
+                logger.warning(message)
+                raise ValueError(message)
 
             # List all resources to find the target
             try:
