@@ -44,18 +44,26 @@ async def scan_file(analyzer: BehavioralCodeAnalyzer, filepath: Path) -> Dict[st
         context = {"file_path": str(filepath), "file_name": filepath.name}
         findings = await analyzer.analyze(content, context)
 
+        # ``analyze()`` now returns a SAFE-severity SecurityFinding for
+        # every scanned tool that came back clean, so ``len(findings)``
+        # is no longer a valid safety signal (it now counts all scanned
+        # tools, safe + unsafe). Classify by severity instead, and keep
+        # the eval JSON shape backward compatible by reporting only the
+        # real (non-SAFE) mismatches in the count.
+        mismatch_findings = [f for f in findings if f.severity != "SAFE"]
+
         return {
             "file": str(filepath.relative_to(Path(__file__).parent.parent)),
             "status": "completed",
-            "is_safe": len(findings) == 0,
-            "findings_count": len(findings),
+            "is_safe": len(mismatch_findings) == 0,
+            "findings_count": len(mismatch_findings),
             "findings": [
                 {
                     "severity": f.severity,
                     "summary": f.summary,
                     "threat_category": f.threat_category,
                 }
-                for f in findings
+                for f in mismatch_findings
             ],
         }
     except Exception as e:
