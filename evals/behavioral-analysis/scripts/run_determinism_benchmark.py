@@ -79,7 +79,14 @@ async def scan_file_once(
         context = {"file_path": str(filepath), "file_name": filepath.name}
         findings = await analyzer.analyze(str(filepath), context)
 
-        findings_list = [normalize_finding(f) for f in findings]
+        # ``analyze()`` now returns a SAFE-severity SecurityFinding for
+        # every scanned-but-clean tool. Those entries are deterministic
+        # by construction (one per func_context, no LLM variability), so
+        # excluding them from the determinism signature keeps this
+        # benchmark focused on what it's measuring: variance in the
+        # alignment LLM's mismatch detection across repeated runs.
+        mismatches = [f for f in findings if f.severity != "SAFE"]
+        findings_list = [normalize_finding(f) for f in mismatches]
         sig = result_signature(findings_list)
         return sig, findings_list, None
     except Exception as e:
