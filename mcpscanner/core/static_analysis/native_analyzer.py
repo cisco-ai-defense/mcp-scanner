@@ -116,6 +116,162 @@ def _get_language_module(lang: str) -> Optional[Any]:
         return None
 
 
+# Method names that MCP SDKs use to register tools/prompts/resources at
+# call sites. Lowercased; the observed call name is lowercased before
+# comparing. Verified against the upstream SDK READMEs (TS SDK v1/v2, Go
+# SDK ``mcp.AddTool``, Kotlin SDK ``server.addTool``) so the list stays
+# narrow and avoids matching unrelated ``.tool``/``.prompt`` collisions.
+_MCP_REGISTRATION_METHODS: Set[str] = {
+    "tool",
+    "prompt",
+    "resource",
+    "registertool",
+    "registerprompt",
+    "registerresource",
+    "addtool",
+    "addprompt",
+    "addresource",
+}
+
+
+# Canonical capability suffixes used in Python decorators (e.g. `@mcp.tool`,
+# `@hello_mcp.prompt`, or the bare `@resource`).
+_PY_MCP_CAPABILITY_TAGS = ("tool", "prompt", "resource")
+
+
+# Some grammars list class-like constructs in their "function types" set
+# (most notably Rust's ``impl_item`` covers both impl blocks *and* the
+# methods inside them). Pass 1 of capability detection must skip the
+# wrapper because it isn't a callable surface — but recursion will still
+# visit the inner ``function_item`` children, so real functions inside
+# ``impl Foo { ... }`` are not lost.
+_TS_NON_FUNCTION_NODE_TYPES: Set[str] = {
+    "impl_item",
+}
+
+
+# Compiled once: matches an annotation/attribute/macro sigil followed by an
+# identifier we want to inspect. Covers:
+#   @Tool            Java/Spring AI
+#   @McpTool         Spring AI MCP annotations
+#   [McpServerTool]  C# attributes
+#   #[tool]          Rust attribute macros (and `#[mcp::tool]`)
+#   #[Tool]          PHP 8 attributes
+#   # @tool          Ruby comment-style annotation
+import re as _re  # local alias avoids polluting wider module namespace
+_MCP_ANNOTATION_RE = _re.compile(
+    r"""
+    (?:                       # one of the annotation sigils
+        @\#?                  #   @ or @# (rare)
+      | \#\s*\[               #   # [  (Rust / PHP 8 — note '# ' before '[')
+      | \[                    #   [  (C#)
+      | \#\s*@                #   # @ (Ruby docblock-style)
+    )
+    \s*
+    (?:[\w]+::)*              # optional namespace path like ``mcp::``
+    ([A-Za-z_][\w]*)          # ← captured: the identifier
+    """,
+    _re.VERBOSE,
+)
+
+# Captures the value assigned to a ``name = ...``/``name: ...`` argument on
+# an annotation or registration call. Used to surface the registered MCP
+# capability name (e.g. ``add`` from ``@Tool(name="add")``).
+_MCP_NAME_ARG_RE = _re.compile(
+    r"""\bname\s*[=:]\s*['"]([^'"]+)['"]""",
+)
+
+
+def _strip_string_quotes(s: str) -> str:
+    """Strip matching surrounding quotes from a tree-sitter string node text."""
+    s = s.strip()
+    if len(s) >= 2 and s[0] in ('"', "'", "`") and s[-1] == s[0]:
+        return s[1:-1]
+    return s
+
+
+def _normalize_capability(method_name: str) -> str:
+    """Map a raw SDK method name onto the canonical capability kind."""
+    lowered = method_name.lower()
+    if "prompt" in lowered:
+        return "prompt"
+    if "resource" in lowered:
+        return "resource"
+    return "tool"
+
+
+def _is_mcp_capability_decorator_set(decorator_types: Optional[List[str]]) -> bool:
+    """Return True if any decorator names an MCP capability (`tool`/`prompt`/`resource`).
+
+    Accepts the raw decorator strings recorded by Python AST extraction,
+    which look like ``mcp.tool``, ``hello_mcp.prompt``, or just ``tool`` for
+    bare decorators. The suffix after the last dot is the method name.
+    """
+    if not decorator_types:
+        return False
+    for dec in decorator_types:
+        if not dec:
+            continue
+        bare = dec.rsplit(".", 1)[-1]
+        # Drop any trailing call form, e.g. ``tool()`` -> ``tool``.
+        bare = bare.split("(", 1)[0].strip().lower()
+        if bare in _PY_MCP_CAPABILITY_TAGS:
+            return True
+    return False
+
+
+def _is_same_ts_node(a, b) -> bool:
+    """Compare tree-sitter nodes by their AST byte range.
+
+    The tree-sitter Python binding can hand back fresh wrapper objects for
+    the same underlying node, so plain ``is`` / ``==`` comparisons aren't
+    reliable. Two nodes with the same ``start_byte`` and ``end_byte``
+    occupy the same source span, which is enough for our purposes.
+    """
+    if a is None or b is None:
+        return False
+    return (
+        a.start_byte == b.start_byte
+        and a.end_byte == b.end_byte
+        and a.type == b.type
+    )
+
+
+def _classify_mcp_annotation(annotations: List[str]) -> Optional[str]:
+    """Return ``'tool'`` / ``'prompt'`` / ``'resource'`` if any annotation
+    names an MCP capability; otherwise ``None``.
+
+    Cross-language coverage:
+
+    * Java/Spring AI:    ``@Tool``, ``@McpTool``
+    * C# (.NET SDK):     ``[McpServerTool]``, ``[Tool]``
+    * Rust (rmcp):       ``#[tool(...)]``, ``#[mcp::tool]``
+    * PHP (php-mcp):     ``#[Tool(...)]``
+    * Ruby (mcp-rb):     ``# @tool name: ...``
+    """
+    keywords = _PY_MCP_CAPABILITY_TAGS
+    for ann in annotations or []:
+        if not ann:
+            continue
+        for m in _MCP_ANNOTATION_RE.finditer(ann):
+            ident = m.group(1).lower()
+            for kw in keywords:
+                if kw in ident:
+                    return kw
+    return None
+
+
+def _parse_name_from_annotations(annotations: List[str]) -> Optional[str]:
+    """Pull a ``name=...``/``name:...`` string argument out of annotations."""
+    for ann in annotations or []:
+        if not ann:
+            continue
+        m = _MCP_NAME_ARG_RE.search(ann)
+        if m:
+            return m.group(1)
+    return None
+
+
 @dataclass
 class NativeAnalysisResult:
     """Result of native analysis for a single unit."""
@@ -262,6 +418,705 @@ class NativeAnalyzer:
         """
         result = self.analyze()
         return result.functions
+
+    def extract_mcp_capability_contexts(self) -> List[FunctionContext]:
+        """Extract contexts ONLY for functions exposed as MCP capabilities.
+
+        The behavioral analyzer must reason about the *tools, prompts, and
+        resources an MCP server exposes* — not about every helper function
+        defined in the source file. ``extract_all_function_contexts()`` is
+        the wrong primitive for that: it returns plain helpers like
+        ``_validate`` alongside real tool callbacks, which causes the
+        analyzer to spend LLM budget on non-capabilities and surface them in
+        user-facing output as if they were tools.
+
+        Detection runs in two complementary passes, sourced from each SDK's
+        own README/quickstart so the patterns match real-world code:
+
+        Pass 1 — **function-attached annotations** (function carries a
+        sigil-led marker):
+
+            * Python (FastMCP):    ``@mcp.tool``, ``.prompt``, ``.resource``
+            * Java (Spring AI):    ``@Tool``, ``@McpTool``
+            * C# (.NET SDK):       ``[McpServerTool]``, ``[Tool]``
+            * Rust (rmcp):         ``#[tool]``, ``#[mcp::tool]``
+            * PHP (php-mcp):       ``#[Tool(...)]``, ``#[McpTool(...)]``
+            * Ruby (mcp-rb):       ``# @tool name: ...``
+
+        Pass 2 — **call-site registrations** (function is registered by
+        being passed to an SDK call):
+
+            * TS SDK v1:           ``server.tool('name', schema, handler)``
+            * TS SDK v2:           ``server.registerTool('name', {...}, handler)``
+            * Go SDK:              ``mcp.AddTool(server, &mcp.Tool{...}, handler)``
+            * Kotlin SDK:          ``server.addTool(name=..., ...) { req -> }``
+              (handler is the *trailing lambda* outside ``arguments``)
+
+        For each detected capability we return a ``FunctionContext`` whose
+        ``name`` is preferred from the registered MCP name (e.g. ``'add'``)
+        and whose ``decorator_types`` is tagged so downstream rendering can
+        tell the function came from a capability registration vs. a plain
+        function definition. Handlers are deduped by AST start-byte so the
+        same function isn't returned twice if it's reachable via both
+        passes.
+
+        Plain helper functions that are not exposed as MCP capabilities are
+        intentionally excluded. Languages without a tree-sitter parser
+        return an empty list.
+        """
+        if self.language == "python":
+            all_funcs = self.extract_all_function_contexts()
+            return [
+                fc
+                for fc in all_funcs
+                if _is_mcp_capability_decorator_set(fc.decorator_types)
+            ]
+
+        if self.language not in self.FUNCTION_NODE_TYPES:
+            return []
+
+        lang_mod = _get_language_module(self.language)
+        if lang_mod is None:
+            return []
+
+        try:
+            if self.language == "typescript":
+                lang = Language(lang_mod.language_typescript())
+            elif self.language == "php":
+                lang = Language(lang_mod.language_php())
+            else:
+                lang = Language(lang_mod.language())
+
+            parser = Parser(lang)
+            tree = parser.parse(self.source_bytes)
+            imports = self._ts_extract_imports(tree.root_node)
+        except Exception as e:
+            self.logger.warning(
+                f"MCP capability extraction failed for {self.file_path}: {e}"
+            )
+            return []
+
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        contexts: List[FunctionContext] = []
+        # Dedupe by handler start_byte so the same function definition can
+        # only be returned once even when both passes locate it.
+        seen_handlers: Set[int] = set()
+
+        # -----------------------------------------------------------------
+        # Pass 1: function-attached annotation/attribute/macro detection
+        # -----------------------------------------------------------------
+        def visit_funcs(node):
+            if (
+                node.type in func_types
+                and node.type not in _TS_NON_FUNCTION_NODE_TYPES
+            ):
+                annotations = self._ts_collect_function_annotations(node)
+                cap_kind = _classify_mcp_annotation(annotations)
+                if (
+                    cap_kind is not None
+                    and node.start_byte not in seen_handlers
+                ):
+                    seen_handlers.add(node.start_byte)
+                    self._append_capability_context(
+                        contexts,
+                        node,
+                        imports,
+                        capability=cap_kind,
+                        registered_name=_parse_name_from_annotations(annotations),
+                        source_kind="annotation",
+                    )
+            for child in node.children:
+                visit_funcs(child)
+
+        visit_funcs(tree.root_node)
+
+        # -----------------------------------------------------------------
+        # Pass 2: SDK call-site registration detection
+        # -----------------------------------------------------------------
+        registrations = self._ts_find_mcp_registrations(tree.root_node)
+        for reg in registrations:
+            handler_node = reg.get("handler_node")
+            handler_name = reg.get("handler_name")
+
+            if handler_node is None and handler_name:
+                handler_node = self._ts_find_function_def_by_name(
+                    tree.root_node, handler_name, func_types
+                )
+            if handler_node is None:
+                continue
+            if handler_node.start_byte in seen_handlers:
+                continue
+            seen_handlers.add(handler_node.start_byte)
+
+            self._append_capability_context(
+                contexts,
+                handler_node,
+                imports,
+                capability=reg["capability"],
+                registered_name=reg.get("name"),
+                source_kind="registration",
+            )
+
+        return contexts
+
+    def _append_capability_context(
+        self,
+        out: List[FunctionContext],
+        handler_node: "Node",
+        imports: List[str],
+        *,
+        capability: str,
+        registered_name: Optional[str],
+        source_kind: str,
+    ) -> None:
+        """Extract a FunctionContext for ``handler_node`` and tag it.
+
+        Shared between the annotation-driven and call-site-driven passes
+        so naming / decorator-tagging stays consistent.
+        """
+        # ``_ts_extract_functions`` (the existing top-level walker) tracks
+        # the enclosing class via recursive context. Our directed walks
+        # don't, so we recover the class name here by walking parents —
+        # this keeps Java/C#/PHP method names class-qualified
+        # (``CalcService.add``) and consistent with what
+        # ``extract_all_function_contexts()`` returns.
+        class_name = self._ts_find_enclosing_class_name(handler_node)
+
+        try:
+            ctx = self._ts_extract_function_context(
+                handler_node, imports, class_name=class_name
+            )
+        except Exception as e:
+            self.logger.debug(f"Failed to extract MCP handler context: {e}")
+            return
+        if ctx is None:
+            return
+
+        # When an inline (anonymous) handler is registered as
+        # ``server.tool('add', ...)``, prefer the registered MCP name in
+        # CLI/SDK output. For named functions we keep the symbol name
+        # because that's also useful context; combine when both exist.
+        if registered_name:
+            if not ctx.name or ctx.name == "<anonymous>":
+                ctx.name = registered_name
+            elif registered_name != ctx.name and registered_name not in ctx.name:
+                ctx.name = f"{registered_name} ({ctx.name})"
+
+        cap_tag = f"<{source_kind}>.{capability}"
+        if cap_tag not in ctx.decorator_types:
+            ctx.decorator_types.append(cap_tag)
+
+        out.append(ctx)
+
+    def _ts_find_enclosing_class_name(self, node: "Node") -> str:
+        """Walk up parents to find the nearest enclosing class-like name.
+
+        Returns the class name (e.g. ``"CalcService"``) or ``""`` if the
+        function is defined at module scope.
+        """
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
+        if not class_types:
+            return ""
+
+        cur = node.parent
+        while cur is not None:
+            if cur.type in class_types:
+                name_node = cur.child_by_field_name("name")
+                if name_node is not None:
+                    return self._ts_get_node_text(name_node)
+                # PHP's ``class_declaration`` exposes its name via a
+                # ``name`` child without a field tag — fall back to text.
+                for sub in cur.children:
+                    if sub.type in ("name", "identifier", "type_identifier"):
+                        return self._ts_get_node_text(sub)
+                return ""
+            cur = cur.parent
+        return ""
+
+    def _ts_collect_function_annotations(self, fn_node: "Node") -> List[str]:
+        """Collect annotation/attribute/macro text strings on a function.
+
+        Combines two extraction styles so we catch the patterns used across
+        the supported languages:
+
+        * **Sibling-based**: Rust ``attribute_item`` and Ruby ``comment``
+          land as the function's previous sibling. Walk back through the
+          siblings until we hit a "real" node.
+        * **Nested**: Java's ``modifiers`` and C#/PHP's ``attribute_list``
+          live *inside* the function/method node and wrap one or more
+          ``annotation`` / ``marker_annotation`` / ``attribute`` children.
+        """
+        out: List[str] = []
+
+        # (a) Sibling-based annotations / leading comments.
+        sib = fn_node.prev_sibling
+        steps = 0
+        while sib is not None and steps < 8:
+            kind = sib.type
+            if kind in (
+                "attribute_item",
+                "decorator",
+                "annotation",
+                "marker_annotation",
+            ):
+                out.append(self._ts_get_node_text(sib))
+            elif kind in ("comment", "line_comment", "block_comment"):
+                out.append(self._ts_get_node_text(sib))
+                # Comments don't chain — one leading comment is enough.
+                break
+            else:
+                # Hit a real node — stop walking back.
+                break
+            sib = sib.prev_sibling
+            steps += 1
+
+        # (b) Nested annotations directly inside the function/method node.
+        # We always preserve the WRAPPER text (which contains the sigil
+        # like ``[`` / ``@``) AND drill into individual annotation/attribute
+        # children. The wrapper text is what the regex classifier matches
+        # against; the inner children are still useful for other consumers
+        # such as ``_parse_name_from_annotations``.
+        for child in fn_node.children:
+            ctype = child.type
+            if ctype in ("modifiers", "attribute_list", "decorator_list"):
+                wrapper_text = self._ts_get_node_text(child)
+                if any(sigil in wrapper_text for sigil in ("@", "[", "#[")):
+                    out.append(wrapper_text)
+                for sub in child.children:
+                    if sub.type in (
+                        "annotation",
+                        "marker_annotation",
+                        "attribute",
+                        "decorator",
+                    ):
+                        out.append(self._ts_get_node_text(sub))
+
+        return out
+
+    def _ts_find_mcp_registrations(self, root: "Node") -> List[Dict[str, Any]]:
+        """Find call expressions that look like MCP capability registrations.
+
+        Returns a list of dicts describing each registration::
+
+            {
+                "capability": "tool" | "prompt" | "resource",
+                "name": Optional[str],          # the registered MCP name
+                "handler_node": Optional[Node], # inline arrow/function expr
+                "handler_name": Optional[str],  # identifier ref otherwise
+            }
+
+        Walks with a parent pointer so we can recognize Kotlin-style
+        trailing lambdas, which tree-sitter parses as a nested call
+        expression where the *outer* call's function field is the *inner*
+        ``server.addTool(...)`` call and the lambda is the outer call's
+        sibling.
+        """
+        registrations: List[Dict[str, Any]] = []
+
+        def visit(node: "Node", parent: Optional["Node"]):
+            if node.type == "call_expression":
+                method = self._ts_call_method_name(node)
+                if method and method.lower() in _MCP_REGISTRATION_METHODS:
+                    args_node = self._ts_call_arguments_node(node)
+                    reg = self._ts_parse_registration_args(args_node, method.lower())
+                    if reg is None:
+                        # No string name and no inline/named handler in
+                        # ``arguments``, but the call site itself still
+                        # qualifies as a registration; allow Pass 1 (the
+                        # trailing-lambda lookup below) to populate the
+                        # handler.
+                        reg = {
+                            "capability": _normalize_capability(method.lower()),
+                            "name": None,
+                            "handler_node": None,
+                            "handler_name": None,
+                        }
+
+                    # Kotlin: ``server.addTool(...) { req -> }`` parses as
+                    # an OUTER call whose callee is the inner call we just
+                    # matched, and whose other child is the
+                    # ``annotated_lambda``. Kotlin's grammar exposes
+                    # neither ``function`` nor ``arguments`` as fields, so
+                    # we check structural position instead: are we the
+                    # callee of the parent call? (i.e. the parent's first
+                    # significant child is us).
+                    if (
+                        reg.get("handler_node") is None
+                        and parent is not None
+                        and parent.type == "call_expression"
+                        and self._ts_is_callee_of_parent(node, parent)
+                    ):
+                        for sibling in parent.children:
+                            if _is_same_ts_node(sibling, node):
+                                continue
+                            lambda_node = self._ts_unwrap_trailing_lambda(sibling)
+                            if lambda_node is not None:
+                                reg["handler_node"] = lambda_node
+                                break
+
+                    if reg.get("name") is None and args_node is not None:
+                        reg["name"] = self._ts_first_string_literal_in_args(
+                            args_node
+                        )
+
+                    if (
+                        reg.get("handler_node") is not None
+                        or reg.get("handler_name") is not None
+                    ):
+                        registrations.append(reg)
+            for child in node.children:
+                visit(child, node)
+
+        visit(root, None)
+        return registrations
+
+    def _ts_call_method_name(self, call_node: "Node") -> Optional[str]:
+        """Return the method name from a ``<expr>.method(...)`` call, or None.
+
+        Tree-sitter grammars vary along two axes:
+
+        * Whether the call expression exposes its callee via a named field
+          (``function`` for JS/TS/Go, no field for Kotlin).
+        * What node type holds the dotted access (``member_expression`` in
+          JS/TS, ``selector_expression`` in Go, ``navigation_expression``
+          in Kotlin) and how the right-hand identifier is exposed
+          (``property`` field for JS/TS, ``field`` for Go, unnamed
+          trailing ``identifier`` child for Kotlin).
+
+        We probe field names first (the cheap, exact path) and fall back
+        to scanning children-by-type so Kotlin's fieldless grammar still
+        works.
+        """
+        func = call_node.child_by_field_name("function")
+        if func is None:
+            # Kotlin: ``call_expression`` has no ``function`` field; the
+            # callee is the first non-trivia child, the ``value_arguments``
+            # block is the second.
+            for child in call_node.children:
+                if child.type in (
+                    "navigation_expression",
+                    "member_expression",
+                    "selector_expression",
+                    "identifier",
+                    "simple_identifier",
+                    "scoped_identifier",
+                    "field_access",
+                    "method_invocation",
+                ):
+                    func = child
+                    break
+        if func is None:
+            return None
+
+        for field_name in ("property", "field", "name"):
+            prop = func.child_by_field_name(field_name)
+            if prop is not None:
+                return self._ts_get_node_text(prop)
+
+        if func.type in (
+            "navigation_expression",
+            "member_expression",
+            "selector_expression",
+        ):
+            for child in reversed(func.children):
+                if child.type in (
+                    "identifier",
+                    "simple_identifier",
+                    "field_identifier",
+                    "property_identifier",
+                ):
+                    return self._ts_get_node_text(child)
+        return None
+
+    def _ts_call_arguments_node(self, call_node: "Node") -> Optional["Node"]:
+        """Return the call's argument list node, regardless of grammar shape.
+
+        Most grammars expose the argument list under the ``arguments`` field
+        (JS/TS/Go/Java). Kotlin doesn't — it has an unnamed
+        ``value_arguments`` child instead. Fall back to a children-by-type
+        scan so capability detection works there too.
+        """
+        named = call_node.child_by_field_name("arguments")
+        if named is not None:
+            return named
+        for child in call_node.children:
+            if child.type in (
+                "arguments",
+                "argument_list",
+                "value_arguments",
+            ):
+                return child
+        return None
+
+    def _ts_is_callee_of_parent(
+        self, node: "Node", parent: "Node"
+    ) -> bool:
+        """Return True if ``node`` is the callee position of ``parent``.
+
+        Two-step check that supports both field-typed grammars (JS/TS/Go,
+        which expose ``parent.function``) and field-less grammars (Kotlin,
+        where the callee is just the parent call's first significant
+        child).
+        """
+        named_func = parent.child_by_field_name("function")
+        if named_func is not None and _is_same_ts_node(named_func, node):
+            return True
+        for child in parent.children:
+            if child.is_named:
+                return _is_same_ts_node(child, node)
+        return False
+
+    def _ts_unwrap_trailing_lambda(self, node: "Node") -> Optional["Node"]:
+        """Return a lambda node from a Kotlin trailing-lambda position.
+
+        Accepts either an ``annotated_lambda`` (which wraps a
+        ``lambda_literal``) or a ``lambda_literal`` directly; anything else
+        returns ``None`` so the caller can keep scanning siblings.
+        """
+        if node.type == "lambda_literal":
+            return node
+        if node.type == "annotated_lambda":
+            for sub in node.children:
+                if sub.type == "lambda_literal":
+                    return sub
+            return node
+        return None
+
+    def _ts_first_string_literal_in_args(
+        self, args_node: "Node"
+    ) -> Optional[str]:
+        """Return the first string-literal value inside an arguments list.
+
+        Used as a fallback after the structured parse misses (e.g. Kotlin's
+        ``value_argument`` wrappers, or grammars that expose argument lists
+        without the field shapes we expect).
+        """
+        for child in args_node.children:
+            stripped = self._ts_extract_string_literal_text(child)
+            if stripped is not None:
+                return stripped
+        return None
+
+    def _ts_extract_string_literal_text(
+        self, node: "Node"
+    ) -> Optional[str]:
+        """If ``node`` (or its single value child) is a string literal, return
+        the unquoted text; otherwise ``None``.
+
+        Kotlin's ``value_argument`` wraps the actual literal; Go's
+        ``interpreted_string_literal`` contains string-content children
+        between the quotes. We just take the node text and strip the outer
+        matched quotes.
+        """
+        string_node_types = {
+            "string",
+            "string_literal",
+            "template_string",
+            "raw_string_literal",
+            "interpreted_string_literal",
+        }
+        if node.type in string_node_types:
+            return _strip_string_quotes(self._ts_get_node_text(node))
+        if node.type == "value_argument":
+            # Kotlin: the actual literal is the single non-trivia child
+            for sub in node.children:
+                if sub.type in string_node_types:
+                    return _strip_string_quotes(self._ts_get_node_text(sub))
+        return None
+
+    def _ts_parse_registration_args(
+        self, args_node: Optional["Node"], capability_method: str
+    ) -> Optional[Dict[str, Any]]:
+        """Pull the registered name + handler out of a registration call.
+
+        Across SDKs the handler shows up in different argument positions:
+
+        * JS/TS v1:  ``server.tool('name', schema, HANDLER)`` — handler is
+          the inline arrow/function (last function-typed argument).
+        * TS v2:    ``server.registerTool('name', config, HANDLER)`` — same.
+        * Go:       ``mcp.AddTool(SERVER, &mcp.Tool{...}, HANDLER)`` — the
+          handler is the LAST identifier; the first identifier (``server``)
+          is the receiver and must not be confused with the handler.
+
+        So we collect *all* candidate identifiers / inline functions /
+        object-literal args during a single pass and then pick the most
+        likely handler at the end (inline function wins; otherwise the
+        last identifier that isn't the obvious "server" receiver wins).
+        Object literals with a ``handler``/``execute``/``fn``/``callback``
+        field are also honored.
+        """
+        if args_node is None:
+            return None
+
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        string_node_types = {
+            "string",
+            "string_literal",
+            "template_string",
+            "raw_string_literal",
+            "interpreted_string_literal",
+        }
+        name: Optional[str] = None
+        inline_handler: Optional["Node"] = None
+        identifier_refs: List[str] = []
+
+        for child in args_node.children:
+            if child.type in ("(", ")", ",", "comment"):
+                continue
+
+            # Inline function expression / arrow function / lambda.
+            if inline_handler is None and child.type in func_types:
+                inline_handler = child
+                continue
+
+            # Bare identifier reference (resolved later against in-file defs).
+            if child.type == "identifier":
+                identifier_refs.append(self._ts_get_node_text(child))
+                continue
+
+            # First string literal we see is conventionally the MCP name
+            # (e.g. ``'add'`` in ``server.tool('add', schema, handler)``).
+            if name is None and child.type in string_node_types:
+                name = _strip_string_quotes(self._ts_get_node_text(child))
+                continue
+
+            # Object/struct literal may carry ``{ name: '...', handler: fn }``
+            # or Go's ``&mcp.Tool{Name: "add"}`` (which we read for the name
+            # only — the handler is a separate positional arg in Go).
+            if child.type in (
+                "object",
+                "object_expression",
+                "literal_value",
+                "composite_literal",
+            ):
+                obj_name, obj_handler = self._ts_extract_handler_from_object(
+                    child, func_types
+                )
+                if name is None and obj_name:
+                    name = obj_name
+                if inline_handler is None and obj_handler is not None:
+                    inline_handler = obj_handler
+                continue
+
+            # Unary/pointer wrapper around an object literal (Go
+            # ``&mcp.Tool{...}``): peek through to find a Name field.
+            if child.type == "unary_expression":
+                for sub in child.children:
+                    if sub.type in ("composite_literal", "literal_value"):
+                        obj_name, _ = self._ts_extract_handler_from_object(
+                            sub, func_types
+                        )
+                        if name is None and obj_name:
+                            name = obj_name
+                        break
+
+        handler_node = inline_handler
+        handler_name: Optional[str] = None
+
+        if handler_node is None and identifier_refs:
+            # Prefer the LAST identifier: in ``mcp.AddTool(server, ..., add)``
+            # ``server`` is the receiver, ``add`` is the handler. The
+            # inline-function check above already covers the JS/TS case
+            # where the handler is the first inline argument.
+            handler_name = identifier_refs[-1]
+
+        if handler_node is None and handler_name is None:
+            return None
+
+        return {
+            "capability": _normalize_capability(capability_method),
+            "name": name,
+            "handler_node": handler_node,
+            "handler_name": handler_name,
+        }
+
+    def _ts_extract_handler_from_object(
+        self, obj_node: "Node", func_types: Set[str]
+    ) -> "tuple[Optional[str], Optional[Node]]":
+        """Pull ``name`` + handler out of an object literal argument."""
+        obj_name: Optional[str] = None
+        obj_handler: Optional["Node"] = None
+
+        # ``pair`` (JS), ``field_initialization`` (TS), ``key_value`` (Go),
+        # ``element`` (Ruby) — try them all.
+        pair_types = {
+            "pair",
+            "field_initialization",
+            "key_value",
+            "object_property",
+            "element",
+        }
+
+        for child in obj_node.children:
+            if child.type not in pair_types:
+                continue
+            key_node = child.child_by_field_name("key")
+            value_node = child.child_by_field_name("value")
+            if key_node is None or value_node is None:
+                continue
+            key = _strip_string_quotes(self._ts_get_node_text(key_node).strip())
+            if (
+                key == "name"
+                and obj_name is None
+                and value_node.type
+                in (
+                    "string",
+                    "string_literal",
+                    "template_string",
+                    "raw_string_literal",
+                    "interpreted_string_literal",
+                )
+            ):
+                obj_name = _strip_string_quotes(self._ts_get_node_text(value_node))
+            elif (
+                key in ("handler", "execute", "fn", "callback", "run")
+                and value_node.type in func_types
+            ):
+                obj_handler = value_node
+
+        return obj_name, obj_handler
+
+    def _ts_find_function_def_by_name(
+        self, root: "Node", target_name: str, func_types: Set[str]
+    ) -> Optional["Node"]:
+        """Find a function/arrow-function definition by symbol name."""
+        if not target_name:
+            return None
+
+        found: List["Node"] = []
+
+        def visit(node: "Node"):
+            if found:
+                return
+            if node.type in func_types:
+                name_node = node.child_by_field_name("name")
+                if (
+                    name_node is not None
+                    and self._ts_get_node_text(name_node) == target_name
+                ):
+                    found.append(node)
+                    return
+                # Arrow function assigned to a variable:
+                #   const handler = async (args) => { ... };
+                if (
+                    node.type == "arrow_function"
+                    and node.parent is not None
+                    and node.parent.type == "variable_declarator"
+                ):
+                    parent_name = node.parent.child_by_field_name("name")
+                    if (
+                        parent_name is not None
+                        and self._ts_get_node_text(parent_name) == target_name
+                    ):
+                        found.append(node)
+                        return
+            for child in node.children:
+                if found:
+                    return
+                visit(child)
+
+        visit(root)
+        return found[0] if found else None
 
     # =========================================================================
     # Python Analysis - Pure AST extraction

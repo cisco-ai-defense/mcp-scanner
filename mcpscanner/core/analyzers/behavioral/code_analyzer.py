@@ -429,18 +429,28 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """Analyze source code for docstring/behavior mismatches.
 
         Supports Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby,
-        Rust, and PHP. Uses ContextExtractor for MCP-decorated Python functions,
-        falls back to NativeAnalyzer when:
-        - ContextExtractor fails (syntax errors, unsupported patterns)
-        - No MCP decorators found but analysis is still needed
-        - Non-Python files (TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, PHP)
+        Rust, and PHP. Only functions that are exposed as MCP capabilities
+        (``tool``/``prompt``/``resource``) are analyzed and returned —
+        plain helper functions defined in the same file are intentionally
+        excluded so the analyzer reflects the *MCP surface* of the server,
+        not every callable in the source. Capability detection:
+
+        - Python: ``@<obj>.tool`` / ``.prompt`` / ``.resource`` decorators
+          (via ``ContextExtractor``), with a NativeAnalyzer fallback that
+          still filters by decorator name when ``ContextExtractor`` fails.
+        - Non-Python: SDK registration call sites such as
+          ``server.tool('name', schema, handler)``,
+          ``server.registerTool({...}, handler)``, etc.
+          (via ``NativeAnalyzer.extract_mcp_capability_contexts()``).
 
         Args:
             source_code: Source code to analyze
             context: Analysis context with file_path
 
         Returns:
-            List of security findings
+            List of security findings — one per registered MCP capability,
+            either a concrete threat finding or a ``SAFE`` finding if no
+            mismatch was detected.
         """
         file_path = context.get("file_path", "unknown")
         findings = []
@@ -467,37 +477,48 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
                     func_contexts = []
 
-                # Fallback to NativeAnalyzer if no MCP functions found or extractor failed
+                # Fallback to NativeAnalyzer, but only for *MCP capabilities*.
+                # The previous implementation called
+                # ``extract_all_function_contexts()`` here, which surfaced
+                # every helper in the file as if it were a tool — see the
+                # bug where ``_validate`` / ``_coerce`` showed up alongside
+                # the real registered handler. The capability-aware
+                # variant returns an empty list when no decorator-tagged
+                # function is found, which is what callers expect.
                 if not func_contexts:
                     self.logger.debug(
                         f"No MCP functions found in {file_path}, using NativeAnalyzer fallback"
                     )
                     native_analyzer = NativeAnalyzer(source_code, file_path)
-                    func_contexts = native_analyzer.extract_all_function_contexts()
+                    func_contexts = native_analyzer.extract_mcp_capability_contexts()
                     if func_contexts:
                         self.logger.debug(
-                            f"NativeAnalyzer extracted {len(func_contexts)} functions from {file_path}"
+                            f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
                         )
 
             elif is_js_ts:
-                # Use NativeAnalyzer for TypeScript/JavaScript
+                # Use NativeAnalyzer for TypeScript/JavaScript, restricted to
+                # functions registered via ``server.tool(...)`` / ``.prompt(...)``
+                # / ``.resource(...)``. Plain helpers in the same file are
+                # excluded.
                 self.logger.debug(f"Using NativeAnalyzer for JS/TS file: {file_path}")
                 native_analyzer = NativeAnalyzer(source_code, file_path)
-                func_contexts = native_analyzer.extract_all_function_contexts()
+                func_contexts = native_analyzer.extract_mcp_capability_contexts()
                 if func_contexts:
                     self.logger.debug(
-                        f"NativeAnalyzer extracted {len(func_contexts)} functions from {file_path}"
+                        f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
                     )
 
             else:
-                # Try NativeAnalyzer for unknown file types (it will detect language)
+                # Try NativeAnalyzer for unknown file types (it will detect language).
+                # Same capability-only contract as the JS/TS branch.
                 self.logger.debug(f"Unknown file type {file_path}, trying NativeAnalyzer")
                 native_analyzer = NativeAnalyzer(source_code, file_path)
-                result = native_analyzer.analyze()
-                if result.success:
-                    func_contexts = result.functions
+                func_contexts = native_analyzer.extract_mcp_capability_contexts()
+                if func_contexts:
                     self.logger.debug(
-                        f"NativeAnalyzer detected {result.language}, extracted {len(func_contexts)} functions"
+                        f"NativeAnalyzer detected {native_analyzer.language}, "
+                        f"extracted {len(func_contexts)} MCP capabilities"
                     )
 
             if not func_contexts:
