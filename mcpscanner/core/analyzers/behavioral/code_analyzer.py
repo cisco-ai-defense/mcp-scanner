@@ -75,9 +75,37 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # Initialize alignment orchestrator (handles all LLM interaction)
         self.alignment_orchestrator = AlignmentOrchestrator(config)
 
+        # Inventory of every function/tool considered during the most recent
+        # ``analyze()`` call. Reset at the top of ``analyze()`` and populated
+        # by ``_analyze_source_code`` once function contexts are extracted —
+        # so it covers every supported language uniformly (Python via
+        # ContextExtractor; JS/TS/Go/Java/Kotlin/C#/Ruby/Rust/PHP via
+        # NativeAnalyzer / TreeSitterCallGraphAnalyzer fall-throughs).
+        #
+        # Each entry is a dict:
+        #   {"function_name": str, "source_file": str, "language": str}
+        #
+        # Consumers (e.g., the ``mcp-scanner behavioral`` CLI) read this
+        # immediately after awaiting ``analyze()`` to render a per-function
+        # row even when no findings exist, instead of collapsing the
+        # safe-case output to a single placeholder. The list is overwritten
+        # on each ``analyze()`` call; treat it as ephemeral and per-call.
+        self._last_inventory: List[Dict[str, Any]] = []
+
         self.logger.debug(
             "BehavioralCodeAnalyzer initialized with alignment verification"
         )
+
+    @property
+    def last_inventory(self) -> List[Dict[str, Any]]:
+        """Function/tool inventory from the most recent ``analyze()`` call.
+
+        Returns a copy to prevent caller mutations leaking back into the
+        analyzer instance. Empty list if ``analyze()`` has not been called
+        yet, or if the most recent call had nothing to enumerate (empty
+        directory, unsupported language, parse failure across all files).
+        """
+        return list(self._last_inventory)
 
     async def analyze(
         self, content: str, context: Dict[str, Any]
@@ -91,6 +119,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         Returns:
             List of SecurityFinding objects for detected mismatches
         """
+        # Per-call inventory of scanned functions; consumers read via
+        # ``last_inventory`` after this call resolves. Reset on every
+        # ``analyze()`` so a stale prior-call inventory can't leak through.
+        self._last_inventory = []
+
         try:
             all_findings = []
 
@@ -477,6 +510,33 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 return findings
 
             self.logger.debug(f"Analyzing {len(func_contexts)} functions in {file_path}")
+
+            # Record the inventory of functions we're about to analyze, so
+            # CLI/UI consumers can render a per-function row even when no
+            # findings are produced. ``language`` is best-effort from the
+            # file extension; we use a stable value per ext so downstream
+            # display logic can group consistently across files. Skip names
+            # we can't determine (defensive, but ContextExtractor /
+            # NativeAnalyzer always populate ``name``).
+            if is_python:
+                inv_language = "python"
+            elif is_js_ts:
+                inv_language = "typescript" if file_ext in {".ts", ".tsx", ".mts", ".cts"} else "javascript"
+            else:
+                # Map other tree-sitter languages from extension; fall back
+                # to the extension stem if we don't recognize it.
+                inv_language = self._EXT_TO_TS_LANGUAGE.get(file_ext, file_ext.lstrip(".") or "unknown")
+            for fc in func_contexts:
+                name = getattr(fc, "name", None)
+                if not name:
+                    continue
+                self._last_inventory.append(
+                    {
+                        "function_name": name,
+                        "source_file": file_path,
+                        "language": inv_language,
+                    }
+                )
 
             # Enrich with cross-file context if available
             if context.get("cross_file_analyzer"):

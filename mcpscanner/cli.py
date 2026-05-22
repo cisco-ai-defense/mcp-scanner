@@ -192,23 +192,77 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
 
     # Analyze the source file
     findings = await analyzer.analyze(source_path, context={"file_path": source_path})
+    # Snapshot the analyzer's per-call inventory so the helper renders one
+    # row per scanned function — including safe ones with no findings. The
+    # inventory is language-agnostic (see BehavioralCodeAnalyzer.last_inventory).
+    inventory = analyzer.last_inventory
 
-    # Format results to match Scanner output structure
-    findings_by_function = {}
+    # Group findings by (source_file, function_name) so directory scans
+    # with same-named functions in different files don't collapse together.
+    findings_by_key: Dict[tuple, List[Any]] = {}
     for finding in findings:
-        func_name = (
-            finding.details.get("function_name", "unknown")
-            if finding.details
-            else "unknown"
-        )
+        details = finding.details or {}
+        fn_name = details.get("function_name", "unknown")
+        src = details.get("source_file", source_path)
+        findings_by_key.setdefault((src, fn_name), []).append(finding)
 
-        if func_name not in findings_by_function:
-            findings_by_function[func_name] = []
-        findings_by_function[func_name].append(finding)
+    # Inventory first → one row per scanned function (even with no findings).
+    # Stray findings whose key isn't in the inventory get appended after.
+    seen_keys: set = set()
+    ordered: List[tuple] = []
+    for entry in inventory:
+        key = (entry["source_file"], entry["function_name"])
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        ordered.append((entry, findings_by_key.get(key, [])))
+    for key, fnds in findings_by_key.items():
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        ordered.append(
+            (
+                {
+                    "function_name": key[1],
+                    "source_file": key[0],
+                    "language": "unknown",
+                },
+                fnds,
+            )
+        )
 
     # Create ToolScanResult-like structure
     results = []
-    for func_name, func_findings in findings_by_function.items():
+    for entry, func_findings in ordered:
+        func_name = entry["function_name"]
+        inv_source_file = entry["source_file"]
+        inv_language = entry.get("language", "unknown")
+        if not func_findings:
+            display_name = os.path.basename(inv_source_file) or inv_source_file
+            results.append(
+                {
+                    "tool_name": func_name,
+                    "tool_description": (
+                        f"MCP function from {display_name} ({inv_language})"
+                    ),
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {
+                        "behavioral_analyzer": {
+                            "severity": "SAFE",
+                            "threat_summary": "No behavioral issues detected.",
+                            "threat_names": [],
+                            "total_findings": 0,
+                            "source_file": inv_source_file,
+                            "language": inv_language,
+                            "mcp_taxonomies": [],
+                        }
+                    },
+                }
+            )
+            continue
+        # Below: original with-findings rendering path (legacy, unchanged
+        # logic, just rebound to use the inventory-derived ``func_name``).
         severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
         max_severity = max(
             (f.severity for f in func_findings), key=lambda s: severity_order.get(s, 0)
@@ -271,11 +325,17 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
             }
         )
 
+    # Nothing scanned at all — neither the analyzer's inventory nor its
+    # findings produced any rows. Could mean: parse failure, empty source,
+    # or no functions extractable in any supported language.
     if not results:
+        placeholder = os.path.basename(source_path) or source_path
         results = [
             {
-                "tool_name": "No MCP functions found",
-                "tool_description": f"No @mcp.tool() decorators found in {source_path}",
+                "tool_name": placeholder,
+                "tool_description": (
+                    f"No analyzable functions detected in {placeholder}"
+                ),
                 "status": "completed",
                 "is_safe": True,
                 "findings": {},
@@ -1906,24 +1966,91 @@ async def main():
                 source_path, context={"file_path": source_path}
             )
 
-            # Format results to match Scanner output structure
-            # Group findings by function to create tool-like results
-            findings_by_function = {}
-            for finding in findings:
-                # Extract function name from details (not summary!)
-                func_name = (
-                    finding.details.get("function_name", "unknown")
-                    if finding.details
-                    else "unknown"
-                )
+            # Snapshot the analyzer's per-call function inventory immediately
+            # so we can emit a row for every tool/function it considered,
+            # including ones with zero findings. ``last_inventory`` covers
+            # every supported language (ContextExtractor for Python,
+            # NativeAnalyzer / TreeSitterCallGraphAnalyzer for the rest).
+            inventory = analyzer.last_inventory
 
-                if func_name not in findings_by_function:
-                    findings_by_function[func_name] = []
-                findings_by_function[func_name].append(finding)
+            # Format results to match Scanner output structure
+            # Group findings by (source_file, function_name) so that a
+            # directory scan with same-named functions in different files
+            # doesn't collapse them into one row.
+            findings_by_key: Dict[tuple, List[Any]] = {}
+            for finding in findings:
+                details = finding.details or {}
+                func_name = details.get("function_name", "unknown")
+                src_file = details.get("source_file", source_path)
+                findings_by_key.setdefault((src_file, func_name), []).append(finding)
+
+            # Walk the inventory first so safe functions still get a row.
+            # Track which (file, name) keys we've emitted; any stray finding
+            # whose key isn't in the inventory is appended after as a
+            # defensive fallback so we never silently drop a real finding.
+            emitted_keys: set = set()
+            ordered_groups: List[tuple] = []
+            for entry in inventory:
+                key = (entry["source_file"], entry["function_name"])
+                if key in emitted_keys:
+                    continue
+                emitted_keys.add(key)
+                ordered_groups.append(
+                    (entry, findings_by_key.get(key, []))
+                )
+            for key, fnds in findings_by_key.items():
+                if key in emitted_keys:
+                    continue
+                emitted_keys.add(key)
+                src_file, func_name = key
+                ordered_groups.append(
+                    (
+                        {
+                            "function_name": func_name,
+                            "source_file": src_file,
+                            "language": "unknown",
+                        },
+                        fnds,
+                    )
+                )
 
             # Create ToolScanResult-like structure for each function
             results = []
-            for func_name, func_findings in findings_by_function.items():
+            for entry, func_findings in ordered_groups:
+                func_name = entry["function_name"]
+                inv_source_file = entry["source_file"]
+                inv_language = entry.get("language", "unknown")
+                if not func_findings:
+                    # No findings for this function — emit a SAFE row so the
+                    # user can see what was actually scanned. Severity is
+                    # explicitly SAFE (not UNKNOWN) so downstream filters
+                    # like ``--severity-filter high`` correctly exclude it.
+                    display_name = os.path.basename(inv_source_file) or inv_source_file
+                    results.append(
+                        {
+                            "tool_name": func_name,
+                            "tool_description": (
+                                f"MCP function from {display_name} ({inv_language})"
+                            ),
+                            "status": "completed",
+                            "is_safe": True,
+                            "findings": {
+                                "behavioral_analyzer": {
+                                    "severity": "SAFE",
+                                    "threat_summary": "No behavioral issues detected.",
+                                    "threat_names": [],
+                                    "total_findings": 0,
+                                    "source_file": inv_source_file,
+                                    "language": inv_language,
+                                    "mcp_taxonomies": [],
+                                }
+                            },
+                        }
+                    )
+                    continue
+                # Below: original per-function-with-findings rendering path
+                # (kept verbatim from the legacy code, just rebound to use
+                # the inventory-derived ``func_name`` / ``func_findings``).
                 # Get highest severity
                 severity_order = {
                     "HIGH": 3,
@@ -1994,32 +2121,43 @@ async def main():
                     }
                 )
 
-            # If no findings, all functions are safe
+            # Nothing scanned at all (empty file, parse failure, or no
+            # functions extractable in any supported language). Emit one
+            # placeholder so the user sees the file got considered.
             if not results:
+                placeholder_basename = (
+                    os.path.basename(source_path) or source_path
+                )
                 results.append(
                     {
-                        "tool_name": source_path,
-                        "tool_description": "MCP server source code",
+                        "tool_name": placeholder_basename,
+                        "tool_description": (
+                            f"No analyzable functions detected in {placeholder_basename}"
+                        ),
                         "status": "completed",
                         "is_safe": True,
                         "findings": {},
                     }
                 )
 
-            # Automatically filter out VULNERABILITY findings - only show THREATS
+            # Automatically filter out VULNERABILITY findings - only show
+            # THREATS *and* SAFE rows (we want to display every scanned
+            # function, including those with no findings). The legacy
+            # filter dropped anything that wasn't classified THREAT, which
+            # included the per-function SAFE rows we synthesize above.
             filtered_results = []
             for result in results:
-                # Check if result has behavioral_analyzer findings with classification
                 if "findings" in result and "behavioral_analyzer" in result["findings"]:
                     analyzer_data = result["findings"]["behavioral_analyzer"]
-                    classification = analyzer_data.get(
-                        "threat_vulnerability_classification", ""
+                    severity = (analyzer_data.get("severity") or "").upper()
+                    classification = (
+                        analyzer_data.get("threat_vulnerability_classification") or ""
                     ).upper()
-
-                    # Only include THREAT findings, exclude VULNERABILITY
-                    if classification == "THREAT":
+                    total = int(analyzer_data.get("total_findings") or 0)
+                    # Keep: actual THREATs, or rows we synthesized with
+                    # zero findings (the "every scanned function" rows).
+                    if classification == "THREAT" or (total == 0 and severity == "SAFE"):
                         filtered_results.append(result)
-                # Keep results without findings (safe results)
                 elif not result.get("findings"):
                     filtered_results.append(result)
 
@@ -2033,7 +2171,10 @@ async def main():
                     print(f"Results saved to {args.output}")
 
         elif args.cmd == "vulnerable-package":
-            import os
+            # ``os`` is imported at module scope; a redundant function-local
+            # ``import os`` here would re-bind it as a local throughout the
+            # whole enclosing ``main()`` function and break every earlier
+            # branch's use of ``os`` with UnboundLocalError.
             from mcpscanner.core.analyzers.vulnerable_package_analyzer import VulnerablePackageAnalyzer
             from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
 
