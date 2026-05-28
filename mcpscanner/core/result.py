@@ -389,6 +389,14 @@ def group_findings_by_analyzer(
 def get_highest_severity(severities: List[str]) -> str:
     """Get the highest severity from a list of severities.
 
+    Severity model:
+    - "UNKNOWN" represents "not yet analyzed" / "analyzer didn't run". It is the
+      pre-analysis default and is *displaced* by any concrete severity
+      ("HIGH", "MEDIUM", "LOW", "INFO", "SAFE") produced by an analyzer.
+    - When concrete severities are present, the highest among them wins.
+    - When the list is empty or contains only "UNKNOWN" entries, the result is
+      "UNKNOWN" (nothing concrete to roll up).
+
     Args:
         severities (List[str]): List of severity strings.
 
@@ -397,22 +405,19 @@ def get_highest_severity(severities: List[str]) -> str:
     """
     severity_order = {
         "HIGH": 5,
-        "UNKNOWN": 4,
-        "MEDIUM": 3,
-        "LOW": 2,
-        "INFO": 1,
-        "SAFE": 0,
+        "MEDIUM": 4,
+        "LOW": 3,
+        "INFO": 2,
+        "SAFE": 1,
     }
-    highest = "SAFE"
-    highest_value = 0
 
-    for severity in severities:
-        value = severity_order.get(severity.upper(), 0)
-        if value > highest_value:
-            highest_value = value
-            highest = severity.upper()
+    concrete = [
+        s.upper() for s in severities if s and s.upper() in severity_order
+    ]
+    if not concrete:
+        return "UNKNOWN"
 
-    return highest
+    return max(concrete, key=lambda s: severity_order[s])
 
 
 def format_results_as_json(
