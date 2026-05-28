@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.7.1"
+version = "4.7.2"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
@@ -26,8 +26,8 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
-    # Pinned to 1.83.0 (verified safe release after PyPI compromise; avoid 1.82.x). BerriAI/litellm#24512.
-    "litellm==1.83.0",
+    # Pinned to 1.83.7 to include the proxy API key verification SQL injection fix while avoiding 1.82.x. BerriAI/litellm#24512.
+    "litellm==1.83.7",
     "expandvars>=0.12.0",
     "tree-sitter>=0.21.0",
     "tree-sitter-python>=0.21.0",
