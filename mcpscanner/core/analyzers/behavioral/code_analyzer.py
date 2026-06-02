@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Union
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
+from ....utils.path_safety import filter_safe_paths, safe_resolve_root
 from ...static_analysis.context_extractor import ContextExtractor
 from ...static_analysis.native_analyzer import NativeAnalyzer
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
@@ -74,6 +75,12 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # Initialize alignment orchestrator (handles all LLM interaction)
         self.alignment_orchestrator = AlignmentOrchestrator(config)
 
+        # Tracks every MCP tool/function that was analyzed during the most recent
+        # analyze() call, regardless of whether a finding was produced. This lets
+        # callers report on ALL tools detected during a scan (safe and unsafe),
+        # not only the ones that triggered a SecurityFinding.
+        self.analyzed_functions: List[Dict[str, Any]] = []
+
         self.logger.debug(
             "BehavioralCodeAnalyzer initialized with alignment verification"
         )
@@ -83,15 +90,37 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     ) -> List[SecurityFinding]:
         """Analyze MCP tool source code for docstring/behavior mismatches.
 
+        The returned list contains a ``SecurityFinding`` for **every** MCP
+        tool/function the scan considered, not only the ones that produced
+        a concrete mismatch. Safe tools are surfaced as findings with
+        ``severity == "SAFE"`` and ``threat_category == ""`` so SDK callers
+        can enumerate every scanned tool from the return value alone,
+        without having to read the legacy ``analyzed_functions``
+        side-channel attribute. This makes ``analyze()`` self-describing:
+        callers should classify each entry by ``finding.severity`` rather
+        than by ``len(findings) == 0``, since the latter no longer means
+        "all safe" — it means "nothing was scannable".
+
         Args:
-            content: File path to Python file/directory OR source code string
-            context: Analysis context with tool_name, file_path, etc.
+            content: File path to a source file/directory OR raw source
+                code string. The directory case walks every supported
+                language (see ``_find_source_files``).
+            context: Analysis context with ``tool_name``, ``file_path``,
+                etc.
 
         Returns:
-            List of SecurityFinding objects for detected mismatches
+            List of ``SecurityFinding`` objects covering every scanned
+            tool: concrete severities (``HIGH``/``MEDIUM``/``LOW``/
+            ``INFO``) for detected mismatches, and ``severity="SAFE"``
+            (with ``threat_category=""``) for tools that came back clean.
+            Empty list only when no functions were extractable at all
+            (parse failure, empty source, unsupported language across
+            every file).
         """
         try:
             all_findings = []
+            # Reset per-call so consumers see only tools from this invocation.
+            self.analyzed_functions = []
 
             # Check if content is a directory
             if os.path.isdir(content):
@@ -299,9 +328,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """
         source_files = []
         path = Path(directory)
+        # Resolve the scan root once; every candidate is checked against this
+        # canonical path so symlinks that point outside the scan root are
+        # rejected before the analyzer ever opens the file. See
+        # mcpscanner/utils/path_safety.py for the rationale.
+        resolved_root = safe_resolve_root(directory)
 
         extensions = self._PYTHON_EXTENSIONS | set(self._EXT_TO_TS_LANGUAGE.keys())
 
+        candidates: List[Path] = []
         for ext in extensions:
             for source_file in path.rglob(f"*{ext}"):
                 file_str = str(source_file)
@@ -310,7 +345,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     and "node_modules" not in file_str
                     and not any(part.startswith(".") for part in source_file.parts)
                 ):
-                    source_files.append(file_str)
+                    candidates.append(source_file)
+
+        safe_candidates, _skipped = filter_safe_paths(
+            candidates, resolved_root, audit_label="behavioral"
+        )
+        for source_file in safe_candidates:
+            source_files.append(str(source_file))
 
         return sorted(source_files)
 
@@ -323,14 +364,22 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         Returns:
             List of Python file paths
         """
-        python_files = []
+        python_files: List[str] = []
         path = Path(directory)
+        resolved_root = safe_resolve_root(directory)
 
+        candidates: List[Path] = []
         for py_file in path.rglob("*.py"):
             if "__pycache__" not in str(py_file) and not any(
                 part.startswith(".") for part in py_file.parts
             ):
-                python_files.append(str(py_file))
+                candidates.append(py_file)
+
+        safe_candidates, _skipped = filter_safe_paths(
+            candidates, resolved_root, audit_label="behavioral"
+        )
+        for py_file in safe_candidates:
+            python_files.append(str(py_file))
 
         return sorted(python_files)
 
@@ -454,6 +503,20 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 self.logger.debug(f"No functions found in {file_path}")
                 return findings
 
+            # Record every function we are about to analyze so that callers
+            # can enumerate all tools detected during the scan (including
+            # functions that later come back clean with no findings).
+            for fc in func_contexts:
+                self.analyzed_functions.append(
+                    {
+                        "name": getattr(fc, "name", "unknown"),
+                        "decorator_types": list(getattr(fc, "decorator_types", []) or []),
+                        "line_number": getattr(fc, "line_number", 0),
+                        "source_file": file_path,
+                        "docstring": getattr(fc, "docstring", None) or "",
+                    }
+                )
+
             self.logger.debug(f"Analyzing {len(func_contexts)} functions in {file_path}")
 
             # Enrich with cross-file context if available
@@ -507,6 +570,58 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         finding = self._create_security_finding(analysis, ctx, file_path)
                         if finding:
                             findings.append(finding)
+
+            # Emit a SAFE SecurityFinding for every scanned function that
+            # didn't produce a concrete mismatch. This lifts safe-tool
+            # enumeration into the documented analyze() return contract
+            # instead of forcing SDK callers to read the legacy
+            # analyzed_functions side-channel attribute. Callers should
+            # classify entries by finding.severity (SAFE vs HIGH/MEDIUM/
+            # LOW/INFO) rather than by len(findings)==0.
+            #
+            # Only synthesize SAFE rows when analysis completed without
+            # raising — if alignment_orchestrator throws and we fall
+            # through to the except block below, findings is partial and
+            # we MUST NOT claim the rest are safe (we just don't know).
+            funcs_with_findings = {
+                (f.details or {}).get("function_name")
+                for f in findings
+                if (f.details or {}).get("source_file") == file_path
+            }
+            funcs_with_findings.discard(None)
+            for fc in func_contexts:
+                name = getattr(fc, "name", None)
+                if not name or name in funcs_with_findings:
+                    continue
+                decorator_types = getattr(fc, "decorator_types", None) or []
+                findings.append(
+                    SecurityFinding(
+                        severity="SAFE",
+                        # Match phrasing already used by report/CLI helpers
+                        # so safe-row UX stays consistent end-to-end.
+                        summary="No behavioral mismatches detected",
+                        # threat_category intentionally empty: SAFE
+                        # findings don't belong in threat-name aggregates
+                        # (set comprehensions like
+                        # {f.threat_category for f in findings if
+                        # f.threat_category} naturally filter them out).
+                        threat_category="",
+                        analyzer="Behavioral",
+                        details={
+                            "function_name": name,
+                            "decorator_type": (
+                                decorator_types[0] if decorator_types else "unknown"
+                            ),
+                            "line_number": getattr(fc, "line_number", 0),
+                            "source_file": file_path,
+                            # Marker so consumers can distinguish synthesized
+                            # SAFE rows from real findings without relying on
+                            # severity alone (other analyzers may also emit
+                            # SAFE-severity findings in the future).
+                            "no_findings": True,
+                        },
+                    )
+                )
 
         except Exception as e:
             self.logger.error(f"Analysis failed for {file_path}: {e}", exc_info=True)
