@@ -22,15 +22,11 @@ It supports MCP servers written in multiple languages.
 
 Supported languages and MCP SDK patterns:
 - Python (via built-in ast module): @mcp.tool(), @mcp.resource(), @mcp.prompt()
-- TypeScript/JavaScript (via tree-sitter): server.registerTool(), server.tool()
+- TypeScript/JavaScript (via tree-sitter): server.registerTool(), server.tool(),
+  export function annotations, and decorators
 - Go (via tree-sitter): mcp.AddTool(server, &mcp.Tool{...}, handler)
-- Java/Spring (via tree-sitter): @Tool, @ToolParam annotations on @Service classes
-- Kotlin (via tree-sitter): server.addTool(name, description, inputSchema) { handler }
 - C#/.NET (via tree-sitter): [McpServerTool], [Description] on [McpServerToolType] classes
 - Rust (via tree-sitter): #[tool], #[tool_router] macros (rmcp crate)
-- Ruby (via tree-sitter): # @tool comment annotations
-- PHP (via tree-sitter): @Tool annotations in docblocks
-- Swift (via tree-sitter): General function analysis
 
 Key features:
 - Pure AST extraction - NO hardcoded patterns
@@ -93,20 +89,10 @@ def _get_language_module(lang: str) -> Optional[Any]:
             import tree_sitter_typescript as mod
         elif lang == "go":
             import tree_sitter_go as mod
-        elif lang == "java":
-            import tree_sitter_java as mod
-        elif lang == "kotlin":
-            import tree_sitter_kotlin as mod
-        elif lang == "swift":
-            import tree_sitter_swift as mod
         elif lang == "c_sharp":
             import tree_sitter_c_sharp as mod
-        elif lang == "ruby":
-            import tree_sitter_ruby as mod
         elif lang == "rust":
             import tree_sitter_rust as mod
-        elif lang == "php":
-            import tree_sitter_php as mod
         else:
             return None
         _LANGUAGE_MODULES[lang] = mod
@@ -135,10 +121,17 @@ class NativeAnalyzer:
 
     Supports:
     - Python: Uses built-in ast module with full dataflow analysis
-    - TypeScript/JavaScript/Go/Java/Kotlin/C#/Ruby/Rust/PHP: Uses tree-sitter with dataflow
+    - TypeScript (incl. TSX) / JavaScript / Go / C# / Rust: Uses tree-sitter with dataflow
 
     The output format matches FunctionContext for compatibility with
     the existing analysis pipeline.
+
+    Java, Kotlin, Ruby, PHP, and Swift were intentionally removed from
+    the supported set because real-world MCP servers in those languages
+    are vanishingly rare and each grammar carried install + binary cost.
+    The dispatch tables below are kept narrow on purpose so an
+    unsupported language fails fast with a clear ``Unsupported language``
+    error rather than half-running through dead node-type maps.
     
     Key difference from basic NativeAnalyzer:
     - Performs taint tracking from function parameters
@@ -146,7 +139,8 @@ class NativeAnalyzer:
     - Tracks parameter flows to calls, returns, and external operations
     """
 
-    # File extension to language mapping
+    # File extension to language mapping. Java/Kotlin/Ruby/PHP/Swift
+    # entries were dropped — see class docstring for rationale.
     EXTENSION_MAP = {
         # Python
         ".py": "python", ".pyw": "python",
@@ -156,20 +150,10 @@ class NativeAnalyzer:
         ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
         # Go
         ".go": "go",
-        # Java
-        ".java": "java",
-        # Kotlin
-        ".kt": "kotlin", ".kts": "kotlin",
-        # Swift
-        ".swift": "swift",
         # C#
         ".cs": "c_sharp",
-        # Ruby
-        ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
         # Rust
         ".rs": "rust",
-        # PHP
-        ".php": "php", ".phtml": "php",
     }
 
     # Function node types per language (for tree-sitter)
@@ -177,13 +161,8 @@ class NativeAnalyzer:
         "javascript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
         "typescript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
         "go": {"function_declaration", "method_declaration"},
-        "java": {"method_declaration", "constructor_declaration"},
-        "kotlin": {"function_declaration", "secondary_constructor", "primary_constructor", "lambda_literal", "anonymous_function"},
-        "swift": {"function_declaration", "initializer_declaration"},
         "c_sharp": {"method_declaration", "constructor_declaration", "local_function_statement"},
-        "ruby": {"method", "singleton_method"},
         "rust": {"function_item", "impl_item"},
-        "php": {"function_definition", "method_declaration"},
     }
 
     # Class node types per language
@@ -191,13 +170,8 @@ class NativeAnalyzer:
         "javascript": {"class_declaration"},
         "typescript": {"class_declaration"},
         "go": {"type_declaration"},
-        "java": {"class_declaration", "interface_declaration"},
-        "kotlin": {"class_declaration", "object_declaration"},
-        "swift": {"class_declaration", "struct_declaration"},
         "c_sharp": {"class_declaration", "struct_declaration", "interface_declaration"},
-        "ruby": {"class", "module"},
         "rust": {"struct_item", "impl_item"},
-        "php": {"class_declaration", "interface_declaration"},
     }
 
     def __init__(self, source_code: str, file_path: str = "unknown"):
@@ -738,11 +712,12 @@ class NativeAnalyzer:
         errors = []
 
         try:
-            # Get the language object
+            # Get the language object. Tree-sitter's TypeScript grammar
+            # exposes its parser under a non-standard factory name so it
+            # needs an explicit branch. PHP/other special-cased grammars
+            # were removed when their language support was dropped.
             if self.language == "typescript":
                 lang = Language(lang_mod.language_typescript())
-            elif self.language == "php":
-                lang = Language(lang_mod.language_php())
             else:
                 lang = Language(lang_mod.language())
 
@@ -981,20 +956,21 @@ class NativeAnalyzer:
                             break
                 
                 elif child.type == "formal_parameter":
-                    # Java/Kotlin parameters
+                    # Generic ``formal_parameter`` shape used by several
+                    # tree-sitter grammars (originally added for Java/Kotlin).
+                    # Branch is harmless when those grammars are removed —
+                    # it simply never fires for the remaining languages.
                     name_node = child.child_by_field_name("name")
                     type_node = child.child_by_field_name("type")
                     if name_node:
                         param_info["name"] = self._ts_get_node_text(name_node)
                     if type_node:
                         param_info["type"] = self._ts_get_node_text(type_node)
-                
-                elif child.type == "simple_parameter":
-                    # Ruby parameters
-                    param_info["name"] = self._ts_get_node_text(child)
-                
+
                 elif child.type == "parameter":
-                    # Rust/PHP/Swift parameters
+                    # Rust ``parameter`` shape (also matched by some legacy
+                    # grammars). ``pattern`` covers Rust's destructured
+                    # parameter forms; ``name`` is the simple identifier path.
                     name_node = child.child_by_field_name("pattern") or child.child_by_field_name("name")
                     if name_node:
                         param_info["name"] = self._ts_get_node_text(name_node)
