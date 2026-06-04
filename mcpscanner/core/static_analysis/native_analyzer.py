@@ -116,6 +116,62 @@ def _get_language_module(lang: str) -> Optional[Any]:
         return None
 
 
+# Process-wide cache of tree-sitter ``Language`` and ``Parser`` objects,
+# keyed by our internal language identifier. Constructing a ``Language``
+# from a grammar pointer is cheap individually but becomes a noticeable
+# fraction of CPU when ``NativeAnalyzer`` instantiates a fresh
+# ``Parser`` per file (and ``extract_mcp_capability_contexts`` *also*
+# instantiates one). The ``tree-sitter`` Python bindings document
+# ``Parser`` as reusable across ``parse()`` calls, so caching is safe.
+#
+# We never invalidate this cache — the underlying language modules are
+# pinned via ``pyproject.toml`` and the language object is pure data.
+_TS_LANGUAGE_CACHE: Dict[str, Optional[Language]] = {}
+_TS_PARSER_CACHE: Dict[str, Optional[Parser]] = {}
+
+
+def _get_tree_sitter_parser(language: str) -> Optional[Parser]:
+    """Return a cached, reusable ``Parser`` for the requested language.
+
+    Returns ``None`` when:
+    - the language module isn't installed (tree-sitter-<lang> missing), or
+    - the language identifier isn't supported.
+
+    Subsequent calls for the same language return the same parser
+    instance, so callers must NOT mutate parser-wide options.
+    """
+    cached = _TS_PARSER_CACHE.get(language)
+    if cached is not None:
+        return cached
+    # Honor a previously cached negative result so we don't repeatedly
+    # attempt to import a missing language module.
+    if language in _TS_PARSER_CACHE and cached is None:
+        return None
+
+    lang_mod = _get_language_module(language)
+    if lang_mod is None:
+        _TS_PARSER_CACHE[language] = None
+        _TS_LANGUAGE_CACHE[language] = None
+        return None
+
+    try:
+        if language == "typescript":
+            lang = Language(lang_mod.language_typescript())
+        elif language == "php":
+            lang = Language(lang_mod.language_php())
+        else:
+            lang = Language(lang_mod.language())
+    except Exception:
+        _TS_PARSER_CACHE[language] = None
+        _TS_LANGUAGE_CACHE[language] = None
+        return None
+
+    parser = Parser(lang)
+    _TS_LANGUAGE_CACHE[language] = lang
+    _TS_PARSER_CACHE[language] = parser
+    return parser
+
+
 # Method names that MCP SDKs use to register tools/prompts/resources at
 # call sites. Lowercased; the observed call name is lowercased before
 # comparing. Verified against the upstream SDK READMEs (TS SDK v1/v2, Go
@@ -828,7 +884,9 @@ class NativeAnalyzer:
         return an empty list.
         """
         if self.language == "python":
-            return self._py_extract_capability_contexts()
+            return self._py_extract_capability_contexts(
+                cross_file_analyzer=cross_file_analyzer
+            )
 
         # Gap 12: byte-level prefilter — skip the whole tree-sitter
         # parse for files that contain none of the MCP marker tokens.
@@ -838,20 +896,38 @@ class NativeAnalyzer:
         if self.language not in self.FUNCTION_NODE_TYPES:
             return []
 
-        lang_mod = _get_language_module(self.language)
-        if lang_mod is None:
-            return []
+        # Reuse the process-wide cached parser. ``extract_mcp_capability_contexts``
+        # is the hot path of the behavioral analyzer — paying for a fresh
+        # ``Language`` + ``Parser`` per file is pure overhead because both
+        # objects are pure data and reusable.
+        #
+        # Additionally, when the caller already built a cross-file call
+        # graph (which itself parses every survivor file once), prefer
+        # the tree it already cached so we don't pay for a *second*
+        # parse on each file in directory scans. ``TreeSitterCallGraphAnalyzer``
+        # exposes ``get_tree(Path)`` for exactly this case.
+        tree = None
+        if cross_file_analyzer is not None:
+            getter = getattr(cross_file_analyzer, "get_tree", None)
+            if callable(getter):
+                try:
+                    tree = getter(self.file_path)
+                except Exception:
+                    tree = None
+
+        if tree is None:
+            parser = _get_tree_sitter_parser(self.language)
+            if parser is None:
+                return []
+            try:
+                tree = parser.parse(self.source_bytes)
+            except Exception as e:
+                self.logger.warning(
+                    f"MCP capability extraction failed for {self.file_path}: {e}"
+                )
+                return []
 
         try:
-            if self.language == "typescript":
-                lang = Language(lang_mod.language_typescript())
-            elif self.language == "php":
-                lang = Language(lang_mod.language_php())
-            else:
-                lang = Language(lang_mod.language())
-
-            parser = Parser(lang)
-            tree = parser.parse(self.source_bytes)
             imports = self._ts_extract_imports(tree.root_node)
         except Exception as e:
             self.logger.warning(
@@ -1136,7 +1212,10 @@ class NativeAnalyzer:
         self._mcp_prefilter_cache = result
         return result
 
-    def _py_extract_capability_contexts(self) -> List[FunctionContext]:
+    def _py_extract_capability_contexts(
+        self,
+        cross_file_analyzer: Optional[Any] = None,
+    ) -> List[FunctionContext]:
         """Lazy Python capability extraction (Gap 5 + Gap 8).
 
         The previous implementation called ``extract_all_function_contexts``
@@ -1148,7 +1227,11 @@ class NativeAnalyzer:
 
           1. Run the byte-level prefilter once. If the file has no MCP
              markers, return ``[]`` without parsing.
-          2. ``ast.parse`` once.
+          2. ``ast.parse`` once — or, when the caller's
+             ``cross_file_analyzer`` (a ``CallGraphAnalyzer``) already
+             parsed the same file, reuse its cached AST instead of
+             paying for a duplicate parse (Gap 4: deduplicate
+             parse/read).
           3. Walk the AST and collect:
              a. ``FunctionDef`` / ``AsyncFunctionDef`` nodes whose
                 decorator list names an MCP capability (FastMCP
@@ -1170,10 +1253,21 @@ class NativeAnalyzer:
         """
         if not self._has_mcp_markers():
             return []
-        try:
-            tree = ast.parse(self.source_code, filename=str(self.file_path))
-        except SyntaxError:
-            return []
+
+        tree = None
+        if cross_file_analyzer is not None:
+            getter = getattr(cross_file_analyzer, "get_ast", None)
+            if callable(getter):
+                try:
+                    tree = getter(self.file_path)
+                except Exception:
+                    tree = None
+
+        if tree is None:
+            try:
+                tree = ast.parse(self.source_code, filename=str(self.file_path))
+            except SyntaxError:
+                return []
 
         module_imports = self._py_extract_imports(tree)
         wrapper_decorators = self._py_collect_wrapper_decorators(tree)
@@ -3009,28 +3103,23 @@ class NativeAnalyzer:
 
     def _analyze_tree_sitter(self) -> NativeAnalysisResult:
         """Analyze source code using tree-sitter AST (generic for all languages)."""
-        # Get the language module
-        lang_mod = _get_language_module(self.language)
-        if lang_mod is None:
+        # Reuse the process-wide cached parser. Falls back to "module
+        # missing" errors only when the language isn't installed.
+        parser = _get_tree_sitter_parser(self.language)
+        if parser is None:
             return NativeAnalysisResult(
                 success=False,
                 language=self.language,
-                errors=[f"tree-sitter-{self.language} not available. Install: pip install tree-sitter-{self.language.replace('_', '-')}"],
+                errors=[
+                    f"tree-sitter-{self.language} not available. Install: "
+                    f"pip install tree-sitter-{self.language.replace('_', '-')}"
+                ],
             )
 
         functions = []
         errors = []
 
         try:
-            # Get the language object
-            if self.language == "typescript":
-                lang = Language(lang_mod.language_typescript())
-            elif self.language == "php":
-                lang = Language(lang_mod.language_php())
-            else:
-                lang = Language(lang_mod.language())
-
-            parser = Parser(lang)
             tree = parser.parse(self.source_bytes)
 
             # Extract imports from AST

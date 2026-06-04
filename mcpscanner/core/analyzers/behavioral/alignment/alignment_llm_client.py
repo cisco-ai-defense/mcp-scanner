@@ -77,11 +77,67 @@ class AlignmentLLMClient:
         self.logger = logging.getLogger(__name__)
         self.logger.debug(f"AlignmentLLMClient initialized with model: {self._model}")
 
-    async def verify_alignment(self, prompt: str) -> str:
+    # Models that support Anthropic-style ``cache_control`` markers
+    # via litellm. OpenAI/Azure OpenAI already do automatic prefix
+    # caching server-side and reject unknown keys, so we only mark
+    # blocks as cacheable for these provider strings.
+    _ANTHROPIC_CACHE_PREFIXES: tuple = (
+        "anthropic/",
+        "claude-",
+        "bedrock/anthropic",
+        "bedrock/us.anthropic",
+        "bedrock/eu.anthropic",
+        "bedrock/apac.anthropic",
+    )
+
+    def _supports_anthropic_cache(self) -> bool:
+        """Return True when the configured model accepts ``cache_control``.
+
+        Anthropic Claude (direct API), AWS Bedrock Claude, and the
+        Vertex AI Anthropic family all honor litellm's
+        ``cache_control: {"type": "ephemeral"}`` block. Other
+        providers either cache automatically (OpenAI/Azure) or reject
+        the marker, so we only emit it for known-supporting models.
+        """
+        if not MCPScannerConstants.LLM_PROMPT_CACHE_ENABLED:
+            return False
+        model = (self._model or "").lower()
+        if any(model.startswith(p) for p in self._ANTHROPIC_CACHE_PREFIXES):
+            return True
+        if "claude" in model and "bedrock/" in model:
+            return True
+        return False
+
+    async def verify_alignment(
+        self,
+        prompt: str,
+        *,
+        cacheable_template: Optional[str] = None,
+        evidence: Optional[str] = None,
+    ) -> str:
         """Send alignment verification prompt to LLM with retry logic.
 
+        Two calling conventions:
+
+        1. Legacy single-string mode (``prompt`` only): the entire
+           template + evidence is sent as one user message. Kept for
+           callers that haven't migrated to the split form.
+        2. Cacheable mode (``cacheable_template`` AND ``evidence``):
+           the static 73 KB threat-analysis template is placed in a
+           dedicated system block tagged with Anthropic
+           ``cache_control: ephemeral`` (when the configured model
+           supports it). After the first request, subsequent requests
+           reuse the cached prefix at ~10× cheaper input-token cost
+           and noticeably lower TTFT. For non-Anthropic providers
+           the two pieces are simply concatenated — OpenAI/Azure
+           handle caching automatically without the marker.
+
         Args:
-            prompt: Comprehensive prompt with alignment verification evidence
+            prompt: Whole prompt (legacy) — ignored when
+                ``cacheable_template`` and ``evidence`` are both set.
+            cacheable_template: Static template to mark cacheable.
+            evidence: Per-request evidence content. Kept short so each
+                request only ships the variable portion.
 
         Returns:
             LLM response (JSON string)
@@ -89,14 +145,18 @@ class AlignmentLLMClient:
         Raises:
             Exception: If LLM API call fails after retries
         """
-        # Log prompt length for debugging
-        prompt_length = len(prompt)
-        self.logger.debug(f"Prompt length: {prompt_length} characters")
+        use_split = (
+            cacheable_template is not None and evidence is not None
+        )
+        if use_split:
+            total_length = len(cacheable_template) + len(evidence)
+        else:
+            total_length = len(prompt)
 
-        # Check against configurable threshold
-        if prompt_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
+        self.logger.debug(f"Prompt length: {total_length} characters")
+        if total_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
             self.logger.warning(
-                f"Large prompt detected: {prompt_length} characters "
+                f"Large prompt detected: {total_length} characters "
                 f"(threshold: {MCPScannerConstants.PROMPT_LENGTH_THRESHOLD}) - may be truncated by LLM"
             )
 
@@ -106,7 +166,13 @@ class AlignmentLLMClient:
 
         for attempt in range(max_retries):
             try:
-                return await self._make_llm_request(prompt)
+                if use_split:
+                    return await self._make_llm_request(
+                        prompt=None,
+                        cacheable_template=cacheable_template,
+                        evidence=evidence,
+                    )
+                return await self._make_llm_request(prompt=prompt)
             except Exception as e:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2**attempt)
@@ -120,11 +186,24 @@ class AlignmentLLMClient:
                     )
                     raise
 
-    async def _make_llm_request(self, prompt: str) -> str:
+    async def _make_llm_request(
+        self,
+        prompt: Optional[str] = None,
+        *,
+        cacheable_template: Optional[str] = None,
+        evidence: Optional[str] = None,
+    ) -> str:
         """Make a single LLM API request.
 
+        Builds the message payload either as a single user prompt
+        (legacy path) or as a system+user pair where the system block
+        carries the static template and is marked cacheable for
+        Anthropic-family models.
+
         Args:
-            prompt: Prompt to send
+            prompt: Single combined prompt (legacy).
+            cacheable_template: Static template (cacheable path).
+            evidence: Per-request evidence (cacheable path).
 
         Returns:
             LLM response content
@@ -133,20 +212,49 @@ class AlignmentLLMClient:
             Exception: If API call fails
         """
         try:
+            base_system = (
+                "You are a security expert analyzing MCP tools. "
+                "You receive complete dataflow, taint analysis, and code context. "
+                "Analyze if the docstring accurately describes what the code actually does. "
+                "Respond ONLY with valid JSON. Do not include any markdown formatting or code blocks."
+            )
+
+            if cacheable_template is not None and evidence is not None:
+                if self._supports_anthropic_cache():
+                    # Anthropic / Bedrock Anthropic: split the system
+                    # block into preamble + cached template. The
+                    # ``cache_control`` marker is per-block; its
+                    # contents must be ≥1024 tokens for caching to
+                    # actually engage (the 73 KB template is well
+                    # over that threshold, so we always qualify).
+                    system_content = [
+                        {"type": "text", "text": base_system},
+                        {
+                            "type": "text",
+                            "text": cacheable_template,
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    ]
+                else:
+                    # OpenAI / Azure: automatic prefix caching kicks
+                    # in for stable system content; no marker needed.
+                    # Concatenate into a plain string so we don't ship
+                    # a content-block list to providers that don't
+                    # accept it.
+                    system_content = f"{base_system}\n\n{cacheable_template}"
+                messages = [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": evidence},
+                ]
+            else:
+                messages = [
+                    {"role": "system", "content": base_system},
+                    {"role": "user", "content": prompt or ""},
+                ]
+
             request_params = {
                 "model": self._model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a security expert analyzing MCP tools. "
-                            "You receive complete dataflow, taint analysis, and code context. "
-                            "Analyze if the docstring accurately describes what the code actually does. "
-                            "Respond ONLY with valid JSON. Do not include any markdown formatting or code blocks."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
+                "messages": messages,
                 "max_tokens": self._max_tokens,
                 "temperature": self._temperature,
                 "timeout": self._llm_timeout,

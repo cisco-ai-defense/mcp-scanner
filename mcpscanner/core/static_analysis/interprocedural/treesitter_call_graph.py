@@ -108,50 +108,32 @@ class TreeSitterCallGraphAnalyzer:
         self.files: Dict[Path, tuple] = {}  # file_path -> (tree, source_bytes)
         self.import_map: Dict[Path, List[str]] = {}
         self.logger = logging.getLogger(__name__)
-        
-        self._parser: Optional[Parser] = None
-        self._lang: Optional[Language] = None
-    
+
     def _get_parser(self) -> Optional[Parser]:
-        """Get or create parser for the language."""
-        if self._parser:
-            return self._parser
-        
-        try:
-            if self.language == "javascript":
-                import tree_sitter_javascript as mod
-                self._lang = Language(mod.language())
-            elif self.language == "typescript":
-                import tree_sitter_typescript as mod
-                self._lang = Language(mod.language_typescript())
-            elif self.language == "go":
-                import tree_sitter_go as mod
-                self._lang = Language(mod.language())
-            elif self.language == "java":
-                import tree_sitter_java as mod
-                self._lang = Language(mod.language())
-            elif self.language == "kotlin":
-                import tree_sitter_kotlin as mod
-                self._lang = Language(mod.language())
-            elif self.language == "c_sharp":
-                import tree_sitter_c_sharp as mod
-                self._lang = Language(mod.language())
-            elif self.language == "ruby":
-                import tree_sitter_ruby as mod
-                self._lang = Language(mod.language())
-            elif self.language == "rust":
-                import tree_sitter_rust as mod
-                self._lang = Language(mod.language())
-            elif self.language == "php":
-                import tree_sitter_php as mod
-                self._lang = Language(mod.language_php())
-            else:
-                return None
-            
-            self._parser = Parser(self._lang)
-            return self._parser
-        except ImportError:
+        """Get a reusable parser for the configured language.
+
+        Delegates to the process-wide cache in ``native_analyzer`` so
+        the call-graph builder and the per-file ``NativeAnalyzer`` share
+        a single ``Parser`` (and ``Language``) instance per language.
+        """
+        # Imported lazily to avoid a top-level cycle: ``native_analyzer``
+        # imports interprocedural helpers via the behavioral analyzer
+        # only.
+        from ..native_analyzer import _get_tree_sitter_parser
+        return _get_tree_sitter_parser(self.language)
+
+    def get_tree(self, file_path: Path) -> Optional[Any]:
+        """Return the cached tree-sitter tree for ``file_path``, if present.
+
+        Lets ``NativeAnalyzer.extract_mcp_capability_contexts`` skip its
+        own ``parser.parse()`` when the call graph already parsed the
+        same file. The tuple is ``(tree, source_bytes)`` — see
+        ``add_file``.
+        """
+        entry = self.files.get(file_path)
+        if entry is None:
             return None
+        return entry[0]
     
     def add_file(self, file_path: Path, source_code: str) -> bool:
         """Add a file to the analysis."""
