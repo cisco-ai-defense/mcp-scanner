@@ -101,14 +101,66 @@ class AlignmentPromptBuilder:
             max_reaches_calls or MCPScannerConstants.BEHAVIORAL_MAX_REACHES_CALLS
         )
 
+    @property
+    def template_text(self) -> str:
+        """Static 73 KB threat-analysis template, loaded once at init.
+
+        Exposed so the LLM client can place this in a separately
+        cacheable system block (Anthropic ``cache_control``) instead
+        of re-shipping it on every single batch. See
+        ``AlignmentLLMClient._make_llm_request``.
+        """
+        return self._template
+
+    def build_evidence(self, func_context: FunctionContext) -> str:
+        """Return ONLY the per-call evidence section for one function.
+
+        This is everything that comes AFTER the static template:
+        the entry-point header, signature, dataflow, calls, etc.,
+        wrapped in randomized delimiter tags. Lives on its own so
+        the static template can be cached by the LLM provider while
+        only the small evidence block changes per request.
+
+        Includes the ``UNTRUSTED_INPUT_*`` delimiter tags so prompt
+        injection protections still hold even when the template is
+        served from a cached system block.
+        """
+        return self._build_evidence_block(func_context)
+
+    def build_batch_evidence(
+        self, func_contexts: List[FunctionContext]
+    ) -> str:
+        """Return ONLY the per-call evidence section for a batch.
+
+        See :meth:`build_evidence`. Mirror of :meth:`build_batch_prompt`
+        minus the static template.
+        """
+        return self._build_batch_evidence_block(func_contexts)
+
     def build_prompt(self, func_context: FunctionContext) -> str:
         """Build comprehensive alignment verification prompt.
+
+        Convenience wrapper that concatenates :attr:`template_text`
+        and :meth:`build_evidence`. Kept for backwards compatibility
+        and for callers (examples, debugging tools) that want the
+        single-string form. Production scans should pass the two
+        pieces to the LLM client separately so the static template
+        can be marked cacheable.
 
         Args:
             func_context: Complete function context with dataflow analysis
 
         Returns:
             Formatted prompt string with evidence
+        """
+        return f"{self._template}\n\n{self.build_evidence(func_context)}".strip()
+
+    def _build_evidence_block(self, func_context: FunctionContext) -> str:
+        """Implementation of the per-call evidence portion.
+
+        Pulled out of ``build_prompt`` so it can be served on its own
+        for prompt caching. Behavior is byte-identical to the prior
+        inlined version — just the static template prefix is gone.
         """
         # Generate random delimiter tags to prevent prompt injection
         random_id = secrets.token_hex(16)
@@ -394,24 +446,44 @@ Parameter Flow Tracking:
                 f"Potential prompt injection detected in function {func_context.name}: Input contains delimiter tags"
             )
 
-        # Wrap the untrusted content with randomized delimiters
-        prompt = f"""{self._template}
-
-{start_tag}
+        # Wrap the untrusted content with randomized delimiters.
+        # The template has been moved out of this string so callers
+        # using prompt caching can place it in a separate system
+        # block; ``build_prompt`` re-prepends it for legacy callers.
+        evidence = f"""{start_tag}
 {analysis_content}
 {end_tag}
 """
 
-        return prompt.strip()
+        return evidence.strip()
 
     def build_batch_prompt(self, func_contexts: List[FunctionContext]) -> str:
         """Build a batched prompt for analyzing multiple functions in one LLM call.
+
+        Convenience wrapper around :meth:`build_batch_evidence` that
+        prepends the static template. Production scans should call
+        :meth:`build_batch_evidence` and pass it alongside
+        :attr:`template_text` to the LLM client so the template can be
+        marked cacheable.
 
         Args:
             func_contexts: List of function contexts to analyze
 
         Returns:
             Formatted prompt string with all functions
+        """
+        return (
+            f"{self._template}\n\n{self.build_batch_evidence(func_contexts)}"
+        ).strip()
+
+    def _build_batch_evidence_block(
+        self, func_contexts: List[FunctionContext]
+    ) -> str:
+        """Implementation of the batched evidence portion.
+
+        Lives separately so the static template can be cached by the
+        LLM provider and only this rebuilt-per-batch evidence string
+        is shipped on each request.
         """
         # Generate random delimiter tags
         random_id = secrets.token_hex(16)
@@ -481,15 +553,17 @@ For each function with mismatch_detected=true, include all required fields (thre
 For functions with no issues, just include function_index, function_name, and mismatch_detected=false.
 
 """
-        prompt = f"""{self._template}
-
-{batch_instructions}
+        # Template is intentionally NOT included here — see
+        # ``build_batch_evidence`` and the cacheable system block in
+        # ``AlignmentLLMClient``. ``build_batch_prompt`` re-prepends
+        # it for legacy callers.
+        evidence = f"""{batch_instructions}
 
 {start_tag}
 {analysis_content}
 {end_tag}
 """
-        return prompt.strip()
+        return evidence.strip()
 
     def _format_call_chain(self, chain: List[Dict[str, Any]], indent: int = 0) -> str:
         """Format call chain recursively for display.

@@ -108,50 +108,32 @@ class TreeSitterCallGraphAnalyzer:
         self.files: Dict[Path, tuple] = {}  # file_path -> (tree, source_bytes)
         self.import_map: Dict[Path, List[str]] = {}
         self.logger = logging.getLogger(__name__)
-        
-        self._parser: Optional[Parser] = None
-        self._lang: Optional[Language] = None
-    
+
     def _get_parser(self) -> Optional[Parser]:
-        """Get or create parser for the language."""
-        if self._parser:
-            return self._parser
-        
-        try:
-            if self.language == "javascript":
-                import tree_sitter_javascript as mod
-                self._lang = Language(mod.language())
-            elif self.language == "typescript":
-                import tree_sitter_typescript as mod
-                self._lang = Language(mod.language_typescript())
-            elif self.language == "go":
-                import tree_sitter_go as mod
-                self._lang = Language(mod.language())
-            elif self.language == "java":
-                import tree_sitter_java as mod
-                self._lang = Language(mod.language())
-            elif self.language == "kotlin":
-                import tree_sitter_kotlin as mod
-                self._lang = Language(mod.language())
-            elif self.language == "c_sharp":
-                import tree_sitter_c_sharp as mod
-                self._lang = Language(mod.language())
-            elif self.language == "ruby":
-                import tree_sitter_ruby as mod
-                self._lang = Language(mod.language())
-            elif self.language == "rust":
-                import tree_sitter_rust as mod
-                self._lang = Language(mod.language())
-            elif self.language == "php":
-                import tree_sitter_php as mod
-                self._lang = Language(mod.language_php())
-            else:
-                return None
-            
-            self._parser = Parser(self._lang)
-            return self._parser
-        except ImportError:
+        """Get a reusable parser for the configured language.
+
+        Delegates to the process-wide cache in ``native_analyzer`` so
+        the call-graph builder and the per-file ``NativeAnalyzer`` share
+        a single ``Parser`` (and ``Language``) instance per language.
+        """
+        # Imported lazily to avoid a top-level cycle: ``native_analyzer``
+        # imports interprocedural helpers via the behavioral analyzer
+        # only.
+        from ..native_analyzer import _get_tree_sitter_parser
+        return _get_tree_sitter_parser(self.language)
+
+    def get_tree(self, file_path: Path) -> Optional[Any]:
+        """Return the cached tree-sitter tree for ``file_path``, if present.
+
+        Lets ``NativeAnalyzer.extract_mcp_capability_contexts`` skip its
+        own ``parser.parse()`` when the call graph already parsed the
+        same file. The tuple is ``(tree, source_bytes)`` — see
+        ``add_file``.
+        """
+        entry = self.files.get(file_path)
+        if entry is None:
             return None
+        return entry[0]
     
     def add_file(self, file_path: Path, source_code: str) -> bool:
         """Add a file to the analysis."""
@@ -179,24 +161,40 @@ class TreeSitterCallGraphAnalyzer:
         """Extract function definitions from AST."""
         func_types = self.FUNCTION_TYPES.get(self.language, set())
         class_types = {"class_declaration", "class", "struct_item", "impl_item", "object_declaration"}
-        
+        # Containers we should transparently descend through. ``export_statement``
+        # / ``export_declaration`` wrap function declarations in ESM modules
+        # (``export async function fn() { ... }``); without recursing into them
+        # we never see the function and cross-file resolution silently misses
+        # any handler that's registered from another module.
+        container_types = {
+            "program",
+            "source_file",
+            "module",
+            "namespace_declaration",
+            "class_body",
+            "interface_body",
+            "block",
+            "export_statement",
+            "export_declaration",
+            "default_export_declaration",
+        }
+
         for child in root.children:
             if child.type in func_types:
                 name = self._get_function_name(child, source_bytes)
                 if class_name:
                     name = f"{class_name}.{name}"
                 self.call_graph.add_function(name, child, file_path)
-            
+
             elif child.type in class_types:
                 # Get class name and recurse
                 name_node = child.child_by_field_name("name")
                 if name_node:
                     cls_name = source_bytes[name_node.start_byte:name_node.end_byte].decode("utf-8")
                     self._extract_functions(file_path, child, source_bytes, cls_name)
-            
+
             # Recurse into other containers
-            elif child.type in ("program", "source_file", "module", "namespace_declaration", 
-                               "class_body", "interface_body", "block"):
+            elif child.type in container_types:
                 self._extract_functions(file_path, child, source_bytes, class_name)
     
     def _get_function_name(self, node: Node, source_bytes: bytes) -> str:

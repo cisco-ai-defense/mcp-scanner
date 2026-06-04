@@ -472,3 +472,24 @@ class CallGraphAnalyzer:
             List of file paths
         """
         return list(self.analyzers.keys())
+
+    def get_ast(self, file_path: Path):
+        """Return the cached Python AST for ``file_path``, if any.
+
+        Lets ``NativeAnalyzer._py_extract_capability_contexts`` skip a
+        second ``ast.parse()`` when the call graph already parsed the
+        same file (Gap 4: deduplicate parse/read).
+
+        Returns ``None`` when the file wasn't added or its
+        ``PythonParser`` failed to parse.
+        """
+        analyzer = self.analyzers.get(file_path)
+        if analyzer is None:
+            return None
+        getter = getattr(analyzer, "get_ast", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:
+            return None

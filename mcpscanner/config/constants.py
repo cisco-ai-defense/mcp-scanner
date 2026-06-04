@@ -139,6 +139,26 @@ class MCPScannerConstants:
         os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0")
     )
 
+    # Behavioral analyzer LLM concurrency. Caps the number of LLM
+    # alignment requests in flight at once across all batches in a
+    # single ``BehavioralCodeAnalyzer.analyze()`` call. Tuned for
+    # provider rate limits (Anthropic Bedrock allows ~10 concurrent
+    # for most accounts; Azure OpenAI varies by deployment). Set to 1
+    # to restore the previous serial behavior.
+    LLM_CONCURRENCY: int = max(
+        1, int(os.getenv("MCP_SCANNER_LLM_CONCURRENCY", "6"))
+    )
+
+    # Enable Anthropic-style ephemeral prompt caching for the static
+    # 73 KB alignment template. When True the LLM client splits the
+    # template into a separate cacheable system block. Auto-disabled
+    # for non-Anthropic / non-Bedrock providers because OpenAI's
+    # automatic caching kicks in without the cache_control marker
+    # and Azure rejects unknown ``cache_control`` keys.
+    LLM_PROMPT_CACHE_ENABLED: bool = os.getenv(
+        "MCP_SCANNER_LLM_PROMPT_CACHE_ENABLED", "true"
+    ).lower() in ("true", "1", "yes")
+
     # Behavioral Analyzer File Size Limits
     MAX_FILE_SIZE_BYTES: int = int(
         os.getenv("MCP_SCANNER_MAX_FILE_SIZE_BYTES", "1000000")  # 1MB default

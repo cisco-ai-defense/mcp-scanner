@@ -26,10 +26,12 @@ It coordinates the alignment verification process by:
 This is the entry point for all alignment verification operations.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from .....config.config import Config
+from .....config.constants import MCPScannerConstants
 from .....threats.threats import ThreatMapping
 from ....static_analysis.context_extractor import FunctionContext
 from .alignment_prompt_builder import AlignmentPromptBuilder
@@ -76,7 +78,33 @@ class AlignmentOrchestrator:
             "skipped_error": 0,
         }
 
-        self.logger.debug("AlignmentOrchestrator initialized")
+        # Bounded LLM concurrency. Prefer a per-orchestrator semaphore
+        # over a module-global one so unit tests that instantiate
+        # multiple orchestrators don't share state, while still letting
+        # each ``analyze()`` invocation cap parallel in-flight requests
+        # at ``MCP_SCANNER_LLM_CONCURRENCY``. Created lazily inside an
+        # event loop in ``_get_llm_semaphore`` because constructing
+        # ``asyncio.Semaphore`` outside a running loop is brittle.
+        self._llm_concurrency = MCPScannerConstants.LLM_CONCURRENCY
+        self._llm_semaphore: Optional[asyncio.Semaphore] = None
+
+        self.logger.debug(
+            "AlignmentOrchestrator initialized "
+            f"(llm_concurrency={self._llm_concurrency})"
+        )
+
+    def _get_llm_semaphore(self) -> asyncio.Semaphore:
+        """Return the per-orchestrator LLM concurrency limiter.
+
+        Lazily creates the semaphore on first use so it binds to the
+        currently running event loop. Without this, repeated calls
+        from different loops (e.g. unit tests using ``asyncio.run``
+        on the same orchestrator) would silently share a semaphore
+        bound to a closed loop.
+        """
+        if self._llm_semaphore is None:
+            self._llm_semaphore = asyncio.Semaphore(self._llm_concurrency)
+        return self._llm_semaphore
 
     async def check_alignment(
         self, func_context: FunctionContext
@@ -99,10 +127,13 @@ class AlignmentOrchestrator:
         self.stats["total_analyzed"] += 1
 
         try:
-            # Step 1: Build alignment verification prompt
+            # Step 1: Build alignment verification prompt. Split the
+            # static template from the per-call evidence so prompt
+            # caching can engage on Anthropic-family models.
             self.logger.debug(f"Building alignment prompt for {func_context.name}")
             try:
-                prompt = self.prompt_builder.build_prompt(func_context)
+                evidence = self.prompt_builder.build_evidence(func_context)
+                cacheable_template = self.prompt_builder.template_text
             except Exception as e:
                 self.logger.error(
                     f"Prompt building failed for {func_context.name}: {e}",
@@ -116,7 +147,11 @@ class AlignmentOrchestrator:
                 f"Querying LLM for alignment verification of {func_context.name}"
             )
             try:
-                response = await self.llm_client.verify_alignment(prompt)
+                response = await self.llm_client.verify_alignment(
+                    "",
+                    cacheable_template=cacheable_template,
+                    evidence=evidence,
+                )
             except Exception as e:
                 self.logger.error(
                     f"LLM verification failed for {func_context.name}: {e}",
@@ -208,91 +243,236 @@ class AlignmentOrchestrator:
     ) -> List[Tuple[Dict[str, Any], FunctionContext]]:
         """Check alignment for multiple functions in batched LLM calls.
 
-        This method batches multiple functions into single LLM requests to reduce
-        API calls and improve scanning speed.
+        Batches are dispatched concurrently and capped by the
+        per-orchestrator LLM semaphore (``MCP_SCANNER_LLM_CONCURRENCY``),
+        so a 120-tool scan completes in ``ceil(num_batches /
+        concurrency)`` round trips instead of ``num_batches`` round
+        trips. The previous implementation awaited each batch
+        sequentially inside a ``for`` loop, which dominated the wall
+        clock on every scan.
+
+        Threat-vulnerability classification (a separate LLM call per
+        flagged mismatch) is also dispatched in parallel under the
+        same semaphore for the same reason.
 
         Args:
-            func_contexts: List of function contexts to analyze
-            batch_size: Number of functions per LLM request (default: 5)
+            func_contexts: List of function contexts to analyze.
+            batch_size: Number of functions per LLM request
+                (default: 5). Larger batches reduce request count but
+                each request carries more risk of partial-failure
+                fallback to per-function analysis.
 
         Returns:
-            List of (analysis_dict, func_context) tuples for detected mismatches
+            List of ``(analysis_dict, func_context)`` tuples for
+            detected mismatches. Order matches input order so callers
+            that zip results with ``func_contexts`` still work.
         """
-        results = []
-        
-        # Process in batches
-        for i in range(0, len(func_contexts), batch_size):
-            batch = func_contexts[i:i + batch_size]
-            self.logger.debug(f"Processing batch of {len(batch)} functions")
-            
-            try:
-                # Build batched prompt
-                prompt = self.prompt_builder.build_batch_prompt(batch)
-                
-                # Query LLM
-                response = await self.llm_client.verify_alignment(prompt)
-                
-                # Parse batched response
-                batch_results = self.response_validator.validate_batch(response, len(batch))
-                
-                if not batch_results:
-                    self.logger.warning("Invalid batch response, falling back to individual analysis")
-                    # Fallback to individual analysis
-                    for func_context in batch:
-                        result = await self.check_alignment(func_context)
-                        if result:
-                            results.append(result)
+        if not func_contexts:
+            return []
+
+        # Slice into batches once. Keep the original index of every
+        # function so we can preserve input order in the output.
+        batches: List[List[FunctionContext]] = [
+            func_contexts[i:i + batch_size]
+            for i in range(0, len(func_contexts), batch_size)
+        ]
+        self.logger.debug(
+            f"Dispatching {len(batches)} batch(es) of up to {batch_size} "
+            f"function(s) with concurrency={self._llm_concurrency}"
+        )
+
+        # Phase 1: run all batches concurrently. Each task returns a
+        # list of ``(global_index, result_or_none, func_context)``
+        # entries. ``return_exceptions=True`` so one bad batch can't
+        # tear down the whole gather.
+        offsets = [i * batch_size for i in range(len(batches))]
+        gathered = await asyncio.gather(
+            *(
+                self._run_one_batch(batch, offset)
+                for batch, offset in zip(batches, offsets)
+            ),
+            return_exceptions=True,
+        )
+
+        # Phase 2: collect the raw alignment results, in order, and
+        # decide which need a follow-up classifier call.
+        #
+        # ``raw[i]`` corresponds to ``func_contexts[i]`` after Phase 1.
+        # ``None`` means "no mismatch" or "task failed and was already
+        # accounted for in stats". Phase 3 only acts on truthy entries.
+        raw: List[Optional[Tuple[Dict[str, Any], FunctionContext]]] = (
+            [None] * len(func_contexts)
+        )
+        classify_indices: List[int] = []
+        for batch_outcome in gathered:
+            if isinstance(batch_outcome, BaseException):
+                # ``_run_one_batch`` already converted internal failures
+                # into per-function ``None`` entries; reaching this branch
+                # means an unexpected exception escaped (e.g. asyncio
+                # cancellation). Log and continue — we'd rather lose one
+                # batch's findings than abort the whole scan.
+                self.logger.error(
+                    f"Batch task raised unexpectedly: {batch_outcome}"
+                )
+                continue
+            for global_idx, item in batch_outcome:
+                if item is None:
                     continue
-                
-                # Process each result in the batch
-                for idx, result in enumerate(batch_results):
-                    if idx >= len(batch):
-                        break
-                    
-                    func_context = batch[idx]
-                    self.stats["total_analyzed"] += 1
-                    
-                    if result and result.get("mismatch_detected"):
-                        self.stats["mismatches_detected"] += 1
-                        
-                        # Classify as threat or vulnerability
-                        threat_name = result.get("threat_name", "")
-                        if threat_name != "GENERAL DESCRIPTION-CODE MISMATCH":
-                            try:
-                                mapped_severity = self._get_mapped_severity(threat_name)
-                                classification = await self.threat_vuln_classifier.classify_finding(
-                                    threat_name=threat_name or "UNKNOWN",
-                                    severity=mapped_severity,
-                                    summary=result.get("summary", ""),
-                                    description_claims=result.get("description_claims", ""),
-                                    actual_behavior=result.get("actual_behavior", ""),
-                                    security_implications=result.get("security_implications", ""),
-                                    dataflow_evidence=result.get("dataflow_evidence", ""),
-                                )
-                                if classification:
-                                    result["threat_vulnerability_classification"] = classification["classification"]
-                                else:
-                                    result["threat_vulnerability_classification"] = "UNCLEAR"
-                            except Exception as e:
-                                self.logger.error(f"Classification failed: {e}")
-                                result["threat_vulnerability_classification"] = "UNCLEAR"
-                        
-                        results.append((result, func_context))
-                    else:
-                        self.stats["no_mismatch"] += 1
-                        
+                raw[global_idx] = item
+                result_dict, _ = item
+                threat_name = (result_dict or {}).get("threat_name", "")
+                # Classifier is skipped for the catch-all label and
+                # for entries that already carry a classification (e.g.
+                # populated by ``check_alignment`` fallback path).
+                if (
+                    threat_name
+                    and threat_name != "GENERAL DESCRIPTION-CODE MISMATCH"
+                    and "threat_vulnerability_classification" not in result_dict
+                ):
+                    classify_indices.append(global_idx)
+
+        # Phase 3: classifier fan-out under the same LLM semaphore.
+        if classify_indices:
+            self.logger.debug(
+                f"Classifying {len(classify_indices)} flagged finding(s) "
+                "in parallel"
+            )
+            classifications = await asyncio.gather(
+                *(
+                    self._classify_with_semaphore(raw[idx][0])
+                    for idx in classify_indices
+                ),
+                return_exceptions=True,
+            )
+            for idx, classification in zip(classify_indices, classifications):
+                result_dict, _ = raw[idx]
+                if isinstance(classification, BaseException):
+                    self.logger.error(
+                        f"Classification failed: {classification}"
+                    )
+                    result_dict["threat_vulnerability_classification"] = (
+                        "UNCLEAR"
+                    )
+                elif classification:
+                    result_dict["threat_vulnerability_classification"] = (
+                        classification["classification"]
+                    )
+                else:
+                    result_dict["threat_vulnerability_classification"] = (
+                        "UNCLEAR"
+                    )
+
+        return [item for item in raw if item is not None]
+
+    async def _run_one_batch(
+        self,
+        batch: List[FunctionContext],
+        offset: int,
+    ) -> List["Tuple[int, Optional[Tuple[Dict[str, Any], FunctionContext]]]"]:
+        """Run a single batched LLM call and translate it into per-function
+        outcomes tagged with their global indices.
+
+        Falls back to per-function ``check_alignment`` when:
+        - the batch prompt build / LLM call raises, or
+        - the response validator can't parse a per-function array.
+
+        Returns one entry per function in the batch (in input order).
+        """
+        outcomes: List[
+            "Tuple[int, Optional[Tuple[Dict[str, Any], FunctionContext]]]"
+        ] = []
+
+        try:
+            evidence = self.prompt_builder.build_batch_evidence(batch)
+            cacheable_template = self.prompt_builder.template_text
+            async with self._get_llm_semaphore():
+                response = await self.llm_client.verify_alignment(
+                    "",
+                    cacheable_template=cacheable_template,
+                    evidence=evidence,
+                )
+            batch_results = self.response_validator.validate_batch(
+                response, len(batch)
+            )
+        except Exception as e:
+            # Whole-batch failure: degrade gracefully to per-function
+            # analysis, still under the global LLM semaphore.
+            self.logger.warning(
+                f"Batch analysis failed ({e!r}); falling back to per-function"
+            )
+            return await self._fallback_individual(batch, offset)
+
+        if not batch_results:
+            self.logger.warning(
+                "Invalid batch response, falling back to per-function analysis"
+            )
+            return await self._fallback_individual(batch, offset)
+
+        for idx, func_context in enumerate(batch):
+            global_idx = offset + idx
+            self.stats["total_analyzed"] += 1
+            result = batch_results[idx] if idx < len(batch_results) else None
+
+            if not result:
+                self.stats["no_mismatch"] += 1
+                outcomes.append((global_idx, None))
+                continue
+
+            if result.get("mismatch_detected"):
+                self.stats["mismatches_detected"] += 1
+                outcomes.append((global_idx, (result, func_context)))
+            else:
+                self.stats["no_mismatch"] += 1
+                outcomes.append((global_idx, None))
+
+        return outcomes
+
+    async def _fallback_individual(
+        self,
+        batch: List[FunctionContext],
+        offset: int,
+    ) -> List[
+        "Tuple[int, Optional[Tuple[Dict[str, Any], FunctionContext]]]"
+    ]:
+        """Per-function fallback when a batch fails.
+
+        Runs the per-function checks concurrently — the LLM semaphore
+        already throttles the total in-flight count, so we don't
+        de-parallelize the rest of the scan just because one batch
+        choked.
+        """
+        async def _one(func_context: FunctionContext, idx: int):
+            try:
+                async with self._get_llm_semaphore():
+                    res = await self.check_alignment(func_context)
             except Exception as e:
-                self.logger.error(f"Batch analysis failed: {e}, falling back to individual")
-                # Fallback to individual analysis
-                for func_context in batch:
-                    try:
-                        result = await self.check_alignment(func_context)
-                        if result:
-                            results.append(result)
-                    except Exception:
-                        pass
-        
-        return results
+                self.logger.error(
+                    f"Per-function fallback failed for "
+                    f"{getattr(func_context, 'name', '?')}: {e}"
+                )
+                res = None
+            return (offset + idx, res)
+
+        return await asyncio.gather(
+            *(_one(fc, i) for i, fc in enumerate(batch))
+        )
+
+    async def _classify_with_semaphore(
+        self, result: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Run threat-vulnerability classification under the LLM semaphore."""
+        threat_name = result.get("threat_name", "") or "UNKNOWN"
+        mapped_severity = self._get_mapped_severity(threat_name)
+        async with self._get_llm_semaphore():
+            return await self.threat_vuln_classifier.classify_finding(
+                threat_name=threat_name,
+                severity=mapped_severity,
+                summary=result.get("summary", ""),
+                description_claims=result.get("description_claims", ""),
+                actual_behavior=result.get("actual_behavior", ""),
+                security_implications=result.get("security_implications", ""),
+                dataflow_evidence=result.get("dataflow_evidence", ""),
+            )
 
     @staticmethod
     def _get_mapped_severity(threat_name: str) -> str:
