@@ -46,7 +46,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, Iterator, List, Optional, Set, Union
 
 from .context_extractor import FunctionContext
 from .parser.python_parser import PythonParser
@@ -121,22 +121,84 @@ def _get_language_module(lang: str) -> Optional[Any]:
 # comparing. Verified against the upstream SDK READMEs (TS SDK v1/v2, Go
 # SDK ``mcp.AddTool``, Kotlin SDK ``server.addTool``) so the list stays
 # narrow and avoids matching unrelated ``.tool``/``.prompt`` collisions.
+#
+# Templates (``addResourceTemplate``, ``registerResourceTemplate``,
+# ``addPromptTemplate``, ``registerPromptTemplate``) are recognized too
+# but normalized to their base capability kind in
+# ``_normalize_capability`` and tagged with a ``.template`` subtype by
+# ``_classify_template_subtype`` so reporting can distinguish them.
 _MCP_REGISTRATION_METHODS: Set[str] = {
+    # tools
     "tool",
-    "prompt",
-    "resource",
     "registertool",
-    "registerprompt",
-    "registerresource",
     "addtool",
+    # prompts
+    "prompt",
+    "registerprompt",
     "addprompt",
+    "prompttemplate",
+    "registerprompttemplate",
+    "addprompttemplate",
+    # resources (concrete)
+    "resource",
+    "registerresource",
     "addresource",
+    # resource templates
+    "resourcetemplate",
+    "registerresourcetemplate",
+    "addresourcetemplate",
+}
+
+
+# Low-level SDK registration methods. These pass an MCP request schema
+# identifier (``CallToolRequestSchema``, ``ListToolsRequestSchema``, …)
+# as the first positional argument and the handler as the second. The
+# schema identifier is what discriminates the capability kind, not the
+# method name. See ``_LOW_LEVEL_SCHEMA_TO_CAPABILITY`` below.
+_MCP_LOW_LEVEL_REGISTRATION_METHODS: Set[str] = {
+    "setrequesthandler",
+}
+
+
+# Maps the leading ``*RequestSchema`` identifier (TS low-level SDK) to
+# the canonical capability kind. Lowercased for comparison.
+_LOW_LEVEL_SCHEMA_TO_CAPABILITY: Dict[str, str] = {
+    "calltoolrequestschema": "tool",
+    "listtoolsrequestschema": "tool",
+    "calltoolresultschema": "tool",
+    "callpromptrequestschema": "prompt",
+    "listpromptsrequestschema": "prompt",
+    "getpromptrequestschema": "prompt",
+    "readresourcerequestschema": "resource",
+    "listresourcesrequestschema": "resource",
+    "listresourcetemplatesrequestschema": "resource",
+    "subscriberequestschema": "resource",
+    "unsubscriberequestschema": "resource",
 }
 
 
 # Canonical capability suffixes used in Python decorators (e.g. `@mcp.tool`,
-# `@hello_mcp.prompt`, or the bare `@resource`).
+# `@hello_mcp.prompt`, or the bare `@resource`). Both FastMCP-style
+# (``@mcp.tool``) and low-level Server-style (``@server.call_tool``,
+# ``@server.list_tools``, ``@server.read_resource``, ``@server.get_prompt``)
+# decorators are recognized.
 _PY_MCP_CAPABILITY_TAGS = ("tool", "prompt", "resource")
+_PY_MCP_LOWLEVEL_DECORATORS: Dict[str, str] = {
+    # FastMCP / high-level shorthand
+    "tool": "tool",
+    "prompt": "prompt",
+    "resource": "resource",
+    # Low-level Server (mcp.server.Server)
+    "call_tool": "tool",
+    "list_tools": "tool",
+    "list_prompts": "prompt",
+    "get_prompt": "prompt",
+    "list_resources": "resource",
+    "list_resource_templates": "resource",
+    "read_resource": "resource",
+    "subscribe_resource": "resource",
+    "unsubscribe_resource": "resource",
+}
 
 
 # Some grammars list class-like constructs in their "function types" set
@@ -191,7 +253,13 @@ def _strip_string_quotes(s: str) -> str:
 
 
 def _normalize_capability(method_name: str) -> str:
-    """Map a raw SDK method name onto the canonical capability kind."""
+    """Map a raw SDK method name onto the canonical capability kind.
+
+    Templates (``addResourceTemplate``, ``registerPromptTemplate``)
+    collapse to their base kind so downstream filtering keeps working;
+    callers who need to distinguish templates from concrete primitives
+    look at the ``.template`` decorator-tag subtype instead.
+    """
     lowered = method_name.lower()
     if "prompt" in lowered:
         return "prompt"
@@ -200,22 +268,45 @@ def _normalize_capability(method_name: str) -> str:
     return "tool"
 
 
-def _is_mcp_capability_decorator_set(decorator_types: Optional[List[str]]) -> bool:
-    """Return True if any decorator names an MCP capability (`tool`/`prompt`/`resource`).
+def _classify_template_subtype(method_name: str) -> Optional[str]:
+    """Return ``'template'`` for ``*Template`` registrations, else ``None``.
+
+    The capability kind itself is unchanged (a template is still a
+    prompt/resource), but downstream consumers can branch on the
+    ``<registration>.<kind>.template`` tag emitted into ``decorator_types``.
+    """
+    return "template" if "template" in method_name.lower() else None
+
+
+def _python_decorator_capability(name: str) -> Optional[str]:
+    """Return the canonical capability kind for a Python decorator name.
 
     Accepts the raw decorator strings recorded by Python AST extraction,
-    which look like ``mcp.tool``, ``hello_mcp.prompt``, or just ``tool`` for
-    bare decorators. The suffix after the last dot is the method name.
+    which look like ``mcp.tool``, ``hello_mcp.prompt``, ``server.call_tool``,
+    or just ``tool`` for bare decorators. The suffix after the last dot
+    is matched against both the FastMCP shorthand (``tool`` / ``prompt`` /
+    ``resource``) and the low-level Server-style decorators
+    (``call_tool``, ``list_tools``, ``read_resource``, ``get_prompt``,
+    ``list_*``). Returns the canonical capability kind or ``None``.
+    """
+    if not name:
+        return None
+    bare = name.rsplit(".", 1)[-1]
+    bare = bare.split("(", 1)[0].strip().lower()
+    return _PY_MCP_LOWLEVEL_DECORATORS.get(bare)
+
+
+def _is_mcp_capability_decorator_set(decorator_types: Optional[List[str]]) -> bool:
+    """Return True if any decorator names an MCP capability.
+
+    Recognizes both FastMCP (``@mcp.tool``, ``@hello_mcp.prompt``) and
+    low-level Server (``@server.call_tool``, ``@server.list_tools``,
+    ``@server.read_resource``, ``@server.get_prompt``, etc.) decorators.
     """
     if not decorator_types:
         return False
     for dec in decorator_types:
-        if not dec:
-            continue
-        bare = dec.rsplit(".", 1)[-1]
-        # Drop any trailing call form, e.g. ``tool()`` -> ``tool``.
-        bare = bare.split("(", 1)[0].strip().lower()
-        if bare in _PY_MCP_CAPABILITY_TAGS:
+        if _python_decorator_capability(dec) is not None:
             return True
     return False
 
@@ -237,27 +328,296 @@ def _is_same_ts_node(a, b) -> bool:
     )
 
 
-def _classify_mcp_annotation(annotations: List[str]) -> Optional[str]:
+# Exact identifier allow-list per language. Replaces the old substring
+# check (``if 'tool' in 'Tooltip'``) so unrelated annotations like
+# ``@Tooltip``, ``@ToolbarItem``, ``[ResourceLock]``, ``#[tool_router]``
+# don't classify as MCP capabilities. Identifiers are compared in their
+# **original case** so we can distinguish ``@Tool`` (Spring AI MCP
+# annotation) from ``@tool`` (Rust rmcp macro) — both legitimate but in
+# different languages. The map's value is the canonical capability kind.
+#
+# Generic identifiers (``Tool``, ``Prompt``, ``Resource``) are accepted
+# only when the namespace is in ``_TRUSTED_ANNOTATION_NAMESPACES`` for
+# that language — a bare ``@Tool`` is the canonical Spring AI MCP form
+# but ``@some.other.lib.Tool`` shouldn't classify just because ``Tool``
+# appears at the leaf.
+_MCP_ANNOTATION_IDENTIFIERS: Dict[str, Dict[str, str]] = {
+    "java": {
+        # Spring AI MCP annotations
+        "Tool": "tool",
+        "McpTool": "tool",
+        "ToolParam": "tool",
+        "McpResource": "resource",
+        "Resource": "resource",
+        "McpPrompt": "prompt",
+        "Prompt": "prompt",
+    },
+    "c_sharp": {
+        # .NET MCP SDK attributes
+        "McpServerTool": "tool",
+        "McpServerPrompt": "prompt",
+        "McpServerResource": "resource",
+        "McpServerToolType": "tool",
+        # Generic forms only accepted via trusted namespace check
+        "Tool": "tool",
+        "Prompt": "prompt",
+        "Resource": "resource",
+    },
+    "rust": {
+        # rmcp macros
+        "tool": "tool",
+        "prompt": "prompt",
+        "resource": "resource",
+        # Note: ``tool_router``, ``tool_handler`` are intentionally
+        # absent. They mark the *router* / *dispatch* impl block, not
+        # individual tool callables. The capability extractor walks
+        # into the impl and matches the per-method ``#[tool]`` macros.
+    },
+    "php": {
+        # php-mcp/server attributes
+        "Tool": "tool",
+        "McpTool": "tool",
+        "Prompt": "prompt",
+        "McpPrompt": "prompt",
+        "Resource": "resource",
+        "McpResource": "resource",
+    },
+    "ruby": {
+        # mcp-rb / community Ruby SDKs use comment-style annotations
+        # (``# @tool name: ...``); identifiers are lowercase by convention.
+        "tool": "tool",
+        "prompt": "prompt",
+        "resource": "resource",
+    },
+    "python": {
+        # Used by the Python branch when a tree-sitter style annotation
+        # text (``@<obj>.tool``) is fed back through the same classifier.
+        "tool": "tool",
+        "prompt": "prompt",
+        "resource": "resource",
+        # Low-level server decorators
+        "call_tool": "tool",
+        "list_tools": "tool",
+        "get_prompt": "prompt",
+        "list_prompts": "prompt",
+        "read_resource": "resource",
+        "list_resources": "resource",
+        "list_resource_templates": "resource",
+    },
+}
+
+# Namespace prefixes that, when present in front of a generic
+# identifier (``Tool`` / ``Prompt`` / ``Resource``), let it classify as
+# MCP. Prevents false positives from unrelated DSLs that happen to use
+# the same leaf name (e.g. JUnit ``@ToolProvider``, JSF ``@Resource``).
+# The empty string represents "no namespace" — i.e. a bare identifier
+# at the import root, which we treat as trusted because the caller
+# already has to import the symbol from the MCP SDK to use it.
+_TRUSTED_ANNOTATION_NAMESPACES: Dict[str, Set[str]] = {
+    "java": {"", "org.springframework.ai", "io.modelcontextprotocol"},
+    "c_sharp": {"", "ModelContextProtocol", "ModelContextProtocol.Server"},
+    "rust": {"", "rmcp", "mcp"},
+    "php": {"", "PhpMcp", "PhpMcp\\Server", "PhpMcp\\Server\\Attributes"},
+    "ruby": {""},
+    "python": {""},
+}
+
+
+# Module/package specifiers (lowercased substrings) that indicate the
+# import is from a recognized MCP SDK. Used by Pass 2's receiver
+# verification (Gap 4) to decide whether the local name being called
+# was actually bound to an MCP server. Anything not on this list is
+# treated as belonging to an unrelated DSL and skipped.
+_MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = {
+    "javascript": (
+        "@modelcontextprotocol/sdk",
+        "@modelcontextprotocol/typescript-sdk",
+    ),
+    "typescript": (
+        "@modelcontextprotocol/sdk",
+        "@modelcontextprotocol/typescript-sdk",
+    ),
+    "python": (
+        "fastmcp",
+        "mcp.server",
+        "mcp.types",
+        "modelcontextprotocol",
+    ),
+    "go": (
+        "modelcontextprotocol/go-sdk",
+        "modelcontextprotocol/go-sdk/mcp",
+    ),
+    "rust": (
+        "rmcp",
+        "modelcontextprotocol",
+    ),
+    "kotlin": (
+        "io.modelcontextprotocol",
+    ),
+    "java": (
+        "io.modelcontextprotocol",
+        "org.springframework.ai",
+    ),
+    "c_sharp": (
+        "modelcontextprotocol",
+    ),
+    "php": (
+        "phpmcp",
+        "modelcontextprotocol",
+    ),
+    "ruby": (
+        "mcp",
+    ),
+}
+
+
+# Class names exposed by recognized MCP SDKs that, when instantiated and
+# bound to a local name, mark that name as a trusted receiver for
+# call-site registration detection.
+_MCP_KNOWN_SERVER_CLASSES: Set[str] = {
+    # TS / JS
+    "McpServer",
+    "Server",
+    "FastMCP",
+    # Python
+    "Server",
+    # Kotlin
+    "Server",
+    # .NET (uncommon — usually attribute-driven, not instance-bound)
+    "McpServer",
+}
+
+
+# Byte-level prefilter (Gap 12). A single compiled regex matched against
+# the file's raw bytes; any hit means the file is *worth* parsing. The
+# token list covers the surface every supported SDK exposes so we don't
+# need a per-language prefilter — one cheap pass before tree-sitter.
+#
+# Tokens are conservative: anything an MCP SDK or annotation/macro form
+# would emit. False-positive cost is paying for one tree-sitter parse;
+# false-negative cost is silently skipping a real MCP server, so we
+# err on the side of over-matching.
+_MCP_PREFILTER_RE = _re.compile(
+    rb"(?:"
+    rb"@modelcontextprotocol/sdk"  # JS/TS module specifier
+    rb"|modelcontextprotocol/go-sdk"  # Go module path
+    rb"|modelcontextprotocol\.kotlin"  # Kotlin SDK
+    rb"|io\.modelcontextprotocol"  # Java/Kotlin SDK
+    rb"|org\.springframework\.ai"  # Spring AI MCP
+    rb"|ModelContextProtocol"  # .NET SDK
+    rb"|fastmcp"  # Python FastMCP
+    rb"|mcp\.server"  # Python low-level Server
+    rb"|McpServer"  # JS/TS / .NET class
+    rb"|FastMCP\("  # Python instantiation
+    rb"|McpServerTool"  # .NET attribute
+    rb"|@McpTool"  # Spring AI MCP annotation
+    rb"|@McpResource"
+    rb"|@McpPrompt"
+    rb"|@Tool\b"  # Java MCP annotation
+    rb"|#\s*\[\s*tool\b"  # Rust attribute macro
+    rb"|#\s*\[\s*Tool\b"  # PHP 8 attribute
+    rb"|#\s*\[\s*McpTool\b"  # PHP 8 attribute
+    rb"|#\s*@\s*tool\b"  # Ruby comment-style annotation
+    rb"|registerTool\b|registerPrompt\b|registerResource\b"
+    rb"|registerResourceTemplate\b|registerPromptTemplate\b"
+    rb"|addTool\b|addPrompt\b|addResource\b"
+    rb"|addResourceTemplate\b|addPromptTemplate\b"
+    rb"|setRequestHandler\b"
+    rb"|@server\.call_tool\b|@server\.list_tools\b"
+    rb"|@server\.list_prompts\b|@server\.get_prompt\b"
+    rb"|@server\.list_resources\b|@server\.read_resource\b"
+    rb"|@mcp\.tool\b|@mcp\.prompt\b|@mcp\.resource\b"
+    rb"|rmcp::|use\s+rmcp"  # Rust SDK
+    rb")",
+    _re.IGNORECASE,
+)
+
+
+# Per-language prefilter scope. Files whose source bytes contain none of
+# the marker tokens above are skipped by the prefilter — but only for
+# languages we actually support. Languages that fall outside this set
+# (CSS, JSON, etc.) are skipped earlier by ``self.language`` checks.
+_PREFILTER_LANGUAGES: Set[str] = {
+    "python",
+    "javascript",
+    "typescript",
+    "go",
+    "rust",
+    "java",
+    "kotlin",
+    "c_sharp",
+    "php",
+    "ruby",
+}
+
+
+def _split_annotation_namespace(ident_or_path: str) -> "tuple[str, str]":
+    """Split ``rmcp::tool`` / ``mcp::tool`` / ``Tool`` into (namespace, leaf).
+
+    Supports Rust ``::`` path separators, PHP ``\\`` separators, and dot
+    separators. Returns ``("", ident)`` when there's no separator.
+    """
+    for sep in ("::", "\\", "."):
+        if sep in ident_or_path:
+            ns, _, leaf = ident_or_path.rpartition(sep)
+            return ns, leaf
+    return "", ident_or_path
+
+
+def _classify_mcp_annotation(
+    annotations: List[str], language: str = ""
+) -> Optional[str]:
     """Return ``'tool'`` / ``'prompt'`` / ``'resource'`` if any annotation
     names an MCP capability; otherwise ``None``.
 
-    Cross-language coverage:
+    Uses the per-language exact-identifier allow-list defined in
+    ``_MCP_ANNOTATION_IDENTIFIERS`` so that look-alike annotations
+    (``@Tooltip``, ``[ResourceLock]``, ``#[tool_router]``, ``@Toolkit``,
+    ``@PromptUser``) don't false-positive as MCP capabilities. Generic
+    identifiers (``Tool`` / ``Prompt`` / ``Resource`` without a vendor
+    prefix) are only accepted when the annotation's namespace is in
+    ``_TRUSTED_ANNOTATION_NAMESPACES`` for the active language.
 
-    * Java/Spring AI:    ``@Tool``, ``@McpTool``
-    * C# (.NET SDK):     ``[McpServerTool]``, ``[Tool]``
-    * Rust (rmcp):       ``#[tool(...)]``, ``#[mcp::tool]``
-    * PHP (php-mcp):     ``#[Tool(...)]``
-    * Ruby (mcp-rb):     ``# @tool name: ...``
+    The ``language`` argument keeps the cross-language allow-list scoped
+    correctly (case-sensitive Java ``@Tool`` vs case-sensitive Rust
+    ``#[tool]``). When omitted, falls back to the union across all
+    languages — only the Python branch should rely on that fallback.
     """
-    keywords = _PY_MCP_CAPABILITY_TAGS
+    if language and language in _MCP_ANNOTATION_IDENTIFIERS:
+        allowed = _MCP_ANNOTATION_IDENTIFIERS[language]
+        trusted_ns = _TRUSTED_ANNOTATION_NAMESPACES.get(language, {""})
+    else:
+        # Fallback: union across all languages. Only the empty namespace
+        # is trusted in this mode.
+        allowed = {}
+        for tbl in _MCP_ANNOTATION_IDENTIFIERS.values():
+            allowed.update(tbl)
+        trusted_ns = {""}
+
     for ann in annotations or []:
         if not ann:
             continue
         for m in _MCP_ANNOTATION_RE.finditer(ann):
-            ident = m.group(1).lower()
-            for kw in keywords:
-                if kw in ident:
-                    return kw
+            ident = m.group(1)
+            # Reconstruct namespace by walking back through the pre-match
+            # text for ``::`` / ``\\`` / ``.`` separated segments.
+            prefix = ann[: m.start(1)]
+            ns_match = _re.search(r"((?:[\w]+(?:::|\\|\.))*)$", prefix)
+            namespace = (ns_match.group(1).rstrip(":\\.") if ns_match else "")
+
+            cap = allowed.get(ident)
+            if cap is None:
+                continue
+
+            # Generic leaves (``Tool`` / ``Prompt`` / ``Resource``) need a
+            # trusted namespace. Vendor-prefixed leaves (``McpServerTool``)
+            # are accepted unconditionally because they only collide with
+            # MCP itself.
+            is_generic = ident in {"Tool", "Prompt", "Resource", "tool", "prompt", "resource"}
+            if is_generic and namespace not in trusted_ns:
+                continue
+
+            return cap
     return None
 
 
@@ -419,7 +779,10 @@ class NativeAnalyzer:
         result = self.analyze()
         return result.functions
 
-    def extract_mcp_capability_contexts(self) -> List[FunctionContext]:
+    def extract_mcp_capability_contexts(
+        self,
+        cross_file_analyzer: Optional[Any] = None,
+    ) -> List[FunctionContext]:
         """Extract contexts ONLY for functions exposed as MCP capabilities.
 
         The behavioral analyzer must reason about the *tools, prompts, and
@@ -465,12 +828,12 @@ class NativeAnalyzer:
         return an empty list.
         """
         if self.language == "python":
-            all_funcs = self.extract_all_function_contexts()
-            return [
-                fc
-                for fc in all_funcs
-                if _is_mcp_capability_decorator_set(fc.decorator_types)
-            ]
+            return self._py_extract_capability_contexts()
+
+        # Gap 12: byte-level prefilter — skip the whole tree-sitter
+        # parse for files that contain none of the MCP marker tokens.
+        if not self._has_mcp_markers():
+            return []
 
         if self.language not in self.FUNCTION_NODE_TYPES:
             return []
@@ -498,9 +861,21 @@ class NativeAnalyzer:
 
         func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
         contexts: List[FunctionContext] = []
-        # Dedupe by handler start_byte so the same function definition can
-        # only be returned once even when both passes locate it.
-        seen_handlers: Set[int] = set()
+        # Dedupe by ``(handler_start_byte, capability_kind)`` so a single
+        # function registered as BOTH a tool and a prompt (legal in MCP)
+        # surfaces twice — once per capability kind — instead of being
+        # collapsed by whichever pass reaches it first. The kind is a
+        # str (``"tool"`` / ``"prompt"`` / ``"resource"``); see Gap 9 in
+        # the PR review.
+        seen_handlers: Set["tuple[int, str]"] = set()
+
+        # Gap 13: build the annotation index once, then look up
+        # annotations per function via dict lookup instead of paying
+        # for ``_ts_collect_function_annotations`` (a parent walk +
+        # sibling scan) on every helper.
+        annotation_index = self._ts_build_annotation_index(
+            tree.root_node, func_types
+        )
 
         # -----------------------------------------------------------------
         # Pass 1: function-attached annotation/attribute/macro detection
@@ -510,13 +885,15 @@ class NativeAnalyzer:
                 node.type in func_types
                 and node.type not in _TS_NON_FUNCTION_NODE_TYPES
             ):
-                annotations = self._ts_collect_function_annotations(node)
-                cap_kind = _classify_mcp_annotation(annotations)
-                if (
-                    cap_kind is not None
-                    and node.start_byte not in seen_handlers
-                ):
-                    seen_handlers.add(node.start_byte)
+                annotations = annotation_index.get(node.start_byte, [])
+                cap_kind = _classify_mcp_annotation(annotations, self.language)
+                # Dedupe key includes capability kind so the same handler
+                # registered as both a tool AND a prompt yields one
+                # context per kind. See _append_capability_context which
+                # also de-dupes within a single kind via the same set.
+                cap_key = (node.start_byte, cap_kind) if cap_kind else None
+                if cap_kind is not None and cap_key not in seen_handlers:
+                    seen_handlers.add(cap_key)
                     self._append_capability_context(
                         contexts,
                         node,
@@ -533,31 +910,632 @@ class NativeAnalyzer:
         # -----------------------------------------------------------------
         # Pass 2: SDK call-site registration detection
         # -----------------------------------------------------------------
-        registrations = self._ts_find_mcp_registrations(tree.root_node)
+        # Build a per-file index of trusted MCP receiver names (Gap 4) so
+        # ``Pass 2`` can require ``X.tool(...)`` / ``X.registerTool(...)``
+        # / etc. to have ``X`` resolve to an instance imported from the
+        # MCP SDK. Stops unrelated builder DSLs (``myToolbar.tool('save')``)
+        # from false-positive-classifying as MCP registrations.
+        mcp_instances = self._collect_mcp_instances(tree.root_node, imports)
+
+        registrations = self._ts_find_mcp_registrations(
+            tree.root_node, trusted_receivers=mcp_instances
+        )
         for reg in registrations:
             handler_node = reg.get("handler_node")
             handler_name = reg.get("handler_name")
+            handler_origin: str = "inline"
 
             if handler_node is None and handler_name:
                 handler_node = self._ts_find_function_def_by_name(
                     tree.root_node, handler_name, func_types
                 )
-            if handler_node is None:
+                if handler_node is not None:
+                    handler_origin = "in_file"
+
+            # Gap 2: cross-file resolution. If the handler is a bare
+            # identifier and the in-file symbol index missed it, try the
+            # cross-file call graph (tree-sitter or Python) before giving
+            # up. The call graph keys functions by ``"<file>::<name>"``,
+            # so we match on the suffix.
+            cross_file_match: Optional["tuple[str, Any]"] = None
+            if handler_node is None and handler_name and cross_file_analyzer is not None:
+                cross_file_match = self._resolve_cross_file_handler(
+                    handler_name, cross_file_analyzer
+                )
+
+            cap_kind = reg["capability"]
+
+            # Gap 8: emit an ``unresolved`` placeholder when the handler
+            # cannot be located in-file or cross-file. Without this, the
+            # capability is silently dropped and the alignment LLM never
+            # sees it. Stub contexts are tagged
+            # ``<registration>.unresolved.<kind>`` so consumers can
+            # distinguish them from analyzed handlers.
+            if handler_node is None and cross_file_match is None:
+                if not (handler_name or reg.get("name")):
+                    continue
+                template_subtype = reg.get("template_subtype")
+                source_kind = (
+                    "registration.unresolved.template"
+                    if template_subtype == "template"
+                    else "registration.unresolved"
+                )
+                # Use the call site's start byte as the dedupe key — the
+                # capability extracted is the registration itself, not a
+                # specific function.
+                stub_key = (id(reg), cap_kind)
+                if stub_key in seen_handlers:
+                    continue
+                seen_handlers.add(stub_key)
+                self._append_unresolved_capability(
+                    contexts,
+                    capability=cap_kind,
+                    registered_name=reg.get("name") or handler_name,
+                    source_kind=source_kind,
+                    handler_name_hint=handler_name,
+                )
                 continue
-            if handler_node.start_byte in seen_handlers:
+
+            if handler_node is None and cross_file_match is not None:
+                # Cross-file hit: build a stub context that points at the
+                # defining file/line via the call-graph node.
+                cross_file_path, _ = cross_file_match
+                template_subtype = reg.get("template_subtype")
+                source_kind = (
+                    "registration.cross_file.template"
+                    if template_subtype == "template"
+                    else "registration.cross_file"
+                )
+                stub_key = (
+                    f"{cross_file_path}::{handler_name}",
+                    cap_kind,
+                )
+                if stub_key in seen_handlers:
+                    continue
+                seen_handlers.add(stub_key)
+                self._append_unresolved_capability(
+                    contexts,
+                    capability=cap_kind,
+                    registered_name=reg.get("name") or handler_name,
+                    source_kind=source_kind,
+                    handler_name_hint=handler_name,
+                    source_file=cross_file_path,
+                )
                 continue
-            seen_handlers.add(handler_node.start_byte)
+
+            cap_key = (handler_node.start_byte, cap_kind)
+            if cap_key in seen_handlers:
+                continue
+            seen_handlers.add(cap_key)
+
+            # Tag templates with a ``.template`` subtype so reports can
+            # distinguish ``addResourceTemplate`` from ``addResource``.
+            template_subtype = reg.get("template_subtype")
+            source_kind = (
+                "registration.template"
+                if template_subtype == "template"
+                else "registration"
+            )
 
             self._append_capability_context(
                 contexts,
                 handler_node,
                 imports,
-                capability=reg["capability"],
+                capability=cap_kind,
                 registered_name=reg.get("name"),
-                source_kind="registration",
+                source_kind=source_kind,
             )
 
         return contexts
+
+    def _resolve_cross_file_handler(
+        self, handler_name: str, cross_file_analyzer: Any
+    ) -> Optional["tuple[str, Any]"]:
+        """Look ``handler_name`` up in a cross-file call graph (Gap 2).
+
+        Both ``CallGraph`` (Python) and ``TSCallGraph`` (tree-sitter)
+        store function definitions as
+        ``Dict[str, Node]`` keyed by ``f"{file_path}::{name}"``. We
+        match on the suffix because the registration call site only
+        knows the bare identifier — it doesn't know the defining file.
+
+        Returns ``(defining_file_path_str, node)`` on the first match,
+        or ``None`` if the identifier isn't in either analyzer's graph.
+        """
+        graph = getattr(cross_file_analyzer, "call_graph", None)
+        if graph is None:
+            return None
+        functions = getattr(graph, "functions", None)
+        if not functions:
+            return None
+        suffix = f"::{handler_name}"
+        for full_name, node in functions.items():
+            if full_name.endswith(suffix):
+                file_path = full_name[: -len(suffix)]
+                return file_path, node
+        return None
+
+    def _append_unresolved_capability(
+        self,
+        out: List[FunctionContext],
+        *,
+        capability: str,
+        registered_name: Optional[str],
+        source_kind: str,
+        handler_name_hint: Optional[str] = None,
+        source_file: Optional[str] = None,
+    ) -> None:
+        """Emit a stub ``FunctionContext`` for an unresolved handler.
+
+        Gap 8 design: rather than silently dropping a registration whose
+        handler we can't locate, surface a placeholder so downstream
+        consumers (alignment LLM, reports) at least know a capability
+        was registered. The stub carries a marker decorator tag
+        (``<registration>.unresolved.<kind>``) so consumers can
+        distinguish stub contexts from real handlers that just happen to
+        have empty bodies.
+        """
+        name = registered_name or handler_name_hint or "<unresolved>"
+        ctx = FunctionContext(
+            name=name,
+            decorator_types=[f"<{source_kind}>.{capability}"],
+            imports=[],
+            function_calls=[],
+            assignments=[],
+            control_flow={},
+            parameter_flows=[],
+            constants={},
+            variable_dependencies={},
+            has_file_operations=False,
+            has_network_operations=False,
+            has_subprocess_calls=False,
+            has_eval_exec=False,
+            has_dangerous_imports=False,
+        )
+        # Optional fields. Set them via attribute assignment because the
+        # dataclass declares defaults — direct setattr is safe.
+        ctx.docstring = None
+        ctx.parameters = []
+        ctx.return_type = None
+        ctx.line_number = 0
+        if source_file:
+            # Stash the cross-file definition path on the context so the
+            # behavioral analyzer / LLM client can show the user where
+            # the unresolved handler actually lives.
+            ctx.source_file = str(source_file)
+        out.append(ctx)
+
+    # -------------------------------------------------------------------------
+    # Helpers for the new lazy/single-pass paths
+    # -------------------------------------------------------------------------
+
+    def _has_mcp_markers(self) -> bool:
+        """Cheap byte-level prefilter (Gap 12).
+
+        Returns ``True`` when the file's raw bytes contain at least one
+        recognized MCP marker token. Files without any marker can be
+        skipped entirely — neither tree-sitter parsed nor sent through
+        the dataflow analyzer — saving significant time on large repos
+        whose MCP surface is concentrated in a handful of files.
+
+        The check runs against ``self.source_bytes`` so we don't pay
+        UTF-8 decode cost; the regex is compiled once (module-level) and
+        case-insensitive to absorb minor convention drift between SDKs.
+        """
+        if self.language not in _PREFILTER_LANGUAGES:
+            # Languages outside our supported set can't be prefiltered
+            # safely — fall through to whatever the language branch does.
+            return True
+        # Cache the prefilter result per-instance: the analyzer can be
+        # consulted multiple times for the same file (annotation index,
+        # registration walk, etc.) and one regex pass is enough.
+        cached = getattr(self, "_mcp_prefilter_cache", None)
+        if cached is not None:
+            return cached
+        result = bool(_MCP_PREFILTER_RE.search(self.source_bytes or b""))
+        self._mcp_prefilter_cache = result
+        return result
+
+    def _py_extract_capability_contexts(self) -> List[FunctionContext]:
+        """Lazy Python capability extraction (Gap 5 + Gap 8).
+
+        The previous implementation called ``extract_all_function_contexts``
+        which forced a full ForwardDataflowAnalysis pass on every helper
+        function in the file *before* filtering them out — defeating the
+        purpose of the capability extractor on helper-heavy modules.
+
+        The new path:
+
+          1. Run the byte-level prefilter once. If the file has no MCP
+             markers, return ``[]`` without parsing.
+          2. ``ast.parse`` once.
+          3. Walk the AST and collect:
+             a. ``FunctionDef`` / ``AsyncFunctionDef`` nodes whose
+                decorator list names an MCP capability (FastMCP
+                shorthand or low-level Server).
+             b. Wrapper-decorator targets (Gap 8): functions decorated
+                with custom wrappers that internally call
+                ``mcp.tool(...)``. Detected via a per-file scan that
+                identifies wrapper definitions like
+                ``def safe_tool(fn): return mcp.tool()(fn)``.
+             c. Programmatic ``mcp.add_tool(handler)`` /
+                ``server.add_tool(handler)`` calls (Gap 8): emit the
+                handler if it's a known function, an unresolved stub
+                otherwise.
+          4. Run the expensive ``_py_extract_function`` (which triggers
+             dataflow analysis) ONLY on the filtered candidates.
+
+        Falls back to ``extract_all_function_contexts``-and-filter if
+        the lazy path raises so behavior stays robust.
+        """
+        if not self._has_mcp_markers():
+            return []
+        try:
+            tree = ast.parse(self.source_code, filename=str(self.file_path))
+        except SyntaxError:
+            return []
+
+        module_imports = self._py_extract_imports(tree)
+        wrapper_decorators = self._py_collect_wrapper_decorators(tree)
+
+        functions_by_name: Dict[
+            str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
+        ] = {}
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions_by_name.setdefault(n.name, n)
+
+        # Class-method index for ``self.<method>`` resolution at
+        # registration call sites (Gap 8 extension).
+        class_methods = self._py_build_class_method_index(tree)
+
+        contexts: List[FunctionContext] = []
+        seen: Set["tuple[Any, str]"] = set()
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            decorator_names = [
+                self._py_get_node_name(dec) for dec in (node.decorator_list or [])
+            ]
+            cap_kind = self._py_classify_decorators(
+                decorator_names, wrapper_decorators
+            )
+            if cap_kind is None:
+                continue
+            cap_key = (node.lineno, cap_kind)
+            if cap_key in seen:
+                continue
+            seen.add(cap_key)
+            try:
+                ctx = self._py_extract_function(node, module_imports)
+            except Exception as e:
+                self.logger.debug(
+                    f"Failed to extract MCP capability {node.name!r} from "
+                    f"{self.file_path}: {e}"
+                )
+                continue
+            contexts.append(ctx)
+
+        # Gap 8: programmatic registrations.
+        # Covers both ``mcp.add_tool(fn)`` and the
+        # ``mcp.tool(...)(self.method)`` decorator-factory-on-bound-method
+        # pattern (used by AWS-Labs-style tool-group classes). Handlers
+        # we cannot resolve in-file (cross-file references, factory
+        # calls, etc.) become unresolved-handler stubs so the LLM /
+        # report layer still sees a capability was registered.
+        for handler_node, label, cap_kind in self._py_iter_programmatic_registrations(
+            tree,
+            functions_by_name=functions_by_name,
+            class_methods=class_methods,
+        ):
+            if handler_node is None:
+                stub_key = (("unresolved", label), cap_kind)
+                if stub_key in seen:
+                    continue
+                seen.add(stub_key)
+                self._append_unresolved_capability(
+                    contexts,
+                    capability=cap_kind,
+                    registered_name=label,
+                    source_kind="registration.unresolved",
+                    handler_name_hint=label,
+                )
+                continue
+            cap_key = (handler_node.lineno, cap_kind)
+            if cap_key in seen:
+                continue
+            seen.add(cap_key)
+            try:
+                ctx = self._py_extract_function(handler_node, module_imports)
+            except Exception as e:
+                self.logger.debug(
+                    f"Failed to extract programmatic MCP capability "
+                    f"{label!r}: {e}"
+                )
+                continue
+            ctx.decorator_types.append(f"<registration>.{cap_kind}")
+            contexts.append(ctx)
+
+        return contexts
+
+    def _py_collect_wrapper_decorators(self, tree: ast.AST) -> Dict[str, str]:
+        """Identify custom decorator wrappers that delegate to an MCP
+        decorator (Gap 8).
+
+        Recognizes the common pattern::
+
+            def safe_tool(fn):
+                return mcp.tool()(fn)
+
+        Returns ``{wrapper_name: capability_kind}``. Wrappers found here
+        are accepted by ``_py_classify_decorators`` so a function
+        decorated with ``@safe_tool`` is classified as a tool even
+        though no built-in MCP decorator name appears on it.
+        """
+        wrappers: Dict[str, str] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            # Wrappers usually take a single arg (``fn``) and return a
+            # call expression that invokes an MCP decorator on it.
+            for ret in (
+                stmt
+                for stmt in ast.walk(node)
+                if isinstance(stmt, ast.Return)
+            ):
+                if ret.value is None:
+                    continue
+                cap = self._py_call_returns_mcp_decoration(ret.value)
+                if cap is not None:
+                    wrappers[node.name] = cap
+                    break
+        return wrappers
+
+    def _py_call_returns_mcp_decoration(
+        self, expr: ast.AST
+    ) -> Optional[str]:
+        """Return the capability kind if ``expr`` is a call expression
+        that ultimately invokes ``mcp.tool``/``mcp.prompt``/``mcp.resource``
+        (or one of the low-level server decorators) and applies it to a
+        function. Used to detect wrapper decorators (Gap 8)."""
+        if not isinstance(expr, ast.Call):
+            return None
+        # ``mcp.tool()(fn)`` parses as Call(Call(...), [fn])
+        inner = expr.func
+        if isinstance(inner, ast.Call):
+            return self._py_call_returns_mcp_decoration(inner)
+        # Plain attribute access: ``server.add_tool(fn)`` etc.
+        name_text = self._py_get_node_name(inner)
+        if not name_text:
+            return None
+        return _python_decorator_capability(name_text)
+
+    def _py_classify_decorators(
+        self,
+        decorator_names: List[str],
+        wrapper_decorators: Dict[str, str],
+    ) -> Optional[str]:
+        """Return the canonical capability kind for ``decorator_names``.
+
+        Accepts both built-in MCP decorators (FastMCP / low-level
+        Server) and locally-defined wrapper decorators discovered via
+        ``_py_collect_wrapper_decorators``.
+        """
+        for name in decorator_names or []:
+            kind = _python_decorator_capability(name)
+            if kind is not None:
+                return kind
+            bare = name.rsplit(".", 1)[-1].split("(", 1)[0].strip()
+            wrapped = wrapper_decorators.get(bare)
+            if wrapped:
+                return wrapped
+        return None
+
+    # ------------------------------------------------------------------
+    # Gap 8 (extended): programmatic + decorator-call-on-bound-method
+    # ------------------------------------------------------------------
+
+    # ``<obj>.<method>(handler)`` — direct programmatic registration.
+    _PY_PROGRAMMATIC_METHOD_TO_KIND: Dict[str, str] = {
+        "add_tool": "tool",
+        "register_tool": "tool",
+        "add_prompt": "prompt",
+        "register_prompt": "prompt",
+        "add_resource": "resource",
+        "register_resource": "resource",
+        "add_resource_template": "resource",
+        "add_prompt_template": "prompt",
+    }
+
+    # ``<obj>.<method>(...)(handler)`` — decorator factory applied to a
+    # bound method or function reference. Includes both the FastMCP
+    # high-level shorthand and the low-level ``Server`` decorators that
+    # users sometimes invoke programmatically (e.g. tests, dynamic
+    # registration).
+    _PY_DECORATOR_FACTORY_METHOD_TO_KIND: Dict[str, str] = {
+        "tool": "tool",
+        "prompt": "prompt",
+        "resource": "resource",
+        "resource_template": "resource",
+        "prompt_template": "prompt",
+        "call_tool": "tool",
+        "list_tools": "tool",
+        "list_prompts": "prompt",
+        "get_prompt": "prompt",
+        "list_resources": "resource",
+        "list_resource_templates": "resource",
+        "read_resource": "resource",
+    }
+
+    def _py_build_class_method_index(
+        self, tree: ast.AST
+    ) -> Dict[str, Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]]:
+        """Index ``{class_name: {method_name: FunctionDef}}`` for the file.
+
+        Used to resolve ``self.<method>`` references at registration call
+        sites such as ``mcp.tool(name='x')(self.do_thing)`` (Gap 8).
+        Nested classes shadow earlier definitions of the same name; we
+        keep the first occurrence for stability.
+        """
+        out: Dict[str, Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]] = {}
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            methods: Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]] = {}
+            for stmt in cls.body:
+                if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    methods.setdefault(stmt.name, stmt)
+            if methods:
+                out.setdefault(cls.name, methods)
+        return out
+
+    def _py_walk_calls_with_class_context(
+        self, node: ast.AST, class_stack: List[str]
+    ) -> Iterator["tuple[ast.Call, Optional[str]]"]:
+        """Yield ``(Call, enclosing_class_name)`` for every ``ast.Call``.
+
+        Tracks the innermost enclosing ``ClassDef`` so callers can resolve
+        ``self.<method>`` handler references against the correct class.
+        Nested classes push onto the stack; the current class is the top
+        of the stack.
+        """
+        if isinstance(node, ast.Call):
+            yield node, (class_stack[-1] if class_stack else None)
+        if isinstance(node, ast.ClassDef):
+            new_stack = class_stack + [node.name]
+        else:
+            new_stack = class_stack
+        for child in ast.iter_child_nodes(node):
+            yield from self._py_walk_calls_with_class_context(child, new_stack)
+
+    def _py_resolve_handler_expr(
+        self,
+        handler: ast.expr,
+        enclosing_cls: Optional[str],
+        class_methods: Dict[
+            str, Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]
+        ],
+        functions_by_name: Dict[
+            str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
+        ],
+    ) -> "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str]":
+        """Resolve a handler expression at a registration call site.
+
+        Returns ``(function_node_or_None, human_label)``. When the node
+        is ``None`` callers should emit an unresolved-handler stub so
+        downstream consumers know a capability was registered without
+        silently dropping it.
+        """
+        if isinstance(handler, ast.Name):
+            return functions_by_name.get(handler.id), handler.id
+        if isinstance(handler, ast.Attribute) and isinstance(
+            handler.value, ast.Name
+        ):
+            base = handler.value.id
+            attr = handler.attr
+            if base in ("self", "cls") and enclosing_cls:
+                node = class_methods.get(enclosing_cls, {}).get(attr)
+                return node, f"{enclosing_cls}.{attr}"
+            return None, f"{base}.{attr}"
+        # Lambda, factory call, subscript, etc. — surface as unresolved
+        # so the LLM still sees that something was registered here.
+        return None, "<unresolved>"
+
+    def _py_iter_programmatic_registrations(
+        self,
+        tree: ast.AST,
+        functions_by_name: Optional[
+            Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]
+        ] = None,
+        class_methods: Optional[
+            Dict[
+                str,
+                Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]],
+            ]
+        ] = None,
+    ) -> List[
+        "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str, str]"
+    ]:
+        """Iterate programmatic / indirect MCP registration calls (Gap 8).
+
+        Detects two complementary patterns:
+
+        * **Direct programmatic registration** —
+          ``<obj>.add_tool(fn)``, ``<obj>.register_resource(fn)`` and
+          their kin. The first positional argument is taken as the
+          handler reference.
+        * **Decorator-factory applied to a bound method or function** —
+          ``<obj>.tool(name='x')(self.do_thing)`` (the form used widely
+          by AWS-Labs MCP servers) and the bare
+          ``<obj>.tool(self.do_thing)`` shorthand. The decorator factory
+          resolves to FastMCP shorthands (``tool``/``prompt``/
+          ``resource`` and template variants) or the low-level
+          ``Server`` decorators (``call_tool``/``list_tools``/
+          ``read_resource``/``get_prompt``/etc.).
+
+        Returns a list of ``(handler_node_or_None, label, capability)``
+        tuples. ``handler_node`` is ``None`` for cross-file or factory-
+        produced handlers we cannot resolve in-file; callers should emit
+        an unresolved-handler stub via
+        :py:meth:`_append_unresolved_capability` for those entries.
+        """
+        functions_by_name = functions_by_name or {}
+        class_methods = class_methods or {}
+
+        out: List[
+            "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str, str]"
+        ] = []
+
+        for call, enclosing_cls in self._py_walk_calls_with_class_context(
+            tree, []
+        ):
+            kind: Optional[str] = None
+            handler_expr: Optional[ast.expr] = None
+
+            method = self._py_call_method_name(call)
+            if (
+                method is not None
+                and method in self._PY_PROGRAMMATIC_METHOD_TO_KIND
+                and call.args
+            ):
+                kind = self._PY_PROGRAMMATIC_METHOD_TO_KIND[method]
+                handler_expr = call.args[0]
+            elif isinstance(call.func, ast.Call):
+                # ``<obj>.tool(name='x')(handler)`` — decorator factory
+                # applied to a function/method reference.
+                inner_method = self._py_call_method_name(call.func)
+                if (
+                    inner_method is not None
+                    and inner_method in self._PY_DECORATOR_FACTORY_METHOD_TO_KIND
+                    and call.args
+                ):
+                    kind = self._PY_DECORATOR_FACTORY_METHOD_TO_KIND[
+                        inner_method
+                    ]
+                    handler_expr = call.args[0]
+
+            if kind is None or handler_expr is None:
+                continue
+
+            handler_node, label = self._py_resolve_handler_expr(
+                handler_expr,
+                enclosing_cls,
+                class_methods,
+                functions_by_name,
+            )
+            out.append((handler_node, label, kind))
+
+        return out
+
+    def _py_call_method_name(self, call: ast.Call) -> Optional[str]:
+        """Return the dotted-leaf method name of an ``ast.Call``."""
+        f = call.func
+        if isinstance(f, ast.Attribute):
+            return f.attr
+        if isinstance(f, ast.Name):
+            return f.id
+        return None
 
     def _append_capability_context(
         self,
@@ -633,6 +1611,50 @@ class NativeAnalyzer:
             cur = cur.parent
         return ""
 
+    def _ts_build_annotation_index(
+        self, root: "Node", func_types: Set[str]
+    ) -> Dict[int, List[str]]:
+        """Index every function node's annotations in a single tree walk (Gap 13).
+
+        Returns ``{function_start_byte: [annotation_text, ...]}``. Empty
+        lists are populated lazily by callers; callers who get a miss can
+        treat it as "no annotations" without re-walking. Cached per
+        ``(root, language)`` so repeated capability extraction on the
+        same file (e.g. across multiple registrations) doesn't re-walk
+        the tree.
+
+        Re-uses the same matching rules as
+        ``_ts_collect_function_annotations`` (the original per-function
+        walker) so the classifier sees identical strings.
+        """
+        cache_attr = "_annotation_index_cache"
+        cached: Optional[Dict[int, List[str]]] = None
+        cache_key = (id(root), self.language)
+        store = getattr(self, cache_attr, None)
+        if store is None:
+            store = {}
+            setattr(self, cache_attr, store)
+        cached = store.get(cache_key)
+        if cached is not None:
+            return cached
+
+        index: Dict[int, List[str]] = {}
+
+        def visit(node: "Node") -> None:
+            if (
+                node.type in func_types
+                and node.type not in _TS_NON_FUNCTION_NODE_TYPES
+            ):
+                annotations = self._ts_collect_function_annotations(node)
+                if annotations:
+                    index[node.start_byte] = annotations
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        store[cache_key] = index
+        return index
+
     def _ts_collect_function_annotations(self, fn_node: "Node") -> List[str]:
         """Collect annotation/attribute/macro text strings on a function.
 
@@ -693,7 +1715,11 @@ class NativeAnalyzer:
 
         return out
 
-    def _ts_find_mcp_registrations(self, root: "Node") -> List[Dict[str, Any]]:
+    def _ts_find_mcp_registrations(
+        self,
+        root: "Node",
+        trusted_receivers: Optional[Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """Find call expressions that look like MCP capability registrations.
 
         Returns a list of dicts describing each registration::
@@ -703,6 +1729,7 @@ class NativeAnalyzer:
                 "name": Optional[str],          # the registered MCP name
                 "handler_node": Optional[Node], # inline arrow/function expr
                 "handler_name": Optional[str],  # identifier ref otherwise
+                "template_subtype": Optional[str],  # "template" if applicable
             }
 
         Walks with a parent pointer so we can recognize Kotlin-style
@@ -710,36 +1737,104 @@ class NativeAnalyzer:
         expression where the *outer* call's function field is the *inner*
         ``server.addTool(...)`` call and the lambda is the outer call's
         sibling.
+
+        ``trusted_receivers`` (Gap 4) is the per-file set of local names
+        that bind to MCP server instances (e.g., ``server`` from
+        ``const server = new McpServer(...)`` or ``mcp`` from
+        ``mcp = FastMCP(...)``). If supplied, only call expressions whose
+        receiver is in this set are accepted. The Go SDK's
+        ``mcp.AddTool(server, ...)`` is special-cased: its receiver is
+        the imported package alias rather than an instance, so the
+        package-level call methods (``addtool``/``addprompt``/...) are
+        accepted unconditionally and the first positional argument is
+        treated as the server instance.
         """
         registrations: List[Dict[str, Any]] = []
+        trusted_receivers = trusted_receivers or set()
 
         def visit(node: "Node", parent: Optional["Node"]):
             if node.type == "call_expression":
                 method = self._ts_call_method_name(node)
-                if method and method.lower() in _MCP_REGISTRATION_METHODS:
-                    args_node = self._ts_call_arguments_node(node)
-                    reg = self._ts_parse_registration_args(args_node, method.lower())
-                    if reg is None:
-                        # No string name and no inline/named handler in
-                        # ``arguments``, but the call site itself still
-                        # qualifies as a registration; allow Pass 1 (the
-                        # trailing-lambda lookup below) to populate the
-                        # handler.
-                        reg = {
-                            "capability": _normalize_capability(method.lower()),
-                            "name": None,
-                            "handler_node": None,
-                            "handler_name": None,
-                        }
+                method_lc = method.lower() if method else ""
 
-                    # Kotlin: ``server.addTool(...) { req -> }`` parses as
-                    # an OUTER call whose callee is the inner call we just
-                    # matched, and whose other child is the
-                    # ``annotated_lambda``. Kotlin's grammar exposes
-                    # neither ``function`` nor ``arguments`` as fields, so
-                    # we check structural position instead: are we the
-                    # callee of the parent call? (i.e. the parent's first
-                    # significant child is us).
+                is_low_level = method_lc in _MCP_LOW_LEVEL_REGISTRATION_METHODS
+                is_registration_method = (
+                    method_lc in _MCP_REGISTRATION_METHODS or is_low_level
+                )
+
+                if is_registration_method:
+                    # Receiver verification: drop unrelated DSLs that
+                    # happen to expose ``.tool(...)`` etc.
+                    if not self._ts_receiver_is_trusted(
+                        node, method_lc, trusted_receivers
+                    ):
+                        for child in node.children:
+                            visit(child, node)
+                        return
+
+                    args_node = self._ts_call_arguments_node(node)
+
+                    if is_low_level:
+                        # TS low-level Server: capability is determined by
+                        # the leading ``*RequestSchema`` identifier, not by
+                        # the method name itself.
+                        ll_cap = self._ts_low_level_capability(args_node)
+                        if ll_cap is None:
+                            for child in node.children:
+                                visit(child, node)
+                            return
+                        reg = self._ts_parse_registration_args(
+                            args_node, method_lc, override_capability=ll_cap
+                        )
+                        if reg is None:
+                            reg = {
+                                "capability": ll_cap,
+                                "name": None,
+                                "handler_node": None,
+                                "handler_name": None,
+                            }
+                        reg["template_subtype"] = None
+                    else:
+                        reg = self._ts_parse_registration_args(args_node, method_lc)
+                        if reg is None:
+                            # No string name and no inline/named handler in
+                            # ``arguments``, but the call site itself still
+                            # qualifies as a registration; allow Pass 1 (the
+                            # trailing-lambda lookup below) to populate the
+                            # handler.
+                            reg = {
+                                "capability": _normalize_capability(method_lc),
+                                "name": None,
+                                "handler_node": None,
+                                "handler_name": None,
+                            }
+                        reg["template_subtype"] = _classify_template_subtype(method_lc)
+
+                    # Kotlin: ``server.addTool(...) { req -> }``
+                    #
+                    # Across tree-sitter-kotlin versions a trailing
+                    # lambda is exposed in two different ways:
+                    #
+                    #   (A) Sibling of the ``call_expression``'s args:
+                    #       the lambda lives as a direct child of THIS
+                    #       call_expression (most current grammar
+                    #       versions).
+                    #   (B) An OUTER call wraps the inner call; the
+                    #       outer's children are the inner call (callee)
+                    #       plus the lambda (older grammar versions or
+                    #       certain receiver shapes).
+                    #
+                    # We check both. Walking the call's own children
+                    # first is structurally safer because it doesn't
+                    # depend on parent-child layout, which is the
+                    # specific brittleness called out in Gap 10.
+                    if reg.get("handler_node") is None:
+                        for child in node.children:
+                            lambda_node = self._ts_unwrap_trailing_lambda(child)
+                            if lambda_node is not None:
+                                reg["handler_node"] = lambda_node
+                                break
+
                     if (
                         reg.get("handler_node") is None
                         and parent is not None
@@ -769,6 +1864,294 @@ class NativeAnalyzer:
 
         visit(root, None)
         return registrations
+
+    def _ts_receiver_is_trusted(
+        self,
+        call_node: "Node",
+        method_lc: str,
+        trusted_receivers: Set[str],
+    ) -> bool:
+        """Return True if ``call_node``'s receiver should be honored as MCP.
+
+        - For Go's ``mcp.AddTool(server, ...)``: the receiver is the
+          imported package alias (``mcp``); we accept it when the alias
+          is in ``trusted_receivers``.
+        - For instance methods (``server.tool(...)``): the receiver name
+          must be in ``trusted_receivers``.
+        - For ``setRequestHandler``: same instance-method rule applies
+          but we also accept it when ``trusted_receivers`` is empty,
+          since low-level Server use can leave the binding harder to
+          detect.
+        - When ``trusted_receivers`` is empty (provenance pass produced
+          nothing useful), we fall back to the previous loose behavior
+          to avoid silently dropping every registration.
+        """
+        if not trusted_receivers:
+            # Loose mode preserves backward compatibility when imports
+            # are missing or the file uses unconventional aliasing.
+            # Provenance is best-effort, not authoritative.
+            return True
+
+        receiver = self._ts_call_receiver_name(call_node) or ""
+        if not receiver:
+            # Bare ``tool(...)`` calls without a receiver are treated as
+            # trusted because they can only have come from a direct
+            # import of the SDK function.
+            return True
+        return receiver in trusted_receivers
+
+    def _ts_call_receiver_name(self, call_node: "Node") -> Optional[str]:
+        """Return the receiver expression of a ``X.method(...)`` call.
+
+        For ``mcp.AddTool(...)`` returns ``"mcp"``; for
+        ``server.registerTool(...)`` returns ``"server"``; for a plain
+        function call without a receiver, returns ``None``.
+        """
+        func = call_node.child_by_field_name("function")
+        if func is None:
+            for child in call_node.children:
+                if child.type in (
+                    "navigation_expression",
+                    "member_expression",
+                    "selector_expression",
+                    "field_access",
+                    "method_invocation",
+                ):
+                    func = child
+                    break
+        if func is None or func.type not in (
+            "navigation_expression",
+            "member_expression",
+            "selector_expression",
+            "field_access",
+            "method_invocation",
+        ):
+            return None
+
+        # JS/TS expose the receiver via the ``object`` field; Go via
+        # ``operand``; Kotlin via the first non-trivia child.
+        for field in ("object", "operand", "expression"):
+            recv = func.child_by_field_name(field)
+            if recv is not None:
+                return self._ts_get_node_text(recv).strip().split(".")[0]
+        for child in func.children:
+            if child.is_named:
+                return self._ts_get_node_text(child).strip().split(".")[0]
+        return None
+
+    def _ts_low_level_capability(
+        self, args_node: Optional["Node"]
+    ) -> Optional[str]:
+        """Return the capability for ``setRequestHandler(<Schema>, ...)``.
+
+        Inspects the first positional argument: if it's an identifier
+        like ``CallToolRequestSchema``, ``ListToolsRequestSchema`` etc.,
+        maps it via ``_LOW_LEVEL_SCHEMA_TO_CAPABILITY``. Returns ``None``
+        if the schema can't be identified.
+        """
+        if args_node is None:
+            return None
+        for child in args_node.children:
+            if child.type in ("(", ")", ",", "comment"):
+                continue
+            text = self._ts_get_node_text(child).strip()
+            if not text:
+                continue
+            # Accept both bare identifiers and dotted forms
+            # (``Schemas.CallToolRequestSchema``) by taking the leaf.
+            leaf = text.rsplit(".", 1)[-1]
+            cap = _LOW_LEVEL_SCHEMA_TO_CAPABILITY.get(leaf.lower())
+            if cap:
+                return cap
+            # First positional arg is the schema; if it isn't recognized
+            # we don't keep scanning.
+            return None
+        return None
+
+    def _collect_mcp_instances(
+        self, root: "Node", imports: List[str]
+    ) -> Set[str]:
+        """Identify local names that bind to MCP server instances.
+
+        Two-stage detection:
+
+          1. Walk the file's imports / use statements for module
+             specifiers belonging to a known MCP SDK
+             (``@modelcontextprotocol/sdk``, ``fastmcp``, ``mcp.server``,
+             ``modelcontextprotocol/go-sdk``, ``rmcp``, ...). The set of
+             trusted SDK module specifiers is stored in
+             ``_MCP_SDK_MODULE_PREFIXES``.
+          2. Walk top-level variable declarations / parameter
+             annotations / property accesses to map class instantiations
+             of MCP server classes (``new McpServer(...)``,
+             ``FastMCP(...)``, ``mcp.NewServer(...)``) onto local names.
+
+        Returns the union of:
+          * names bound to MCP server instances,
+          * imported MCP SDK package aliases (Go's ``mcp``).
+
+        When the import header is opaque (e.g., the source has no
+        recognizable SDK import), returns an empty set so the caller can
+        fall back to loose receiver matching rather than dropping every
+        registration.
+        """
+        trusted: Set[str] = set()
+        prefixes = _MCP_SDK_MODULE_PREFIXES.get(self.language, ())
+        if not prefixes:
+            return trusted
+
+        # Stage 1: which import specifiers refer to MCP SDK modules?
+        sdk_aliases: Set[str] = set()
+        sdk_classes: Set[str] = set()
+        for stmt in imports:
+            stmt_lc = stmt.lower()
+            if not any(p in stmt_lc for p in prefixes):
+                continue
+
+            # Try to extract the imported name(s) and any local alias.
+            # Each language has a different import grammar so we use
+            # tolerant regexes rather than re-parsing.
+            for cls in _re.findall(r"\b([A-Z][A-Za-z0-9_]+)\b", stmt):
+                if cls in _MCP_KNOWN_SERVER_CLASSES:
+                    sdk_classes.add(cls)
+            # ``import "...github.com/modelcontextprotocol/go-sdk/mcp"``
+            # → expose alias ``mcp``; allow ``import alias "..."`` form too.
+            if self.language == "go":
+                m = _re.search(
+                    r'^\s*(?:import\s+)?(?:([\w]+)\s+)?"[^"]*modelcontextprotocol[^"]*"',
+                    stmt,
+                )
+                if m:
+                    sdk_aliases.add(m.group(1) or "mcp")
+            elif self.language == "python":
+                # ``from fastmcp import FastMCP`` or
+                # ``from mcp.server import Server``
+                m = _re.match(
+                    r"\s*from\s+([\w\.]+)\s+import\s+([\w\s,]+)", stmt
+                )
+                if m:
+                    for sym in m.group(2).split(","):
+                        sym = sym.strip().split(" as ")[0].strip()
+                        if sym:
+                            sdk_classes.add(sym)
+            elif self.language == "kotlin":
+                # ``import io.modelcontextprotocol.kotlin.sdk.server.Server``
+                m = _re.search(r"\.(\w+)\s*$", stmt)
+                if m:
+                    sdk_classes.add(m.group(1))
+
+        trusted.update(sdk_aliases)
+
+        # Stage 2: walk the AST for instantiations bound to local names.
+        def visit(node: "Node"):
+            # JS/TS: ``const server = new McpServer(...)``
+            if node.type in ("variable_declarator", "lexical_declaration"):
+                name_node = node.child_by_field_name("name")
+                value_node = node.child_by_field_name("value")
+                if name_node is not None and value_node is not None:
+                    if self._ts_is_mcp_instantiation(value_node, sdk_classes):
+                        trusted.add(self._ts_get_node_text(name_node))
+
+            # Go: ``server := mcp.NewServer(...)`` parses as
+            # ``short_var_declaration`` with ``left`` (identifier) and
+            # ``right`` (call_expression).
+            if node.type == "short_var_declaration":
+                left = node.child_by_field_name("left")
+                right = node.child_by_field_name("right")
+                if left is not None and right is not None:
+                    if self._ts_is_mcp_factory_call(right, sdk_aliases):
+                        trusted.add(self._ts_get_node_text(left))
+
+            # Python/Kotlin function/method parameters declared with an
+            # MCP server type annotation (``server: Server`` /
+            # ``def f(server: Server)``).
+            if node.type in (
+                "parameter",
+                "formal_parameter",
+                "typed_parameter",
+                "function_parameter",
+                "value_parameter",
+            ):
+                pname = node.child_by_field_name("name")
+                ptype = node.child_by_field_name("type")
+                if pname is not None and ptype is not None:
+                    type_text = self._ts_get_node_text(ptype).strip()
+                    if (
+                        type_text in sdk_classes
+                        or type_text.split(".")[-1] in sdk_classes
+                    ):
+                        trusted.add(self._ts_get_node_text(pname))
+
+            # Python: ``mcp = FastMCP("demo")`` parses as ``assignment``
+            # with ``left`` (identifier) and ``right`` (call_expression).
+            if node.type == "assignment":
+                left = node.child_by_field_name("left")
+                right = node.child_by_field_name("right")
+                if left is not None and right is not None:
+                    if self._ts_is_mcp_instantiation(right, sdk_classes):
+                        trusted.add(self._ts_get_node_text(left))
+
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return trusted
+
+    def _ts_is_mcp_instantiation(
+        self, expr_node: "Node", sdk_classes: Set[str]
+    ) -> bool:
+        """Recognize ``new McpServer(...)`` / ``FastMCP(...)`` etc."""
+        if not sdk_classes:
+            return False
+        if expr_node.type in ("new_expression",):
+            cls = expr_node.child_by_field_name("constructor")
+            if cls is None:
+                for c in expr_node.children:
+                    if c.is_named:
+                        cls = c
+                        break
+            if cls is not None:
+                cls_name = (
+                    self._ts_get_node_text(cls).strip().split(".")[-1]
+                )
+                return cls_name in sdk_classes
+        if expr_node.type == "call_expression":
+            callee = expr_node.child_by_field_name("function")
+            if callee is None:
+                for c in expr_node.children:
+                    if c.is_named:
+                        callee = c
+                        break
+            if callee is not None:
+                callee_text = self._ts_get_node_text(callee).strip()
+                leaf = callee_text.rsplit(".", 1)[-1]
+                return leaf in sdk_classes
+        return False
+
+    def _ts_is_mcp_factory_call(
+        self, expr_node: "Node", sdk_aliases: Set[str]
+    ) -> bool:
+        """Recognize ``mcp.NewServer(...)`` Go-style factory calls."""
+        if not sdk_aliases:
+            return False
+        if expr_node.type != "call_expression":
+            return False
+        callee = expr_node.child_by_field_name("function")
+        if callee is None:
+            for c in expr_node.children:
+                if c.is_named:
+                    callee = c
+                    break
+        if callee is None:
+            return False
+        text = self._ts_get_node_text(callee).strip()
+        if "." not in text:
+            return False
+        receiver, _, method = text.partition(".")
+        return (
+            receiver in sdk_aliases
+            and ("server" in method.lower() or "newserver" in method.lower())
+        )
 
     def _ts_call_method_name(self, call_node: "Node") -> Optional[str]:
         """Return the method name from a ``<expr>.method(...)`` call, or None.
@@ -869,17 +2252,32 @@ class NativeAnalyzer:
     def _ts_unwrap_trailing_lambda(self, node: "Node") -> Optional["Node"]:
         """Return a lambda node from a Kotlin trailing-lambda position.
 
-        Accepts either an ``annotated_lambda`` (which wraps a
-        ``lambda_literal``) or a ``lambda_literal`` directly; anything else
-        returns ``None`` so the caller can keep scanning siblings.
+        Accepts:
+
+        * ``lambda_literal`` directly,
+        * ``annotated_lambda`` (which wraps a ``lambda_literal`` and may
+          carry annotations like ``@Suppress``),
+        * ``call_suffix`` / ``annotated_call_suffix`` — the synthetic
+          parser node that some tree-sitter-kotlin grammar versions
+          insert around the trailing lambda position.
+
+        Returns ``None`` if the node isn't a lambda or doesn't wrap one,
+        so the caller can keep scanning siblings.
         """
+        if node is None:
+            return None
         if node.type == "lambda_literal":
             return node
-        if node.type == "annotated_lambda":
+        if node.type in (
+            "annotated_lambda",
+            "call_suffix",
+            "annotated_call_suffix",
+        ):
             for sub in node.children:
-                if sub.type == "lambda_literal":
-                    return sub
-            return node
+                lambda_node = self._ts_unwrap_trailing_lambda(sub)
+                if lambda_node is not None:
+                    return lambda_node
+            return node if node.type == "annotated_lambda" else None
         return None
 
     def _ts_first_string_literal_in_args(
@@ -925,7 +2323,10 @@ class NativeAnalyzer:
         return None
 
     def _ts_parse_registration_args(
-        self, args_node: Optional["Node"], capability_method: str
+        self,
+        args_node: Optional["Node"],
+        capability_method: str,
+        override_capability: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Pull the registered name + handler out of a registration call.
 
@@ -1024,7 +2425,7 @@ class NativeAnalyzer:
             return None
 
         return {
-            "capability": _normalize_capability(capability_method),
+            "capability": override_capability or _normalize_capability(capability_method),
             "name": name,
             "handler_node": handler_node,
             "handler_name": handler_name,
@@ -1079,44 +2480,72 @@ class NativeAnalyzer:
     def _ts_find_function_def_by_name(
         self, root: "Node", target_name: str, func_types: Set[str]
     ) -> Optional["Node"]:
-        """Find a function/arrow-function definition by symbol name."""
+        """Find a function/arrow-function definition by symbol name.
+
+        Backed by ``_ts_build_function_index`` (Gap 6), which walks the
+        tree once and caches a ``name -> Node`` map per file. The
+        previous implementation walked the AST per registration call,
+        producing ``O(registrations × file_size)`` work; the index
+        collapses it to a single ``O(file_size)`` walk plus a dict
+        lookup for each registration.
+        """
         if not target_name:
             return None
 
-        found: List["Node"] = []
+        index = self._ts_build_function_index(root, func_types)
+        return index.get(target_name)
 
-        def visit(node: "Node"):
-            if found:
-                return
+    def _ts_build_function_index(
+        self, root: "Node", func_types: Set[str]
+    ) -> Dict[str, "Node"]:
+        """Build a ``name -> definition_node`` map for ``root`` (Gap 6).
+
+        Walks the tree once and records:
+          * named function/method declarations (``function_declaration``,
+            ``method_definition``, etc.),
+          * arrow functions / function expressions assigned to a local
+            via ``variable_declarator`` / ``assignment`` (``const fn = …``,
+            ``fn = …``).
+
+        Cached per (file, language). Subsequent calls reuse the index.
+        """
+        cache_key = (id(root), self.language)
+        cached = getattr(self, "_func_index_cache", None)
+        if cached is None:
+            cached = {}
+            self._func_index_cache = cached
+        if cache_key in cached:
+            return cached[cache_key]
+
+        index: Dict[str, "Node"] = {}
+
+        def visit(node: "Node") -> None:
             if node.type in func_types:
                 name_node = node.child_by_field_name("name")
-                if (
-                    name_node is not None
-                    and self._ts_get_node_text(name_node) == target_name
-                ):
-                    found.append(node)
-                    return
-                # Arrow function assigned to a variable:
-                #   const handler = async (args) => { ... };
-                if (
-                    node.type == "arrow_function"
-                    and node.parent is not None
-                    and node.parent.type == "variable_declarator"
-                ):
-                    parent_name = node.parent.child_by_field_name("name")
-                    if (
-                        parent_name is not None
-                        and self._ts_get_node_text(parent_name) == target_name
+                if name_node is not None:
+                    index.setdefault(self._ts_get_node_text(name_node), node)
+                # ``const handler = async (args) => { ... };``
+                # ``handler = async (args) => { ... };``
+                if node.type in ("arrow_function", "function_expression"):
+                    parent = node.parent
+                    if parent is not None and parent.type in (
+                        "variable_declarator",
+                        "assignment",
+                        "assignment_expression",
                     ):
-                        found.append(node)
-                        return
+                        parent_name = parent.child_by_field_name("name")
+                        if parent_name is None:
+                            parent_name = parent.child_by_field_name("left")
+                        if parent_name is not None:
+                            index.setdefault(
+                                self._ts_get_node_text(parent_name), node
+                            )
             for child in node.children:
-                if found:
-                    return
                 visit(child)
 
         visit(root)
-        return found[0] if found else None
+        cached[cache_key] = index
+        return index
 
     # =========================================================================
     # Python Analysis - Pure AST extraction

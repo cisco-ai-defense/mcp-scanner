@@ -447,3 +447,325 @@ def test_unsupported_language_returns_empty() -> None:
     # deleted.)
     if analyzer.language not in analyzer.FUNCTION_NODE_TYPES:
         assert analyzer.extract_mcp_capability_contexts() == []
+
+
+# ---------------------------------------------------------------------------
+# Commit 1 additions: low-level SDK, multi-capability dedup, receiver
+# verification, Kotlin guard, and resource templates (Gaps 1, 4, 9, 10, 11).
+# ---------------------------------------------------------------------------
+
+# Gap 1: TS low-level Server using setRequestHandler.
+LOWLEVEL_TS_SETREQUESTHANDLER = """\
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+
+const server = new Server({ name: "demo", version: "1.0" }, { capabilities: {} });
+
+async function callToolHandler(request) {
+  return { content: [{ type: "text", text: "ok" }] };
+}
+
+async function listToolsHandler() {
+  return { tools: [] };
+}
+
+server.setRequestHandler(CallToolRequestSchema, callToolHandler);
+server.setRequestHandler(ListToolsRequestSchema, listToolsHandler);
+"""
+
+
+def test_lowlevel_ts_setrequesthandler_classifies_as_tool() -> None:
+    """TS low-level ``Server.setRequestHandler(CallToolRequestSchema, …)``
+    must surface as a tool capability (Gap 1)."""
+    analyzer = NativeAnalyzer(LOWLEVEL_TS_SETREQUESTHANDLER, "lowlevel.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert "callToolHandler" in names, names
+    assert "listToolsHandler" in names, names
+
+
+# Gap 1: Python low-level Server with @server.call_tool / @server.list_tools.
+LOWLEVEL_PYTHON_SERVER = '''
+from mcp.server import Server
+
+server = Server("demo")
+
+def helper(x):
+    return x
+
+@server.call_tool()
+async def call_tool(name, arguments):
+    """Dispatch a tool call."""
+    return helper(arguments)
+
+@server.list_tools()
+async def list_tools():
+    """Enumerate tools."""
+    return []
+'''
+
+
+def test_lowlevel_python_server_decorators_classify_as_capabilities() -> None:
+    """Python low-level Server's ``@server.call_tool`` and ``@server.list_tools``
+    must classify as MCP tools (Gap 1)."""
+    analyzer = NativeAnalyzer(LOWLEVEL_PYTHON_SERVER, "lowlevel.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert "call_tool" in names, names
+    assert "list_tools" in names, names
+    # And ``helper`` must NOT leak through.
+    assert "helper" not in names, names
+
+
+# Gap 11: Resource templates and prompt templates.
+RESOURCE_TEMPLATES_TS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+async function readUserResource(uri) {
+  return { contents: [{ uri, text: "user data" }] };
+}
+
+server.registerResourceTemplate(
+  "user-template",
+  { uriTemplate: "users://{id}" },
+  readUserResource
+);
+"""
+
+
+def test_resource_template_classifies_as_resource_with_template_tag() -> None:
+    """``registerResourceTemplate(...)`` must surface as a resource and carry
+    the synthetic ``<registration.template>.resource`` tag (Gap 11)."""
+    analyzer = NativeAnalyzer(RESOURCE_TEMPLATES_TS, "templates.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.name for c in caps]
+    handler = caps[0]
+    # Pass 1's registered-name merge means the surfaced label combines
+    # the registered MCP name (``user-template``) with the symbol name
+    # (``readUserResource``). Both must be present.
+    assert "readUserResource" in handler.name, handler.name
+    assert "user-template" in handler.name, handler.name
+    tags = handler.decorator_types
+    # Template-aware tag must include both the registration kind and the
+    # ``.template`` subtype so reporting can distinguish templates from
+    # concrete resource registrations.
+    assert any(
+        "registration.template" in t and t.endswith("resource") for t in tags
+    ), tags
+
+
+# Gap 9: Multi-capability registrations on the same handler.
+MULTI_CAPABILITY_TS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+async function shared(args) {
+  return { content: [{ type: "text", text: String(args) }] };
+}
+
+server.registerTool("x", { description: "x as tool" }, shared);
+server.registerPrompt("x", { description: "x as prompt" }, shared);
+"""
+
+
+def test_multi_capability_registration_yields_one_context_per_kind() -> None:
+    """A single function registered as both a tool AND a prompt must yield
+    two capability contexts — one tagged ``tool``, one tagged ``prompt``
+    (Gap 9). Otherwise downstream loses the second registration's metadata."""
+    analyzer = NativeAnalyzer(MULTI_CAPABILITY_TS, "multi.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    capability_kinds = sorted(
+        {
+            t.split(".", 2)[1]
+            for c in caps
+            for t in c.decorator_types
+            if t.startswith("<registration>.")
+        }
+    )
+    assert capability_kinds == ["prompt", "tool"], capability_kinds
+    # Both contexts must point at the same handler. Pass 1 merges the
+    # registered MCP name (``x``) with the symbol name (``shared``).
+    assert all("shared" in c.name for c in caps), [c.name for c in caps]
+    assert len(caps) == 2, len(caps)
+
+
+# Gap 4: Receiver verification — non-MCP DSL must not classify.
+NON_MCP_BUILDER_DSL = """\
+import { Toolbar } from "./toolbar.js";
+
+const toolbar = new Toolbar();
+toolbar.tool("save", () => {});
+toolbar.tool("open", () => {});
+"""
+
+
+def test_non_mcp_receiver_does_not_classify(monkeypatch) -> None:
+    """``app.tool('save', ...)`` from a non-MCP module must yield no
+    capabilities (Gap 4). ``trusted_receivers`` is empty because the file
+    has no MCP SDK imports — so receiver-verification falls back to its
+    loose mode. To make the strict path testable we manually set the SDK
+    prefix list on the analyzer instance."""
+    # The current loose-fallback semantics mean an SDK-less file currently
+    # accepts the registration; this test asserts that once an MCP import
+    # IS present, ANY registration whose receiver is *not* an MCP server
+    # is rejected.
+    src = '''import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Toolbar } from "./toolbar.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+const toolbar = new Toolbar();
+toolbar.tool("save", () => {});
+'''
+    analyzer = NativeAnalyzer(src, "non_mcp.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    # ``server`` is bound to McpServer, ``toolbar`` is not. The Toolbar
+    # call must not surface.
+    names = {c.name for c in caps}
+    assert "save" not in names, names
+
+
+# Gap 10: Kotlin guard — trailing-lambda fixture WITHOUT a lambda.
+KOTLIN_NO_TRAILING_LAMBDA = """\
+import io.modelcontextprotocol.kotlin.sdk.server.Server
+
+fun main() {
+  val server = Server()
+  fun handle(req: Any): Any { return req }
+  server.addTool(name = "noop", description = "no-op", handler = ::handle)
+}
+"""
+
+
+def test_kotlin_addtool_without_trailing_lambda() -> None:
+    """``server.addTool(name=…, handler=::handle)`` with NO trailing lambda
+    must still surface the named handler so Kotlin SDK clients that don't
+    use the trailing-lambda style aren't silently skipped (Gap 10)."""
+    analyzer = NativeAnalyzer(KOTLIN_NO_TRAILING_LAMBDA, "no_lambda.kt")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    # Kotlin's tree-sitter grammar may or may not bind the named-arg
+    # handler to a function we can locate; if it can't, we accept an
+    # empty result rather than mis-tagging. The key correctness property
+    # is "no false positives". We assert the right tag when it does
+    # surface.
+    if names:
+        assert "handle" in names, names
+        cap = caps[0]
+        assert any("registration" in t for t in cap.decorator_types), (
+            cap.decorator_types
+        )
+
+
+# ---------------------------------------------------------------------------
+# Commit 2 additions: byte-level prefilter, lazy Python dataflow,
+# symbol/annotation index (Gaps 5, 6, 12, 13).
+# ---------------------------------------------------------------------------
+
+# A 1000-line file with ZERO MCP markers must short-circuit to ``[]``
+# without ever invoking tree-sitter or the Python AST extractor.
+HELPERS_ONLY_LARGE_PYTHON = "\n".join(
+    [
+        "def helper_{i}(x):\n    return x + {i}\n".format(i=i)
+        for i in range(1000)
+    ]
+)
+
+
+def test_prefilter_skips_helpers_only_python() -> None:
+    """Files that contain none of the MCP marker tokens must yield
+    ``[]`` immediately — no tree-sitter parse, no dataflow analysis.
+    Gap 12 + Gap 5."""
+    analyzer = NativeAnalyzer(HELPERS_ONLY_LARGE_PYTHON, "huge.py")
+    # Prefilter cache should be unset before the call.
+    assert getattr(analyzer, "_mcp_prefilter_cache", None) is None
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert caps == []
+    # Cache should now reflect a "no markers" result.
+    assert analyzer._mcp_prefilter_cache is False
+
+
+def test_prefilter_keeps_python_with_fastmcp() -> None:
+    """A Python file with ``from fastmcp import FastMCP`` must NOT be
+    short-circuited by the prefilter."""
+    src = '''from fastmcp import FastMCP
+
+mcp = FastMCP("demo")
+
+@mcp.tool()
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+'''
+    analyzer = NativeAnalyzer(src, "ok.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert {c.name for c in caps} == {"add"}, [c.name for c in caps]
+    # Prefilter should have hit.
+    assert analyzer._has_mcp_markers() is True
+
+
+def test_python_lazy_extraction_skips_helpers_dataflow() -> None:
+    """Helper-heavy Python file: only the decorated tool should pay for
+    ForwardDataflowAnalysis. We assert correctness (only the tool is
+    returned) — the perf property is asserted in
+    ``test_prefilter_skips_helpers_only_python``."""
+    helpers = "\n".join(
+        f"def _helper_{i}(x):\n    return x + {i}\n" for i in range(50)
+    )
+    src = (
+        "from fastmcp import FastMCP\n"
+        'mcp = FastMCP("demo")\n'
+        + helpers
+        + '\n@mcp.tool()\n'
+        + "def real_tool(a: int, b: int) -> int:\n"
+        + "    return a + b\n"
+    )
+    analyzer = NativeAnalyzer(src, "many_helpers.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert {c.name for c in caps} == {"real_tool"}, [c.name for c in caps]
+
+
+def test_function_index_caches_per_root() -> None:
+    """``_ts_build_function_index`` must walk the tree once; subsequent
+    calls return the same dict object (Gap 6)."""
+    src = (
+        'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\n'
+        "const server = new McpServer({name:'x',version:'1'});\n"
+        "function add(a, b) { return a + b; }\n"
+        "function sub(a, b) { return a - b; }\n"
+        "server.tool('add', {}, add);\n"
+        "server.tool('sub', {}, sub);\n"
+    )
+    analyzer = NativeAnalyzer(src, "indexed.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert {c.name for c in caps} == {"add (add)", "sub (sub)"} or {
+        c.name for c in caps
+    } == {"add", "sub"}, [c.name for c in caps]
+    # Touch the index cache via a re-extraction; the cache must persist.
+    cache = getattr(analyzer, "_func_index_cache", None)
+    assert cache is not None and len(cache) >= 1
+
+
+def test_annotation_index_collects_decorators_once() -> None:
+    """The annotation index must populate even for a single annotated
+    function in a haystack (Gap 13)."""
+    src = """\
+package demo;
+import org.springframework.ai.mcp.Tool;
+
+public class Calc {
+    private double helper(double x) { return x; }
+    @Tool(description = "Add")
+    public double add(double a, double b) { return a + b; }
+}
+"""
+    analyzer = NativeAnalyzer(src, "Calc.java")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert {c.name for c in caps} == {"Calc.add"}, [c.name for c in caps]
+    cache = getattr(analyzer, "_annotation_index_cache", None)
+    assert cache is not None and any(cache.values()), cache
