@@ -27,6 +27,7 @@ This analyzer:
 """
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -42,6 +43,23 @@ from ...static_analysis.interprocedural.treesitter_call_graph import (
 )
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
+
+
+@dataclass(slots=True)
+class _AcceptedFile:
+    """A capability-file that survived the byte-level prefilter.
+
+    Carries both the raw bytes (used by the prefilter regex) and the
+    UTF-8-decoded text (used by tree-sitter / Python AST / LLM
+    pipelines) so the rest of the directory pipeline can avoid
+    reopening the same file. See Review #5: prior to caching, every
+    accepted file was read three times — once by the prefilter, once
+    by the call-graph builder, once by ``_analyze_file``.
+    """
+
+    path: str
+    source_bytes: bytes
+    source_text: str
 
 
 class BehavioralCodeAnalyzer(BaseAnalyzer):
@@ -154,15 +172,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
 
                 # Partition files by language family
-                python_files: List[str] = []
-                ts_files_by_lang: Dict[str, List[str]] = {}
-                for src_file in capability_files:
-                    ext = Path(src_file).suffix.lower()
+                python_files: List[_AcceptedFile] = []
+                ts_files_by_lang: Dict[str, List[_AcceptedFile]] = {}
+                for accepted in capability_files:
+                    ext = Path(accepted.path).suffix.lower()
                     if ext in self._PYTHON_EXTENSIONS:
-                        python_files.append(src_file)
+                        python_files.append(accepted)
                     elif ext in self._EXT_TO_TS_LANGUAGE:
                         lang = self._EXT_TO_TS_LANGUAGE[ext]
-                        ts_files_by_lang.setdefault(lang, []).append(src_file)
+                        ts_files_by_lang.setdefault(lang, []).append(accepted)
 
                 # Build Python call graph
                 py_call_graph_analyzer: Optional[CallGraphAnalyzer] = None
@@ -175,35 +193,51 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     ts_call_graph_analyzers[lang] = TreeSitterCallGraphAnalyzer(lang)
 
                 total_size = 0
-                for src_file in capability_files:
+                for accepted in capability_files:
                     try:
-                        file_size = os.path.getsize(src_file)
+                        # Cache hit: use the bytes we already read in
+                        # the prefilter pass. Falls back to ``getsize``
+                        # only when the prefilter saw a read error and
+                        # left ``source_bytes`` empty.
+                        if accepted.source_bytes:
+                            file_size = len(accepted.source_bytes)
+                        else:
+                            file_size = os.path.getsize(accepted.path)
                         total_size += file_size
 
                         if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
                             self.logger.error(
-                                f"Very large file detected, skipping: {src_file} ({file_size:,} bytes)"
+                                f"Very large file detected, skipping: {accepted.path} ({file_size:,} bytes)"
                             )
                             continue
                         elif file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
                             self.logger.debug(
-                                f"Large file detected: {src_file} ({file_size:,} bytes)"
+                                f"Large file detected: {accepted.path} ({file_size:,} bytes)"
                             )
 
-                        with open(src_file, "r", encoding="utf-8") as f:
-                            source_code = f.read()
+                        # Reuse the cached text (Review #5): we already
+                        # paid for the read + decode in the prefilter,
+                        # so don't open/read/decoded the file again
+                        # just to feed the call-graph builder.
+                        if accepted.source_text:
+                            source_code = accepted.source_text
+                        else:
+                            with open(accepted.path, "r", encoding="utf-8") as f:
+                                source_code = f.read()
 
-                        ext = Path(src_file).suffix.lower()
+                        ext = Path(accepted.path).suffix.lower()
                         if ext in self._PYTHON_EXTENSIONS and py_call_graph_analyzer:
-                            py_call_graph_analyzer.add_file(Path(src_file), source_code)
+                            py_call_graph_analyzer.add_file(
+                                Path(accepted.path), source_code
+                            )
                         elif ext in self._EXT_TO_TS_LANGUAGE:
                             lang = self._EXT_TO_TS_LANGUAGE[ext]
                             ts_call_graph_analyzers[lang].add_file(
-                                Path(src_file), source_code
+                                Path(accepted.path), source_code
                             )
                     except Exception as e:
                         self.logger.warning(
-                            f"Failed to add file {src_file} to cross-file analyzer: {e}"
+                            f"Failed to add file {accepted.path} to cross-file analyzer: {e}"
                         )
 
                 self.logger.debug(
@@ -228,9 +262,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
 
                 # Analyze each file with its language-appropriate call graph
-                for src_file in capability_files:
-                    self.logger.debug(f"Analyzing file: {src_file}")
-                    ext = Path(src_file).suffix.lower()
+                for accepted in capability_files:
+                    self.logger.debug(f"Analyzing file: {accepted.path}")
+                    ext = Path(accepted.path).suffix.lower()
                     if ext in self._PYTHON_EXTENSIONS:
                         file_cga = py_call_graph_analyzer
                     elif ext in self._EXT_TO_TS_LANGUAGE:
@@ -240,7 +274,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         file_cga = None
 
                     file_findings = await self._analyze_file(
-                        src_file, context, file_cga
+                        accepted.path,
+                        context,
+                        file_cga,
+                        cached_source=accepted.source_text or None,
                     )
                     all_findings.extend(file_findings)
 
@@ -378,22 +415,30 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         return sorted(source_files)
 
-    def _prefilter_capability_files(self, source_files: List[str]) -> List[str]:
+    def _prefilter_capability_files(
+        self, source_files: List[str]
+    ) -> List[_AcceptedFile]:
         """Phase 1 of Gap 7's discovery / analysis split.
 
         Returns the subset of ``source_files`` that contain at least
-        one MCP marker token. Uses
-        ``NativeAnalyzer._has_mcp_markers`` so the marker list stays
-        consistent with the per-file capability extractor.
+        one MCP marker token, *along with the bytes and text we just
+        read* so the rest of the directory pipeline can avoid reopening
+        the same file. Uses
+        :py:meth:`NativeAnalyzer._has_mcp_markers` so the marker list
+        stays consistent with the per-file capability extractor.
 
         Files larger than ``MAX_FILE_SIZE_BYTES`` are still passed
         through (the size cap is applied later in
         ``_analyze_file``); the prefilter only short-circuits files
         whose source has no MCP marker token at all.
+
+        On read error we fall back to a no-cache placeholder so
+        downstream still gets a chance to surface the proper error;
+        the call sites tolerate empty-string source.
         """
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
-        accepted: List[str] = []
+        accepted: List[_AcceptedFile] = []
         for src_file in source_files:
             try:
                 file_size = os.path.getsize(src_file)
@@ -411,7 +456,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 self.logger.debug(f"Prefilter could not read {src_file}: {e}")
                 # Pass-through on read errors so downstream still sees
                 # the file (the analyzer will surface a proper error).
-                accepted.append(src_file)
+                accepted.append(
+                    _AcceptedFile(path=src_file, source_bytes=b"", source_text="")
+                )
                 continue
             try:
                 source_code = source_bytes.decode("utf-8", errors="replace")
@@ -419,7 +466,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 continue
             analyzer = NativeAnalyzer(source_code, src_file)
             if analyzer._has_mcp_markers():
-                accepted.append(src_file)
+                accepted.append(
+                    _AcceptedFile(
+                        path=src_file,
+                        source_bytes=source_bytes,
+                        source_text=source_code,
+                    )
+                )
         return accepted
 
     def _find_python_files(self, directory: str) -> List[str]:
@@ -457,6 +510,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         cross_file_analyzer: Optional[
             Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer]
         ] = None,
+        *,
+        cached_source: Optional[str] = None,
     ) -> List[SecurityFinding]:
         """Analyze a single source file.
 
@@ -464,13 +519,20 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             file_path: Path to source file
             context: Analysis context
             cross_file_analyzer: Optional cross-file analyzer (Python or tree-sitter)
+            cached_source: Pre-read source text (Review #5). When the
+                directory pipeline has already read the file in
+                ``_prefilter_capability_files`` we pass the bytes back
+                in here to avoid a third read of the same file.
 
         Returns:
             List of SecurityFinding objects
         """
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                source_code = f.read()
+            if cached_source is not None:
+                source_code = cached_source
+            else:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    source_code = f.read()
 
             file_context = context.copy()
             file_context["file_path"] = file_path

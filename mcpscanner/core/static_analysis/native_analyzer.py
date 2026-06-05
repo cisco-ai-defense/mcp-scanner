@@ -221,17 +221,35 @@ _TS_NON_FUNCTION_NODE_TYPES: Set[str] = {
 #   #[Tool]          PHP 8 attributes
 #   # @tool          Ruby comment-style annotation
 import re as _re  # local alias avoids polluting wider module namespace
+# Notes for maintainers:
+# - The optional namespace path consumes ``::``, ``.``, *and* ``\\``
+#   separators so fully-qualified annotations like
+#   ``@org.springframework.ai.Tool``,
+#   ``[ModelContextProtocol.Server.McpServerTool]``, and PHP's
+#   ``#[App\\Mcp\\Tool]`` still surface the LEAF identifier (``Tool``,
+#   ``McpServerTool``) instead of the package head. The previous regex
+#   only walked ``::`` and silently dropped dotted/backslash-separated
+#   forms — see the PR review noting Spring AI / C# regressions.
+# - The captured identifier uses ``\w+`` (no leading ``[A-Za-z_]``
+#   class) to stop CodeQL flagging the redundant character-class
+#   range that overlaps with ``\w``. Identifiers starting with a digit
+#   aren't a real concern here because the upstream tokenizers reject
+#   them long before this regex sees the source.
 _MCP_ANNOTATION_RE = _re.compile(
     r"""
-    (?:                       # one of the annotation sigils
-        @\#?                  #   @ or @# (rare)
-      | \#\s*\[               #   # [  (Rust / PHP 8 — note '# ' before '[')
-      | \[                    #   [  (C#)
-      | \#\s*@                #   # @ (Ruby docblock-style)
+    (?:                                    # one of the annotation sigils
+        @\#?                               #   @ or @# (rare)
+      | \#\s*\[                            #   # [  (Rust / PHP 8 — note '# ' before '[')
+      | \[                                 #   [  (C#)
+      | \#\s*@                             #   # @ (Ruby docblock-style)
     )
     \s*
-    (?:[\w]+::)*              # optional namespace path like ``mcp::``
-    ([A-Za-z_][\w]*)          # ← captured: the identifier
+    # Optional namespace path: ``pkg::``, ``pkg.``, or ``pkg\\``
+    # (Important: do not end this comment with a backslash — under
+    # VERBOSE mode a trailing ``\`` escapes the newline and silently
+    # eats the next line of the pattern, killing the capture group.)
+    (?:\w+\s*(?:::|\.|\\))*
+    (\w+)                                  # ← captured: the leaf identifier
     """,
     _re.VERBOSE,
 )
@@ -276,6 +294,90 @@ def _classify_template_subtype(method_name: str) -> Optional[str]:
     ``<registration>.<kind>.template`` tag emitted into ``decorator_types``.
     """
     return "template" if "template" in method_name.lower() else None
+
+
+# Source-file extensions stripped when normalizing module specifiers to
+# path-suffix candidates. Used by both ``_normalize_module_specifier`` and
+# ``_path_endswith_suffix`` so the import-map disambiguator survives small
+# language differences (``.tsx`` vs ``.ts``, ``.pyi`` vs ``.py``, etc.).
+_SOURCE_FILE_EXTS: "tuple[str, ...]" = (
+    ".py", ".pyi", ".pyx",
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".go", ".rb", ".rs",
+    ".kt", ".kts",
+    ".java", ".cs", ".php", ".m",
+)
+
+
+def _strip_source_extension(p: str) -> str:
+    """Strip the trailing language source extension from ``p`` if present."""
+    last_seg = p.rsplit("/", 1)[-1]
+    for ext in _SOURCE_FILE_EXTS:
+        if last_seg.endswith(ext):
+            return p[: -len(ext)]
+    return p
+
+
+def _normalize_module_specifier(spec: str) -> str:
+    """Normalize an import module specifier into a path-suffix candidate.
+
+    Used by the cross-file handler resolver (Gap 2) to disambiguate
+    same-named functions in different files.
+
+    Examples::
+
+        "./tools/add"          -> "tools/add"
+        "../tools/add.js"      -> "tools/add"
+        "tools.docs"           -> "tools/docs"
+        ".tools.docs"          -> "tools/docs"
+        "@scope/pkg/sub"       -> "@scope/pkg/sub"
+        "github.com/foo/bar"   -> "github.com/foo/bar"
+    """
+    if not spec:
+        return ""
+    s = spec.strip()
+    # Drop relative-path segments that would otherwise pollute the
+    # suffix (``../foo/bar`` should match a file ending in ``foo/bar``).
+    while s.startswith("./") or s.startswith("../"):
+        s = s[3:] if s.startswith("../") else s[2:]
+    # Python-style leading dots (``.tools.docs``).
+    s = s.lstrip(".")
+    # Strip a trailing source extension if any.
+    s = _strip_source_extension(s)
+    # Convert dotted Python module paths to slash form so the suffix
+    # match treats both ``tools.docs`` and ``tools/docs`` identically.
+    if "/" not in s:
+        s = s.replace(".", "/")
+    return s.strip("/")
+
+
+def _path_endswith_suffix(file_path: str, candidate: str) -> bool:
+    """Path-component-aware endswith.
+
+    Returns ``True`` iff ``candidate`` (treated as a forward-slashed
+    path-suffix) lines up with ``file_path``'s trailing path components.
+    Tolerates a trailing source extension, separator differences, and
+    package indirection through ``__init__.py``.
+
+    Examples::
+
+        ("/abs/repo/src/tools/add.ts",       "tools/add")     -> True
+        ("/abs/repo/src/utils/add.ts",       "tools/add")     -> False
+        ("/abs/repo/src/tools/add/__init__.py", "tools/add")  -> True
+    """
+    if not candidate:
+        return False
+    p = file_path.replace("\\", "/")
+    p = _strip_source_extension(p)
+    cand = candidate.replace("\\", "/").strip("/")
+    if not cand:
+        return False
+    if p == cand or p.endswith("/" + cand):
+        return True
+    # ``foo/__init__`` matches an import targeting ``foo`` (Python pkg).
+    if p.endswith("/" + cand + "/__init__"):
+        return True
+    return False
 
 
 def _python_decorator_capability(name: str) -> Optional[str]:
@@ -828,7 +930,9 @@ class NativeAnalyzer:
         return an empty list.
         """
         if self.language == "python":
-            return self._py_extract_capability_contexts()
+            return self._py_extract_capability_contexts(
+                cross_file_analyzer=cross_file_analyzer
+            )
 
         # Gap 12: byte-level prefilter — skip the whole tree-sitter
         # parse for files that contain none of the MCP marker tokens.
@@ -920,6 +1024,15 @@ class NativeAnalyzer:
         registrations = self._ts_find_mcp_registrations(
             tree.root_node, trusted_receivers=mcp_instances
         )
+
+        # Build an import-target map once per extract call (Review #1):
+        # cross-file resolution prefers entries whose defining file path
+        # matches one of the calling file's import targets, killing the
+        # "wrong same-named function in node_modules wins" failure mode.
+        import_target_map = self._build_import_target_map(
+            imports, current_file=str(self.file_path) if self.file_path else None
+        )
+
         for reg in registrations:
             handler_node = reg.get("handler_node")
             handler_name = reg.get("handler_name")
@@ -935,12 +1048,16 @@ class NativeAnalyzer:
             # Gap 2: cross-file resolution. If the handler is a bare
             # identifier and the in-file symbol index missed it, try the
             # cross-file call graph (tree-sitter or Python) before giving
-            # up. The call graph keys functions by ``"<file>::<name>"``,
-            # so we match on the suffix.
+            # up. The resolver prefers matches whose path lines up with
+            # one of the calling file's import targets so a sibling
+            # ``tests/fixtures/add.ts`` defining the same name doesn't
+            # win the suffix race.
             cross_file_match: Optional["tuple[str, Any]"] = None
             if handler_node is None and handler_name and cross_file_analyzer is not None:
                 cross_file_match = self._resolve_cross_file_handler(
-                    handler_name, cross_file_analyzer
+                    handler_name,
+                    cross_file_analyzer,
+                    target_module_paths=import_target_map.get(handler_name),
                 )
 
             cap_kind = reg["capability"]
@@ -1029,18 +1146,31 @@ class NativeAnalyzer:
         return contexts
 
     def _resolve_cross_file_handler(
-        self, handler_name: str, cross_file_analyzer: Any
+        self,
+        handler_name: str,
+        cross_file_analyzer: Any,
+        *,
+        target_module_paths: Optional[List[str]] = None,
     ) -> Optional["tuple[str, Any]"]:
         """Look ``handler_name`` up in a cross-file call graph (Gap 2).
 
         Both ``CallGraph`` (Python) and ``TSCallGraph`` (tree-sitter)
-        store function definitions as
-        ``Dict[str, Node]`` keyed by ``f"{file_path}::{name}"``. We
-        match on the suffix because the registration call site only
-        knows the bare identifier — it doesn't know the defining file.
+        store function definitions as ``Dict[str, Node]`` keyed by
+        ``f"{file_path}::{name}"``. We start by collecting every entry
+        whose key ends with ``::<handler_name>``.
 
-        Returns ``(defining_file_path_str, node)`` on the first match,
-        or ``None`` if the identifier isn't in either analyzer's graph.
+        When ``target_module_paths`` is provided (typically built from
+        the calling file's import map), we **prefer** matches whose
+        defining file path lines up with one of the import targets — so
+        a handler imported from ``./tools/add`` resolves to
+        ``src/tools/add.ts`` even if a sibling
+        ``tests/fixtures/add.ts`` happens to define the same name.
+
+        Falls back to the legacy "first suffix match" behavior with a
+        ``DEBUG`` log when the import map can't disambiguate.
+
+        Returns ``(defining_file_path_str, node)`` for the chosen match,
+        or ``None`` if the identifier isn't in the graph at all.
         """
         graph = getattr(cross_file_analyzer, "call_graph", None)
         if graph is None:
@@ -1049,11 +1179,200 @@ class NativeAnalyzer:
         if not functions:
             return None
         suffix = f"::{handler_name}"
+        matches: List["tuple[str, Any]"] = []
         for full_name, node in functions.items():
             if full_name.endswith(suffix):
                 file_path = full_name[: -len(suffix)]
-                return file_path, node
-        return None
+                matches.append((file_path, node))
+        if not matches:
+            return None
+
+        if target_module_paths:
+            # Score each candidate by the longest matching import-target
+            # suffix. Ties go to the first inserted match (insertion
+            # order is stable across Python ≥3.7 dicts), which keeps
+            # behavior deterministic.
+            scored: List["tuple[int, str, Any]"] = []
+            for fp, node in matches:
+                best = 0
+                for tgt in target_module_paths:
+                    if _path_endswith_suffix(fp, tgt):
+                        best = max(best, len(tgt))
+                if best:
+                    scored.append((best, fp, node))
+            if scored:
+                scored.sort(key=lambda t: t[0], reverse=True)
+                return scored[0][1], scored[0][2]
+            self.logger.debug(
+                "Cross-file handler %r: import map suggested %r, "
+                "but no call-graph entry matched. Falling back to first "
+                "suffix match: %r.",
+                handler_name,
+                target_module_paths,
+                matches[0][0],
+            )
+            return matches[0]
+
+        if len(matches) > 1:
+            # No import-map hint: stay with the legacy behavior, but
+            # surface the ambiguity at DEBUG so it's at least visible
+            # when scan results disagree with expectations.
+            self.logger.debug(
+                "Cross-file handler %r: %d call-graph entries match by "
+                "suffix. Returning first: %r.",
+                handler_name,
+                len(matches),
+                matches[0][0],
+            )
+        return matches[0]
+
+    def _build_import_target_map(
+        self,
+        imports: Optional[List[str]],
+        current_file: Optional[str] = None,
+    ) -> Dict[str, List[str]]:
+        """Build ``{bound_name: [path-suffix candidates]}`` from imports.
+
+        Per-language import grammars are parsed with intentionally
+        tolerant regexes — a malformed line can't break the whole pass
+        because failures degrade gracefully into the legacy suffix-only
+        cross-file resolution path (with a DEBUG log).
+
+        Each candidate is a forward-slashed path-suffix without
+        extension; e.g.::
+
+            from .tools.add import addHandler   -> {"addHandler": ["tools/add"]}
+            import tools.docs as docs           -> {"docs":       ["tools/docs"]}
+            import { x } from "./tools/add"     -> {"x":          ["tools/add"]}
+            import alias "github.com/foo/bar"   -> {"alias":      ["github.com/foo/bar"]}
+        """
+        out: Dict[str, List[str]] = {}
+        if not imports:
+            return out
+        for stmt in imports:
+            s = (stmt or "").strip()
+            if not s:
+                continue
+            try:
+                if self.language == "python":
+                    self._py_collect_import_targets(s, out)
+                elif self.language in ("typescript", "javascript"):
+                    self._ts_collect_import_targets(s, out)
+                elif self.language == "go":
+                    self._go_collect_import_targets(s, out)
+                # Other languages keep the legacy resolver behavior.
+            except Exception:
+                # Robust to malformed import lines — fall back to bare
+                # suffix matching for affected symbols.
+                self.logger.debug(
+                    "Failed to parse import for target map: %r", s
+                )
+        return out
+
+    def _py_collect_import_targets(
+        self, stmt: str, out: Dict[str, List[str]]
+    ) -> None:
+        """Populate ``out`` from one Python import statement."""
+        # ``from <module> import X [as Y], ...``
+        m = _re.match(r"^from\s+(\S+)\s+import\s+(.+?)\s*$", stmt)
+        if m:
+            module = _normalize_module_specifier(m.group(1))
+            for piece in m.group(2).split(","):
+                piece = piece.strip().rstrip(")").lstrip("(")
+                if not piece or piece == "*":
+                    continue
+                parts = _re.split(r"\s+as\s+", piece, maxsplit=1)
+                orig = parts[0].strip()
+                bound = parts[1].strip() if len(parts) > 1 else orig
+                if not bound:
+                    continue
+                # ``orig`` could either be a function within ``module``
+                # or a submodule of ``module`` (when used like
+                # ``from .tools import docs`` to bind a module). Record
+                # both candidates so the resolver can pick whichever
+                # actually exists in the call graph.
+                if module:
+                    out.setdefault(bound, []).append(module)
+                    out[bound].append(f"{module}/{orig}")
+                else:
+                    out.setdefault(bound, []).append(orig)
+            return
+        # ``import M [as N]`` or ``import M.sub``
+        m = _re.match(r"^import\s+([\w\.]+)(?:\s+as\s+(\w+))?\s*$", stmt)
+        if m:
+            full = m.group(1)
+            alias = m.group(2)
+            bound = alias or full.split(".", 1)[0]
+            out.setdefault(bound, []).append(_normalize_module_specifier(full))
+
+    def _ts_collect_import_targets(
+        self, stmt: str, out: Dict[str, List[str]]
+    ) -> None:
+        """Populate ``out`` from one TS/JS import statement."""
+        # ``import <clause> from "<module>"``
+        m = _re.match(
+            r"""^import\s+(.*?)\s+from\s+['"]([^'"]+)['"]""",
+            stmt,
+        )
+        if m:
+            clause = m.group(1).strip()
+            path = _normalize_module_specifier(m.group(2))
+            if not path:
+                return
+            # ``import * as ns from "..."``
+            ns = _re.match(r"^\*\s+as\s+(\w+)$", clause)
+            if ns:
+                out.setdefault(ns.group(1), []).append(path)
+                return
+            # ``import default, { a, b as c } from "..."`` — split
+            # default-import + named-import block.
+            if not clause.startswith("{"):
+                head, _, rest = clause.partition(",")
+                head = head.strip()
+                if head:
+                    out.setdefault(head, []).append(path)
+                clause = rest.strip()
+            m2 = _re.match(r"^\{(.*)\}$", clause, _re.DOTALL)
+            if m2:
+                for piece in m2.group(1).split(","):
+                    piece = piece.strip()
+                    if not piece:
+                        continue
+                    parts = _re.split(r"\s+as\s+", piece, maxsplit=1)
+                    bound = (
+                        parts[1].strip()
+                        if len(parts) > 1
+                        else parts[0].strip()
+                    )
+                    if bound:
+                        out.setdefault(bound, []).append(path)
+            return
+        # ``const x = require("./tools/add")`` — best-effort.
+        m = _re.match(
+            r"""^(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)""",
+            stmt,
+        )
+        if m:
+            bound = m.group(1)
+            path = _normalize_module_specifier(m.group(2))
+            if path:
+                out.setdefault(bound, []).append(path)
+
+    def _go_collect_import_targets(
+        self, stmt: str, out: Dict[str, List[str]]
+    ) -> None:
+        """Populate ``out`` from one Go import statement."""
+        # ``import "github.com/foo/bar"`` or ``import alias "..."``.
+        for m in _re.finditer(
+            r"""(?:^|\b)(?:import\s+)?(?:(\w+)\s+)?['"]([^'"]+)['"]""",
+            stmt,
+        ):
+            alias = m.group(1)
+            path = m.group(2)
+            if not path or "/" not in path and "." not in path:
+                continue
+            bound = alias or path.rsplit("/", 1)[-1]
+            out.setdefault(bound, []).append(path)
 
     def _append_unresolved_capability(
         self,
@@ -1136,7 +1455,11 @@ class NativeAnalyzer:
         self._mcp_prefilter_cache = result
         return result
 
-    def _py_extract_capability_contexts(self) -> List[FunctionContext]:
+    def _py_extract_capability_contexts(
+        self,
+        *,
+        cross_file_analyzer: Any = None,
+    ) -> List[FunctionContext]:
         """Lazy Python capability extraction (Gap 5 + Gap 8).
 
         The previous implementation called ``extract_all_function_contexts``
@@ -1165,8 +1488,22 @@ class NativeAnalyzer:
           4. Run the expensive ``_py_extract_function`` (which triggers
              dataflow analysis) ONLY on the filtered candidates.
 
-        Falls back to ``extract_all_function_contexts``-and-filter if
-        the lazy path raises so behavior stays robust.
+        Failure modes:
+
+        - The byte-level prefilter rejects files with no MCP markers
+          (returns ``[]`` immediately).
+        - ``ast.parse`` failures on unparseable Python return ``[]``.
+        - Per-function extraction failures (in
+          ``_py_extract_function`` or the programmatic-registration
+          handler resolver) are logged at ``DEBUG`` and skipped
+          individually; one bad function does not abort the whole pass.
+
+        There is intentionally no outer try/except that re-runs the
+        legacy ``extract_all_function_contexts`` path. An earlier draft
+        of this docstring claimed otherwise — that promise was removed
+        because falling back to the legacy walker would re-introduce
+        the helper-bloat regression this method was written to fix
+        (every plain helper would be sent to dataflow analysis).
         """
         if not self._has_mcp_markers():
             return []
@@ -1177,6 +1514,18 @@ class NativeAnalyzer:
 
         module_imports = self._py_extract_imports(tree)
         wrapper_decorators = self._py_collect_wrapper_decorators(tree)
+        # Review #2: identify trusted MCP server-instance names so
+        # ``@<receiver>.tool`` only classifies when ``<receiver>``
+        # actually binds to an MCP SDK instance.
+        mcp_instances = self._py_collect_mcp_instances(tree, module_imports)
+
+        # Review #1 / #6: build the import-target map once per call so
+        # the cross-file resolver can disambiguate same-named functions
+        # via the calling file's own import paths.
+        import_target_map = self._build_import_target_map(
+            module_imports,
+            current_file=str(self.file_path) if self.file_path else None,
+        )
 
         functions_by_name: Dict[
             str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
@@ -1199,7 +1548,9 @@ class NativeAnalyzer:
                 self._py_get_node_name(dec) for dec in (node.decorator_list or [])
             ]
             cap_kind = self._py_classify_decorators(
-                decorator_names, wrapper_decorators
+                decorator_names,
+                wrapper_decorators,
+                trusted_receivers=mcp_instances,
             )
             if cap_kind is None:
                 continue
@@ -1222,13 +1573,38 @@ class NativeAnalyzer:
         # ``mcp.tool(...)(self.method)`` decorator-factory-on-bound-method
         # pattern (used by AWS-Labs-style tool-group classes). Handlers
         # we cannot resolve in-file (cross-file references, factory
-        # calls, etc.) become unresolved-handler stubs so the LLM /
-        # report layer still sees a capability was registered.
-        for handler_node, label, cap_kind in self._py_iter_programmatic_registrations(
+        # calls, etc.) become cross-file or unresolved-handler stubs so
+        # the LLM / report layer still sees a capability was
+        # registered.
+        for (
+            handler_node,
+            label,
+            cap_kind,
+            cross_file_path,
+        ) in self._py_iter_programmatic_registrations(
             tree,
             functions_by_name=functions_by_name,
             class_methods=class_methods,
+            cross_file_analyzer=cross_file_analyzer,
+            import_target_map=import_target_map,
         ):
+            if handler_node is None and cross_file_path is not None:
+                # Review #6: cross-file resolution succeeded — emit a
+                # ``registration.cross_file`` stub like the TS path so
+                # consumers can show the user where the handler lives.
+                stub_key = (("crossfile", cross_file_path, label), cap_kind)
+                if stub_key in seen:
+                    continue
+                seen.add(stub_key)
+                self._append_unresolved_capability(
+                    contexts,
+                    capability=cap_kind,
+                    registered_name=label,
+                    source_kind="registration.cross_file",
+                    handler_name_hint=label,
+                    source_file=cross_file_path,
+                )
+                continue
             if handler_node is None:
                 stub_key = (("unresolved", label), cap_kind)
                 if stub_key in seen:
@@ -1315,22 +1691,165 @@ class NativeAnalyzer:
         self,
         decorator_names: List[str],
         wrapper_decorators: Dict[str, str],
+        *,
+        trusted_receivers: Optional[Set[str]] = None,
     ) -> Optional[str]:
         """Return the canonical capability kind for ``decorator_names``.
 
         Accepts both built-in MCP decorators (FastMCP / low-level
         Server) and locally-defined wrapper decorators discovered via
         ``_py_collect_wrapper_decorators``.
+
+        Receiver verification (Review #2 / Gap 4 parity):
+        when ``trusted_receivers`` is non-empty, decorators of the form
+        ``@<receiver>.<method>`` only classify as MCP if ``<receiver>``
+        is a known MCP server instance bound in this file. Bare
+        decorators (``@tool``, no dot) are always accepted because they
+        can only have come from a direct symbol import. When the
+        receiver set is empty (provenance pass found nothing) we apply
+        the same "loose if empty" tradeoff as TS so unusual import
+        patterns still work.
         """
         for name in decorator_names or []:
             kind = _python_decorator_capability(name)
             if kind is not None:
+                if trusted_receivers and "." in name:
+                    receiver = name.rsplit(".", 1)[0].strip()
+                    # Strip any call-args so ``foo(args).tool`` reduces
+                    # to ``foo`` for receiver lookup.
+                    receiver_root = receiver.split(".", 1)[0].split("(", 1)[0]
+                    if receiver_root not in trusted_receivers:
+                        # Receiver isn't a known MCP instance; reject
+                        # this decorator and keep scanning the list —
+                        # another decorator on the same function may
+                        # still be a valid MCP capability.
+                        continue
                 return kind
             bare = name.rsplit(".", 1)[-1].split("(", 1)[0].strip()
             wrapped = wrapper_decorators.get(bare)
             if wrapped:
                 return wrapped
         return None
+
+    def _py_collect_mcp_instances(
+        self, tree: ast.AST, module_imports: List[str]
+    ) -> Set[str]:
+        """Identify Python local names bound to an MCP server instance.
+
+        AST-based mirror of :meth:`_collect_mcp_instances` (which runs
+        on tree-sitter): the lazy Python path doesn't have a tree-sitter
+        tree available, so we walk ``ast`` instead. Recognized
+        provenance shapes::
+
+            mcp = FastMCP("demo")                          # Assign
+            server = Server()                              # Assign
+            mcp = mcp.server.fastmcp.FastMCP(...)          # Assign
+            mcp: FastMCP = ...                             # AnnAssign
+            def f(server: Server): ...                     # parameter
+            class S:
+                def m(self, server: FastMCP): ...          # parameter
+
+        SDK class names are sourced from this file's ``from <mcp-sdk>
+        import X [as Y]`` statements (so locally-renamed classes still
+        match) plus the global ``_MCP_KNOWN_SERVER_CLASSES`` allow-list
+        as a backstop for unusual import shapes.
+
+        Returns the union of bound instance names and SDK package
+        aliases. Returns an empty set when no SDK import is detected so
+        the caller can fall back to loose receiver matching rather than
+        silently dropping registrations.
+        """
+        prefixes = _MCP_SDK_MODULE_PREFIXES.get("python", ())
+        if not prefixes:
+            return set()
+
+        sdk_classes: Set[str] = set()
+        sdk_aliases: Set[str] = set()
+        for stmt in module_imports or []:
+            stmt_lc = stmt.lower()
+            if not any(p in stmt_lc for p in prefixes):
+                continue
+            # ``from <module> import X [as Y], Z, ...``
+            m = _re.match(r"^\s*from\s+([\w\.]+)\s+import\s+(.+)$", stmt)
+            if m:
+                for sym in m.group(2).split(","):
+                    sym = sym.strip()
+                    parts = _re.split(r"\s+as\s+", sym, maxsplit=1)
+                    bound = (
+                        parts[1].strip()
+                        if len(parts) > 1
+                        else parts[0].strip()
+                    )
+                    if not bound:
+                        continue
+                    # Heuristic: PascalCase = class, snake_case / lower
+                    # = module alias. Cheap and accurate for SDK code.
+                    if bound[:1].isupper():
+                        sdk_classes.add(bound)
+                    else:
+                        sdk_aliases.add(bound)
+                continue
+            # ``import <module> [as alias]`` — bind the alias.
+            m = _re.match(r"^\s*import\s+([\w\.]+)(?:\s+as\s+(\w+))?\s*$", stmt)
+            if m:
+                full = m.group(1)
+                alias = m.group(2)
+                bound = alias or full.split(".", 1)[0]
+                sdk_aliases.add(bound)
+
+        # Backstop allow-list: even if the import line was unusual, a
+        # call to ``FastMCP(...)`` / ``Server(...)`` should bind a
+        # trusted receiver. Same names tree-sitter uses.
+        sdk_classes.update(_MCP_KNOWN_SERVER_CLASSES)
+
+        trusted: Set[str] = set(sdk_aliases)
+
+        def _matches_sdk_class(call_or_attr: ast.AST) -> bool:
+            """Return True if the node names an MCP SDK class."""
+            full = ""
+            if isinstance(call_or_attr, ast.Call):
+                full = self._py_get_node_name(call_or_attr.func)
+            elif isinstance(call_or_attr, (ast.Attribute, ast.Name)):
+                full = self._py_get_node_name(call_or_attr)
+            if not full:
+                return False
+            leaf = full.rsplit(".", 1)[-1].split("(", 1)[0].strip()
+            return leaf in sdk_classes
+
+        for node in ast.walk(tree):
+            # ``mcp = FastMCP("demo")``
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                if _matches_sdk_class(node.value):
+                    for tgt in node.targets:
+                        if isinstance(tgt, ast.Name):
+                            trusted.add(tgt.id)
+            # ``mcp: FastMCP = FastMCP(...)`` or just the annotation.
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                ann_text = self._py_unparse_safe(node.annotation)
+                leaf = ann_text.rsplit(".", 1)[-1] if ann_text else ""
+                if leaf in sdk_classes:
+                    trusted.add(node.target.id)
+                if isinstance(node.value, ast.Call) and _matches_sdk_class(node.value):
+                    trusted.add(node.target.id)
+            # Function-parameter type annotations:
+            # ``def f(server: FastMCP): ...``
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                params: List[ast.arg] = []
+                params.extend(node.args.args or [])
+                params.extend(node.args.kwonlyargs or [])
+                if node.args.vararg is not None:
+                    params.append(node.args.vararg)
+                if node.args.kwarg is not None:
+                    params.append(node.args.kwarg)
+                for arg in params:
+                    if arg.annotation is None:
+                        continue
+                    ann_text = self._py_unparse_safe(arg.annotation)
+                    leaf = ann_text.rsplit(".", 1)[-1] if ann_text else ""
+                    if leaf in sdk_classes:
+                        trusted.add(arg.arg)
+
+        return trusted
 
     # ------------------------------------------------------------------
     # Gap 8 (extended): programmatic + decorator-call-on-bound-method
@@ -1419,16 +1938,52 @@ class NativeAnalyzer:
         functions_by_name: Dict[
             str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
         ],
-    ) -> "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str]":
+        *,
+        cross_file_analyzer: Any = None,
+        import_target_map: Optional[Dict[str, List[str]]] = None,
+    ) -> "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str, Optional[str]]":
         """Resolve a handler expression at a registration call site.
 
-        Returns ``(function_node_or_None, human_label)``. When the node
-        is ``None`` callers should emit an unresolved-handler stub so
-        downstream consumers know a capability was registered without
-        silently dropping it.
+        Returns ``(function_node_or_None, human_label, cross_file_path_or_None)``.
+
+        * ``function_node`` is non-None when the handler resolves to a
+          local AST node we can run dataflow on.
+        * ``cross_file_path`` is non-None when in-file resolution failed
+          but the cross-file call graph located the defining file. The
+          caller should emit a ``registration.cross_file`` stub
+          pointing at this path (mirroring the TS behavior).
+        * Both ``None`` means the handler is genuinely unresolved
+          (lambda, factory call, dynamic attr, etc.) — callers emit a
+          plain unresolved stub so downstream consumers still see the
+          capability was registered.
         """
+        # Local lookup helpers ------------------------------------------------
+        def _crossfile(name: str) -> Optional[str]:
+            if cross_file_analyzer is None or not name:
+                return None
+            targets = (
+                import_target_map.get(name) if import_target_map else None
+            )
+            try:
+                match = self._resolve_cross_file_handler(
+                    name,
+                    cross_file_analyzer,
+                    target_module_paths=targets,
+                )
+            except Exception:
+                return None
+            if match is None:
+                return None
+            return match[0]
+
         if isinstance(handler, ast.Name):
-            return functions_by_name.get(handler.id), handler.id
+            local = functions_by_name.get(handler.id)
+            if local is not None:
+                return local, handler.id, None
+            # Review #6: bare name missed in this file — try cross-file.
+            cross_file_path = _crossfile(handler.id)
+            return None, handler.id, cross_file_path
+
         if isinstance(handler, ast.Attribute) and isinstance(
             handler.value, ast.Name
         ):
@@ -1436,11 +1991,32 @@ class NativeAnalyzer:
             attr = handler.attr
             if base in ("self", "cls") and enclosing_cls:
                 node = class_methods.get(enclosing_cls, {}).get(attr)
-                return node, f"{enclosing_cls}.{attr}"
-            return None, f"{base}.{attr}"
+                return node, f"{enclosing_cls}.{attr}", None
+            # Review #6: ``<module>.<name>`` — look up ``name`` in the
+            # call graph, restricted to entries whose path lines up
+            # with whatever ``<module>`` was bound to in this file's
+            # imports. Without the import-map filter we'd suffix-match
+            # any ``::<name>`` and possibly analyze the wrong file.
+            target_paths: Optional[List[str]] = None
+            if import_target_map:
+                target_paths = import_target_map.get(base) or None
+            cross_file_path: Optional[str] = None
+            if cross_file_analyzer is not None and target_paths is not None:
+                try:
+                    match = self._resolve_cross_file_handler(
+                        attr,
+                        cross_file_analyzer,
+                        target_module_paths=target_paths,
+                    )
+                except Exception:
+                    match = None
+                if match is not None:
+                    cross_file_path = match[0]
+            return None, f"{base}.{attr}", cross_file_path
+
         # Lambda, factory call, subscript, etc. — surface as unresolved
         # so the LLM still sees that something was registered here.
-        return None, "<unresolved>"
+        return None, "<unresolved>", None
 
     def _py_iter_programmatic_registrations(
         self,
@@ -1454,8 +2030,11 @@ class NativeAnalyzer:
                 Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]],
             ]
         ] = None,
+        *,
+        cross_file_analyzer: Any = None,
+        import_target_map: Optional[Dict[str, List[str]]] = None,
     ) -> List[
-        "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str, str]"
+        "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str, str, Optional[str]]"
     ]:
         """Iterate programmatic / indirect MCP registration calls (Gap 8).
 
@@ -1474,17 +2053,24 @@ class NativeAnalyzer:
           ``Server`` decorators (``call_tool``/``list_tools``/
           ``read_resource``/``get_prompt``/etc.).
 
-        Returns a list of ``(handler_node_or_None, label, capability)``
-        tuples. ``handler_node`` is ``None`` for cross-file or factory-
-        produced handlers we cannot resolve in-file; callers should emit
-        an unresolved-handler stub via
-        :py:meth:`_append_unresolved_capability` for those entries.
+        Returns a list of
+        ``(handler_node_or_None, label, capability, cross_file_path_or_None)``
+        tuples.
+
+        * ``handler_node`` non-None — local node, run dataflow on it.
+        * ``handler_node`` None and ``cross_file_path`` non-None —
+          handler resolved into another file via the call graph (Review
+          #6); callers emit a ``registration.cross_file`` stub
+          referencing that path.
+        * Both None — genuinely unresolved (lambda, factory call,
+          dynamic attribute, etc.); callers emit a plain unresolved
+          stub so downstream consumers still see a registration.
         """
         functions_by_name = functions_by_name or {}
         class_methods = class_methods or {}
 
         out: List[
-            "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str, str]"
+            "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str, str, Optional[str]]"
         ] = []
 
         for call, enclosing_cls in self._py_walk_calls_with_class_context(
@@ -1518,13 +2104,15 @@ class NativeAnalyzer:
             if kind is None or handler_expr is None:
                 continue
 
-            handler_node, label = self._py_resolve_handler_expr(
+            handler_node, label, cross_file_path = self._py_resolve_handler_expr(
                 handler_expr,
                 enclosing_cls,
                 class_methods,
                 functions_by_name,
+                cross_file_analyzer=cross_file_analyzer,
+                import_target_map=import_target_map,
             )
-            out.append((handler_node, label, kind))
+            out.append((handler_node, label, kind, cross_file_path))
 
         return out
 
