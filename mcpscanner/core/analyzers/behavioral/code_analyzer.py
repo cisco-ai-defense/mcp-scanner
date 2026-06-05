@@ -27,6 +27,7 @@ This analyzer:
 """
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -42,6 +43,23 @@ from ...static_analysis.interprocedural.treesitter_call_graph import (
 )
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
+
+
+@dataclass(slots=True)
+class _AcceptedFile:
+    """A capability-file that survived the byte-level prefilter.
+
+    Carries both the raw bytes (used by the prefilter regex) and the
+    UTF-8-decoded text (used by tree-sitter / Python AST / LLM
+    pipelines) so the rest of the directory pipeline can avoid
+    reopening the same file. Without this cache every accepted file
+    was read three times — once by the prefilter, once by the
+    call-graph builder, and once by ``_analyze_file``.
+    """
+
+    path: str
+    source_bytes: bytes
+    source_text: str
 
 
 class BehavioralCodeAnalyzer(BaseAnalyzer):
@@ -131,16 +149,38 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     f"Found {len(source_files)} source file(s) to analyze"
                 )
 
+                # =====================================================
+                # Gap 7 — Discovery / Analysis phase split
+                # =====================================================
+                # Phase 1: cheap byte-level prefilter. Skip files that
+                # contain none of the recognized MCP marker tokens —
+                # they can't host a tool/prompt/resource and we don't
+                # want them in the call graph either.
+                #
+                # Phase 2: load the survivors, partition them by
+                # language, and build the call graph ONLY for those
+                # files. This keeps cross-file enrichment intact for
+                # capability handlers while skipping unrelated source
+                # files entirely. On a 500-file repo with 3 MCP files
+                # this turns 500 parses + 500 call-graph entries into
+                # 3 parses + 3 call-graph entries.
+                # =====================================================
+                capability_files = self._prefilter_capability_files(source_files)
+                self.logger.debug(
+                    f"Prefilter: {len(capability_files)} of "
+                    f"{len(source_files)} files contain MCP markers"
+                )
+
                 # Partition files by language family
-                python_files: List[str] = []
-                ts_files_by_lang: Dict[str, List[str]] = {}
-                for src_file in source_files:
-                    ext = Path(src_file).suffix.lower()
+                python_files: List[_AcceptedFile] = []
+                ts_files_by_lang: Dict[str, List[_AcceptedFile]] = {}
+                for accepted in capability_files:
+                    ext = Path(accepted.path).suffix.lower()
                     if ext in self._PYTHON_EXTENSIONS:
-                        python_files.append(src_file)
+                        python_files.append(accepted)
                     elif ext in self._EXT_TO_TS_LANGUAGE:
                         lang = self._EXT_TO_TS_LANGUAGE[ext]
-                        ts_files_by_lang.setdefault(lang, []).append(src_file)
+                        ts_files_by_lang.setdefault(lang, []).append(accepted)
 
                 # Build Python call graph
                 py_call_graph_analyzer: Optional[CallGraphAnalyzer] = None
@@ -153,39 +193,55 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     ts_call_graph_analyzers[lang] = TreeSitterCallGraphAnalyzer(lang)
 
                 total_size = 0
-                for src_file in source_files:
+                for accepted in capability_files:
                     try:
-                        file_size = os.path.getsize(src_file)
+                        # Cache hit: use the bytes we already read in
+                        # the prefilter pass. Falls back to ``getsize``
+                        # only when the prefilter saw a read error and
+                        # left ``source_bytes`` empty.
+                        if accepted.source_bytes:
+                            file_size = len(accepted.source_bytes)
+                        else:
+                            file_size = os.path.getsize(accepted.path)
                         total_size += file_size
 
                         if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
                             self.logger.error(
-                                f"Very large file detected, skipping: {src_file} ({file_size:,} bytes)"
+                                f"Very large file detected, skipping: {accepted.path} ({file_size:,} bytes)"
                             )
                             continue
                         elif file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
                             self.logger.debug(
-                                f"Large file detected: {src_file} ({file_size:,} bytes)"
+                                f"Large file detected: {accepted.path} ({file_size:,} bytes)"
                             )
 
-                        with open(src_file, "r", encoding="utf-8") as f:
-                            source_code = f.read()
+                        # Reuse the cached text: we already paid for
+                        # the read + decode in the prefilter, so don't
+                        # open/read/decode the file again just to feed
+                        # the call-graph builder.
+                        if accepted.source_text:
+                            source_code = accepted.source_text
+                        else:
+                            with open(accepted.path, "r", encoding="utf-8") as f:
+                                source_code = f.read()
 
-                        ext = Path(src_file).suffix.lower()
+                        ext = Path(accepted.path).suffix.lower()
                         if ext in self._PYTHON_EXTENSIONS and py_call_graph_analyzer:
-                            py_call_graph_analyzer.add_file(Path(src_file), source_code)
+                            py_call_graph_analyzer.add_file(
+                                Path(accepted.path), source_code
+                            )
                         elif ext in self._EXT_TO_TS_LANGUAGE:
                             lang = self._EXT_TO_TS_LANGUAGE[ext]
                             ts_call_graph_analyzers[lang].add_file(
-                                Path(src_file), source_code
+                                Path(accepted.path), source_code
                             )
                     except Exception as e:
                         self.logger.warning(
-                            f"Failed to add file {src_file} to cross-file analyzer: {e}"
+                            f"Failed to add file {accepted.path} to cross-file analyzer: {e}"
                         )
 
                 self.logger.debug(
-                    f"Total directory size: {total_size:,} bytes across {len(source_files)} files"
+                    f"Total directory size: {total_size:,} bytes across {len(capability_files)} files"
                 )
                 if total_size > 10_000_000:  # 10MB
                     self.logger.warning(
@@ -206,9 +262,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
 
                 # Analyze each file with its language-appropriate call graph
-                for src_file in source_files:
-                    self.logger.debug(f"Analyzing file: {src_file}")
-                    ext = Path(src_file).suffix.lower()
+                for accepted in capability_files:
+                    self.logger.debug(f"Analyzing file: {accepted.path}")
+                    ext = Path(accepted.path).suffix.lower()
                     if ext in self._PYTHON_EXTENSIONS:
                         file_cga = py_call_graph_analyzer
                     elif ext in self._EXT_TO_TS_LANGUAGE:
@@ -218,7 +274,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         file_cga = None
 
                     file_findings = await self._analyze_file(
-                        src_file, context, file_cga
+                        accepted.path,
+                        context,
+                        file_cga,
+                        cached_source=accepted.source_text or None,
                     )
                     all_findings.extend(file_findings)
 
@@ -356,6 +415,66 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         return sorted(source_files)
 
+    def _prefilter_capability_files(
+        self, source_files: List[str]
+    ) -> List[_AcceptedFile]:
+        """Phase 1 of Gap 7's discovery / analysis split.
+
+        Returns the subset of ``source_files`` that contain at least
+        one MCP marker token, *along with the bytes and text we just
+        read* so the rest of the directory pipeline can avoid reopening
+        the same file. Uses
+        :py:meth:`NativeAnalyzer._has_mcp_markers` so the marker list
+        stays consistent with the per-file capability extractor.
+
+        Files larger than ``MAX_FILE_SIZE_BYTES`` are still passed
+        through (the size cap is applied later in
+        ``_analyze_file``); the prefilter only short-circuits files
+        whose source has no MCP marker token at all.
+
+        On read error we fall back to a no-cache placeholder so
+        downstream still gets a chance to surface the proper error;
+        the call sites tolerate empty-string source.
+        """
+        from mcpscanner.core.static_analysis import NativeAnalyzer
+
+        accepted: List[_AcceptedFile] = []
+        for src_file in source_files:
+            try:
+                file_size = os.path.getsize(src_file)
+                if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
+                    # Honor the same hard cap the analyzer enforces: don't
+                    # pre-read multi-megabyte files just to prefilter them.
+                    self.logger.debug(
+                        f"Prefilter skipping huge file: {src_file} "
+                        f"({file_size:,} bytes)"
+                    )
+                    continue
+                with open(src_file, "rb") as f:
+                    source_bytes = f.read()
+            except OSError as e:
+                self.logger.debug(f"Prefilter could not read {src_file}: {e}")
+                # Pass-through on read errors so downstream still sees
+                # the file (the analyzer will surface a proper error).
+                accepted.append(
+                    _AcceptedFile(path=src_file, source_bytes=b"", source_text="")
+                )
+                continue
+            try:
+                source_code = source_bytes.decode("utf-8", errors="replace")
+            except UnicodeDecodeError:
+                continue
+            analyzer = NativeAnalyzer(source_code, src_file)
+            if analyzer._has_mcp_markers():
+                accepted.append(
+                    _AcceptedFile(
+                        path=src_file,
+                        source_bytes=source_bytes,
+                        source_text=source_code,
+                    )
+                )
+        return accepted
+
     def _find_python_files(self, directory: str) -> List[str]:
         """Find all Python files in a directory (legacy method).
 
@@ -391,6 +510,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         cross_file_analyzer: Optional[
             Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer]
         ] = None,
+        *,
+        cached_source: Optional[str] = None,
     ) -> List[SecurityFinding]:
         """Analyze a single source file.
 
@@ -398,13 +519,20 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             file_path: Path to source file
             context: Analysis context
             cross_file_analyzer: Optional cross-file analyzer (Python or tree-sitter)
+            cached_source: Pre-read source text. When the directory
+                pipeline has already read the file in
+                ``_prefilter_capability_files`` we pass the bytes back
+                in here to avoid a third read of the same file.
 
         Returns:
             List of SecurityFinding objects
         """
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                source_code = f.read()
+            if cached_source is not None:
+                source_code = cached_source
+            else:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    source_code = f.read()
 
             file_context = context.copy()
             file_context["file_path"] = file_path
@@ -429,18 +557,28 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """Analyze source code for docstring/behavior mismatches.
 
         Supports Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby,
-        Rust, and PHP. Uses ContextExtractor for MCP-decorated Python functions,
-        falls back to NativeAnalyzer when:
-        - ContextExtractor fails (syntax errors, unsupported patterns)
-        - No MCP decorators found but analysis is still needed
-        - Non-Python files (TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, PHP)
+        Rust, and PHP. Only functions that are exposed as MCP capabilities
+        (``tool``/``prompt``/``resource``) are analyzed and returned —
+        plain helper functions defined in the same file are intentionally
+        excluded so the analyzer reflects the *MCP surface* of the server,
+        not every callable in the source. Capability detection:
+
+        - Python: ``@<obj>.tool`` / ``.prompt`` / ``.resource`` decorators
+          (via ``ContextExtractor``), with a NativeAnalyzer fallback that
+          still filters by decorator name when ``ContextExtractor`` fails.
+        - Non-Python: SDK registration call sites such as
+          ``server.tool('name', schema, handler)``,
+          ``server.registerTool({...}, handler)``, etc.
+          (via ``NativeAnalyzer.extract_mcp_capability_contexts()``).
 
         Args:
             source_code: Source code to analyze
             context: Analysis context with file_path
 
         Returns:
-            List of security findings
+            List of security findings — one per registered MCP capability,
+            either a concrete threat finding or a ``SAFE`` finding if no
+            mismatch was detected.
         """
         file_path = context.get("file_path", "unknown")
         findings = []
@@ -467,37 +605,54 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
                     func_contexts = []
 
-                # Fallback to NativeAnalyzer if no MCP functions found or extractor failed
+                # Fallback to NativeAnalyzer, but only for *MCP capabilities*.
+                # The previous implementation called
+                # ``extract_all_function_contexts()`` here, which surfaced
+                # every helper in the file as if it were a tool — see the
+                # bug where ``_validate`` / ``_coerce`` showed up alongside
+                # the real registered handler. The capability-aware
+                # variant returns an empty list when no decorator-tagged
+                # function is found, which is what callers expect.
                 if not func_contexts:
                     self.logger.debug(
                         f"No MCP functions found in {file_path}, using NativeAnalyzer fallback"
                     )
                     native_analyzer = NativeAnalyzer(source_code, file_path)
-                    func_contexts = native_analyzer.extract_all_function_contexts()
+                    func_contexts = native_analyzer.extract_mcp_capability_contexts(
+                        cross_file_analyzer=context.get("cross_file_analyzer")
+                    )
                     if func_contexts:
                         self.logger.debug(
-                            f"NativeAnalyzer extracted {len(func_contexts)} functions from {file_path}"
+                            f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
                         )
 
             elif is_js_ts:
-                # Use NativeAnalyzer for TypeScript/JavaScript
+                # Use NativeAnalyzer for TypeScript/JavaScript, restricted to
+                # functions registered via ``server.tool(...)`` / ``.prompt(...)``
+                # / ``.resource(...)``. Plain helpers in the same file are
+                # excluded.
                 self.logger.debug(f"Using NativeAnalyzer for JS/TS file: {file_path}")
                 native_analyzer = NativeAnalyzer(source_code, file_path)
-                func_contexts = native_analyzer.extract_all_function_contexts()
+                func_contexts = native_analyzer.extract_mcp_capability_contexts(
+                    cross_file_analyzer=context.get("cross_file_analyzer")
+                )
                 if func_contexts:
                     self.logger.debug(
-                        f"NativeAnalyzer extracted {len(func_contexts)} functions from {file_path}"
+                        f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
                     )
 
             else:
-                # Try NativeAnalyzer for unknown file types (it will detect language)
+                # Try NativeAnalyzer for unknown file types (it will detect language).
+                # Same capability-only contract as the JS/TS branch.
                 self.logger.debug(f"Unknown file type {file_path}, trying NativeAnalyzer")
                 native_analyzer = NativeAnalyzer(source_code, file_path)
-                result = native_analyzer.analyze()
-                if result.success:
-                    func_contexts = result.functions
+                func_contexts = native_analyzer.extract_mcp_capability_contexts(
+                    cross_file_analyzer=context.get("cross_file_analyzer")
+                )
+                if func_contexts:
                     self.logger.debug(
-                        f"NativeAnalyzer detected {result.language}, extracted {len(func_contexts)} functions"
+                        f"NativeAnalyzer detected {native_analyzer.language}, "
+                        f"extracted {len(func_contexts)} MCP capabilities"
                     )
 
             if not func_contexts:

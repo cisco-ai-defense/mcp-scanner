@@ -179,24 +179,40 @@ class TreeSitterCallGraphAnalyzer:
         """Extract function definitions from AST."""
         func_types = self.FUNCTION_TYPES.get(self.language, set())
         class_types = {"class_declaration", "class", "struct_item", "impl_item", "object_declaration"}
-        
+        # Containers we should transparently descend through. ``export_statement``
+        # / ``export_declaration`` wrap function declarations in ESM modules
+        # (``export async function fn() { ... }``); without recursing into them
+        # we never see the function and cross-file resolution silently misses
+        # any handler that's registered from another module.
+        container_types = {
+            "program",
+            "source_file",
+            "module",
+            "namespace_declaration",
+            "class_body",
+            "interface_body",
+            "block",
+            "export_statement",
+            "export_declaration",
+            "default_export_declaration",
+        }
+
         for child in root.children:
             if child.type in func_types:
                 name = self._get_function_name(child, source_bytes)
                 if class_name:
                     name = f"{class_name}.{name}"
                 self.call_graph.add_function(name, child, file_path)
-            
+
             elif child.type in class_types:
                 # Get class name and recurse
                 name_node = child.child_by_field_name("name")
                 if name_node:
                     cls_name = source_bytes[name_node.start_byte:name_node.end_byte].decode("utf-8")
                     self._extract_functions(file_path, child, source_bytes, cls_name)
-            
+
             # Recurse into other containers
-            elif child.type in ("program", "source_file", "module", "namespace_declaration", 
-                               "class_body", "interface_body", "block"):
+            elif child.type in container_types:
                 self._extract_functions(file_path, child, source_bytes, class_name)
     
     def _get_function_name(self, node: Node, source_bytes: bytes) -> str:
