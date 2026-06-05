@@ -3172,7 +3172,18 @@ class NativeAnalyzer:
             )
 
     def _py_extract_imports(self, tree: ast.AST) -> List[str]:
-        """Extract all imports from Python AST."""
+        """Extract all imports from Python AST.
+
+        Reconstructs each import as a stable single-line string so the
+        downstream regex-based collectors (e.g.
+        ``_py_collect_import_targets``) can parse them uniformly.
+        Relative imports preserve their leading dots — ``from .
+        import handlers`` round-trips as ``"from . import handlers"``,
+        not ``"from  import handlers"`` — so the import-target map can
+        bind ``handlers`` to a path candidate, which the cross-file
+        handler resolver needs for programmatic registrations like
+        ``mcp.tool(name='x')(handlers.do_thing)``.
+        """
         imports = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -3182,7 +3193,15 @@ class NativeAnalyzer:
                         stmt += f" as {alias.asname}"
                     imports.append(stmt)
             elif isinstance(node, ast.ImportFrom):
-                module = node.module or ""
+                # Preserve the relative-import dot prefix from
+                # ``node.level``. Without this, ``from . import x`` and
+                # ``from ..pkg import x`` collapse to bare ``from
+                # import x`` / ``from pkg import x`` respectively, both
+                # of which fail the ``^from\s+(\S+)\s+import\s+...``
+                # regex that the import-target collector uses to bind
+                # names to module paths.
+                level = node.level or 0
+                module = ("." * level) + (node.module or "")
                 for alias in node.names:
                     stmt = f"from {module} import {alias.name}"
                     if alias.asname:

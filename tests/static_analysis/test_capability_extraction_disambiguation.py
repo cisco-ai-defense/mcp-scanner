@@ -265,3 +265,87 @@ def test_python_programmatic_registration_resolves_via_call_graph(
     assert any("registration.cross_file" in t for t in tags), tags
     source = getattr(cap, "source_file", "") or ""
     assert source.endswith("tools/docs.py"), source
+
+
+# ---------------------------------------------------------------------------
+# Relative-import round-trip in ``_py_extract_imports``.
+# ---------------------------------------------------------------------------
+#
+# The cross-file resolver above relies on the calling file's import
+# statements to bind a name like ``handlers`` to a module path. When
+# ``ast.ImportFrom`` represents a relative import, ``node.module`` is
+# ``None`` and the dot count lives in ``node.level``. If the dots are
+# dropped during round-trip extraction, ``from . import handlers``
+# becomes the unparseable ``"from  import handlers"`` and the
+# downstream regex collector silently emits no entry — which means
+# the cross-file resolver can never fire for the very common
+# packaged-server shape. The two tests below pin both halves of the
+# round-trip: the literal string and the resulting capability stub.
+
+PY_REL_SERVER = """\
+from mcp.server.fastmcp import FastMCP
+from . import handlers
+
+mcp = FastMCP("demo")
+mcp.tool(name="upper")(handlers.do_thing)
+"""
+
+PY_REL_HANDLERS = """\
+def do_thing(payload: str) -> str:
+    return payload.upper()
+"""
+
+
+def test_relative_import_round_trips_with_leading_dots():
+    """``from . import handlers`` and ``from ..pkg import x`` must
+    survive round-trip through ``_py_extract_imports`` so the
+    downstream regex collector can bind names to module paths."""
+    import ast
+
+    src = (
+        "from . import handlers\n"
+        "from ..pkg import sibling\n"
+        "from .tools import docs\n"
+        "from mcp.server.fastmcp import FastMCP\n"
+    )
+    tree = ast.parse(src)
+    analyzer = NativeAnalyzer(src, "server.py")
+    imports = analyzer._py_extract_imports(tree)
+    # The leading-dot relative imports must keep their dots so the
+    # downstream regex collector can parse them.
+    assert "from . import handlers" in imports, imports
+    assert "from ..pkg import sibling" in imports, imports
+    assert "from .tools import docs" in imports, imports
+    # Non-relative imports continue to round-trip unchanged.
+    assert "from mcp.server.fastmcp import FastMCP" in imports, imports
+
+
+def test_bare_from_dot_import_unblocks_cross_file_resolver(
+    tmp_path: Path,
+) -> None:
+    """Pin the end-to-end behavior: a server using the bare
+    ``from . import handlers`` form must emit a cross-file stub when
+    the call graph contains the handler. Before the leading-dot fix
+    in ``_py_extract_imports`` this test surfaced an ``unresolved``
+    stub instead of a ``cross_file`` one."""
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    server_path = pkg / "server.py"
+    handlers_path = pkg / "handlers.py"
+    server_path.write_text(PY_REL_SERVER)
+    handlers_path.write_text(PY_REL_HANDLERS)
+
+    cga = CallGraphAnalyzer()
+    cga.add_file(server_path, PY_REL_SERVER)
+    cga.add_file(handlers_path, PY_REL_HANDLERS)
+    cga.build_call_graph()
+
+    analyzer = NativeAnalyzer(PY_REL_SERVER, str(server_path))
+    caps = analyzer.extract_mcp_capability_contexts(cross_file_analyzer=cga)
+    assert len(caps) == 1, [c.name for c in caps]
+    cap = caps[0]
+    tags = cap.decorator_types
+    assert any("registration.cross_file" in t for t in tags), tags
+    source = getattr(cap, "source_file", "") or ""
+    assert source.endswith("handlers.py"), source
