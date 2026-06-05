@@ -227,14 +227,12 @@ import re as _re  # local alias avoids polluting wider module namespace
 #   ``@org.springframework.ai.Tool``,
 #   ``[ModelContextProtocol.Server.McpServerTool]``, and PHP's
 #   ``#[App\\Mcp\\Tool]`` still surface the LEAF identifier (``Tool``,
-#   ``McpServerTool``) instead of the package head. The previous regex
-#   only walked ``::`` and silently dropped dotted/backslash-separated
-#   forms — see the PR review noting Spring AI / C# regressions.
+#   ``McpServerTool``) instead of the package head.
 # - The captured identifier uses ``\w+`` (no leading ``[A-Za-z_]``
-#   class) to stop CodeQL flagging the redundant character-class
-#   range that overlaps with ``\w``. Identifiers starting with a digit
-#   aren't a real concern here because the upstream tokenizers reject
-#   them long before this regex sees the source.
+#   class) so its character set doesn't overlap with ``\w``.
+#   Identifiers starting with a digit aren't a real concern here
+#   because the upstream tokenizers reject them long before this
+#   regex sees the source.
 _MCP_ANNOTATION_RE = _re.compile(
     r"""
     (?:                                    # one of the annotation sigils
@@ -1025,9 +1023,9 @@ class NativeAnalyzer:
             tree.root_node, trusted_receivers=mcp_instances
         )
 
-        # Build an import-target map once per extract call (Review #1):
-        # cross-file resolution prefers entries whose defining file path
-        # matches one of the calling file's import targets, killing the
+        # Build an import-target map once per extract call: cross-file
+        # resolution prefers entries whose defining file path matches
+        # one of the calling file's import targets, killing the
         # "wrong same-named function in node_modules wins" failure mode.
         import_target_map = self._build_import_target_map(
             imports, current_file=str(self.file_path) if self.file_path else None
@@ -1514,14 +1512,14 @@ class NativeAnalyzer:
 
         module_imports = self._py_extract_imports(tree)
         wrapper_decorators = self._py_collect_wrapper_decorators(tree)
-        # Review #2: identify trusted MCP server-instance names so
+        # Identify trusted MCP server-instance names so
         # ``@<receiver>.tool`` only classifies when ``<receiver>``
         # actually binds to an MCP SDK instance.
         mcp_instances = self._py_collect_mcp_instances(tree, module_imports)
 
-        # Review #1 / #6: build the import-target map once per call so
-        # the cross-file resolver can disambiguate same-named functions
-        # via the calling file's own import paths.
+        # Build the import-target map once per call so the cross-file
+        # resolver can disambiguate same-named functions via the
+        # calling file's own import paths.
         import_target_map = self._build_import_target_map(
             module_imports,
             current_file=str(self.file_path) if self.file_path else None,
@@ -1589,7 +1587,7 @@ class NativeAnalyzer:
             import_target_map=import_target_map,
         ):
             if handler_node is None and cross_file_path is not None:
-                # Review #6: cross-file resolution succeeded — emit a
+                # Cross-file resolution succeeded — emit a
                 # ``registration.cross_file`` stub like the TS path so
                 # consumers can show the user where the handler lives.
                 stub_key = (("crossfile", cross_file_path, label), cap_kind)
@@ -1700,7 +1698,7 @@ class NativeAnalyzer:
         Server) and locally-defined wrapper decorators discovered via
         ``_py_collect_wrapper_decorators``.
 
-        Receiver verification (Review #2 / Gap 4 parity):
+        Receiver verification (Gap 4 parity):
         when ``trusted_receivers`` is non-empty, decorators of the form
         ``@<receiver>.<method>`` only classify as MCP if ``<receiver>``
         is a known MCP server instance bound in this file. Bare
@@ -1980,7 +1978,7 @@ class NativeAnalyzer:
             local = functions_by_name.get(handler.id)
             if local is not None:
                 return local, handler.id, None
-            # Review #6: bare name missed in this file — try cross-file.
+            # Bare name missed in this file — try the cross-file graph.
             cross_file_path = _crossfile(handler.id)
             return None, handler.id, cross_file_path
 
@@ -1992,9 +1990,9 @@ class NativeAnalyzer:
             if base in ("self", "cls") and enclosing_cls:
                 node = class_methods.get(enclosing_cls, {}).get(attr)
                 return node, f"{enclosing_cls}.{attr}", None
-            # Review #6: ``<module>.<name>`` — look up ``name`` in the
-            # call graph, restricted to entries whose path lines up
-            # with whatever ``<module>`` was bound to in this file's
+            # ``<module>.<name>`` — look up ``name`` in the call
+            # graph, restricted to entries whose path lines up with
+            # whatever ``<module>`` was bound to in this file's
             # imports. Without the import-map filter we'd suffix-match
             # any ``::<name>`` and possibly analyze the wrong file.
             target_paths: Optional[List[str]] = None

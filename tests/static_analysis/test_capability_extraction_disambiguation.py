@@ -1,16 +1,18 @@
-"""Coverage for the PR review fixes on top of fix/behavioral-only-mcp-capabilities.
+"""Disambiguation / precision tests for capability extraction.
 
-These tests pin the behavior changes requested in the review:
+Covers four concerns where the extractor previously made a coarse
+decision that could silently misattribute a capability:
 
 1. Import-map disambiguation in ``_resolve_cross_file_handler``: when
    two files in the call graph define a function with the same name,
    prefer the one named in the calling file's imports.
 2. Python decorator receiver verification: ``@<receiver>.tool`` only
    classifies as MCP when ``<receiver>`` is bound to an MCP SDK
-   instance; unrelated DSLs that ``alias.tool(...)`` no longer
+   instance; unrelated DSLs (``toolbar.tool(...)``) no longer
    false-positive.
 3. Annotation regex captures the leaf identifier across ``::``,
-   ``.``, and ``\\`` namespace separators.
+   ``.``, and ``\\`` namespace separators (e.g.
+   ``@org.springframework.ai.Tool`` → ``Tool``).
 4. Python programmatic registrations resolve cross-file handler
    references via the call graph (e.g. ``mcp.tool()(docs.search_x)``
    with ``docs`` imported from another module).
@@ -31,7 +33,7 @@ from mcpscanner.core.static_analysis.native_analyzer import _MCP_ANNOTATION_RE
 
 
 # ---------------------------------------------------------------------------
-# Review #3 + #7: annotation regex covers `::`, `.`, `\\` namespace separators.
+# Annotation regex covers ``::``, ``.``, ``\\`` namespace separators.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -74,7 +76,7 @@ public class Calc {
 
 
 # ---------------------------------------------------------------------------
-# Review #1: import-map disambiguation for cross-file handler resolution.
+# Import-map disambiguation for cross-file handler resolution.
 # ---------------------------------------------------------------------------
 
 INDEX_TS = """\
@@ -163,7 +165,7 @@ server.registerTool("add", { description: "x" }, addHandler);
 
 
 # ---------------------------------------------------------------------------
-# Review #2: Python decorator receiver verification.
+# Python decorator receiver verification.
 # ---------------------------------------------------------------------------
 
 def test_python_decorator_rejected_when_receiver_is_unrelated_dsl():
@@ -218,7 +220,7 @@ def loose_tool(x: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Review #6: Python programmatic registration uses cross-file call graph.
+# Python programmatic registration uses the cross-file call graph.
 # ---------------------------------------------------------------------------
 
 PY_SERVER = """\

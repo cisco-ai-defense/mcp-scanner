@@ -52,9 +52,9 @@ class _AcceptedFile:
     Carries both the raw bytes (used by the prefilter regex) and the
     UTF-8-decoded text (used by tree-sitter / Python AST / LLM
     pipelines) so the rest of the directory pipeline can avoid
-    reopening the same file. See Review #5: prior to caching, every
-    accepted file was read three times — once by the prefilter, once
-    by the call-graph builder, once by ``_analyze_file``.
+    reopening the same file. Without this cache every accepted file
+    was read three times — once by the prefilter, once by the
+    call-graph builder, and once by ``_analyze_file``.
     """
 
     path: str
@@ -215,10 +215,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                                 f"Large file detected: {accepted.path} ({file_size:,} bytes)"
                             )
 
-                        # Reuse the cached text (Review #5): we already
-                        # paid for the read + decode in the prefilter,
-                        # so don't open/read/decoded the file again
-                        # just to feed the call-graph builder.
+                        # Reuse the cached text: we already paid for
+                        # the read + decode in the prefilter, so don't
+                        # open/read/decode the file again just to feed
+                        # the call-graph builder.
                         if accepted.source_text:
                             source_code = accepted.source_text
                         else:
@@ -519,8 +519,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             file_path: Path to source file
             context: Analysis context
             cross_file_analyzer: Optional cross-file analyzer (Python or tree-sitter)
-            cached_source: Pre-read source text (Review #5). When the
-                directory pipeline has already read the file in
+            cached_source: Pre-read source text. When the directory
+                pipeline has already read the file in
                 ``_prefilter_capability_files`` we pass the bytes back
                 in here to avoid a third read of the same file.
 
