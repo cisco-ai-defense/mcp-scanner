@@ -30,6 +30,7 @@ industry-standard SAST tool conventions:
 Architecture inspired by production SAST tools.
 """
 
+from .capability_detector import CapabilityDetector, CapabilityRecord
 from .context_extractor import ContextExtractor, FunctionContext
 from .native_analyzer import NativeAnalyzer, NativeAnalysisResult
 
@@ -37,6 +38,8 @@ __version__ = "1.0.0"
 
 __all__ = [
     "__version__",
+    "CapabilityDetector",
+    "CapabilityRecord",
     "ContextExtractor",
     "FunctionContext",
     "NativeAnalyzer",

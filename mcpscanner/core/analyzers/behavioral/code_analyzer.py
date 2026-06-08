@@ -35,7 +35,7 @@ from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ....utils.path_safety import filter_safe_paths, safe_resolve_root
-from ...static_analysis.context_extractor import ContextExtractor
+from ...static_analysis.context_extractor import ContextExtractor, FunctionContext
 from ...static_analysis.native_analyzer import NativeAnalyzer
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
 from ...static_analysis.interprocedural.treesitter_call_graph import (
@@ -569,7 +569,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         - Non-Python: SDK registration call sites such as
           ``server.tool('name', schema, handler)``,
           ``server.registerTool({...}, handler)``, etc.
-          (via ``NativeAnalyzer.extract_mcp_capability_contexts()``).
+          (via ``CapabilityDetector(NativeAnalyzer).extract_mcp_capability_contexts()``).
 
         Args:
             source_code: Source code to analyze
@@ -580,6 +580,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             either a concrete threat finding or a ``SAFE`` finding if no
             mismatch was detected.
         """
+        from mcpscanner.core.static_analysis import CapabilityDetector
+
         file_path = context.get("file_path", "unknown")
         findings = []
         func_contexts = []
@@ -588,6 +590,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         file_ext = Path(file_path).suffix.lower()
         is_python = file_ext in {".py", ".pyw"}
         is_js_ts = file_ext in {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+
+        def _detect_capabilities(analyzer: NativeAnalyzer) -> List[FunctionContext]:
+            # Use the new capability detector directly so the legacy
+            # deprecation shim on NativeAnalyzer doesn't fire on every
+            # behavioral scan; the FunctionContext shape is unchanged.
+            return CapabilityDetector(analyzer).extract_mcp_capability_contexts(
+                cross_file_analyzer=context.get("cross_file_analyzer")
+            )
 
         try:
             if is_python:
@@ -605,7 +615,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
                     func_contexts = []
 
-                # Fallback to NativeAnalyzer, but only for *MCP capabilities*.
+                # Fallback to CapabilityDetector, but only for *MCP capabilities*.
                 # The previous implementation called
                 # ``extract_all_function_contexts()`` here, which surfaced
                 # every helper in the file as if it were a tool — see the
@@ -615,43 +625,38 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # function is found, which is what callers expect.
                 if not func_contexts:
                     self.logger.debug(
-                        f"No MCP functions found in {file_path}, using NativeAnalyzer fallback"
+                        f"No MCP functions found in {file_path}, using CapabilityDetector fallback"
                     )
                     native_analyzer = NativeAnalyzer(source_code, file_path)
-                    func_contexts = native_analyzer.extract_mcp_capability_contexts(
-                        cross_file_analyzer=context.get("cross_file_analyzer")
-                    )
+                    func_contexts = _detect_capabilities(native_analyzer)
                     if func_contexts:
                         self.logger.debug(
-                            f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
+                            f"CapabilityDetector extracted {len(func_contexts)} MCP capabilities from {file_path}"
                         )
 
             elif is_js_ts:
-                # Use NativeAnalyzer for TypeScript/JavaScript, restricted to
+                # Use CapabilityDetector for TypeScript/JavaScript, restricted to
                 # functions registered via ``server.tool(...)`` / ``.prompt(...)``
                 # / ``.resource(...)``. Plain helpers in the same file are
                 # excluded.
-                self.logger.debug(f"Using NativeAnalyzer for JS/TS file: {file_path}")
+                self.logger.debug(f"Using CapabilityDetector for JS/TS file: {file_path}")
                 native_analyzer = NativeAnalyzer(source_code, file_path)
-                func_contexts = native_analyzer.extract_mcp_capability_contexts(
-                    cross_file_analyzer=context.get("cross_file_analyzer")
-                )
+                func_contexts = _detect_capabilities(native_analyzer)
                 if func_contexts:
                     self.logger.debug(
-                        f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
+                        f"CapabilityDetector extracted {len(func_contexts)} MCP capabilities from {file_path}"
                     )
 
             else:
-                # Try NativeAnalyzer for unknown file types (it will detect language).
-                # Same capability-only contract as the JS/TS branch.
-                self.logger.debug(f"Unknown file type {file_path}, trying NativeAnalyzer")
+                # Try CapabilityDetector for unknown file types (NativeAnalyzer
+                # detects the language). Same capability-only contract as the
+                # JS/TS branch.
+                self.logger.debug(f"Unknown file type {file_path}, trying CapabilityDetector")
                 native_analyzer = NativeAnalyzer(source_code, file_path)
-                func_contexts = native_analyzer.extract_mcp_capability_contexts(
-                    cross_file_analyzer=context.get("cross_file_analyzer")
-                )
+                func_contexts = _detect_capabilities(native_analyzer)
                 if func_contexts:
                     self.logger.debug(
-                        f"NativeAnalyzer detected {native_analyzer.language}, "
+                        f"CapabilityDetector detected {native_analyzer.language}, "
                         f"extracted {len(func_contexts)} MCP capabilities"
                     )
 
