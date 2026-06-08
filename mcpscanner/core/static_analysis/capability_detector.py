@@ -61,7 +61,9 @@ if TYPE_CHECKING:
 # Tree-sitter at runtime: imported here so ``Language`` / ``Parser`` are
 # usable from ``CapabilityDetector.detect`` without re-importing inside
 # the hot path.
-from tree_sitter import Language, Parser
+from tree_sitter import Language, Parser, QueryCursor
+
+from .capability_queries import QueryBundle, get_bundle
 
 # Method names that MCP SDKs use to register tools/prompts/resources at
 # call sites. Lowercased; the observed call name is lowercased before
@@ -2202,6 +2204,34 @@ class CapabilityDetector:
     ) -> List[Dict[str, Any]]:
         """Find call expressions that look like MCP capability registrations.
 
+        Dispatches to the query-backed implementation when a compiled
+        :class:`QueryBundle` is available for the active language; falls
+        back to the imperative walker otherwise. The two paths are
+        contract-equivalent — same return shape, same per-language
+        quirks honoured (Kotlin trailing lambdas, low-level schema
+        capability mapping, …) — so callers don't need to know which
+        path ran.
+
+        See :py:meth:`_ts_find_mcp_registrations_imperative` for the
+        full behavioural description; the query path is documented at
+        :py:meth:`_ts_find_mcp_registrations_q`.
+        """
+        bundle = get_bundle(self.language)
+        if bundle is not None and bundle.registrations is not None:
+            return self._ts_find_mcp_registrations_q(
+                root, trusted_receivers, bundle
+            )
+        return self._ts_find_mcp_registrations_imperative(
+            root, trusted_receivers
+        )
+
+    def _ts_find_mcp_registrations_imperative(
+        self,
+        root: "Node",
+        trusted_receivers: Optional[Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Imperative tree walk for capability registrations.
+
         Returns a list of dicts describing each registration::
 
             {
@@ -2228,6 +2258,10 @@ class CapabilityDetector:
         package-level call methods (``addtool``/``addprompt``/...) are
         accepted unconditionally and the first positional argument is
         treated as the server instance.
+
+        Kept on the class because languages without query coverage
+        (Kotlin, Java, C#, Rust, PHP, Ruby) still rely on it, and so
+        we can A/B against the query-backed path during validation.
         """
         registrations: List[Dict[str, Any]] = []
         trusted_receivers = trusted_receivers or set()
@@ -2344,6 +2378,148 @@ class CapabilityDetector:
 
         visit(root, None)
         return registrations
+
+    # ------------------------------------------------------------------
+    # Query-backed registration finders.
+    #
+    # The ``_q`` variants delegate the *pattern matching* to a compiled
+    # tree-sitter query and keep the *semantic* parts (receiver-trust
+    # check, argument shape parsing, Kotlin trailing-lambda fixup,
+    # low-level schema → capability mapping) in Python. Result shape is
+    # identical to the imperative path so the dispatcher in
+    # :py:meth:`_ts_find_mcp_registrations` can swap between them
+    # transparently.
+    # ------------------------------------------------------------------
+    def _ts_find_mcp_registrations_q(
+        self,
+        root: "Node",
+        trusted_receivers: Optional[Set[str]],
+        bundle: "QueryBundle",
+    ) -> List[Dict[str, Any]]:
+        """Query-backed equivalent of :py:meth:`_ts_find_mcp_registrations_imperative`.
+
+        Two queries run in succession when both are present:
+
+        * ``bundle.registrations`` — high-level methods (``tool``,
+          ``registerTool``, …). Capability is derived from the method
+          name via :func:`_normalize_capability` and template subtype
+          via :func:`_classify_template_subtype`.
+        * ``bundle.low_level``    — TS low-level Server's
+          ``setRequestHandler``. Capability is derived from the leading
+          ``*RequestSchema`` argument via
+          :py:meth:`_ts_low_level_capability`.
+
+        For every accepted call we still call
+        :py:meth:`_ts_receiver_is_trusted`, so silent registration
+        leaks from unrelated DSLs that happen to expose ``.tool(...)``
+        cannot slip through just because the call shape matches.
+        """
+        trusted_receivers = trusted_receivers or set()
+        registrations: List[Dict[str, Any]] = []
+
+        if bundle.registrations is not None:
+            self._collect_q_registrations(
+                root,
+                bundle.registrations,
+                trusted_receivers,
+                registrations,
+                low_level=False,
+            )
+        if bundle.low_level is not None:
+            self._collect_q_registrations(
+                root,
+                bundle.low_level,
+                trusted_receivers,
+                registrations,
+                low_level=True,
+            )
+        return registrations
+
+    def _collect_q_registrations(
+        self,
+        root: "Node",
+        query: Any,
+        trusted_receivers: Set[str],
+        out: List[Dict[str, Any]],
+        *,
+        low_level: bool,
+    ) -> None:
+        """Run ``query`` over ``root`` and emit registration dicts.
+
+        The semantic logic (trust check, argument parsing, low-level
+        schema mapping, trailing-lambda lookup) is shared with the
+        imperative walker via the existing private helpers; this method
+        just translates the query's match dicts into calls into those
+        helpers.
+        """
+        cursor = QueryCursor(query)
+        for _pat_idx, captures in cursor.matches(root):
+            call_nodes = captures.get("call")
+            method_nodes = captures.get("method")
+            args_nodes = captures.get("args")
+            if not call_nodes or not method_nodes:
+                continue
+            call_node = call_nodes[0]
+            method_text = self._ts_get_node_text(method_nodes[0])
+            method_lc = method_text.lower()
+
+            # Receiver-trust gate: drop unrelated DSLs that expose a
+            # method name we recognize. The check is identical to the
+            # imperative path.
+            if not self._ts_receiver_is_trusted(
+                call_node, method_lc, trusted_receivers
+            ):
+                continue
+
+            args_node = args_nodes[0] if args_nodes else None
+
+            if low_level:
+                ll_cap = self._ts_low_level_capability(args_node)
+                if ll_cap is None:
+                    continue
+                reg = self._ts_parse_registration_args(
+                    args_node, method_lc, override_capability=ll_cap
+                )
+                if reg is None:
+                    reg = {
+                        "capability": ll_cap,
+                        "name": None,
+                        "handler_node": None,
+                        "handler_name": None,
+                    }
+                reg["template_subtype"] = None
+            else:
+                reg = self._ts_parse_registration_args(args_node, method_lc)
+                if reg is None:
+                    reg = {
+                        "capability": _normalize_capability(method_lc),
+                        "name": None,
+                        "handler_node": None,
+                        "handler_name": None,
+                    }
+                reg["template_subtype"] = _classify_template_subtype(method_lc)
+
+            # Kotlin trailing-lambda lookup is unreachable from these
+            # queries (Kotlin doesn't have a query bundle yet), but we
+            # keep the helper call here so the result shape stays
+            # identical to the imperative path even when a
+            # query-supported language eventually grows trailing-lambda
+            # syntax.
+            if reg.get("handler_node") is None:
+                for child in call_node.children:
+                    lambda_node = self._ts_unwrap_trailing_lambda(child)
+                    if lambda_node is not None:
+                        reg["handler_node"] = lambda_node
+                        break
+
+            if reg.get("name") is None and args_node is not None:
+                reg["name"] = self._ts_first_string_literal_in_args(args_node)
+
+            if (
+                reg.get("handler_node") is not None
+                or reg.get("handler_name") is not None
+            ):
+                out.append(reg)
 
     def _ts_receiver_is_trusted(
         self,
@@ -2523,6 +2699,49 @@ class CapabilityDetector:
         trusted.update(sdk_aliases)
 
         # Stage 2: walk the AST for instantiations bound to local names.
+        # The query-backed path covers the JS/TS/Go binding shapes; the
+        # imperative path retains parameter-type and Python/Kotlin
+        # ``assignment`` shapes that aren't expressible with the query
+        # bundles we ship today. Languages that don't have a query
+        # bundle still go through the imperative path entirely.
+        bundle = get_bundle(self.language)
+        if bundle is not None and bundle.instantiations is not None:
+            self._collect_mcp_instances_q(
+                root, bundle.instantiations, sdk_classes, sdk_aliases, trusted
+            )
+            # Parameter types and Python/Kotlin ``assignment`` shapes
+            # aren't covered by the per-language query files yet, so we
+            # still do a (cheap) imperative pass for those specific
+            # cases. Restricted to non-Stage-2 node types so we don't
+            # double-count the bindings the query already handled.
+            self._collect_mcp_param_and_assignment_instances(
+                root, sdk_classes, trusted
+            )
+        else:
+            self._collect_mcp_instances_imperative(
+                root, sdk_classes, sdk_aliases, trusted
+            )
+
+        return trusted
+
+    # ------------------------------------------------------------------
+    # Instance-binding collectors.
+    #
+    # ``_collect_mcp_instances_imperative`` is the original walker; the
+    # ``_q`` variant uses ``instantiations.scm`` for the JS/TS/Go cases
+    # and ``_collect_mcp_param_and_assignment_instances`` covers the
+    # parameter-type / Python-style ``assignment`` shapes that aren't
+    # in the query files (yet).
+    # ------------------------------------------------------------------
+    def _collect_mcp_instances_imperative(
+        self,
+        root: "Node",
+        sdk_classes: Set[str],
+        sdk_aliases: Set[str],
+        trusted: Set[str],
+    ) -> None:
+        """Imperative AST walk that mirrors the legacy behaviour exactly."""
+
         def visit(node: "Node"):
             # JS/TS: ``const server = new McpServer(...)``
             if node.type in ("variable_declarator", "lexical_declaration"):
@@ -2575,7 +2794,102 @@ class CapabilityDetector:
                 visit(child)
 
         visit(root)
-        return trusted
+
+    def _collect_mcp_instances_q(
+        self,
+        root: "Node",
+        query: Any,
+        sdk_classes: Set[str],
+        sdk_aliases: Set[str],
+        trusted: Set[str],
+    ) -> None:
+        """Query-backed Stage 2 for the JS/TS/Go binding shapes.
+
+        Matches each ``@target`` / ``@class`` capture pair from
+        ``instantiations.scm`` and admits the binding when ``@class``
+        matches one of the SDK classes (TS/JS) or the receiver of a
+        factory call is a known SDK package alias (Go).
+        """
+        cursor = QueryCursor(query)
+        for _pat_idx, captures in cursor.matches(root):
+            target_nodes = captures.get("target")
+            class_nodes = captures.get("class")
+            if not target_nodes or not class_nodes:
+                continue
+            class_text = self._ts_get_node_text(class_nodes[0]).strip()
+            if not class_text:
+                continue
+
+            # JS/TS: the captured @class is the leaf identifier of the
+            # constructor / callee; admit if it's a known MCP server
+            # class.
+            if (
+                class_text in sdk_classes
+                or class_text.split(".")[-1] in sdk_classes
+            ):
+                trusted.add(self._ts_get_node_text(target_nodes[0]))
+                continue
+
+            # Go: the @receiver is the SDK package alias (e.g. ``mcp``)
+            # and the @class is the factory method name. Admit when
+            # the receiver is a known alias and the method name looks
+            # like a server factory ("NewServer", "Server", …).
+            receiver_nodes = captures.get("receiver")
+            if not receiver_nodes:
+                continue
+            receiver_text = self._ts_get_node_text(receiver_nodes[0]).strip()
+            if not receiver_text or receiver_text not in sdk_aliases:
+                continue
+            class_lc = class_text.lower()
+            if "server" in class_lc or "newserver" in class_lc:
+                trusted.add(self._ts_get_node_text(target_nodes[0]))
+
+    def _collect_mcp_param_and_assignment_instances(
+        self,
+        root: "Node",
+        sdk_classes: Set[str],
+        trusted: Set[str],
+    ) -> None:
+        """Cover parameter-type and ``assignment`` instance bindings.
+
+        These shapes (``def f(server: Server)``, Python's ``mcp =
+        FastMCP("demo")``) aren't expressible cleanly in the per-
+        language ``.scm`` files — Python doesn't have a query bundle
+        and the typed-parameter forms vary across grammars — so we
+        keep the small imperative walk for them. The walk skips the
+        node types already handled by ``_collect_mcp_instances_q`` so
+        results don't double-count.
+        """
+
+        def visit(node: "Node"):
+            if node.type in (
+                "parameter",
+                "formal_parameter",
+                "typed_parameter",
+                "function_parameter",
+                "value_parameter",
+            ):
+                pname = node.child_by_field_name("name")
+                ptype = node.child_by_field_name("type")
+                if pname is not None and ptype is not None:
+                    type_text = self._ts_get_node_text(ptype).strip()
+                    if (
+                        type_text in sdk_classes
+                        or type_text.split(".")[-1] in sdk_classes
+                    ):
+                        trusted.add(self._ts_get_node_text(pname))
+
+            if node.type == "assignment":
+                left = node.child_by_field_name("left")
+                right = node.child_by_field_name("right")
+                if left is not None and right is not None:
+                    if self._ts_is_mcp_instantiation(right, sdk_classes):
+                        trusted.add(self._ts_get_node_text(left))
+
+            for child in node.children:
+                visit(child)
+
+        visit(root)
 
     def _ts_is_mcp_instantiation(
         self, expr_node: "Node", sdk_classes: Set[str]
@@ -2980,20 +3294,14 @@ class CapabilityDetector:
     ) -> Dict[str, "Node"]:
         """Build a ``name -> definition_node`` map for ``root`` (Gap 6).
 
-        Walks the tree once and records:
-          * named function/method declarations (``function_declaration``,
-            ``method_definition``, etc.),
-          * arrow functions / function expressions assigned to a local
-            via ``variable_declarator`` / ``assignment`` (``const fn = …``,
-            ``fn = …``).
-
-        Cached per (file, language). Subsequent calls reuse the index.
+        Dispatches to a query-backed implementation when the active
+        language has a compiled ``functions.scm`` bundle; falls back to
+        the imperative walker otherwise. Cached per ``(file_root,
+        language)`` on the underlying analyzer so repeated capability
+        extraction on the same file (across multiple registrations,
+        across both code paths) reuses the index.
         """
         cache_key = (id(root), self.language)
-        # Cache lives on the underlying analyzer so it survives across
-        # multiple CapabilityDetector instances bound to the same file
-        # and so existing tests (and external callers) that inspect
-        # ``analyzer._func_index_cache`` still see the populated cache.
         analyzer = self._analyzer
         cached = getattr(analyzer, "_func_index_cache", None)
         if cached is None:
@@ -3002,6 +3310,32 @@ class CapabilityDetector:
         if cache_key in cached:
             return cached[cache_key]
 
+        bundle = get_bundle(self.language)
+        if bundle is not None and bundle.functions is not None:
+            index = self._ts_build_function_index_q(
+                root, func_types, bundle.functions
+            )
+        else:
+            index = self._ts_build_function_index_imperative(root, func_types)
+
+        cached[cache_key] = index
+        return index
+
+    def _ts_build_function_index_imperative(
+        self, root: "Node", func_types: Set[str]
+    ) -> Dict[str, "Node"]:
+        """Imperative walk that records function/method/arrow defs.
+
+        Records:
+          * named function/method declarations (``function_declaration``,
+            ``method_definition``, etc.),
+          * arrow functions / function expressions assigned to a local
+            via ``variable_declarator`` / ``assignment`` (``const fn = …``,
+            ``fn = …``).
+
+        Used as the fallback when no ``functions.scm`` query is shipped
+        for the active language.
+        """
         index: Dict[str, "Node"] = {}
 
         def visit(node: "Node") -> None:
@@ -3029,7 +3363,41 @@ class CapabilityDetector:
                 visit(child)
 
         visit(root)
-        cached[cache_key] = index
+        return index
+
+    def _ts_build_function_index_q(
+        self,
+        root: "Node",
+        func_types: Set[str],
+        query: Any,
+    ) -> Dict[str, "Node"]:
+        """Query-backed equivalent of :py:meth:`_ts_build_function_index_imperative`.
+
+        Each pattern in the ``functions.scm`` file emits a
+        ``@func_name`` + ``@func_def`` capture pair; we just translate
+        them into the same ``name -> Node`` dict shape. ``func_types``
+        is consulted as a sanity filter so we never accidentally index
+        a node whose type isn't a recognized function shape (defends
+        against future ``.scm`` patterns drifting from the canonical
+        type set).
+        """
+        index: Dict[str, "Node"] = {}
+        cursor = QueryCursor(query)
+        for _pat_idx, captures in cursor.matches(root):
+            name_nodes = captures.get("func_name")
+            def_nodes = captures.get("func_def")
+            if not name_nodes or not def_nodes:
+                continue
+            def_node = def_nodes[0]
+            if def_node.type not in func_types:
+                continue
+            name_text = self._ts_get_node_text(name_nodes[0])
+            if not name_text:
+                continue
+            # ``setdefault`` mirrors the imperative walker's
+            # first-write-wins behaviour, which matters when the same
+            # symbol is rebound (we keep the first definition).
+            index.setdefault(name_text, def_node)
         return index
 
 

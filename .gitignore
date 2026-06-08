@@ -201,3 +201,17 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Local scratch / reproducibility artifacts that aren't part of the
+# tracked source tree (clones of upstream MCP servers, scan logs,
+# one-shot trace scripts, generated server fixtures used for ad-hoc
+# parity / perf investigations).
+_external/
+evals/behavioral-analysis/scripts/all_malicious_fastmcp_server.py
+evals/behavioral-analysis/scripts/helpers_only_server.py
+evals/behavioral-analysis/scripts/mcp_plus_helpers_server.js
+evals/behavioral-analysis/scripts/mcp_plus_helpers_server.py
+evals/behavioral-analysis/scripts/mixed_fastmcp_server.py
+evals/behavioral-analysis/scripts/safe_fastmcp_server.js
+evals/behavioral-analysis/scripts/safe_fastmcp_server.py
+evals/behavioral-analysis/scripts/scan_results.json
