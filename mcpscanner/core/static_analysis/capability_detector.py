@@ -50,7 +50,7 @@ remains as a deprecation shim that forwards to this module.
 import ast
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Set, Union, TYPE_CHECKING
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Union, TYPE_CHECKING
 
 from .context_extractor import FunctionContext
 
@@ -2106,6 +2106,23 @@ class CapabilityDetector:
         Re-uses the same matching rules as
         ``_ts_collect_function_annotations`` (the original per-function
         walker) so the classifier sees identical strings.
+
+        Two implementation paths share the cache:
+
+        * **Query-backed**: when a ``functions.scm`` query is shipped
+          for the active language, iterate matches from the query and
+          call :py:meth:`_ts_collect_function_annotations` on each
+          captured ``@func_def`` node. The per-function annotation
+          walk stays imperative because tree-sitter queries don't
+          model "preceding sibling" in a way that's portable across
+          all grammars (Rust ``attribute_item``, Ruby ``# @tool``
+          comment, etc.) — the imperative collector already handles
+          those uniformly.
+        * **Imperative**: fallback for languages without a ``.scm``
+          functions query (today: just Python).
+
+        Both paths produce byte-for-byte identical output for any node
+        the imperative walker would have visited.
         """
         cache_attr = "_annotation_index_cache"
         cached: Optional[Dict[int, List[str]]] = None
@@ -2119,6 +2136,14 @@ class CapabilityDetector:
         cached = store.get(cache_key)
         if cached is not None:
             return cached
+
+        bundle = get_bundle(self.language)
+        if bundle is not None and bundle.functions is not None:
+            index = self._ts_build_annotation_index_q(
+                root, func_types, bundle.functions
+            )
+            store[cache_key] = index
+            return index
 
         index: Dict[int, List[str]] = {}
 
@@ -2135,6 +2160,57 @@ class CapabilityDetector:
 
         visit(root)
         store[cache_key] = index
+        return index
+
+    def _ts_build_annotation_index_q(
+        self,
+        root: "Node",
+        func_types: Set[str],
+        query: Any,
+    ) -> Dict[int, List[str]]:
+        """Query-backed equivalent of the imperative annotation walk.
+
+        Uses ``functions.scm`` to enumerate every function-shaped node
+        in the tree, then calls
+        :py:meth:`_ts_collect_function_annotations` on each match. The
+        per-function annotation collector is reused unchanged — it
+        already handles every annotation shape across supported
+        languages (Rust sibling ``attribute_item``, Ruby leading
+        ``comment``, Java/Spring AI nested ``modifiers``, C#/PHP
+        ``attribute_list``, …) — so behaviour stays identical to the
+        imperative path on a per-function basis.
+
+        ``func_types`` is consulted as a sanity filter so we never
+        collect annotations for a node whose type isn't a recognized
+        function shape (defends against ``.scm`` patterns drifting
+        from the canonical set in :py:attr:`NativeAnalyzer.FUNCTION_NODE_TYPES`).
+        ``_TS_NON_FUNCTION_NODE_TYPES`` is honoured for the same
+        reason — the imperative path skips ``impl_item`` and the
+        query path must too.
+        """
+        index: Dict[int, List[str]] = {}
+        seen: Set[int] = set()
+        cursor = QueryCursor(query)
+        for _pat_idx, captures in cursor.matches(root):
+            def_nodes = captures.get("func_def")
+            if not def_nodes:
+                continue
+            fn_node = def_nodes[0]
+            if (
+                fn_node.type not in func_types
+                or fn_node.type in _TS_NON_FUNCTION_NODE_TYPES
+            ):
+                continue
+            # Two patterns may legitimately match the same node (e.g.
+            # Kotlin's lambda/anonymous-function fallbacks), so we
+            # de-dup by start_byte — the same key the imperative path
+            # uses as the dictionary key.
+            if fn_node.start_byte in seen:
+                continue
+            seen.add(fn_node.start_byte)
+            annotations = self._ts_collect_function_annotations(fn_node)
+            if annotations:
+                index[fn_node.start_byte] = annotations
         return index
 
     def _ts_collect_function_annotations(self, fn_node: "Node") -> List[str]:
@@ -2451,12 +2527,61 @@ class CapabilityDetector:
         imperative walker via the existing private helpers; this method
         just translates the query's match dicts into calls into those
         helpers.
+
+        Some grammars (notably Kotlin) need TWO patterns to cover both
+        the bare and trailing-lambda registration shapes: the inner
+        ``server.addTool(args)`` call matches pattern 1, and the outer
+        ``addTool(args){lambda}`` wrapper matches pattern 2. Both
+        capture ``@call`` as the same inner-call node, so we merge
+        per-call by ``(start_byte, end_byte)`` and prefer the merged
+        match that carries a ``@lambda`` capture — that's what gives
+        the Kotlin trailing lambda its handler.
         """
         cursor = QueryCursor(query)
+
+        # First pass: group matches by the inner-call signature so
+        # duplicate hits (Kotlin's bare-vs-wrapped patterns) collapse
+        # into one entry that carries the union of captures.
+        #
+        # ``ordered`` preserves source-discovery order so the output
+        # stays deterministic. ``index`` maps a call signature to its
+        # position in ``ordered`` so duplicates merge in-place. We
+        # only copy ``captures`` once a duplicate is seen — non-Kotlin
+        # languages take the fast path and never copy. ``copied_at``
+        # tracks which entries we already copied so the merge step
+        # doesn't accidentally clone twice if a third match arrives.
+        ordered: List[Tuple[Tuple[int, int], Dict[str, List["Node"]]]] = []
+        index: Dict[Tuple[int, int], int] = {}
+        copied_at: Set[int] = set()
         for _pat_idx, captures in cursor.matches(root):
             call_nodes = captures.get("call")
             method_nodes = captures.get("method")
-            args_nodes = captures.get("args")
+            if not call_nodes or not method_nodes:
+                continue
+            call_node = call_nodes[0]
+            sig = (call_node.start_byte, call_node.end_byte)
+            existing_idx = index.get(sig)
+            if existing_idx is None:
+                index[sig] = len(ordered)
+                ordered.append((sig, captures))
+                continue
+            # Merge: copy-on-first-merge so we don't mutate tree-
+            # sitter's match dict. ``setdefault`` makes first-seen win
+            # for stable scalar fields; the new match contributes
+            # ``@lambda`` (and any other key the original lacked).
+            prev_sig, prev_caps = ordered[existing_idx]
+            if existing_idx not in copied_at:
+                prev_caps = dict(prev_caps)
+                ordered[existing_idx] = (prev_sig, prev_caps)
+                copied_at.add(existing_idx)
+            for key, nodes in captures.items():
+                prev_caps.setdefault(key, nodes)
+
+        for sig, captures in sorted(ordered, key=lambda item: item[0]):
+            call_nodes = captures.get("call") or []
+            method_nodes = captures.get("method") or []
+            args_nodes = captures.get("args") or []
+            lambda_nodes = captures.get("lambda") or []
             if not call_nodes or not method_nodes:
                 continue
             call_node = call_nodes[0]
@@ -2499,18 +2624,39 @@ class CapabilityDetector:
                     }
                 reg["template_subtype"] = _classify_template_subtype(method_lc)
 
-            # Kotlin trailing-lambda lookup is unreachable from these
-            # queries (Kotlin doesn't have a query bundle yet), but we
-            # keep the helper call here so the result shape stays
-            # identical to the imperative path even when a
-            # query-supported language eventually grows trailing-lambda
-            # syntax.
+            # Trailing-lambda lookup. Three sources, in priority:
+            #   (1) explicit ``@lambda`` capture (Kotlin's wrapped
+            #       trailing-lambda pattern surfaces it directly);
+            #   (2) the call's own children (TS/JS arrow callbacks
+            #       that the args parser missed);
+            #   (3) the parent's siblings — the *imperative* Kotlin
+            #       walker uses this fallback when older grammar
+            #       versions place the trailing lambda outside the
+            #       outer call_expression. Keeping it here means the
+            #       query path matches imperative behaviour byte-for-
+            #       byte even on grammar-version drift.
+            if reg.get("handler_node") is None:
+                for ln in lambda_nodes:
+                    unwrapped = self._ts_unwrap_trailing_lambda(ln)
+                    if unwrapped is not None:
+                        reg["handler_node"] = unwrapped
+                        break
             if reg.get("handler_node") is None:
                 for child in call_node.children:
                     lambda_node = self._ts_unwrap_trailing_lambda(child)
                     if lambda_node is not None:
                         reg["handler_node"] = lambda_node
                         break
+            if reg.get("handler_node") is None:
+                parent = call_node.parent
+                if parent is not None:
+                    for sibling in parent.children:
+                        if _is_same_ts_node(sibling, call_node):
+                            continue
+                        lambda_node = self._ts_unwrap_trailing_lambda(sibling)
+                        if lambda_node is not None:
+                            reg["handler_node"] = lambda_node
+                            break
 
             if reg.get("name") is None and args_node is not None:
                 reg["name"] = self._ts_first_string_literal_in_args(args_node)

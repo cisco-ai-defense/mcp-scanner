@@ -72,6 +72,69 @@ def parse_go() -> Callable[[str], Tuple[Node, bytes]]:
     return _parse
 
 
+def _make_parse_fixture(language_factory: Callable[[], Language]):
+    """Build a per-language parse fixture without re-creating the
+    tree-sitter Parser/Language objects on every call.
+
+    The factory pattern keeps the fixture body small while still
+    binding the language module lazily — importing every grammar at
+    module load time would slow down `pytest --collect-only`."""
+
+    def fixture(_request) -> Callable[[str], Tuple[Node, bytes]]:
+        lang = language_factory()
+        parser = Parser(lang)
+
+        def _parse(src: str) -> Tuple[Node, bytes]:
+            b = src.encode("utf-8")
+            return parser.parse(b).root_node, b
+
+        return _parse
+
+    return fixture
+
+
+@pytest.fixture
+def parse_kotlin(request) -> Callable[[str], Tuple[Node, bytes]]:
+    import tree_sitter_kotlin
+
+    return _make_parse_fixture(lambda: Language(tree_sitter_kotlin.language()))(request)
+
+
+@pytest.fixture
+def parse_java(request) -> Callable[[str], Tuple[Node, bytes]]:
+    import tree_sitter_java
+
+    return _make_parse_fixture(lambda: Language(tree_sitter_java.language()))(request)
+
+
+@pytest.fixture
+def parse_csharp(request) -> Callable[[str], Tuple[Node, bytes]]:
+    import tree_sitter_c_sharp
+
+    return _make_parse_fixture(lambda: Language(tree_sitter_c_sharp.language()))(request)
+
+
+@pytest.fixture
+def parse_rust(request) -> Callable[[str], Tuple[Node, bytes]]:
+    import tree_sitter_rust
+
+    return _make_parse_fixture(lambda: Language(tree_sitter_rust.language()))(request)
+
+
+@pytest.fixture
+def parse_php(request) -> Callable[[str], Tuple[Node, bytes]]:
+    import tree_sitter_php
+
+    return _make_parse_fixture(lambda: Language(tree_sitter_php.language_php()))(request)
+
+
+@pytest.fixture
+def parse_ruby(request) -> Callable[[str], Tuple[Node, bytes]]:
+    import tree_sitter_ruby
+
+    return _make_parse_fixture(lambda: Language(tree_sitter_ruby.language()))(request)
+
+
 @pytest.fixture
 def run_query() -> Callable[..., List[Dict[str, List[str]]]]:
     """Run a query and return capture maps as ``{name: [text, ...]}`` dicts.
@@ -112,6 +175,48 @@ def js_bundle() -> QueryBundle:
 def go_bundle() -> QueryBundle:
     bundle = get_loader().bundle("go")
     assert bundle is not None, "Go query bundle not loaded"
+    return bundle
+
+
+@pytest.fixture
+def kotlin_bundle() -> QueryBundle:
+    bundle = get_loader().bundle("kotlin")
+    assert bundle is not None, "Kotlin query bundle not loaded"
+    return bundle
+
+
+@pytest.fixture
+def java_bundle() -> QueryBundle:
+    bundle = get_loader().bundle("java")
+    assert bundle is not None, "Java query bundle not loaded"
+    return bundle
+
+
+@pytest.fixture
+def csharp_bundle() -> QueryBundle:
+    bundle = get_loader().bundle("c_sharp")
+    assert bundle is not None, "C# query bundle not loaded"
+    return bundle
+
+
+@pytest.fixture
+def rust_bundle() -> QueryBundle:
+    bundle = get_loader().bundle("rust")
+    assert bundle is not None, "Rust query bundle not loaded"
+    return bundle
+
+
+@pytest.fixture
+def php_bundle() -> QueryBundle:
+    bundle = get_loader().bundle("php")
+    assert bundle is not None, "PHP query bundle not loaded"
+    return bundle
+
+
+@pytest.fixture
+def ruby_bundle() -> QueryBundle:
+    bundle = get_loader().bundle("ruby")
+    assert bundle is not None, "Ruby query bundle not loaded"
     return bundle
 
 

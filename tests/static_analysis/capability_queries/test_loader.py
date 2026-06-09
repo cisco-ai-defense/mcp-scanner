@@ -52,11 +52,16 @@ def test_supported_languages_match_shipped_directories():
 
 
 def test_unsupported_language_returns_none():
-    """Languages without query files (Python, Kotlin, …) fall through
-    to the imperative walker — represented as ``None`` here."""
+    """Languages without query files (Python today) fall through to the
+    imperative walker — represented as ``None`` here.
+
+    Kept narrow on purpose: as we add more languages this list will
+    shrink, but every entry MUST stay ``None`` until a ``.scm``
+    directory ships for it.
+    """
     loader = get_loader()
     assert loader.bundle("python") is None
-    assert loader.bundle("kotlin") is None
+    assert loader.bundle("swift") is None
     assert loader.bundle("") is None
 
 
@@ -74,6 +79,18 @@ def test_bundle_is_cached():
         ("typescript", {"registrations", "low_level", "functions", "instantiations"}),
         ("javascript", {"registrations", "low_level", "functions", "instantiations"}),
         ("go", {"registrations", "functions", "instantiations"}),
+        # Annotation-driven languages: only ``functions.scm`` is shipped
+        # because they use attributes / decorators / leading comments
+        # rather than explicit ``server.tool(...)`` registration calls.
+        ("java", {"functions"}),
+        ("c_sharp", {"functions"}),
+        ("rust", {"functions"}),
+        ("php", {"functions"}),
+        ("ruby", {"functions"}),
+        # Kotlin is the only remaining language with call-site
+        # registration: trailing-lambda support requires the
+        # ``registrations.scm`` query alongside ``functions.scm``.
+        ("kotlin", {"registrations", "functions", "instantiations"}),
     ],
 )
 def test_bundle_exposes_expected_queries(language, expected_present):

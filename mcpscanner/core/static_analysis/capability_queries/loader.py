@@ -59,6 +59,12 @@ SUPPORTED_LANGUAGES: Tuple[str, ...] = (
     "typescript",
     "javascript",
     "go",
+    "kotlin",
+    "java",
+    "c_sharp",
+    "rust",
+    "php",
+    "ruby",
 )
 
 
@@ -96,6 +102,12 @@ _LANGUAGE_QUERY_DIR: Dict[str, str] = {
     "tsx": "typescript",
     "javascript": "javascript",
     "go": "go",
+    "kotlin": "kotlin",
+    "java": "java",
+    "c_sharp": "c_sharp",
+    "rust": "rust",
+    "php": "php",
+    "ruby": "ruby",
 }
 
 
@@ -132,6 +144,33 @@ def _ts_language_factory(name: str) -> "Language":
         import tree_sitter_go
 
         return Language(tree_sitter_go.language())
+    if name == "kotlin":
+        import tree_sitter_kotlin
+
+        return Language(tree_sitter_kotlin.language())
+    if name == "java":
+        import tree_sitter_java
+
+        return Language(tree_sitter_java.language())
+    if name == "c_sharp":
+        import tree_sitter_c_sharp
+
+        return Language(tree_sitter_c_sharp.language())
+    if name == "rust":
+        import tree_sitter_rust
+
+        return Language(tree_sitter_rust.language())
+    if name == "php":
+        # tree_sitter_php exposes both ``language_php`` (full PHP) and
+        # ``language_php_only`` (no embedded HTML); we want the full
+        # variant because real MCP files start with ``<?php``.
+        import tree_sitter_php
+
+        return Language(tree_sitter_php.language_php())
+    if name == "ruby":
+        import tree_sitter_ruby
+
+        return Language(tree_sitter_ruby.language())
     raise KeyError(f"No tree-sitter Language factory wired for: {name}")
 
 
