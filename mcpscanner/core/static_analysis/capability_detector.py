@@ -64,6 +64,13 @@ if TYPE_CHECKING:
 from tree_sitter import Language, Parser, QueryCursor
 
 from .capability_queries import QueryBundle, get_bundle
+from .capability import (
+    LANGUAGE_REGISTRY,
+    LanguageAdapter,
+    get_adapter,
+    supported_languages as _supported_capability_languages,
+)
+from .capability.registry import _ensure_default_adapters_registered
 
 # Method names that MCP SDKs use to register tools/prompts/resources at
 # call sites. Lowercased; the observed call name is lowercased before
@@ -390,134 +397,51 @@ def _is_same_ts_node(a, b) -> bool:
 # that language — a bare ``@Tool`` is the canonical Spring AI MCP form
 # but ``@some.other.lib.Tool`` shouldn't classify just because ``Tool``
 # appears at the leaf.
-_MCP_ANNOTATION_IDENTIFIERS: Dict[str, Dict[str, str]] = {
-    "java": {
-        # Spring AI MCP annotations
-        "Tool": "tool",
-        "McpTool": "tool",
-        "ToolParam": "tool",
-        "McpResource": "resource",
-        "Resource": "resource",
-        "McpPrompt": "prompt",
-        "Prompt": "prompt",
-    },
-    "c_sharp": {
-        # .NET MCP SDK attributes
-        "McpServerTool": "tool",
-        "McpServerPrompt": "prompt",
-        "McpServerResource": "resource",
-        "McpServerToolType": "tool",
-        # Generic forms only accepted via trusted namespace check
-        "Tool": "tool",
-        "Prompt": "prompt",
-        "Resource": "resource",
-    },
-    "rust": {
-        # rmcp macros
-        "tool": "tool",
-        "prompt": "prompt",
-        "resource": "resource",
-        # Note: ``tool_router``, ``tool_handler`` are intentionally
-        # absent. They mark the *router* / *dispatch* impl block, not
-        # individual tool callables. The capability extractor walks
-        # into the impl and matches the per-method ``#[tool]`` macros.
-    },
-    "php": {
-        # php-mcp/server attributes
-        "Tool": "tool",
-        "McpTool": "tool",
-        "Prompt": "prompt",
-        "McpPrompt": "prompt",
-        "Resource": "resource",
-        "McpResource": "resource",
-    },
-    "ruby": {
-        # mcp-rb / community Ruby SDKs use comment-style annotations
-        # (``# @tool name: ...``); identifiers are lowercase by convention.
-        "tool": "tool",
-        "prompt": "prompt",
-        "resource": "resource",
-    },
-    "python": {
-        # Used by the Python branch when a tree-sitter style annotation
-        # text (``@<obj>.tool``) is fed back through the same classifier.
-        "tool": "tool",
-        "prompt": "prompt",
-        "resource": "resource",
-        # Low-level server decorators
-        "call_tool": "tool",
-        "list_tools": "tool",
-        "get_prompt": "prompt",
-        "list_prompts": "prompt",
-        "read_resource": "resource",
-        "list_resources": "resource",
-        "list_resource_templates": "resource",
-    },
-}
+# ---------------------------------------------------------------------
+# Per-language data sources.
+#
+# Annotation identifiers, trusted namespaces, and SDK module prefixes
+# used to live as hard-coded module-level dicts in this file. Each
+# language now owns its own copy in ``capability/<lang>.py`` and the
+# orchestrator reads the registry instead of branching on
+# ``self.language``. The names below are kept as backward-compat
+# proxies: external callers that historically imported them from
+# ``native_analyzer`` (which re-exports from this module) keep working
+# unchanged. The contents are computed once at module-import time and
+# stay in sync with the registry as long as no test re-registers an
+# adapter mid-process — for those rare cases the orchestrator reads
+# the registry directly via ``self._adapter`` instead of these dicts.
+# ---------------------------------------------------------------------
 
-# Namespace prefixes that, when present in front of a generic
-# identifier (``Tool`` / ``Prompt`` / ``Resource``), let it classify as
-# MCP. Prevents false positives from unrelated DSLs that happen to use
-# the same leaf name (e.g. JUnit ``@ToolProvider``, JSF ``@Resource``).
-# The empty string represents "no namespace" — i.e. a bare identifier
-# at the import root, which we treat as trusted because the caller
-# already has to import the symbol from the MCP SDK to use it.
+
+def _build_language_keyed_dict(attr: str) -> Dict[str, Any]:
+    """Build a ``{language: <attr value>}`` dict from the adapter registry.
+
+    Materialized once at module-import time as a backward-compat
+    convenience for tests / external callers that imported the old
+    module-level dicts (``_MCP_ANNOTATION_IDENTIFIERS`` etc.). The
+    orchestrator itself goes through ``self._adapter`` rather than
+    these dicts so re-registering an adapter (e.g. the fake-swift
+    onboarding test) always picks up the new value.
+    """
+    _ensure_default_adapters_registered()
+    return {
+        adapter.LANGUAGE: getattr(adapter, attr)
+        for adapter in LANGUAGE_REGISTRY.values()
+    }
+
+
+_MCP_ANNOTATION_IDENTIFIERS: Dict[str, Dict[str, str]] = (
+    _build_language_keyed_dict("ANNOTATION_IDENTIFIERS")
+)
 _TRUSTED_ANNOTATION_NAMESPACES: Dict[str, Set[str]] = {
-    "java": {"", "org.springframework.ai", "io.modelcontextprotocol"},
-    "c_sharp": {"", "ModelContextProtocol", "ModelContextProtocol.Server"},
-    "rust": {"", "rmcp", "mcp"},
-    "php": {"", "PhpMcp", "PhpMcp\\Server", "PhpMcp\\Server\\Attributes"},
-    "ruby": {""},
-    "python": {""},
+    lang: set(ns) for lang, ns in _build_language_keyed_dict(
+        "TRUSTED_NAMESPACES"
+    ).items()
 }
-
-
-# Module/package specifiers (lowercased substrings) that indicate the
-# import is from a recognized MCP SDK. Used by Pass 2's receiver
-# verification (Gap 4) to decide whether the local name being called
-# was actually bound to an MCP server. Anything not on this list is
-# treated as belonging to an unrelated DSL and skipped.
-_MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = {
-    "javascript": (
-        "@modelcontextprotocol/sdk",
-        "@modelcontextprotocol/typescript-sdk",
-    ),
-    "typescript": (
-        "@modelcontextprotocol/sdk",
-        "@modelcontextprotocol/typescript-sdk",
-    ),
-    "python": (
-        "fastmcp",
-        "mcp.server",
-        "mcp.types",
-        "modelcontextprotocol",
-    ),
-    "go": (
-        "modelcontextprotocol/go-sdk",
-        "modelcontextprotocol/go-sdk/mcp",
-    ),
-    "rust": (
-        "rmcp",
-        "modelcontextprotocol",
-    ),
-    "kotlin": (
-        "io.modelcontextprotocol",
-    ),
-    "java": (
-        "io.modelcontextprotocol",
-        "org.springframework.ai",
-    ),
-    "c_sharp": (
-        "modelcontextprotocol",
-    ),
-    "php": (
-        "phpmcp",
-        "modelcontextprotocol",
-    ),
-    "ruby": (
-        "mcp",
-    ),
-}
+_MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = (
+    _build_language_keyed_dict("SDK_MODULE_PREFIXES")
+)
 
 
 # Class names exposed by recognized MCP SDKs that, when instantiated and
@@ -582,22 +506,13 @@ _MCP_PREFILTER_RE = _re.compile(
 )
 
 
-# Per-language prefilter scope. Files whose source bytes contain none of
-# the marker tokens above are skipped by the prefilter — but only for
-# languages we actually support. Languages that fall outside this set
-# (CSS, JSON, etc.) are skipped earlier by ``self.language`` checks.
-_PREFILTER_LANGUAGES: Set[str] = {
-    "python",
-    "javascript",
-    "typescript",
-    "go",
-    "rust",
-    "java",
-    "kotlin",
-    "c_sharp",
-    "php",
-    "ruby",
-}
+# Per-language prefilter scope. Files whose source bytes contain none
+# of the marker tokens above are skipped by the prefilter — but only
+# for languages we actually support. Derived from the adapter registry
+# so adding a new language adapter automatically extends the prefilter
+# scope: "registering an adapter is the only seam needed" is the whole
+# point of the surrounding refactor.
+_PREFILTER_LANGUAGES: Set[str] = set(_supported_capability_languages())
 
 
 def _split_annotation_namespace(ident_or_path: str) -> "tuple[str, str]":
@@ -632,16 +547,20 @@ def _classify_mcp_annotation(
     ``#[tool]``). When omitted, falls back to the union across all
     languages — only the Python branch should rely on that fallback.
     """
-    if language and language in _MCP_ANNOTATION_IDENTIFIERS:
-        allowed = _MCP_ANNOTATION_IDENTIFIERS[language]
-        trusted_ns = _TRUSTED_ANNOTATION_NAMESPACES.get(language, {""})
+    # Resolve through the adapter registry rather than the cached dict
+    # so newly-registered adapters (e.g. fake-swift onboarding tests)
+    # are visible without rebuilding the module.
+    adapter = get_adapter(language) if language else None
+    if adapter is not None:
+        allowed = adapter.ANNOTATION_IDENTIFIERS
+        trusted_ns = adapter.TRUSTED_NAMESPACES
     else:
-        # Fallback: union across all languages. Only the empty namespace
-        # is trusted in this mode.
+        # Fallback: union across all registered languages. Only the
+        # empty namespace is trusted in this mode.
         allowed = {}
-        for tbl in _MCP_ANNOTATION_IDENTIFIERS.values():
-            allowed.update(tbl)
-        trusted_ns = {""}
+        for a in LANGUAGE_REGISTRY.values():
+            allowed.update(a.ANNOTATION_IDENTIFIERS)
+        trusted_ns = frozenset({""})
 
     for ann in annotations or []:
         if not ann:
@@ -739,8 +658,30 @@ class CapabilityDetector:
         ``analyzer`` provides the parsed source, language detection,
         Tree-sitter helpers, and per-function context extraction. The
         detector adds the MCP-specific classification layer.
+
+        ``self._adapter`` is resolved lazily — adapters are an
+        immutable map for the lifetime of a process, so caching the
+        lookup result is safe and saves a registry hash per call.
         """
         self._analyzer = analyzer
+        self._adapter_cached: Optional[LanguageAdapter] = None
+
+    @property
+    def _adapter(self) -> Optional[LanguageAdapter]:
+        """Return (and memoize) the per-language adapter for this file.
+
+        ``None`` if the file's language doesn't have a registered
+        adapter — in that case the orchestrator returns empty results
+        without invoking any detection passes. Tests that swap an
+        adapter mid-process should construct a new
+        :class:`CapabilityDetector` afterwards.
+        """
+        cached = self._adapter_cached
+        if cached is not None:
+            return cached
+        cached = get_adapter(self.language)
+        self._adapter_cached = cached
+        return cached
 
     def __getattr__(self, name: str) -> Any:
         """Delegate unknown attribute access to the underlying analyzer.
@@ -838,10 +779,27 @@ class CapabilityDetector:
         intentionally excluded. Languages without a tree-sitter parser
         return an empty list.
         """
-        if self.language == "python":
-            return self._py_extract_capability_contexts(
-                cross_file_analyzer=cross_file_analyzer
-            )
+        # Languages without a registered adapter return no capabilities.
+        adapter = self._adapter
+        if adapter is None:
+            return []
+
+        # Adapters that don't use tree-sitter (Python uses ``ast``)
+        # implement a custom entry point and signal completion by
+        # returning a list rather than ``None``. The generic walker
+        # below is skipped entirely in that case.
+        native = adapter.extract_with_native_parser(
+            self, cross_file_analyzer=cross_file_analyzer
+        )
+        if native is not None:
+            return native
+
+        ts_lang = adapter.tree_sitter_language()
+        if ts_lang is None:
+            # Adapter declared neither a tree-sitter grammar nor a
+            # native pipeline — nothing to do. (Should never happen for
+            # registered adapters, but be defensive.)
+            return []
 
         # Gap 12: byte-level prefilter — skip the whole tree-sitter
         # parse for files that contain none of the MCP marker tokens.
@@ -851,24 +809,8 @@ class CapabilityDetector:
         if self.language not in self.FUNCTION_NODE_TYPES:
             return []
 
-        # Lazy import to break the circular dependency with
-        # ``native_analyzer`` (which re-exports from this module at
-        # top level for backward compatibility).
-        from .native_analyzer import _get_language_module
-
-        lang_mod = _get_language_module(self.language)
-        if lang_mod is None:
-            return []
-
         try:
-            if self.language == "typescript":
-                lang = Language(lang_mod.language_typescript())
-            elif self.language == "php":
-                lang = Language(lang_mod.language_php())
-            else:
-                lang = Language(lang_mod.language())
-
-            parser = Parser(lang)
+            parser = Parser(ts_lang)
             tree = parser.parse(self.source_bytes)
             imports = self._ts_extract_imports(tree.root_node)
         except Exception as e:
@@ -1163,18 +1105,20 @@ class CapabilityDetector:
         out: Dict[str, List[str]] = {}
         if not imports:
             return out
+        adapter = self._adapter
+        if adapter is None:
+            return out
         for stmt in imports:
             s = (stmt or "").strip()
             if not s:
                 continue
             try:
-                if self.language == "python":
-                    self._py_collect_import_targets(s, out)
-                elif self.language in ("typescript", "javascript"):
-                    self._ts_collect_import_targets(s, out)
-                elif self.language == "go":
-                    self._go_collect_import_targets(s, out)
-                # Other languages keep the legacy resolver behavior.
+                # Adapters whose language doesn't expose a target map
+                # (Java, C#, Rust, PHP, Ruby, Kotlin) inherit the
+                # default no-op from ``AdapterMixin`` and silently skip
+                # this loop iteration. The cross-file resolver then
+                # falls back to bare-suffix matching for those files.
+                adapter.parse_import_target(s, out)
             except Exception:
                 # Robust to malformed import lines — fall back to bare
                 # suffix matching for affected symbols.
@@ -1183,110 +1127,12 @@ class CapabilityDetector:
                 )
         return out
 
-    def _py_collect_import_targets(
-        self, stmt: str, out: Dict[str, List[str]]
-    ) -> None:
-        """Populate ``out`` from one Python import statement."""
-        # ``from <module> import X [as Y], ...``
-        m = _re.match(r"^from\s+(\S+)\s+import\s+(.+?)\s*$", stmt)
-        if m:
-            module = _normalize_module_specifier(m.group(1))
-            for piece in m.group(2).split(","):
-                piece = piece.strip().rstrip(")").lstrip("(")
-                if not piece or piece == "*":
-                    continue
-                parts = _re.split(r"\s+as\s+", piece, maxsplit=1)
-                orig = parts[0].strip()
-                bound = parts[1].strip() if len(parts) > 1 else orig
-                if not bound:
-                    continue
-                # ``orig`` could either be a function within ``module``
-                # or a submodule of ``module`` (when used like
-                # ``from .tools import docs`` to bind a module). Record
-                # both candidates so the resolver can pick whichever
-                # actually exists in the call graph.
-                if module:
-                    out.setdefault(bound, []).append(module)
-                    out[bound].append(f"{module}/{orig}")
-                else:
-                    out.setdefault(bound, []).append(orig)
-            return
-        # ``import M [as N]`` or ``import M.sub``
-        m = _re.match(r"^import\s+([\w\.]+)(?:\s+as\s+(\w+))?\s*$", stmt)
-        if m:
-            full = m.group(1)
-            alias = m.group(2)
-            bound = alias or full.split(".", 1)[0]
-            out.setdefault(bound, []).append(_normalize_module_specifier(full))
-
-    def _ts_collect_import_targets(
-        self, stmt: str, out: Dict[str, List[str]]
-    ) -> None:
-        """Populate ``out`` from one TS/JS import statement."""
-        # ``import <clause> from "<module>"``
-        m = _re.match(
-            r"""^import\s+(.*?)\s+from\s+['"]([^'"]+)['"]""",
-            stmt,
-        )
-        if m:
-            clause = m.group(1).strip()
-            path = _normalize_module_specifier(m.group(2))
-            if not path:
-                return
-            # ``import * as ns from "..."``
-            ns = _re.match(r"^\*\s+as\s+(\w+)$", clause)
-            if ns:
-                out.setdefault(ns.group(1), []).append(path)
-                return
-            # ``import default, { a, b as c } from "..."`` — split
-            # default-import + named-import block.
-            if not clause.startswith("{"):
-                head, _, rest = clause.partition(",")
-                head = head.strip()
-                if head:
-                    out.setdefault(head, []).append(path)
-                clause = rest.strip()
-            m2 = _re.match(r"^\{(.*)\}$", clause, _re.DOTALL)
-            if m2:
-                for piece in m2.group(1).split(","):
-                    piece = piece.strip()
-                    if not piece:
-                        continue
-                    parts = _re.split(r"\s+as\s+", piece, maxsplit=1)
-                    bound = (
-                        parts[1].strip()
-                        if len(parts) > 1
-                        else parts[0].strip()
-                    )
-                    if bound:
-                        out.setdefault(bound, []).append(path)
-            return
-        # ``const x = require("./tools/add")`` — best-effort.
-        m = _re.match(
-            r"""^(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)""",
-            stmt,
-        )
-        if m:
-            bound = m.group(1)
-            path = _normalize_module_specifier(m.group(2))
-            if path:
-                out.setdefault(bound, []).append(path)
-
-    def _go_collect_import_targets(
-        self, stmt: str, out: Dict[str, List[str]]
-    ) -> None:
-        """Populate ``out`` from one Go import statement."""
-        # ``import "github.com/foo/bar"`` or ``import alias "..."``.
-        for m in _re.finditer(
-            r"""(?:^|\b)(?:import\s+)?(?:(\w+)\s+)?['"]([^'"]+)['"]""",
-            stmt,
-        ):
-            alias = m.group(1)
-            path = m.group(2)
-            if not path or "/" not in path and "." not in path:
-                continue
-            bound = alias or path.rsplit("/", 1)[-1]
-            out.setdefault(bound, []).append(path)
+    # ``_py_collect_import_targets`` / ``_ts_collect_import_targets`` /
+    # ``_go_collect_import_targets`` used to live here as per-language
+    # branches off the orchestrator. They now live on each language's
+    # adapter (``capability/<lang>.py``'s ``parse_import_target``) and
+    # the orchestrator dispatches via ``adapter.parse_import_target()``
+    # in :py:meth:`_build_import_target_map` above.
 
     def _append_unresolved_capability(
         self,
@@ -1651,7 +1497,13 @@ class CapabilityDetector:
         the caller can fall back to loose receiver matching rather than
         silently dropping registrations.
         """
-        prefixes = _MCP_SDK_MODULE_PREFIXES.get("python", ())
+        # Python-specific helper: read the SDK prefix list off the
+        # adapter the orchestrator already cached in ``self._adapter``
+        # rather than the backward-compat module-level dict. Adapters
+        # are the source of truth so test-time re-registration (the
+        # fake-swift onboarding flow) stays consistent across paths.
+        adapter = self._adapter
+        prefixes = adapter.SDK_MODULE_PREFIXES if adapter else ()
         if not prefixes:
             return set()
 
@@ -2798,7 +2650,10 @@ class CapabilityDetector:
         registration.
         """
         trusted: Set[str] = set()
-        prefixes = _MCP_SDK_MODULE_PREFIXES.get(self.language, ())
+        adapter = self._adapter
+        if adapter is None:
+            return trusted
+        prefixes = adapter.SDK_MODULE_PREFIXES
         if not prefixes:
             return trusted
 
@@ -2810,37 +2665,21 @@ class CapabilityDetector:
             if not any(p in stmt_lc for p in prefixes):
                 continue
 
-            # Try to extract the imported name(s) and any local alias.
-            # Each language has a different import grammar so we use
-            # tolerant regexes rather than re-parsing.
+            # Generic step (every language): pick up known server-class
+            # identifiers that the SDK is likely to export. The set of
+            # known names is centralised in ``_MCP_KNOWN_SERVER_CLASSES``
+            # and shared across grammars because the class names
+            # themselves are language-neutral.
             for cls in _re.findall(r"\b([A-Z][A-Za-z0-9_]+)\b", stmt):
                 if cls in _MCP_KNOWN_SERVER_CLASSES:
                     sdk_classes.add(cls)
-            # ``import "...github.com/modelcontextprotocol/go-sdk/mcp"``
-            # → expose alias ``mcp``; allow ``import alias "..."`` form too.
-            if self.language == "go":
-                m = _re.search(
-                    r'^\s*(?:import\s+)?(?:([\w]+)\s+)?"[^"]*modelcontextprotocol[^"]*"',
-                    stmt,
-                )
-                if m:
-                    sdk_aliases.add(m.group(1) or "mcp")
-            elif self.language == "python":
-                # ``from fastmcp import FastMCP`` or
-                # ``from mcp.server import Server``
-                m = _re.match(
-                    r"\s*from\s+([\w\.]+)\s+import\s+([\w\s,]+)", stmt
-                )
-                if m:
-                    for sym in m.group(2).split(","):
-                        sym = sym.strip().split(" as ")[0].strip()
-                        if sym:
-                            sdk_classes.add(sym)
-            elif self.language == "kotlin":
-                # ``import io.modelcontextprotocol.kotlin.sdk.server.Server``
-                m = _re.search(r"\.(\w+)\s*$", stmt)
-                if m:
-                    sdk_classes.add(m.group(1))
+
+            # Language-specific step: each adapter knows its own
+            # import grammar and adds aliases / classes as appropriate.
+            # Adapters that don't override ``parse_import_alias``
+            # inherit the default no-op from ``AdapterMixin`` — the
+            # generic step above is enough for them.
+            adapter.parse_import_alias(stmt, sdk_classes, sdk_aliases)
 
         trusted.update(sdk_aliases)
 
