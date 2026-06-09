@@ -24,6 +24,24 @@ It coordinates the alignment verification process by:
 4. Creating security findings for mismatches
 
 This is the entry point for all alignment verification operations.
+
+Failure semantics
+-----------------
+The orchestrator distinguishes three outcomes per function:
+
+* **Mismatch detected** — returns ``(analysis_dict, func_context)`` where
+  ``analysis_dict`` describes the mismatch (no ``LLM_UNAVAILABLE_KEY`` set).
+* **Verified clean** — returns ``None``.
+* **Could not verify** — returns ``(sentinel_dict, func_context)`` where
+  ``sentinel_dict[LLM_UNAVAILABLE_KEY] is True``. This is the case when the
+  LLM provider failed (network error, model identifier invalid, throttling
+  past retry, prompt build crash, etc.). Callers MUST NOT collapse this
+  into the "verified clean" bucket; downstream analyzers map it to a
+  ``severity="ERROR"`` finding so operators can see what was unverified.
+
+Returning a sentinel rather than re-raising lets ``check_alignment_batch``
+report partial progress: a single bad function in a batch shouldn't drop
+the alignment results for its peers.
 """
 
 import logging
@@ -36,6 +54,37 @@ from .alignment_prompt_builder import AlignmentPromptBuilder
 from .alignment_llm_client import AlignmentLLMClient
 from .alignment_response_validator import AlignmentResponseValidator
 from .threat_vulnerability_classifier import ThreatVulnerabilityClassifier
+
+
+# Marker key on result dicts indicating that LLM verification could NOT
+# complete for a function. Callers (BehavioralCodeAnalyzer) detect this
+# via ``analysis.get(LLM_UNAVAILABLE_KEY)`` and emit a ``severity="ERROR"``
+# finding instead of treating the function as verified-clean. The leading
+# underscore signals "internal sentinel" so it doesn't collide with any
+# real LLM-returned field name.
+LLM_UNAVAILABLE_KEY = "_llm_unavailable"
+
+
+def _make_llm_unavailable_result(error: BaseException) -> Dict[str, Any]:
+    """Build a sentinel result for an unrecoverable per-function LLM failure.
+
+    The sentinel satisfies the orchestrator's ``Tuple[Dict, FunctionContext]``
+    return shape but is distinguishable from a real mismatch via
+    ``LLM_UNAVAILABLE_KEY``. ``mismatch_detected`` is set to False so any
+    legacy caller that branches on it still treats the entry as "not a
+    mismatch" — but proper callers should branch on ``LLM_UNAVAILABLE_KEY``
+    first to avoid losing the verification-failure signal.
+
+    The error message is truncated to keep findings.json artifacts small;
+    full traces still land in the analyzer log via ``exc_info=True``.
+    """
+    raw_message = str(error) if error is not None else ""
+    return {
+        LLM_UNAVAILABLE_KEY: True,
+        "mismatch_detected": False,
+        "error_type": type(error).__name__ if error is not None else "Unknown",
+        "error_message": raw_message[:500],
+    }
 
 
 class AlignmentOrchestrator:
@@ -94,7 +143,22 @@ class AlignmentOrchestrator:
             func_context: Complete function context with dataflow analysis
 
         Returns:
-            Tuple of (analysis_dict, func_context) if mismatch detected, None if aligned
+            One of three values:
+
+            * ``(analysis_dict, func_context)`` where ``analysis_dict`` does
+              NOT contain :data:`LLM_UNAVAILABLE_KEY` — a real mismatch was
+              detected.
+            * ``(sentinel_dict, func_context)`` where
+              ``sentinel_dict[LLM_UNAVAILABLE_KEY] is True`` — LLM
+              verification could not complete (provider error, invalid model
+              id, response validation failure, prompt build crash, etc.).
+              The caller MUST treat this as "unverified", not "clean".
+            * ``None`` — verification succeeded and no mismatch was detected.
+
+            Prior versions of this method returned ``None`` for both clean
+            and "couldn't verify" outcomes, which let LLM provider failures
+            silently masquerade as a clean bill of health when the caller
+            synthesised SAFE rows for missing mismatches.
         """
         self.stats["total_analyzed"] += 1
 
@@ -199,62 +263,95 @@ class AlignmentOrchestrator:
                 return None
 
         except Exception as e:
-            self.logger.error(f"Alignment check failed for {func_context.name}: {e}")
+            # Verification could not complete. Surface a sentinel so the
+            # caller can emit a `severity="ERROR"` finding instead of
+            # treating the function as verified-clean. We log with
+            # exc_info to preserve the full trace in the analyzer log even
+            # though the truncated message is what lands on the finding.
+            self.logger.error(
+                f"Alignment check failed for {func_context.name}: {e}",
+                exc_info=True,
+            )
             self.stats["skipped_error"] += 1
-            return None
+            return (_make_llm_unavailable_result(e), func_context)
 
     async def check_alignment_batch(
         self, func_contexts: List[FunctionContext], batch_size: int = 5
     ) -> List[Tuple[Dict[str, Any], FunctionContext]]:
         """Check alignment for multiple functions in batched LLM calls.
 
-        This method batches multiple functions into single LLM requests to reduce
-        API calls and improve scanning speed.
+        This method batches multiple functions into single LLM requests to
+        reduce API calls and improve scanning speed.
 
         Args:
             func_contexts: List of function contexts to analyze
             batch_size: Number of functions per LLM request (default: 5)
 
         Returns:
-            List of (analysis_dict, func_context) tuples for detected mismatches
+            List of ``(analysis_dict, func_context)`` tuples — one per
+            function that either tripped a mismatch OR could not be
+            verified. Verified-clean functions are NOT in the list (their
+            absence is the signal). Each entry is one of:
+
+            * Mismatch tuple — ``analysis_dict`` does not contain
+              :data:`LLM_UNAVAILABLE_KEY` and may include ``threat_name``,
+              ``severity``, etc.
+            * LLM-unavailable sentinel — ``analysis_dict[LLM_UNAVAILABLE_KEY]``
+              is True. The caller MUST emit a ``severity="ERROR"`` finding
+              for this entry instead of falling back to "no mismatch =
+              SAFE", which would mask the verification gap.
+
+            Prior versions of this method silently swallowed batch-level
+            exceptions and returned an empty list, which caused
+            ``BehavioralCodeAnalyzer`` to synthesise SAFE rows for every
+            function as if the LLM had cleared them. The new contract
+            propagates per-function verification failures so that bug is
+            no longer reachable.
         """
         results = []
-        
+
         # Process in batches
         for i in range(0, len(func_contexts), batch_size):
-            batch = func_contexts[i:i + batch_size]
+            batch = func_contexts[i : i + batch_size]
             self.logger.debug(f"Processing batch of {len(batch)} functions")
-            
+
             try:
                 # Build batched prompt
                 prompt = self.prompt_builder.build_batch_prompt(batch)
-                
+
                 # Query LLM
                 response = await self.llm_client.verify_alignment(prompt)
-                
+
                 # Parse batched response
-                batch_results = self.response_validator.validate_batch(response, len(batch))
-                
+                batch_results = self.response_validator.validate_batch(
+                    response, len(batch)
+                )
+
                 if not batch_results:
-                    self.logger.warning("Invalid batch response, falling back to individual analysis")
-                    # Fallback to individual analysis
+                    self.logger.warning(
+                        "Invalid batch response, falling back to individual analysis"
+                    )
+                    # Fall back to individual analysis. ``check_alignment``
+                    # now returns sentinel-or-mismatch-or-None, so we must
+                    # forward every non-None result (including sentinels)
+                    # rather than dropping them.
                     for func_context in batch:
                         result = await self.check_alignment(func_context)
-                        if result:
+                        if result is not None:
                             results.append(result)
                     continue
-                
+
                 # Process each result in the batch
                 for idx, result in enumerate(batch_results):
                     if idx >= len(batch):
                         break
-                    
+
                     func_context = batch[idx]
                     self.stats["total_analyzed"] += 1
-                    
+
                     if result and result.get("mismatch_detected"):
                         self.stats["mismatches_detected"] += 1
-                        
+
                         # Classify as threat or vulnerability
                         threat_name = result.get("threat_name", "")
                         if threat_name != "GENERAL DESCRIPTION-CODE MISMATCH":
@@ -264,34 +361,52 @@ class AlignmentOrchestrator:
                                     threat_name=threat_name or "UNKNOWN",
                                     severity=mapped_severity,
                                     summary=result.get("summary", ""),
-                                    description_claims=result.get("description_claims", ""),
+                                    description_claims=result.get(
+                                        "description_claims", ""
+                                    ),
                                     actual_behavior=result.get("actual_behavior", ""),
-                                    security_implications=result.get("security_implications", ""),
-                                    dataflow_evidence=result.get("dataflow_evidence", ""),
+                                    security_implications=result.get(
+                                        "security_implications", ""
+                                    ),
+                                    dataflow_evidence=result.get(
+                                        "dataflow_evidence", ""
+                                    ),
                                 )
                                 if classification:
-                                    result["threat_vulnerability_classification"] = classification["classification"]
+                                    result["threat_vulnerability_classification"] = (
+                                        classification["classification"]
+                                    )
                                 else:
-                                    result["threat_vulnerability_classification"] = "UNCLEAR"
+                                    result["threat_vulnerability_classification"] = (
+                                        "UNCLEAR"
+                                    )
                             except Exception as e:
                                 self.logger.error(f"Classification failed: {e}")
-                                result["threat_vulnerability_classification"] = "UNCLEAR"
-                        
+                                result["threat_vulnerability_classification"] = (
+                                    "UNCLEAR"
+                                )
+
                         results.append((result, func_context))
                     else:
                         self.stats["no_mismatch"] += 1
-                        
+
             except Exception as e:
-                self.logger.error(f"Batch analysis failed: {e}, falling back to individual")
-                # Fallback to individual analysis
+                # Whole batch failed (typically prompt build or LLM call).
+                # Fall back to per-function calls so peers are unaffected.
+                # ``check_alignment`` is exception-safe and now returns a
+                # sentinel rather than re-raising on its own failures, so
+                # we no longer need a defensive ``try/except: pass``
+                # around the call — that pattern was the silent-failure
+                # bug we are fixing here.
+                self.logger.error(
+                    f"Batch analysis failed: {e}, falling back to individual",
+                    exc_info=True,
+                )
                 for func_context in batch:
-                    try:
-                        result = await self.check_alignment(func_context)
-                        if result:
-                            results.append(result)
-                    except Exception:
-                        pass
-        
+                    result = await self.check_alignment(func_context)
+                    if result is not None:
+                        results.append(result)
+
         return results
 
     @staticmethod

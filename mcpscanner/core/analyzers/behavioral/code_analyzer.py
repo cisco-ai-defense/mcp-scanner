@@ -43,6 +43,7 @@ from ...static_analysis.interprocedural.treesitter_call_graph import (
 )
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
+from .alignment.alignment_orchestrator import LLM_UNAVAILABLE_KEY
 
 
 @dataclass(slots=True)
@@ -693,7 +694,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     func_contexts, batch_size=batch_size
                 )
                 for analysis, ctx in batch_results:
-                    finding = self._create_security_finding(analysis, ctx, file_path)
+                    finding = self._dispatch_finding(analysis, ctx, file_path)
                     if finding:
                         findings.append(finding)
             else:
@@ -723,22 +724,32 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                     if result:
                         analysis, ctx = result
-                        finding = self._create_security_finding(analysis, ctx, file_path)
+                        finding = self._dispatch_finding(analysis, ctx, file_path)
                         if finding:
                             findings.append(finding)
 
             # Emit a SAFE SecurityFinding for every scanned function that
-            # didn't produce a concrete mismatch. This lifts safe-tool
+            # didn't already produce a finding. This lifts safe-tool
             # enumeration into the documented analyze() return contract
             # instead of forcing SDK callers to read the legacy
             # analyzed_functions side-channel attribute. Callers should
             # classify entries by finding.severity (SAFE vs HIGH/MEDIUM/
-            # LOW/INFO) rather than by len(findings)==0.
+            # LOW/INFO/ERROR) rather than by len(findings)==0.
+            #
+            # ERROR findings (severity="ERROR", details["llm_unavailable"]
+            # is True) are emitted by ``_dispatch_finding`` whenever the
+            # alignment orchestrator returns its LLM-unavailable sentinel
+            # for a function. Those functions appear in
+            # ``funcs_with_findings`` below, which is what suppresses the
+            # synthesized SAFE row for them — preserving the invariant
+            # that SAFE is reserved for "the LLM verified this function
+            # and found no mismatch", not for "we couldn't verify".
             #
             # Only synthesize SAFE rows when analysis completed without
-            # raising — if alignment_orchestrator throws and we fall
-            # through to the except block below, findings is partial and
-            # we MUST NOT claim the rest are safe (we just don't know).
+            # raising — if the orchestrator's outer machinery throws and
+            # we fall through to the except block below, findings is
+            # partial and we MUST NOT claim the rest are safe (we just
+            # don't know).
             funcs_with_findings = {
                 (f.details or {}).get("function_name")
                 for f in findings
@@ -783,6 +794,76 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.logger.error(f"Analysis failed for {file_path}: {e}", exc_info=True)
 
         return findings
+
+    def _dispatch_finding(
+        self, analysis: Dict[str, Any], func_context, file_path: str
+    ) -> Optional[SecurityFinding]:
+        """Build a finding from an alignment-orchestrator result tuple.
+
+        Splits the two paths the orchestrator can return:
+
+        * ``analysis[LLM_UNAVAILABLE_KEY] is True`` — verification could
+          not complete; emit a ``severity="ERROR"`` finding so the row is
+          visible in artifacts and clearly distinguishable from
+          ``severity="SAFE"`` (verified clean). Skips the threat-mapping
+          path entirely because there is no real threat name.
+        * Otherwise — a real mismatch result; route through the existing
+          threat-mapping pipeline.
+
+        Returns ``None`` when the underlying creator returns ``None``
+        (e.g. unrecognised threat name on a real mismatch). The synthetic
+        SAFE row for that function is still suppressed in
+        ``_analyze_source_code``'s fallback loop because the dispatched
+        path always yields either a finding or a deliberate ``None``.
+        """
+        if analysis.get(LLM_UNAVAILABLE_KEY):
+            return self._create_llm_unavailable_finding(analysis, func_context, file_path)
+        return self._create_security_finding(analysis, func_context, file_path)
+
+    def _create_llm_unavailable_finding(
+        self, analysis: Dict[str, Any], func_context, file_path: str
+    ) -> SecurityFinding:
+        """Create a ``severity="ERROR"`` finding for an unverified function.
+
+        ERROR is distinct from SAFE in the SecurityFinding contract: SAFE
+        is a positive "LLM examined this function and found no mismatch"
+        signal, ERROR is "the LLM never returned a verdict for this
+        function so we have no evidence either way". Operators consuming
+        the findings.json artifact MUST NOT treat ERROR rows as evidence
+        of safety; they should re-run the scan after fixing the LLM
+        access path (model id, throttling, IAM, region, etc.).
+        """
+        error_type = analysis.get("error_type") or "Unknown"
+        error_message = (analysis.get("error_message") or "").strip()
+        decorator_types = getattr(func_context, "decorator_types", None) or []
+        func_name = getattr(func_context, "name", "unknown")
+        # Truncate the message in the summary so finding artifacts stay
+        # human-readable. Full text is preserved in details.error_message
+        # (already truncated to 500 chars upstream by the orchestrator).
+        truncated = error_message if len(error_message) <= 200 else error_message[:200] + "..."
+        return SecurityFinding(
+            severity="ERROR",
+            summary=(
+                f"LLM verification unavailable for {func_name}: "
+                f"{error_type}: {truncated}"
+            ),
+            threat_category="",
+            analyzer="Behavioral",
+            details={
+                "function_name": func_name,
+                "decorator_type": (
+                    decorator_types[0] if decorator_types else "unknown"
+                ),
+                "line_number": getattr(func_context, "line_number", 0),
+                "source_file": file_path,
+                # Marker so consumers can filter ERROR rows without
+                # relying on severity alone (other analyzers may also
+                # emit ERROR-severity findings in the future).
+                "llm_unavailable": True,
+                "error_type": error_type,
+                "error_message": error_message,
+            },
+        )
 
     def _create_security_finding(
         self, analysis: Dict[str, Any], func_context, file_path: str
