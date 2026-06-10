@@ -122,11 +122,36 @@ class AlignmentLLMClient:
                 "AlignmentLLMClient initialized with model: %s", self._model
             )
 
-    async def verify_alignment(self, prompt: str) -> str:
+    # Short security-expert preamble that lives in the system role
+    # alongside the (much larger) framework template. Kept tight on
+    # purpose — Anthropic-on-Bedrock penalises long, instruction-heavy
+    # system messages with empty ``{}`` responses, so the bulk of the
+    # framework guidance is appended via ``system_prompt`` from the
+    # prompt builder rather than being baked in here.
+    _BASE_SYSTEM_PREAMBLE = (
+        "You are a security expert analyzing MCP tools. "
+        "You receive complete dataflow, taint analysis, and code context. "
+        "Analyze if the docstring accurately describes what the code actually does. "
+        "Respond ONLY with valid JSON. Do not include any markdown formatting or code blocks."
+    )
+
+    async def verify_alignment(
+        self, prompt: str, *, system_prompt: Optional[str] = None
+    ) -> str:
         """Send alignment verification prompt to LLM with retry logic.
 
         Args:
-            prompt: Comprehensive prompt with alignment verification evidence
+            prompt: User-role payload with the per-function or per-batch
+                evidence the model should analyse. This should contain
+                ONLY the evidence (delimited untrusted-input block); the
+                framework template belongs in ``system_prompt``.
+            system_prompt: Optional system-role content (typically the
+                73 KB framework template returned by
+                ``AlignmentPromptBuilder.build_prompt_parts``). When
+                provided it is concatenated after the built-in
+                ``_BASE_SYSTEM_PREAMBLE``; when ``None`` the legacy
+                "everything in the user role" shape is preserved for
+                backward compatibility.
 
         Returns:
             LLM response (JSON string)
@@ -134,9 +159,17 @@ class AlignmentLLMClient:
         Raises:
             Exception: If LLM API call fails after retries
         """
-        # Log prompt length for debugging
+        # Log prompt length for debugging. We log the user payload length
+        # because that's the value the model must reason about per call;
+        # the system template is constant and would just inflate every
+        # log line.
         prompt_length = len(prompt)
-        self.logger.debug(f"Prompt length: {prompt_length} characters")
+        system_length = len(system_prompt) if system_prompt else 0
+        self.logger.debug(
+            "User-payload length: %d characters (system_prompt=%d)",
+            prompt_length,
+            system_length,
+        )
 
         # Check against configurable threshold
         if prompt_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
@@ -151,7 +184,9 @@ class AlignmentLLMClient:
 
         for attempt in range(max_retries):
             try:
-                return await self._make_llm_request(prompt)
+                return await self._make_llm_request(
+                    prompt, system_prompt=system_prompt
+                )
             except Exception as e:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2**attempt)
@@ -165,11 +200,48 @@ class AlignmentLLMClient:
                     )
                     raise
 
-    async def _make_llm_request(self, prompt: str) -> str:
+    def _supports_native_json_mode(self) -> bool:
+        """Return True if the configured model supports ``response_format=json_object``.
+
+        Empirically only OpenAI direct honours ``response_format`` cleanly
+        across the model lineup. Bedrock-hosted Anthropic short-circuits
+        on long prompts and returns ``{}``; Bedrock Cohere/Titan reject
+        the flag outright; Azure OpenAI on older API versions ignores or
+        rejects it, which is why the prior code path explicitly excluded
+        Azure too (see ``test_alignment_llm_client_bedrock`` regression).
+
+        We intentionally allowlist by prefix rather than denylist so
+        adding a new exotic provider doesn't accidentally re-enable the
+        flag for a model that can't handle it. JSON output is still
+        reliably coaxed via the system-prompt instruction in
+        :data:`_BASE_SYSTEM_PREAMBLE`.
+        """
+        if not self._model:
+            return False
+        model = self._model.lower()
+        # OpenAI direct: ``openai/...`` or bare ``gpt-*`` / ``o1-*`` /
+        # ``o3-*`` / ``chatgpt-*`` model ids that litellm resolves to
+        # the OpenAI provider. Azure (``azure/...``) is intentionally
+        # excluded — older api-versions don't accept the flag and the
+        # behavioral suite locks that contract.
+        openai_prefixes = ("openai/", "gpt-", "o1-", "o1", "o3-", "o3", "chatgpt-")
+        if model.startswith(openai_prefixes):
+            return True
+        # Everything else (Azure/Bedrock/Anthropic/Cohere/Vertex/...):
+        # rely on the system-prompt instruction. See module docstring of
+        # alignment_orchestrator for why this matters.
+        return False
+
+    async def _make_llm_request(
+        self, prompt: str, *, system_prompt: Optional[str] = None
+    ) -> str:
         """Make a single LLM API request.
 
         Args:
-            prompt: Prompt to send
+            prompt: User-role payload (per-function evidence).
+            system_prompt: Optional system-role addendum (framework
+                template). When provided the request shape becomes
+                ``[system: preamble + system_prompt, user: prompt]``.
 
         Returns:
             LLM response content
@@ -178,18 +250,22 @@ class AlignmentLLMClient:
             Exception: If API call fails
         """
         try:
+            # Compose the system message. When the caller provides the
+            # framework template via ``system_prompt`` we concat it after
+            # the short security-expert preamble so models see the
+            # response-format expectations *before* the lengthy template.
+            # When ``system_prompt`` is None we keep the legacy single
+            # short system message — preserves behaviour for any caller
+            # that hasn't migrated to the build_prompt_parts API yet.
+            if system_prompt:
+                system_content = f"{self._BASE_SYSTEM_PREAMBLE}\n\n{system_prompt}"
+            else:
+                system_content = self._BASE_SYSTEM_PREAMBLE
+
             request_params = {
                 "model": self._model,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a security expert analyzing MCP tools. "
-                            "You receive complete dataflow, taint analysis, and code context. "
-                            "Analyze if the docstring accurately describes what the code actually does. "
-                            "Respond ONLY with valid JSON. Do not include any markdown formatting or code blocks."
-                        ),
-                    },
+                    {"role": "system", "content": system_content},
                     {"role": "user", "content": prompt},
                 ],
                 "max_tokens": self._max_tokens,
@@ -203,9 +279,11 @@ class AlignmentLLMClient:
             if self._api_key:
                 request_params["api_key"] = self._api_key
 
-            # Only enable JSON mode for supported models/providers
-            # Azure OpenAI with older API versions may not support this
-            if not self._model.startswith("azure/"):
+            # Native JSON mode is OpenAI/Azure-only. Bedrock Anthropic in
+            # particular returns ``{}`` when the flag is set alongside a
+            # multi-KB system prompt; rely on the system-message
+            # instruction instead. See _supports_native_json_mode docs.
+            if self._supports_native_json_mode():
                 request_params["response_format"] = {"type": "json_object"}
 
             # Add optional parameters if configured

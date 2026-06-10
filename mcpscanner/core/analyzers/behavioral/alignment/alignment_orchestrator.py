@@ -65,6 +65,29 @@ from .threat_vulnerability_classifier import ThreatVulnerabilityClassifier
 LLM_UNAVAILABLE_KEY = "_llm_unavailable"
 
 
+class AlignmentVerificationError(RuntimeError):
+    """Raised when an LLM response could not be parsed or validated.
+
+    Distinct from a transport/provider failure (which surfaces as the
+    underlying exception from :class:`AlignmentLLMClient`): this signals
+    "the LLM responded, but the response shape is unusable" — empty
+    string, ``{}``, missing required fields, or a non-dict payload.
+
+    Treating those cases as a verification failure (rather than a
+    silent skip) is critical for Bedrock-hosted Anthropic models: under
+    a 73 KB user prompt with ``response_format=json_object`` they
+    consistently reply with ``{}``, and the prior orchestrator silently
+    converted that into a SAFE row. See the module docstring for the
+    full failure taxonomy.
+
+    Caught by ``check_alignment``'s outer ``except Exception`` clause
+    and converted into the same ``LLM_UNAVAILABLE_KEY`` sentinel that
+    transport errors produce, so downstream callers don't need to know
+    the difference between "couldn't reach the LLM" and "LLM responded
+    with garbage".
+    """
+
+
 def _make_llm_unavailable_result(error: BaseException) -> Dict[str, Any]:
     """Build a sentinel result for an unrecoverable per-function LLM failure.
 
@@ -163,10 +186,16 @@ class AlignmentOrchestrator:
         self.stats["total_analyzed"] += 1
 
         try:
-            # Step 1: Build alignment verification prompt
+            # Step 1: Build alignment verification prompt as
+            # (system_template, user_payload). Splitting the framework
+            # template into the system slot is what makes Bedrock
+            # Anthropic models actually respond with structured JSON
+            # instead of an empty {} — see AlignmentPromptBuilder.
             self.logger.debug(f"Building alignment prompt for {func_context.name}")
             try:
-                prompt = self.prompt_builder.build_prompt(func_context)
+                system_template, user_payload = (
+                    self.prompt_builder.build_prompt_parts(func_context)
+                )
             except Exception as e:
                 self.logger.error(
                     f"Prompt building failed for {func_context.name}: {e}",
@@ -180,7 +209,9 @@ class AlignmentOrchestrator:
                 f"Querying LLM for alignment verification of {func_context.name}"
             )
             try:
-                response = await self.llm_client.verify_alignment(prompt)
+                response = await self.llm_client.verify_alignment(
+                    user_payload, system_prompt=system_template
+                )
             except Exception as e:
                 self.logger.error(
                     f"LLM verification failed for {func_context.name}: {e}",
@@ -202,11 +233,25 @@ class AlignmentOrchestrator:
                 raise
 
             if not result:
+                # The LLM responded but the response was empty / not
+                # JSON / missing required fields. Previously we silently
+                # swallowed this, which let downstream synthesise a
+                # SAFE row for an unverified function. Now we raise so
+                # the outer except clause emits an LLM_UNAVAILABLE
+                # sentinel — same severity="ERROR" treatment as a
+                # transport failure.
+                response_excerpt = (
+                    (response or "").strip()[:200] if response is not None else ""
+                )
                 self.logger.warning(
-                    f"Invalid response for {func_context.name}, skipping"
+                    f"Invalid response for {func_context.name} "
+                    f"(excerpt: {response_excerpt!r})"
                 )
                 self.stats["skipped_invalid_response"] += 1
-                return None
+                raise AlignmentVerificationError(
+                    f"LLM response was empty/non-JSON/missing required "
+                    f"fields (excerpt: {response_excerpt!r})"
+                )
 
             # Step 4: Return analysis if mismatch detected
             if result.get("mismatch_detected"):
@@ -316,11 +361,17 @@ class AlignmentOrchestrator:
             self.logger.debug(f"Processing batch of {len(batch)} functions")
 
             try:
-                # Build batched prompt
-                prompt = self.prompt_builder.build_batch_prompt(batch)
+                # Build batched prompt as (system_template, user_payload)
+                # — same Anthropic-friendly split as the single-function
+                # path. See ``check_alignment``.
+                system_template, user_payload = (
+                    self.prompt_builder.build_batch_prompt_parts(batch)
+                )
 
                 # Query LLM
-                response = await self.llm_client.verify_alignment(prompt)
+                response = await self.llm_client.verify_alignment(
+                    user_payload, system_prompt=system_template
+                )
 
                 # Parse batched response
                 batch_results = self.response_validator.validate_batch(

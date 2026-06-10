@@ -29,7 +29,7 @@ import json
 import logging
 import secrets
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .....config.constants import MCPScannerConstants
 from ....static_analysis.context_extractor import FunctionContext
@@ -404,6 +404,41 @@ Parameter Flow Tracking:
 
         return prompt.strip()
 
+    def build_prompt_parts(
+        self, func_context: FunctionContext
+    ) -> Tuple[str, str]:
+        """Build the alignment prompt as a (system_template, user_payload) split.
+
+        The 73 KB framework template was previously concatenated into the
+        single ``user`` message returned by :meth:`build_prompt`. That shape
+        works fine for OpenAI/Azure but causes Bedrock-hosted Anthropic
+        models to short-circuit and return ``{}`` — see
+        ``alignment_orchestrator`` docs and the regression test in
+        ``tests/behavioral/test_validator_failure_emits_error.py``.
+
+        Splitting the template into the ``system`` slot and keeping only
+        the per-function evidence in the ``user`` slot is the canonical
+        Anthropic-style messages layout and restores the model's ability
+        to actually emit the structured analysis JSON.
+
+        Returns:
+            Tuple ``(system_template, user_payload)``:
+
+            * ``system_template`` — the static framework template loaded
+              from ``code_alignment_threat_analysis_prompt.md``. Callers
+              should send this in the ``system`` role.
+            * ``user_payload`` — the delimited per-function evidence (the
+              same content that :meth:`build_prompt` appends after the
+              template). Callers should send this in the ``user`` role.
+
+        The split is done by reusing :meth:`build_prompt` and trimming the
+        leading template so any future change to either side stays in
+        lockstep — there is exactly one source of truth for the prompt
+        body and one source of truth for the template.
+        """
+        full = self.build_prompt(func_context)
+        return self._split_template_from_payload(full)
+
     def build_batch_prompt(self, func_contexts: List[FunctionContext]) -> str:
         """Build a batched prompt for analyzing multiple functions in one LLM call.
 
@@ -490,6 +525,39 @@ For functions with no issues, just include function_index, function_name, and mi
 {end_tag}
 """
         return prompt.strip()
+
+    def build_batch_prompt_parts(
+        self, func_contexts: List[FunctionContext]
+    ) -> Tuple[str, str]:
+        """Batch counterpart to :meth:`build_prompt_parts`.
+
+        Returns:
+            Tuple ``(system_template, user_payload)`` where the framework
+            template lives in the system slot and the per-batch
+            instructions + delimited function dump live in the user slot.
+            See :meth:`build_prompt_parts` for the rationale.
+        """
+        full = self.build_batch_prompt(func_contexts)
+        return self._split_template_from_payload(full)
+
+    def _split_template_from_payload(self, full_prompt: str) -> Tuple[str, str]:
+        """Strip the leading framework template from ``full_prompt``.
+
+        Both single and batch prompt construction prefix the prompt with
+        ``self._template`` followed by a blank line. We strip that prefix
+        here so the prompt builder stays the single source of truth for
+        what counts as "framework instructions" vs. "per-call evidence".
+
+        Falls back to ``("", full_prompt)`` if the prefix isn't found —
+        which would only happen if the prompt body is rebuilt to omit the
+        template (in which case routing the whole thing as a user message
+        is the safest legacy behaviour).
+        """
+        template = self._template or ""
+        if template and full_prompt.startswith(template):
+            user_payload = full_prompt[len(template):].lstrip("\n")
+            return template, user_payload
+        return "", full_prompt
 
     def _format_call_chain(self, chain: List[Dict[str, Any]], indent: int = 0) -> str:
         """Format call chain recursively for display.

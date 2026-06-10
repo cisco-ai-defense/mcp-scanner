@@ -112,13 +112,23 @@ class TestCheckAlignmentReturnsSentinelOnLLMFailure:
         # with its own logging + raise pattern).
         ctx = _func_context("echo", line_number=4)
 
-        async def _boom(_prompt: str) -> str:
+        async def _boom(_prompt: str, **_kwargs) -> str:
+            # ``**_kwargs`` swallows the ``system_prompt`` kwarg the
+            # orchestrator now forwards to ``verify_alignment``. Pre-fix
+            # the LLM client only took ``prompt``; post-fix it also
+            # accepts ``system_prompt`` so the framework template can
+            # ride in the system role for Bedrock Anthropic.
             raise RuntimeError("simulated bedrock outage")
 
         # The prompt builder runs first; mock it out so the test only
-        # exercises the LLM-call failure path.
+        # exercises the LLM-call failure path. The orchestrator now
+        # consumes the (system, user) split returned by
+        # ``build_prompt_parts`` — the legacy single-string ``build_prompt``
+        # is no longer in the orchestrator's call path.
         with patch.object(
-            orchestrator.prompt_builder, "build_prompt", return_value="<prompt>"
+            orchestrator.prompt_builder,
+            "build_prompt_parts",
+            return_value=("<system>", "<user>"),
         ), patch.object(
             orchestrator.llm_client,
             "verify_alignment",
@@ -153,7 +163,9 @@ class TestCheckAlignmentReturnsSentinelOnLLMFailure:
         """
         ctx = _func_context("echo", line_number=4)
         with patch.object(
-            orchestrator.prompt_builder, "build_prompt", return_value="<prompt>"
+            orchestrator.prompt_builder,
+            "build_prompt_parts",
+            return_value=("<system>", "<user>"),
         ), patch.object(
             orchestrator.llm_client,
             "verify_alignment",
@@ -181,7 +193,7 @@ class TestCheckAlignmentBatchEmitsSentinelOnFailure:
     ) -> None:
         contexts = [_func_context(f"tool_{i}", i + 1) for i in range(3)]
 
-        async def _boom(_prompt: str) -> str:
+        async def _boom(_prompt: str, **_kwargs) -> str:
             raise RuntimeError("simulated llm outage")
 
         # Both the batched and the per-function fallback path must
@@ -190,9 +202,13 @@ class TestCheckAlignmentBatchEmitsSentinelOnFailure:
         # call. Patching ``verify_alignment`` covers both because
         # check_alignment also calls it during fallback.
         with patch.object(
-            orchestrator.prompt_builder, "build_batch_prompt", return_value="<batch>"
+            orchestrator.prompt_builder,
+            "build_batch_prompt_parts",
+            return_value=("<system>", "<batch-user>"),
         ), patch.object(
-            orchestrator.prompt_builder, "build_prompt", return_value="<single>"
+            orchestrator.prompt_builder,
+            "build_prompt_parts",
+            return_value=("<system>", "<single-user>"),
         ), patch.object(
             orchestrator.llm_client,
             "verify_alignment",
@@ -242,7 +258,7 @@ class TestBehavioralCodeAnalyzerEmitsErrorNotSafe:
             # propagate through check_alignment_batch -> code_analyzer's
             # _dispatch_finding routes them to _create_llm_unavailable_finding
             # -> SecurityFinding(severity="ERROR") emitted.
-            async def _boom(_prompt: str) -> str:
+            async def _boom(_prompt: str, **_kwargs) -> str:
                 raise RuntimeError(
                     "ValidationException: The provided model identifier "
                     "is invalid"
