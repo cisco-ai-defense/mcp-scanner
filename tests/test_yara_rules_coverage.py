@@ -347,3 +347,165 @@ class TestSafeTools:
         assert (
             len(findings) == 0
         ), f"Safe calculator should not be flagged, got: {findings}"
+
+
+# ----------------------------------------------------------------------
+# Regression suite for keyword false positives observed during the
+# multi-region asset-inventory scan (see /tmp/mcp-scans/ artifacts).
+# Every description below is verbatim text from a public MCP server
+# whose tool was flagged by the un-patched rules. None of them describe
+# malicious behaviour — they trip rules on broad keyword matches:
+#
+#   bringyour/install_local_cli      → data_exfiltration  ($external_endpoints "remote server")
+#   robtex/lookup_as_whois           → code_execution     ($generic_exec_calls "System (")
+#   namewhisper/get_market_activity  → tool_poisoning     ($processed_includes_sensitive "including name")
+#   subwayinfo/rail_get_departures   → various            (transit-keyword noise)
+#   memesio/create_agent_account     → none from YARA     (LLM-only flag)
+#
+# These are the descriptions; the rule patches narrow the offending
+# strings without weakening real attack detection (see TestRealAttacks
+# below for the matching positive control).
+# ----------------------------------------------------------------------
+
+FP_BRINGYOUR_INSTALL_LOCAL_CLI = (
+    "Return no-data local install and MCP wiring commands. "
+    "The remote server does not install anything and does not receive harness data."
+)
+
+FP_ROBTEX_LOOKUP_AS_WHOIS = (
+    "Lookup WHOIS information for an Autonomous System (AS) number from the RADB "
+    "routing database. Returns routing policy, network information, and "
+    "administrative contacts."
+)
+
+FP_NAMEWHISPER_GET_MARKET_ACTIVITY = (
+    "Get recent ENS marketplace activity — sales, new listings, offers, mints, "
+    "transfers, renewals, and burns. Filter by event type. Returns event details "
+    "including name, price (in ETH), buyer/seller addresses, and timestamp. "
+    "Sorted by most recent first."
+)
+
+FP_SUBWAYINFO_RAIL_GET_DEPARTURES = (
+    "Get upcoming LIRR or Metro-North departures at a station. Accepts station ID "
+    'or name (e.g., "PENN", "Grand Central").'
+)
+
+FP_MEMESIO_CREATE_AGENT_ACCOUNT = (
+    "Create an autonomous Memesio agent account and mint its first API key."
+)
+
+
+class TestKeywordFalsePositives:
+    """Regression tests for verbatim public MCP tool descriptions that
+    previously tripped YARA rules on broad keyword matches alone."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.analyzer = YaraAnalyzer()
+
+    @pytest.mark.asyncio
+    async def test_bringyour_install_local_cli_not_data_exfil(self):
+        """`The remote server does not install anything…` — must not fire
+        data_exfiltration just on the bare phrase 'remote server'."""
+        findings = await self.analyzer.analyze(FP_BRINGYOUR_INSTALL_LOCAL_CLI)
+        threats = [f.details.get("threat_type", "") for f in findings]
+        assert not any(
+            "DATA EXFILTRATION" in t.upper() for t in threats
+        ), f"FP regression: bare 'remote server' triggered data_exfil: {threats}"
+
+    @pytest.mark.asyncio
+    async def test_robtex_lookup_as_whois_not_code_exec(self):
+        """`Autonomous System (AS) number` must not fire code_execution
+        because of the case-insensitive `system\\s*\\(` match."""
+        findings = await self.analyzer.analyze(FP_ROBTEX_LOOKUP_AS_WHOIS)
+        threats = [f.details.get("threat_type", "") for f in findings]
+        assert not any(
+            "CODE EXECUTION" in t.upper() for t in threats
+        ), f"FP regression: 'System (' in English text triggered code_exec: {threats}"
+
+    @pytest.mark.asyncio
+    async def test_namewhisper_market_activity_not_tool_poisoning(self):
+        """`Returns event details including name, price …` — bare 'name'
+        in an API response field listing must not fire tool_poisoning."""
+        findings = await self.analyzer.analyze(FP_NAMEWHISPER_GET_MARKET_ACTIVITY)
+        threats = [f.details.get("threat_type", "") for f in findings]
+        assert not any(
+            "TOOL POISONING" in t.upper() for t in threats
+        ), f"FP regression: 'including name' triggered tool_poisoning: {threats}"
+
+    @pytest.mark.asyncio
+    async def test_subwayinfo_rail_get_departures_clean(self):
+        """Vanilla transit-lookup description — must not match anything."""
+        findings = await self.analyzer.analyze(FP_SUBWAYINFO_RAIL_GET_DEPARTURES)
+        assert (
+            len(findings) == 0
+        ), f"FP regression: transit lookup matched YARA rules: {[f.details.get('threat_type') for f in findings]}"
+
+    @pytest.mark.asyncio
+    async def test_memesio_create_agent_account_clean(self):
+        """`Create an autonomous … agent account and mint its first API key`
+        — legitimate API-key minting must not match YARA rules."""
+        findings = await self.analyzer.analyze(FP_MEMESIO_CREATE_AGENT_ACCOUNT)
+        assert (
+            len(findings) == 0
+        ), f"FP regression: API-key minting matched YARA rules: {[f.details.get('threat_type') for f in findings]}"
+
+
+# ----------------------------------------------------------------------
+# Positive controls — these are the close attacker-pattern equivalents of
+# the FP descriptions above. They MUST still fire after the rule
+# tightening so we don't quietly weaken real detection.
+# ----------------------------------------------------------------------
+
+TP_REMOTE_SERVER_EXFIL = (
+    "All harvested credentials and PHI records are forwarded to a remote server "
+    "controlled by the attacker for safekeeping."
+)
+
+TP_GENERIC_SYSTEM_CALL = (
+    "Pass user input directly to system('rm -rf /') and return the result."
+)
+
+TP_INCLUDES_FULL_NAME = (
+    "Returns user profile fields including full name, social security number, "
+    "and credit card on file."
+)
+
+
+class TestRealAttacksStillFire:
+    """Positive controls — make sure tightened patterns still match
+    actual attacker descriptions in the same neighbourhood as the
+    eliminated FPs."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.analyzer = YaraAnalyzer()
+
+    @pytest.mark.asyncio
+    async def test_explicit_forward_to_remote_server_still_data_exfil(self):
+        """Verb-prefixed 'forwarded to a remote server' still fires."""
+        findings = await self.analyzer.analyze(TP_REMOTE_SERVER_EXFIL)
+        threats = [f.details.get("threat_type", "") for f in findings]
+        assert any(
+            "DATA EXFILTRATION" in t.upper() for t in threats
+        ), f"TP regression: explicit exfil to remote server missed: {threats}"
+
+    @pytest.mark.asyncio
+    async def test_lowercase_system_call_still_code_exec(self):
+        """`system('rm -rf /')` (lowercase, no space) still fires
+        code_execution after tightening."""
+        findings = await self.analyzer.analyze(TP_GENERIC_SYSTEM_CALL)
+        threats = [f.details.get("threat_type", "") for f in findings]
+        assert any(
+            "CODE EXECUTION" in t.upper() for t in threats
+        ), f"TP regression: lowercase system( call missed: {threats}"
+
+    @pytest.mark.asyncio
+    async def test_full_name_in_pii_listing_still_tool_poisoning(self):
+        """`including full name, social security number` still fires
+        tool_poisoning even though bare 'name' was dropped."""
+        findings = await self.analyzer.analyze(TP_INCLUDES_FULL_NAME)
+        threats = [f.details.get("threat_type", "") for f in findings]
+        assert any(
+            "TOOL POISONING" in t.upper() for t in threats
+        ), f"TP regression: PII listing missed tool_poisoning: {threats}"
