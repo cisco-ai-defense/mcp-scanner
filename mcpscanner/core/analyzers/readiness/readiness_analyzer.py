@@ -23,11 +23,7 @@ heuristic checks and optional OPA policy evaluation.
 This analyzer focuses on operational reliability, NOT security vulnerabilities.
 It detects issues like missing timeouts, unsafe retry loops, and silent failures.
 
-Implements 20 core heuristic rules (HEUR-001 through HEUR-020):
-
-Timeout Guards (HEUR-001, HEUR-002):
-- Missing timeout configuration
-- Timeout values too long (>5 minutes)
+Implements 18 core heuristic rules (HEUR-003 through HEUR-020):
 
 Retry Configuration (HEUR-003, HEUR-004, HEUR-005):
 - No retry limit defined
@@ -262,8 +258,10 @@ class ReadinessAnalyzer(BaseAnalyzer):
         findings: List[SecurityFinding] = []
 
         # Timeout Guards
-        findings.extend(self._check_missing_timeout(tool_def, tool_name))
-        findings.extend(self._check_timeout_too_long(tool_def, tool_name))
+        # Note: HEUR-001 and HEUR-002 (timeout checks) have been removed.
+        # The MCP Tool specification does not define a timeout field on tools.
+        # Timeout configuration is an implementation concern, not a tool schema concern.
+        # See: https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool
 
         # Retry Configuration
         findings.extend(self._check_no_retry_limit(tool_def, tool_name))
@@ -366,86 +364,6 @@ class ReadinessAnalyzer(BaseAnalyzer):
             deduction = self.SEVERITY_DEDUCTIONS.get(finding.severity, 0)
             score -= deduction
         return max(0, score)
-
-    # ===================================================================
-    # HEUR-001: Missing timeout (HIGH)
-    # ===================================================================
-    def _check_missing_timeout(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-001: Check for missing timeout configuration."""
-        findings: List[SecurityFinding] = []
-
-        timeout_fields = ["timeout", "timeoutMs", "timeout_ms", "timeoutSeconds"]
-        has_timeout = any(field in tool_def for field in timeout_fields)
-
-        # Also check nested config
-        config = tool_def.get("config", {})
-        has_timeout = has_timeout or any(field in config for field in timeout_fields)
-
-        if not has_timeout:
-            findings.append(
-                self.create_security_finding(
-                    severity="HIGH",
-                    summary=(
-                        f"Tool '{tool_name}' does not specify a timeout. "
-                        "Operations may hang indefinitely if external services "
-                        "become unresponsive."
-                    ),
-                    threat_category="MISSING_TIMEOUT_GUARD",
-                    details={
-                        "tool_name": tool_name,
-                        "rule_id": "HEUR-001",
-                        "location": f"tool.{tool_name}",
-                        "recommendation": (
-                            "Add a 'timeout' or 'timeoutMs' field with a reasonable "
-                            "value (e.g., 30000 for 30 seconds)"
-                        ),
-                    },
-                )
-            )
-
-        return findings
-
-    # ===================================================================
-    # HEUR-002: Timeout too long (MEDIUM)
-    # ===================================================================
-    def _check_timeout_too_long(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """HEUR-002: Check if timeout is greater than 300000ms (5 minutes)."""
-        findings: List[SecurityFinding] = []
-
-        timeout_fields = ["timeout", "timeoutMs", "timeout_ms"]
-        config = tool_def.get("config", {})
-
-        for field in timeout_fields:
-            timeout_value = tool_def.get(field) or config.get(field)
-            if timeout_value is not None and timeout_value > 300000:
-                findings.append(
-                    self.create_security_finding(
-                        severity="MEDIUM",
-                        summary=(
-                            f"Tool '{tool_name}' has {field}={timeout_value}ms "
-                            "(over 5 minutes). Long timeouts can cause extended hangs "
-                            "and poor user experience."
-                        ),
-                        threat_category="MISSING_TIMEOUT_GUARD",
-                        details={
-                            "tool_name": tool_name,
-                            "rule_id": "HEUR-002",
-                            "location": f"tool.{tool_name}.{field}",
-                            "field": field,
-                            "value": timeout_value,
-                            "recommendation": (
-                                "Consider reducing timeout to 30-60 seconds "
-                                "for better responsiveness"
-                            ),
-                        },
-                    )
-                )
-
-        return findings
 
     # ===================================================================
     # HEUR-003: No retry limit (MEDIUM)
