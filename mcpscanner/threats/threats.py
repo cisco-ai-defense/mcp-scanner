@@ -155,7 +155,15 @@ class ThreatMapping:
             "aitech_name": "Direct Prompt Injection",
             "aisubtech": "AISubtech-1.1.1",
             "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Malicious manipulation of tool metadata, descriptions, or decorators that mislead the LLM into invoking tools incorrectly or exposing confidential context; combined with injection of hidden or malicious instructions in MCP system/user prompts to alter model reasoning or bypass content restrictions.",
+            # Aligned with LLM / YARA / AI_DEFENSE PROMPT INJECTION
+            # entries — all four detection analyzers share AITech-1.1 /
+            # AISubtech-1.1.1, so cross-analyzer aggregation must show
+            # one consistent description per taxonomy code. The
+            # behavioral analyzer detects this same threat class via
+            # tool metadata / decorator manipulation (not just direct
+            # user input), but that is a vector of the same
+            # Instruction Manipulation subtech, not a separate one.
+            "description": 'Explicit attempts to override, replace, or modify the model\'s system instructions, operational directives, or behavioral guidelines through direct user input, causing the model to follow attacker-controlled instructions instead of its intended programming (e.g., "Ignore previous instructions").',
         },
         "INJECTION ATTACKS": {
             "scanner_category": "INJECTION ATTACKS",
@@ -409,11 +417,20 @@ class ThreatMapping:
         "DATA_LEAKAGE": {
             "scanner_category": "SECURITY VIOLATION",
             "severity": "HIGH",
+            # Align with the other analyzers that map to AITech-8.2 —
+            # LLM/YARA/BEHAVIORAL all use AISubtech-8.2.3 Data
+            # Exfiltration via Agent Tooling. Prompt Defense was the
+            # outlier on AISubtech-8.2.1 Sensitive Information
+            # Disclosure, which describes accidental exposure rather
+            # than agent-tool-mediated leakage. The DATA_LEAKAGE rule
+            # fires when a tool description omits guardrails for
+            # sensitive data flowing back through tool outputs / model
+            # responses, which is squarely 8.2.3.
             "aitech": "AITech-8.2",
             "aitech_name": "Data Exfiltration / Exposure",
-            "aisubtech": "AISubtech-8.2.1",
-            "aisubtech_name": "Sensitive Information Disclosure",
-            "description": "Missing defense against data leakage where sensitive, confidential, or private information may be exposed through tool outputs or model responses.",
+            "aisubtech": "AISubtech-8.2.3",
+            "aisubtech_name": "Data Exfiltration via Agent Tooling",
+            "description": "Missing defense against data exfiltration via agent tooling where sensitive information (private data, intellectual property, proprietary algorithms) can be exposed through tool outputs or model responses without explicit redaction, scoping, or output filtering.",
         },
         "ROLE_ESCAPE": {
             "scanner_category": "PROMPT INJECTION",
@@ -499,11 +516,24 @@ class ThreatMapping:
         "ABUSE_PREVENTION": {
             "scanner_category": "DENIAL OF SERVICE",
             "severity": "LOW",
-            "aitech": "AITech-4.1",
-            "aitech_name": "Denial of Service",
-            "aisubtech": "AISubtech-4.1.1",
-            "aisubtech_name": "Context Window Overflow",
-            "description": "Missing defense against abuse and resource exhaustion through rate limiting, throttling, or quota enforcement.",
+            # Abuse prevention is about rate limits, throttling, and
+            # quotas (see prompt_defense_analyzer DEFENSE_RULES patterns:
+            # ``rate.?limit|throttl|quota|cooldown`` and
+            # ``abuse|misuse|spam|flood``). That is compute exhaustion
+            # via excess invocations, NOT a context-window overflow,
+            # which is what AISubtech-4.1.1 describes (oversized inputs
+            # blowing the model's context). The previous mapping co-
+            # located ABUSE_PREVENTION with CONTEXT_OVERFLOW under the
+            # same subtech, which mis-tagged every abuse finding as a
+            # context-window issue. The correct subtech is
+            # ``AISubtech-13.1.1 Compute Exhaustion`` (already used by
+            # the BEHAVIORAL/RESOURCE EXHAUSTION mapping) under
+            # ``AITech-13.1 Disruption of Availability``.
+            "aitech": "AITech-13.1",
+            "aitech_name": "Disruption of Availability",
+            "aisubtech": "AISubtech-13.1.1",
+            "aisubtech_name": "Compute Exhaustion",
+            "description": "Missing defense against compute exhaustion through abuse — repeated tool invocations or large payloads that overload the MCP server and degrade performance or cause denial of service. Tool description lacks rate limits, throttling, quota enforcement, cooldowns, or break conditions to prevent flooding and recursive misuse.",
         },
     }
 

@@ -239,15 +239,173 @@ class TestFindingTaxonomy:
         if f.mcp_taxonomy:
             assert f.mcp_taxonomy["aitech"] == "AITech-1.1"
 
-        # DATA_LEAKAGE -> AITech-8.2
+        # DATA_LEAKAGE -> AITech-8.2 / AISubtech-8.2.3 (aligned with
+        # LLM/YARA/BEHAVIORAL data-exfiltration mappings; see
+        # test_data_leakage_subtech_aligned_with_other_analyzers)
         f = finding_map["DATA_LEAKAGE"]
         if f.mcp_taxonomy:
             assert f.mcp_taxonomy["aitech"] == "AITech-8.2"
+            assert f.mcp_taxonomy["aisubtech"] == "AISubtech-8.2.3"
 
         # INPUT_VALIDATION -> AITech-9.1
         f = finding_map["INPUT_VALIDATION"]
         if f.mcp_taxonomy:
             assert f.mcp_taxonomy["aitech"] == "AITech-9.1"
+
+    @pytest.mark.asyncio
+    async def test_abuse_prevention_taxonomy_is_compute_exhaustion(
+        self, analyzer: PromptDefenseAnalyzer
+    ) -> None:
+        """ABUSE_PREVENTION rule patterns are about rate limiting,
+        throttling, and quota enforcement — i.e. abuse-driven compute
+        exhaustion, NOT context-window overflow. The taxonomy must
+        reflect that or every rate-limit finding gets mis-tagged.
+
+        Locks the threats.py mapping at AITech-13.1 / AISubtech-13.1.1
+        so it stays aligned with BEHAVIORAL/RESOURCE EXHAUSTION (the
+        only other entry that uses Compute Exhaustion) and does not
+        regress back to AISubtech-4.1.1 Context Window Overflow.
+        """
+        findings = await analyzer.analyze(
+            UNDEFENDED_CONTENT, {"tool_name": "test_tool"}
+        )
+        finding_map = {f.details["defense_id"]: f for f in findings}
+
+        f = finding_map["ABUSE_PREVENTION"]
+        assert f.mcp_taxonomy is not None, (
+            "ABUSE_PREVENTION finding must enrich with MCP taxonomy"
+        )
+        assert f.mcp_taxonomy["aitech"] == "AITech-13.1", (
+            f"Expected AITech-13.1 (Disruption of Availability), got "
+            f"{f.mcp_taxonomy['aitech']}"
+        )
+        assert f.mcp_taxonomy["aisubtech"] == "AISubtech-13.1.1", (
+            f"Expected AISubtech-13.1.1 (Compute Exhaustion), got "
+            f"{f.mcp_taxonomy['aisubtech']}"
+        )
+        # Sanity: the previous (wrong) mapping must NOT come back.
+        assert f.mcp_taxonomy["aisubtech_name"] != "Context Window Overflow"
+
+    def test_prompt_injection_description_aligned_across_detection_analyzers(
+        self,
+    ) -> None:
+        """LLM, YARA, AI_DEFENSE, and BEHAVIORAL all map their
+        ``PROMPT INJECTION`` entry to AITech-1.1 / AISubtech-1.1.1
+        Instruction Manipulation. They must therefore share one
+        canonical description so the same taxonomy code does not
+        surface two different blurbs in cross-analyzer reports.
+
+        The historical drift was BEHAVIORAL using a tool-metadata /
+        decorator-specific paragraph while the other three used the
+        ``Ignore previous instructions`` user-input paragraph.
+
+        PROMPT_DEFENSE entries are intentionally not part of this
+        consistency contract — they describe MISSING defenses and use
+        the ``Missing defense against ...`` framing.
+        """
+        from mcpscanner.threats.threats import ThreatMapping
+
+        canonical = ThreatMapping.LLM_THREATS["PROMPT INJECTION"]["description"]
+        assert "Ignore previous instructions" in canonical, (
+            "Sanity: LLM canonical description must keep the named "
+            "'Ignore previous instructions' example; if you want to "
+            "change wording, update every detection analyzer at once."
+        )
+
+        peers = [
+            ("YARA", ThreatMapping.YARA_THREATS["PROMPT INJECTION"]),
+            (
+                "AI_DEFENSE",
+                ThreatMapping.AI_DEFENSE_THREATS["PROMPT_INJECTION"],
+            ),
+            (
+                "BEHAVIORAL",
+                ThreatMapping.BEHAVIORAL_THREATS["PROMPT INJECTION"],
+            ),
+        ]
+        for name, entry in peers:
+            assert entry["aitech"] == "AITech-1.1", (
+                f"{name} drifted off AITech-1.1: got {entry['aitech']}"
+            )
+            assert entry["aisubtech"] == "AISubtech-1.1.1", (
+                f"{name} drifted off AISubtech-1.1.1: got "
+                f"{entry['aisubtech']}"
+            )
+            assert entry["description"] == canonical, (
+                f"{name} PROMPT INJECTION description diverged from the "
+                "LLM canonical text. All four detection analyzers must "
+                "share one description for AISubtech-1.1.1."
+            )
+
+    def test_data_leakage_subtech_aligned_with_other_analyzers(self) -> None:
+        """Every analyzer that maps to AITech-8.2 Data Exfiltration /
+        Exposure must use the same subtech so cross-analyzer
+        aggregation does not split otherwise-identical findings into
+        two buckets. The historical drift was Prompt Defense's
+        DATA_LEAKAGE on AISubtech-8.2.1 (Sensitive Information
+        Disclosure) while LLM, YARA, and BEHAVIORAL all used
+        AISubtech-8.2.3 (Data Exfiltration via Agent Tooling).
+        """
+        from mcpscanner.threats.threats import ThreatMapping
+
+        peers = [
+            ("LLM", ThreatMapping.LLM_THREATS["DATA EXFILTRATION"]),
+            ("YARA-DATA", ThreatMapping.YARA_THREATS["DATA EXFILTRATION"]),
+            ("YARA-CRED", ThreatMapping.YARA_THREATS["CREDENTIAL HARVESTING"]),
+            ("BEHAVIORAL", ThreatMapping.BEHAVIORAL_THREATS["DATA EXFILTRATION"]),
+            (
+                "PROMPT_DEFENSE",
+                ThreatMapping.PROMPT_DEFENSE_THREATS["DATA_LEAKAGE"],
+            ),
+        ]
+
+        for name, entry in peers:
+            assert entry["aitech"] == "AITech-8.2", (
+                f"{name} drifted off AITech-8.2: got {entry['aitech']}"
+            )
+            assert entry["aisubtech"] == "AISubtech-8.2.3", (
+                f"{name} drifted off AISubtech-8.2.3: got "
+                f"{entry['aisubtech']}"
+            )
+
+    def test_abuse_prevention_subtech_aligned_with_behavioral(self) -> None:
+        """ABUSE_PREVENTION (Prompt Defense) and RESOURCE EXHAUSTION
+        (Behavioral) describe the same root cause — compute exhaustion
+        from repeated invocations / floods — and must share the same
+        AITech / AISubtech codes so cross-analyzer dashboards do not
+        bucket them apart."""
+        from mcpscanner.threats.threats import ThreatMapping
+
+        abuse = ThreatMapping.PROMPT_DEFENSE_THREATS["ABUSE_PREVENTION"]
+        resource = ThreatMapping.BEHAVIORAL_THREATS["RESOURCE EXHAUSTION"]
+
+        assert abuse["aitech"] == resource["aitech"] == "AITech-13.1"
+        assert (
+            abuse["aisubtech"] == resource["aisubtech"] == "AISubtech-13.1.1"
+        )
+        assert (
+            abuse["aisubtech_name"]
+            == resource["aisubtech_name"]
+            == "Compute Exhaustion"
+        )
+
+    @pytest.mark.asyncio
+    async def test_context_overflow_taxonomy_unchanged(
+        self, analyzer: PromptDefenseAnalyzer
+    ) -> None:
+        """Context overflow is the canonical user of AISubtech-4.1.1
+        Context Window Overflow — the ABUSE_PREVENTION fix must not
+        accidentally drag this one along."""
+        findings = await analyzer.analyze(
+            UNDEFENDED_CONTENT, {"tool_name": "test_tool"}
+        )
+        finding_map = {f.details["defense_id"]: f for f in findings}
+
+        f = finding_map["CONTEXT_OVERFLOW"]
+        assert f.mcp_taxonomy is not None
+        assert f.mcp_taxonomy["aitech"] == "AITech-4.1"
+        assert f.mcp_taxonomy["aisubtech"] == "AISubtech-4.1.1"
+        assert f.mcp_taxonomy["aisubtech_name"] == "Context Window Overflow"
 
 
 class TestFindingSeverityLevels:
