@@ -16,8 +16,10 @@
 
 """Unit tests for ReadinessAnalyzer.
 
-Tests all 20 heuristic rules (HEUR-001 through HEUR-020) for production
-readiness analysis of MCP tools.
+Tests all 18 core heuristic rules (HEUR-003 through HEUR-020) for production
+readiness analysis of MCP tools. HEUR-001 and HEUR-002 were removed because
+they checked for non-standard timeout fields that don't exist in the MCP
+Tool specification.
 """
 
 import json
@@ -70,102 +72,6 @@ class TestReadinessAnalyzerInitialization:
         )
         assert analyzer.max_capabilities == 5
         assert analyzer.min_description_length == 50
-
-
-class TestHEUR001MissingTimeout:
-    """Tests for HEUR-001: Missing timeout."""
-
-    @pytest.mark.asyncio
-    async def test_missing_timeout_triggers_finding(self):
-        """Tool without timeout should trigger HIGH finding."""
-        analyzer = ReadinessAnalyzer()
-        tool_def = {
-            "name": "test_tool",
-            "description": "A test tool that does something useful",
-        }
-        content = json.dumps(tool_def)
-        context = {"tool_name": "test_tool"}
-
-        findings = await analyzer.analyze(content, context)
-
-        finding = find_finding_by_rule(findings, "HEUR-001")
-        assert finding is not None
-        assert finding.severity == "HIGH"
-        assert finding.threat_category == "MISSING_TIMEOUT_GUARD"
-
-    @pytest.mark.asyncio
-    async def test_with_timeout_no_finding(self):
-        """Tool with timeout should not trigger HEUR-001."""
-        analyzer = ReadinessAnalyzer()
-        tool_def = {
-            "name": "test_tool",
-            "description": "A test tool that does something useful",
-            "timeout": 30000,
-        }
-        content = json.dumps(tool_def)
-        context = {"tool_name": "test_tool"}
-
-        findings = await analyzer.analyze(content, context)
-
-        finding = find_finding_by_rule(findings, "HEUR-001")
-        assert finding is None
-
-    @pytest.mark.asyncio
-    async def test_timeout_in_config_no_finding(self):
-        """Tool with timeout in config should not trigger HEUR-001."""
-        analyzer = ReadinessAnalyzer()
-        tool_def = {
-            "name": "test_tool",
-            "description": "A test tool that does something useful",
-            "config": {"timeoutMs": 30000},
-        }
-        content = json.dumps(tool_def)
-        context = {"tool_name": "test_tool"}
-
-        findings = await analyzer.analyze(content, context)
-
-        finding = find_finding_by_rule(findings, "HEUR-001")
-        assert finding is None
-
-
-class TestHEUR002TimeoutTooLong:
-    """Tests for HEUR-002: Timeout too long."""
-
-    @pytest.mark.asyncio
-    async def test_long_timeout_triggers_finding(self):
-        """Timeout > 5 minutes should trigger MEDIUM finding."""
-        analyzer = ReadinessAnalyzer()
-        tool_def = {
-            "name": "test_tool",
-            "description": "A test tool that does something useful",
-            "timeout": 600000,  # 10 minutes
-        }
-        content = json.dumps(tool_def)
-        context = {"tool_name": "test_tool"}
-
-        findings = await analyzer.analyze(content, context)
-
-        finding = find_finding_by_rule(findings, "HEUR-002")
-        assert finding is not None
-        assert finding.severity == "MEDIUM"
-        assert finding.details["value"] == 600000
-
-    @pytest.mark.asyncio
-    async def test_reasonable_timeout_no_finding(self):
-        """Timeout <= 5 minutes should not trigger HEUR-002."""
-        analyzer = ReadinessAnalyzer()
-        tool_def = {
-            "name": "test_tool",
-            "description": "A test tool that does something useful",
-            "timeout": 30000,  # 30 seconds
-        }
-        content = json.dumps(tool_def)
-        context = {"tool_name": "test_tool"}
-
-        findings = await analyzer.analyze(content, context)
-
-        finding = find_finding_by_rule(findings, "HEUR-002")
-        assert finding is None
 
 
 class TestHEUR003NoRetryLimit:
@@ -1091,8 +997,8 @@ class TestContextHandling:
         findings = await analyzer.analyze("{}", context)
 
         # Should use the tool definition from context
-        finding = find_finding_by_rule(findings, "HEUR-001")
-        assert finding is None  # Has timeout, so no HEUR-001
+        finding = find_finding_by_rule(findings, "HEUR-003")
+        assert finding is None  # Has maxRetries, so no HEUR-003
 
     @pytest.mark.asyncio
     async def test_plain_text_content(self):
@@ -1104,8 +1010,8 @@ class TestContextHandling:
         findings = await analyzer.analyze(content, context)
 
         # Should be parsed as a tool with only description
-        # Will trigger missing timeout, etc.
-        finding = find_finding_by_rule(findings, "HEUR-001")
+        # Will trigger no-retry-limit (HEUR-003) since maxRetries is missing
+        finding = find_finding_by_rule(findings, "HEUR-003")
         assert finding is not None
 
     @pytest.mark.asyncio
@@ -1162,20 +1068,6 @@ class TestFixtureFiles:
         # Bad tool should trigger HEUR-009 (short description)
         finding_009 = find_finding_by_rule(findings, "HEUR-009")
         assert finding_009 is not None
-
-    @pytest.mark.asyncio
-    async def test_long_timeout_fixture(self):
-        """Test tool_with_long_timeout.json triggers HEUR-002."""
-        analyzer = ReadinessAnalyzer()
-        tool_def = load_fixture("tool_with_long_timeout.json")
-        content = json.dumps(tool_def)
-        context = {"tool_name": tool_def["name"]}
-
-        findings = await analyzer.analyze(content, context)
-
-        finding = find_finding_by_rule(findings, "HEUR-002")
-        assert finding is not None
-        assert finding.severity == "MEDIUM"
 
     @pytest.mark.asyncio
     async def test_overloaded_scope_fixture(self):
