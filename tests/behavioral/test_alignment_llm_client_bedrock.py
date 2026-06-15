@@ -231,6 +231,105 @@ class TestAlignmentLLMClientRequestForwarding:
 
 
 # ---------------------------------------------------------------------------
+# Prompt-length threshold warning — must consider system + user combined.
+# ---------------------------------------------------------------------------
+
+
+class TestPromptLengthThresholdWarning:
+    """Lock the behaviour reviewer ihabler asked for: the
+    ``"Large prompt detected"`` warning must trip on the *combined*
+    user+system payload, not just the user-role string.
+
+    Pre-PR the user role carried the entire 73 KB framework template, so
+    ``len(prompt)`` alone routinely crossed the threshold. Post-PR the
+    bulk lives in ``system_prompt`` and ``len(prompt)`` is ~3 KB; if the
+    threshold check stayed user-only the warning would silently never
+    fire again. These tests prevent that regression.
+    """
+
+    @pytest.mark.asyncio
+    async def test_warns_when_system_alone_exceeds_threshold(self, caplog):
+        """The exact reviewer scenario: small user payload, huge system
+        template. The warning MUST still fire because the LLM sees both.
+        """
+        from mcpscanner.config.constants import MCPScannerConstants
+
+        cfg = _non_bedrock_config()
+        client = AlignmentLLMClient(cfg)
+
+        small_user = "evidence: {}"  # well below threshold on its own
+        big_system = "X" * (MCPScannerConstants.PROMPT_LENGTH_THRESHOLD + 50)
+
+        with patch(
+            "mcpscanner.core.analyzers.behavioral.alignment."
+            "alignment_llm_client.acompletion",
+            new=AsyncMock(return_value=_stub_acompletion_response()),
+        ), caplog.at_level("WARNING"):
+            await client.verify_alignment(small_user, system_prompt=big_system)
+
+        warning_messages = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert any(
+            "Large prompt detected" in m for m in warning_messages
+        ), f"Expected combined-length threshold warning; got: {warning_messages}"
+        # The message must surface both halves so reviewers can see
+        # which side dominates without having to re-derive lengths.
+        joined = " ".join(warning_messages)
+        assert f"user={len(small_user)}" in joined
+        assert f"system={len(big_system)}" in joined
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_combined_under_threshold(self, caplog):
+        """Both halves small -> no warning. Sanity check the new combined
+        check doesn't over-warn on routine alignment calls."""
+        cfg = _non_bedrock_config()
+        client = AlignmentLLMClient(cfg)
+
+        with patch(
+            "mcpscanner.core.analyzers.behavioral.alignment."
+            "alignment_llm_client.acompletion",
+            new=AsyncMock(return_value=_stub_acompletion_response()),
+        ), caplog.at_level("WARNING"):
+            await client.verify_alignment("u" * 1000, system_prompt="s" * 1000)
+
+        warning_messages = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert not any(
+            "Large prompt detected" in m for m in warning_messages
+        ), f"Unexpected threshold warning: {warning_messages}"
+
+    @pytest.mark.asyncio
+    async def test_warns_when_user_alone_exceeds_threshold_legacy_shape(
+        self, caplog
+    ):
+        """Legacy ``verify_alignment(prompt)`` (no ``system_prompt``)
+        callers must keep their warning. With ``system_length=0`` the
+        combined check degenerates to user-only, matching the pre-PR
+        behaviour."""
+        from mcpscanner.config.constants import MCPScannerConstants
+
+        cfg = _non_bedrock_config()
+        client = AlignmentLLMClient(cfg)
+        big_user = "Y" * (MCPScannerConstants.PROMPT_LENGTH_THRESHOLD + 100)
+
+        with patch(
+            "mcpscanner.core.analyzers.behavioral.alignment."
+            "alignment_llm_client.acompletion",
+            new=AsyncMock(return_value=_stub_acompletion_response()),
+        ), caplog.at_level("WARNING"):
+            await client.verify_alignment(big_user)
+
+        warning_messages = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert any(
+            "Large prompt detected" in m for m in warning_messages
+        ), f"Legacy shape lost its threshold warning: {warning_messages}"
+
+
+# ---------------------------------------------------------------------------
 # Scanner gate parity (no separate file because the test is one assertion).
 # ---------------------------------------------------------------------------
 

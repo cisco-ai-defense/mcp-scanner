@@ -159,23 +159,36 @@ class AlignmentLLMClient:
         Raises:
             Exception: If LLM API call fails after retries
         """
-        # Log prompt length for debugging. We log the user payload length
-        # because that's the value the model must reason about per call;
-        # the system template is constant and would just inflate every
-        # log line.
+        # Log prompt length for debugging. We surface user, system, and
+        # combined lengths individually so reviewers can tell at a glance
+        # which side is dominating (the system slot now carries the
+        # framework template; the user slot carries per-call evidence).
         prompt_length = len(prompt)
         system_length = len(system_prompt) if system_prompt else 0
+        total_length = prompt_length + system_length
         self.logger.debug(
-            "User-payload length: %d characters (system_prompt=%d)",
+            "Alignment request lengths: user=%d system=%d total=%d characters",
             prompt_length,
             system_length,
+            total_length,
         )
 
-        # Check against configurable threshold
-        if prompt_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
+        # Check against configurable threshold. The threshold is about
+        # context-window crowding ("may be truncated by LLM") and the
+        # model sees both messages, so we compare against the combined
+        # length. Pre-PR this was equivalent to ``prompt_length`` because
+        # the entire framework template lived in the user role; after the
+        # Bedrock prompt-shape fix the bulk rides in ``system_prompt`` so
+        # checking only the user side would silently disable the warning
+        # for every alignment call.
+        if total_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
             self.logger.warning(
-                f"Large prompt detected: {prompt_length} characters "
-                f"(threshold: {MCPScannerConstants.PROMPT_LENGTH_THRESHOLD}) - may be truncated by LLM"
+                "Large prompt detected: total=%d characters (user=%d, system=%d) "
+                "exceeds threshold %d - may be truncated by LLM",
+                total_length,
+                prompt_length,
+                system_length,
+                MCPScannerConstants.PROMPT_LENGTH_THRESHOLD,
             )
 
         # Retry logic with exponential backoff (configurable via constants)
