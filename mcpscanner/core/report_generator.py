@@ -569,13 +569,17 @@ class ReportGenerator:
             severities = [f.get("severity", "UNKNOWN") for f in findings.values()]
             highest_severity = get_highest_severity(severities)
 
-            # Use colored emojis based on severity
+            # Use colored emojis based on severity. ERROR uses a wrench
+            # because the row signals an analyzer-side problem operators
+            # need to fix (model id, throttling, IAM) rather than a
+            # tool-side risk to triage.
             severity_emojis = {
                 "HIGH": "🔴",
                 "UNKNOWN": "🟣",
                 "MEDIUM": "🟠",
                 "LOW": "🟡",
                 "INFO": "🔵",
+                "ERROR": "🛠️",
                 "SAFE": "🟢",
             }
             severity_icon = severity_emojis.get(highest_severity, "🟣")
@@ -689,14 +693,20 @@ class ReportGenerator:
         # confirmed concrete severity, so a tool with both UNKNOWN and any
         # concrete finding would have already been bucketed into the
         # concrete bucket; surfacing UNKNOWN-only items at the bottom keeps
-        # the eye on confirmed risk first.
-        severity_order = ["HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "UNKNOWN"]
+        # the eye on confirmed risk first. ERROR goes between SAFE and
+        # UNKNOWN so verification failures (LLM unavailable etc.) get a
+        # dedicated section that operators can route to infra triage
+        # rather than security triage. Anything not in this list is
+        # silently skipped by the loop below; keeping it in sync with
+        # ``mcpscanner/core/result.py::get_highest_severity`` is required.
+        severity_order = ["HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "ERROR", "UNKNOWN"]
         severity_emojis = {
             "HIGH": "🔴",
             "MEDIUM": "🟠",
             "LOW": "🟡",
             "INFO": "🔵",
             "SAFE": "🟢",
+            "ERROR": "🛠️",
             "UNKNOWN": "🟣",
         }
 
@@ -819,6 +829,7 @@ class ReportGenerator:
                 "MEDIUM": "🟠",
                 "LOW": "🟡",
                 "INFO": "🔵",
+                "ERROR": "🛠️",
                 "SAFE": "🟢",
             }
 
@@ -865,11 +876,19 @@ class ReportGenerator:
             "total_tools": len(self.scan_results),
             "safe_tools": 0,
             "unsafe_tools": 0,
+            # Severity counts include ERROR so verification failures
+            # (LLM unavailable etc.) are countable for operator alerts.
+            # INFO is also added here — historically missing from this
+            # particular dict, which silently dropped INFO findings
+            # from the get_statistics rollup; keeping it in sync with
+            # ``result.py::process_scan_results::severity_counts``.
             "severity_counts": {
                 "HIGH": 0,
                 "UNKNOWN": 0,
                 "MEDIUM": 0,
                 "LOW": 0,
+                "INFO": 0,
+                "ERROR": 0,
                 "SAFE": 0,
             },
             "analyzer_stats": {

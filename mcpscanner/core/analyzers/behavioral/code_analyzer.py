@@ -42,8 +42,7 @@ from ...static_analysis.interprocedural.treesitter_call_graph import (
     TreeSitterCallGraphAnalyzer,
 )
 from ..base import BaseAnalyzer, SecurityFinding
-from .alignment import AlignmentOrchestrator
-from .alignment.alignment_orchestrator import LLM_UNAVAILABLE_KEY
+from .alignment import LLM_UNAVAILABLE_KEY, AlignmentOrchestrator
 
 
 @dataclass(slots=True)
@@ -838,9 +837,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         decorator_types = getattr(func_context, "decorator_types", None) or []
         func_name = getattr(func_context, "name", "unknown")
         # Truncate the message in the summary so finding artifacts stay
-        # human-readable. Full text is preserved in details.error_message
-        # (already truncated to 500 chars upstream by the orchestrator).
-        truncated = error_message if len(error_message) <= 200 else error_message[:200] + "..."
+        # human-readable, but keep enough room for typical Bedrock /
+        # provider error messages including the full model ARN
+        # (~140 chars by itself) plus a short prefix. 400 leaves
+        # headroom for the prefix without truncating the model
+        # identifier mid-string. Full text is preserved in
+        # details.error_message (already truncated to 500 chars upstream
+        # by the orchestrator).
+        truncated = error_message if len(error_message) <= 400 else error_message[:400] + "..."
         return SecurityFinding(
             severity="ERROR",
             summary=(

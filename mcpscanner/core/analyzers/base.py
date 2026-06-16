@@ -213,7 +213,12 @@ class BaseAnalyzer(ABC):
         """Create a security finding with this analyzer's name and standardized format.
 
         Args:
-            severity: The severity level ("HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "UNKNOWN").
+            severity: The severity level ("HIGH", "MEDIUM", "LOW", "INFO",
+                "SAFE", "ERROR", "UNKNOWN"). Use "ERROR" only for entries
+                where verification could not complete (e.g. LLM provider
+                unavailable); never use it as a fallback when the analyzer
+                successfully produced a result with an unmapped severity —
+                that case should remain "UNKNOWN".
             summary: Brief description of the security finding.
             threat_category: Standardized threat category.
             confidence: The confidence level ("HIGH", "MEDIUM", "LOW").
