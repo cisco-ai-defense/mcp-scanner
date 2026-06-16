@@ -279,6 +279,15 @@ class APIScanRequest(BaseModel):
         default=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM],
         description="List of analyzers to run",
     )
+    enable_meta: bool = Field(
+        default=False,
+        description=(
+            "Enable second-pass LLM meta-analyzer for false-positive filtering. "
+            "Mirrors the CLI --enable-meta flag: when True, AnalyzerEnum.META is "
+            "appended to `analyzers` (no-op if already present). Requires an "
+            "LLM API key (or AWS credentials for Bedrock models)."
+        ),
+    )
     output_format: OutputFormat = OutputFormat.RAW
     severity_filter: SeverityFilter = SeverityFilter.ALL
     analyzer_filter: Optional[str] = None
@@ -287,6 +296,22 @@ class APIScanRequest(BaseModel):
     show_stats: bool = False
     rules_path: Optional[str] = None
     auth: Optional[APIAuthConfig] = None
+
+    def resolved_analyzers(self) -> List[AnalyzerEnum]:
+        """Return the effective analyzer list with `enable_meta` applied.
+
+        The CLI ``--enable-meta`` flag and an explicit ``meta`` entry in
+        ``analyzers`` are equivalent. This helper keeps that contract in one
+        place so every scan endpoint resolves the list the same way.
+
+        Returns:
+            List[AnalyzerEnum]: ``analyzers`` with ``META`` appended if
+            ``enable_meta`` is True and ``META`` is not already present.
+        """
+        analyzers = list(self.analyzers)
+        if self.enable_meta and AnalyzerEnum.META not in analyzers:
+            analyzers.append(AnalyzerEnum.META)
+        return analyzers
 
 
 class SpecificToolScanRequest(APIScanRequest):

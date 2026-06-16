@@ -26,6 +26,7 @@ from ..core.exceptions import (
 )
 from ..core.models import (
     AllToolsScanResponse,
+    AnalyzerEnum,
     APIScanRequest,
     FormattedToolScanResponse,
     OutputFormat,
@@ -366,7 +367,8 @@ async def scan_tool_endpoint(
     )
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -389,7 +391,7 @@ async def scan_tool_endpoint(
             server_url=request.server_url,
             tool_name=request.tool_name,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
         )
         # Only warn if analyzers actually failed to run
@@ -457,7 +459,8 @@ async def scan_all_tools_endpoint(
     logger.debug(f"Starting full server scan - server: {request.server_url}")
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -478,7 +481,7 @@ async def scan_all_tools_endpoint(
         results = await scanner.scan_remote_server_tools(
             server_url=request.server_url,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
         )
         logger.debug(f"Scanner completed - scanned {len(results)} tools")
@@ -552,7 +555,8 @@ async def scan_prompt_endpoint(
     )
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -574,7 +578,7 @@ async def scan_prompt_endpoint(
             server_url=request.server_url,
             prompt_name=request.prompt_name,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
         )
         logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
@@ -625,7 +629,8 @@ async def scan_all_prompts_endpoint(
     logger.debug(f"Starting all prompts scan - server: {request.server_url}")
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -646,7 +651,7 @@ async def scan_all_prompts_endpoint(
         results = await scanner.scan_remote_server_prompts(
             server_url=request.server_url,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
         )
         logger.debug(f"Scanner completed - scanned {len(results)} prompts")
@@ -713,7 +718,8 @@ async def scan_resource_endpoint(
     )
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -738,7 +744,7 @@ async def scan_resource_endpoint(
             server_url=request.server_url,
             resource_uri=request.resource_uri,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
             allowed_mime_types=allowed_mime_types,
         )
@@ -796,7 +802,8 @@ async def scan_all_resources_endpoint(
     logger.debug(f"Starting all resources scan - server: {request.server_url}")
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -820,7 +827,7 @@ async def scan_all_resources_endpoint(
         results = await scanner.scan_remote_server_resources(
             server_url=request.server_url,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
             allowed_mime_types=allowed_mime_types,
         )
@@ -907,7 +914,8 @@ async def scan_instructions_endpoint(
     logger.debug(f"Starting instructions scan - server: {request.server_url}")
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -922,7 +930,7 @@ async def scan_instructions_endpoint(
         result = await scanner.scan_remote_server_instructions(
             server_url=request.server_url,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
         )
         logger.debug(f"Scanner completed - scanned instructions from server")
