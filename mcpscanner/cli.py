@@ -265,6 +265,12 @@ def _build_behavioral_results(
                     "threat_vulnerability_classification"
                 )
 
+            # Derive is_safe from severity instead of hardcoding False.
+            # Analyzers can now emit SAFE-severity findings for tools that
+            # came back clean (see BehavioralCodeAnalyzer.analyze docstring);
+            # those rows must NOT be filtered out downstream as unsafe.
+            is_safe_row = max_severity == "SAFE"
+
             analyzer_finding: Dict[str, Any] = {
                 "severity": max_severity,
                 "threat_summary": func_findings[0].summary,
@@ -285,7 +291,7 @@ def _build_behavioral_results(
                     "tool_name": func_name,
                     "tool_description": f"MCP function from {display_name}",
                     "status": "completed",
-                    "is_safe": False,
+                    "is_safe": is_safe_row,
                     "findings": {"behavioral_analyzer": analyzer_finding},
                 }
             )
@@ -339,7 +345,10 @@ def _build_behavioral_results(
                 "tool_name": func_name,
                 "tool_description": f"MCP function from {display_name}",
                 "status": "completed",
-                "is_safe": False,
+                # Same severity-derived semantics as the inventory loop
+                # above: a stray SAFE finding must not be misreported as
+                # unsafe and dropped by the downstream THREAT filter.
+                "is_safe": max_severity == "SAFE",
                 "findings": {
                     "behavioral_analyzer": {
                         "severity": max_severity,

@@ -133,13 +133,17 @@ class Scanner:
         self._api_analyzer = ApiAnalyzer(config) if config.api_key else None
         self._yara_analyzer = YaraAnalyzer(rules_dir=rules_dir)
 
-        # LLM analyzer can be used with either API key or Bedrock (AWS credentials)
+        # LLM analyzer can be used with either API key or Bedrock (AWS credentials).
+        # Behavioral analyzer follows the same gate now that AlignmentLLMClient
+        # supports Bedrock auth via bearer token / AWS provider chain.
         is_bedrock = config.llm_model and "bedrock/" in config.llm_model
         self._llm_analyzer = (
             LLMAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
         )
         self._behavioral_analyzer = (
-            BehavioralCodeAnalyzer(config) if config.llm_provider_api_key else None
+            BehavioralCodeAnalyzer(config)
+            if (config.llm_provider_api_key or is_bedrock)
+            else None
         )
         self._vt_analyzer = (
             VirusTotalAnalyzer(
@@ -216,7 +220,8 @@ class Scanner:
             and not self._behavioral_analyzer
         ):
             missing_requirements.append(
-                "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
+                "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured "
+                "(or AWS credentials for Bedrock models)"
             )
 
         if (

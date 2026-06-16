@@ -49,33 +49,78 @@ class AlignmentLLMClient:
     def __init__(self, config: Config):
         """Initialize the alignment LLM client.
 
+        Mirrors ``LLMAnalyzer``'s tiered authentication strategy so the
+        behavioral path supports the same Bedrock options as the
+        tool-metadata path:
+
+          1. Non-Bedrock providers (OpenAI, Anthropic, Azure):
+             ``llm_provider_api_key`` is required.
+          2. Bedrock with API key (``MCP_SCANNER_LLM_API_KEY``): use it.
+          3. Bedrock with bearer token
+             (``AWS_BEARER_TOKEN_BEDROCK`` / ``Config.aws_bearer_token_bedrock``):
+             forward as ``api_key``.
+          4. Bedrock with neither: leave ``api_key`` unset and let
+             litellm/boto3 resolve credentials from the AWS provider
+             chain (profile / IAM role / web identity / session token).
+
         Args:
             config: Configuration containing LLM credentials and settings
 
         Raises:
-            ValueError: If LLM provider API key is not configured
+            ValueError: If a non-Bedrock provider is configured but no
+                ``llm_provider_api_key`` is set.
         """
-        if (
-            not hasattr(config, "llm_provider_api_key")
-            or not config.llm_provider_api_key
-        ):
-            raise ValueError(
-                "LLM provider API key is required for alignment verification"
-            )
-
-        # Store configuration for per-request usage
-        self._api_key = config.llm_provider_api_key
-        self._base_url = config.llm_base_url
-        self._api_version = config.llm_api_version
-
-        # Model configuration
+        # Model configuration (read first so the auth branch can use it).
         self._model = config.llm_model
         self._max_tokens = config.llm_max_tokens
         self._temperature = config.llm_temperature
         self._llm_timeout = config.llm_timeout
+        self._base_url = config.llm_base_url
+        self._api_version = config.llm_api_version
+
+        is_bedrock = bool(self._model and "bedrock/" in self._model)
+        api_key = getattr(config, "llm_provider_api_key", None)
+        bearer_token = getattr(config, "aws_bearer_token_bedrock", None)
+
+        if not is_bedrock:
+            if not api_key:
+                raise ValueError(
+                    "LLM provider API key is required for alignment verification"
+                )
+            self._api_key = api_key
+        else:
+            # Bedrock auth precedence: explicit api_key > bearer token > AWS provider chain.
+            if api_key:
+                self._api_key = api_key
+            elif bearer_token:
+                self._api_key = bearer_token
+            else:
+                # IAM role / profile / session token resolved by litellm/boto3.
+                self._api_key = None
+
+        # AWS-specific knobs (only forwarded for Bedrock requests).
+        self._aws_region = config.aws_region_name if is_bedrock else None
+        self._aws_session_token = config.aws_session_token if is_bedrock else None
+        self._aws_profile_name = config.aws_profile_name if is_bedrock else None
 
         self.logger = logging.getLogger(__name__)
-        self.logger.debug(f"AlignmentLLMClient initialized with model: {self._model}")
+        if is_bedrock:
+            if self._api_key:
+                # Don't leak which mode (key vs bearer); both look identical
+                # downstream and the distinction is only useful in support tickets.
+                auth_kind = "api_key/bearer_token"
+            else:
+                auth_kind = "AWS provider chain (profile/IAM/session)"
+            self.logger.debug(
+                "AlignmentLLMClient initialized with bedrock model=%s region=%s auth=%s",
+                self._model,
+                self._aws_region,
+                auth_kind,
+            )
+        else:
+            self.logger.debug(
+                "AlignmentLLMClient initialized with model: %s", self._model
+            )
 
     async def verify_alignment(self, prompt: str) -> str:
         """Send alignment verification prompt to LLM with retry logic.
@@ -150,8 +195,13 @@ class AlignmentLLMClient:
                 "max_tokens": self._max_tokens,
                 "temperature": self._temperature,
                 "timeout": self._llm_timeout,
-                "api_key": self._api_key,
             }
+
+            # Only attach api_key when one was resolved. Bedrock with the
+            # AWS provider chain (profile/IAM/session token) must reach
+            # litellm with no api_key so boto3 can pick credentials up.
+            if self._api_key:
+                request_params["api_key"] = self._api_key
 
             # Only enable JSON mode for supported models/providers
             # Azure OpenAI with older API versions may not support this
@@ -163,6 +213,17 @@ class AlignmentLLMClient:
                 request_params["api_base"] = self._base_url
             if self._api_version:
                 request_params["api_version"] = self._api_version
+
+            # Forward AWS-specific routing parameters when running against
+            # Bedrock so litellm/boto3 hit the right region/profile/session
+            # token. These are stored as None for non-Bedrock models and
+            # therefore never appear in the request kwargs in that case.
+            if self._aws_region:
+                request_params["aws_region_name"] = self._aws_region
+            if self._aws_session_token:
+                request_params["aws_session_token"] = self._aws_session_token
+            if self._aws_profile_name:
+                request_params["aws_profile_name"] = self._aws_profile_name
 
             self.logger.debug(
                 f"Sending alignment verification request to {self._model}"
