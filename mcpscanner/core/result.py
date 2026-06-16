@@ -250,12 +250,17 @@ def process_scan_results(
     safe_tools = [r for r in results if r.is_safe]
     unsafe_tools = [r for r in results if not r.is_safe]
 
-    # Count findings by severity
+    # Count findings by severity. ERROR is included so operators can
+    # alarm on bursts of LLM-unavailable verification failures instead
+    # of having them silently dropped by the ``if severity in
+    # severity_counts`` guard below — that drop was the artifact-format
+    # echo of the silent-failure bug fixed by the ERROR-not-SAFE PR.
     severity_counts = {
         "HIGH": 0,
         "MEDIUM": 0,
         "LOW": 0,
         "INFO": 0,
+        "ERROR": 0,
         "SAFE": 0,
         "UNKNOWN": 0,
     }
@@ -392,7 +397,16 @@ def get_highest_severity(severities: List[str]) -> str:
     Severity model:
     - "UNKNOWN" represents "not yet analyzed" / "analyzer didn't run". It is the
       pre-analysis default and is *displaced* by any concrete severity
-      ("HIGH", "MEDIUM", "LOW", "INFO", "SAFE") produced by an analyzer.
+      ("HIGH", "MEDIUM", "LOW", "INFO", "ERROR", "SAFE") produced by an analyzer.
+    - "ERROR" represents "analyzer attempted verification but the verification
+      itself failed" (e.g. LLM provider unreachable, model id invalid). It is
+      ranked above SAFE so a tool with both ERROR and SAFE rows correctly rolls
+      up as ERROR — you cannot report a tool as clean if any function on it was
+      not verified. It is intentionally ranked below INFO so a real low-signal
+      finding still beats a transient infrastructure failure when both are
+      present on the same scope.
+    - "SAFE" is reserved for "verified clean" — never use it as a fallback when
+      verification didn't complete.
     - When concrete severities are present, the highest among them wins.
     - When the list is empty or contains only "UNKNOWN" entries, the result is
       "UNKNOWN" (nothing concrete to roll up).
@@ -404,10 +418,15 @@ def get_highest_severity(severities: List[str]) -> str:
         str: The highest severity level.
     """
     severity_order = {
-        "HIGH": 5,
-        "MEDIUM": 4,
-        "LOW": 3,
-        "INFO": 2,
+        "HIGH": 6,
+        "MEDIUM": 5,
+        "LOW": 4,
+        "INFO": 3,
+        # ERROR ranks above SAFE so [ERROR, SAFE] rolls up as ERROR.
+        # See codeguard-0-logging: ERROR-severity events must remain
+        # visible in aggregated dashboards rather than being silently
+        # collapsed into a clean-bill-of-health bucket.
+        "ERROR": 2,
         "SAFE": 1,
     }
 

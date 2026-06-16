@@ -212,7 +212,20 @@ def _build_behavioral_results(
         src_file = details.get("source_file", source_path)
         findings_by_key.setdefault((src_file, func_name), []).append(finding)
 
-    severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+    # Severity ordering for picking the highest-impact finding per
+    # function. ERROR ranks above SAFE so an unverified function can
+    # never be reported as safe; ranked below LOW so a real low-signal
+    # finding still wins when the same function has both. Keep aligned
+    # with ``mcpscanner/core/result.py::get_highest_severity``.
+    severity_order = {
+        "HIGH": 5,
+        "MEDIUM": 4,
+        "LOW": 3,
+        "INFO": 2,
+        "ERROR": 1,
+        "SAFE": 0,
+        "UNKNOWN": 0,
+    }
     results: List[Dict[str, Any]] = []
     seen_keys: set = set()
 
@@ -1444,7 +1457,11 @@ async def main():
     )
     parser.add_argument(
         "--severity-filter",
-        choices=["all", "high", "unknown", "medium", "low", "safe"],
+        # ``error`` filters to verification-failure rows (LLM unavailable
+        # etc.) so operators can triage infrastructure issues separately
+        # from security findings. Keep aligned with the SeverityFilter
+        # enum in ``mcpscanner/core/models.py``.
+        choices=["all", "high", "unknown", "medium", "low", "info", "error", "safe"],
         default="all",
         help="Filter results by severity level (default: %(default)s)",
     )
@@ -2364,21 +2381,22 @@ async def main():
         else:
             output_format = OutputFormat.SUMMARY
 
-        # Determine severity filter
-        if args.severity_filter == "all":
-            severity_filter = SeverityFilter.ALL
-        elif args.severity_filter == "high":
-            severity_filter = SeverityFilter.HIGH
-        elif args.severity_filter == "unknown":
-            severity_filter = SeverityFilter.UNKNOWN
-        elif args.severity_filter == "medium":
-            severity_filter = SeverityFilter.MEDIUM
-        elif args.severity_filter == "low":
-            severity_filter = SeverityFilter.LOW
-        elif args.severity_filter == "safe":
-            severity_filter = SeverityFilter.SAFE
-        else:
-            severity_filter = SeverityFilter.ALL
+        # Determine severity filter. Keep this dispatch in sync with
+        # the ``--severity-filter`` argparse choices above and the
+        # SeverityFilter enum in ``mcpscanner/core/models.py``.
+        severity_filter_map = {
+            "all": SeverityFilter.ALL,
+            "high": SeverityFilter.HIGH,
+            "unknown": SeverityFilter.UNKNOWN,
+            "medium": SeverityFilter.MEDIUM,
+            "low": SeverityFilter.LOW,
+            "info": SeverityFilter.INFO,
+            "error": SeverityFilter.ERROR,
+            "safe": SeverityFilter.SAFE,
+        }
+        severity_filter = severity_filter_map.get(
+            args.severity_filter, SeverityFilter.ALL
+        )
 
         # Generate and display report
         formatted_output = formatter.format_output(

@@ -41,13 +41,22 @@ class OutputFormat(str, Enum):
 
 
 class SeverityFilter(str, Enum):
-    """Available severity filters."""
+    """Available severity filters.
+
+    ``ERROR`` corresponds to ``severity="ERROR"`` SecurityFinding rows
+    emitted when an analyzer was unable to complete verification (e.g.
+    LLM provider unreachable). It is exposed as a filter so operators
+    can list only verification failures via ``--severity=error`` to
+    triage infrastructure issues separately from security findings.
+    """
 
     ALL = "all"
     HIGH = "high"
     UNKNOWN = "unknown"
     MEDIUM = "medium"
     LOW = "low"
+    INFO = "info"
+    ERROR = "error"
     SAFE = "safe"
 
 
