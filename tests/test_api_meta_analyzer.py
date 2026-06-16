@@ -16,7 +16,7 @@
 
 """API parity tests for the LLM Meta-Analyzer.
 
-These tests pin two contracts:
+These tests pin three contracts:
 
 1. ``APIScanRequest.enable_meta`` is the HTTP equivalent of the CLI
    ``--enable-meta`` flag. When True, ``AnalyzerEnum.META`` must be appended
@@ -29,6 +29,12 @@ These tests pin two contracts:
    AND the underlying ``Scanner.scan_remote_server_*`` call (so meta-analysis
    actually runs). Forgetting either of these two sites was the silent-drop
    defect that motivated this test suite.
+3. ``mcpscanner.api.api._prepare_scanner_config`` keeps LLM credentials wired
+   when ANY LLM-backed analyzer is requested (LLM, BEHAVIORAL, or META) — not
+   just when ``LLM`` is explicitly in the analyzer list. The original code
+   blanked the LLM API key for non-LLM scans, which made
+   ``analyzers=["yara","meta"]`` 404 with a confusing "MCP_SCANNER_LLM_API_KEY
+   not configured" error even when the env was correct.
 """
 
 from __future__ import annotations
@@ -383,6 +389,70 @@ class TestEndpointAnalyzerThreading:
         assert response.status_code == 200, response.text
         assert captured["factory_analyzers"].count(AnalyzerEnum.META) == 1
         assert captured["scan_call_analyzers"].count(AnalyzerEnum.META) == 1
+
+
+# ---------------------------------------------------------------------------
+# _prepare_scanner_config — keep LLM credentials wired for META / BEHAVIORAL
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareScannerConfigLLMCredentials:
+    """``_prepare_scanner_config`` must not blank LLM credentials when any
+    LLM-backed analyzer (LLM, BEHAVIORAL, META) is requested.
+
+    Regression: prior to this fix, ``llm_scan = AnalyzerEnum.LLM in analyzers``
+    only checked the literal LLM analyzer. ``analyzers=["yara","meta"]`` would
+    pass ``llm_scan=False`` to the no-op blanking branch, and the resulting
+    Scanner would refuse to initialize the meta-analyzer with a confusing
+    "MCP_SCANNER_LLM_API_KEY not configured" 404, even though the operator's
+    env was correctly set.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _set_env(self, monkeypatch):
+        """Provide an LLM API key in the module-level globals."""
+        monkeypatch.setattr("mcpscanner.api.api.LLM_API_KEY", "fake-llm-key")
+        monkeypatch.setattr("mcpscanner.api.api.LLM_MODEL", "gpt-4o")
+        monkeypatch.setattr("mcpscanner.api.api.API_KEY", "")
+        monkeypatch.setattr("mcpscanner.api.api.AWS_REGION", "")
+        monkeypatch.setattr("mcpscanner.api.api.AWS_PROFILE", "")
+        monkeypatch.setattr("mcpscanner.api.api.AWS_SESSION_TOKEN", "")
+
+    def test_meta_only_keeps_llm_key(self):
+        from mcpscanner.api.api import _prepare_scanner_config
+
+        api_key, _, llm_api_key, *_ = _prepare_scanner_config(
+            [AnalyzerEnum.YARA, AnalyzerEnum.META]
+        )
+        assert api_key == ""
+        assert llm_api_key == "fake-llm-key", (
+            "LLM API key must NOT be blanked when META is requested — "
+            "the meta-analyzer needs it to make its second-pass LLM call."
+        )
+
+    def test_behavioral_only_keeps_llm_key(self):
+        from mcpscanner.api.api import _prepare_scanner_config
+
+        _, _, llm_api_key, *_ = _prepare_scanner_config(
+            [AnalyzerEnum.YARA, AnalyzerEnum.BEHAVIORAL]
+        )
+        assert llm_api_key == "fake-llm-key"
+
+    def test_llm_explicitly_keeps_llm_key(self):
+        """Existing behaviour preserved: explicit LLM also keeps the key."""
+        from mcpscanner.api.api import _prepare_scanner_config
+
+        _, _, llm_api_key, *_ = _prepare_scanner_config(
+            [AnalyzerEnum.YARA, AnalyzerEnum.LLM]
+        )
+        assert llm_api_key == "fake-llm-key"
+
+    def test_no_llm_backed_analyzer_blanks_llm_key(self):
+        """Existing behaviour preserved: pure YARA blanks the key."""
+        from mcpscanner.api.api import _prepare_scanner_config
+
+        _, _, llm_api_key, *_ = _prepare_scanner_config([AnalyzerEnum.YARA])
+        assert llm_api_key == ""
 
 
 # ---------------------------------------------------------------------------
