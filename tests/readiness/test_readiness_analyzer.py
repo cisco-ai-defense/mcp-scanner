@@ -997,8 +997,9 @@ class TestContextHandling:
         findings = await analyzer.analyze("{}", context)
 
         # Should use the tool definition from context
-        finding = find_finding_by_rule(findings, "HEUR-003")
-        assert finding is None  # Has maxRetries, so no HEUR-003
+        # Tool has a good description, so HEUR-009 should not fire
+        finding = find_finding_by_rule(findings, "HEUR-009")
+        assert finding is None
 
     @pytest.mark.asyncio
     async def test_plain_text_content(self):
