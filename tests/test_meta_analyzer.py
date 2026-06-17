@@ -416,31 +416,54 @@ class TestExtractJsonFromResponse:
         with pytest.raises(ValueError, match="No valid JSON"):
             self.analyzer._extract_json_from_response(truncated)
 
-    def test_braces_inside_string_literals_are_not_counted(self):
-        """P2-4: a literal ``{`` or ``}`` inside a JSON string value
-        must NOT inflate the unclosed-brace count.
+    def test_strategy_4_string_mask_prevents_appending_phantom_braces(self):
+        """L3-rewrite (was: ``test_braces_inside_string_literals_are_not_counted``).
 
-        Real LLM shape: ``"matched {regex} on field"`` ships verbatim
-        from YARA / scanner descriptions. Without the string-mask the
-        naive ``count("{")`` would see a phantom unclosed brace,
-        Strategy 4a would append a stray ``}``, and the repair pass
-        could corrupt valid input or produce JSON that decodes but
-        lies about structure.
+        The previous test fed already-valid JSON, so Strategy 1
+        returned before Strategy 4's brace-count mask was reached —
+        meaning the test name promised P2-4 coverage but actually
+        exercised zero of it. Here we construct an input that:
+
+        1. **Forces Strategy 1 to fail** (extra preamble, not pure JSON).
+        2. **Forces Strategy 3 to fail** (terminates early at the first
+           literal ``}`` inside a string and tries to parse a partial
+           fragment that ends at that brace).
+        3. **Forces Strategy 4** to do the work — and where, without
+           the string mask, Strategy 4a would compute the wrong
+           ``unclosed_braces`` count and append phantom closers,
+           producing structurally-broken JSON.
+
+        With the P2-4 mask the count drops to the structural truth (1
+        unclosed) and 4a recovers the original, including the literal
+        braces preserved verbatim inside the string value.
         """
-        # Already-balanced JSON with literal braces inside a string.
-        # Strategy 4a/b should NOT fire (input already valid for the
-        # parser to handle elsewhere). After string-masking the brace
-        # count is balanced, so we fall through to ``raise``.
-        already_valid = (
+        # Multiple literal braces inside completed strings; outer
+        # object's ``}`` is genuinely missing (truncation). Without
+        # the mask the naive count would see something like 6 ``{``
+        # vs 4 ``}`` → unclosed=2 → append two ``}`` → broken.
+        truncated_with_literals = (
+            "Here is the analysis:\n"  # forces Strategy 1 to fail
             '{"false_positives": ['
-            '{"_index": 0, "false_positive_reason": "matched {regex} on field"}'
-            "]}"
+            '{"_index": 0, "false_positive_reason": "matched {alpha} {beta} on key"}'
+            "]"  # missing outer ``}``
         )
-        # This input is already well-formed JSON — Strategy 1 (full
-        # parse) returns it without ever reaching Strategy 4.
-        result = self.analyzer._extract_json_from_response(already_valid)
-        assert result["false_positives"][0]["false_positive_reason"] == (
-            "matched {regex} on field"
+        result = self.analyzer._extract_json_from_response(
+            truncated_with_literals
+        )
+        assert isinstance(result, dict)
+        assert list(result.keys()) == ["false_positives"], (
+            "Strategy 4 must not introduce extra top-level keys; the "
+            "mask is what keeps the brace count from overshooting and "
+            "appending closers that re-open new objects on parse."
+        )
+        assert len(result["false_positives"]) == 1
+        fp = result["false_positives"][0]
+        assert fp["_index"] == 0
+        # The literal braces inside the string MUST round-trip exactly.
+        assert fp["false_positive_reason"] == "matched {alpha} {beta} on key", (
+            "If the literal braces were lost or mutated, the mask was "
+            "applied destructively (to the parsed output instead of a "
+            "throwaway scratch copy used for counting)."
         )
 
     def test_braces_in_string_dont_break_truncation_repair(self):
@@ -464,6 +487,70 @@ class TestExtractJsonFromResponse:
                 "false_positive_reason": "matched {regex} on {field}",
             }
         ]
+
+    def test_truncation_inside_open_string_literal_falls_through_cleanly(self):
+        """L5: pin the documented limitation of the Strategy 4 string
+        mask.
+
+        ``_STRING_LITERAL_RE`` only matches CLOSED string literals
+        (``"..."`` with a matching closing quote). When truncation
+        lands INSIDE an unterminated string — common Bedrock /
+        Anthropic shape when ``max_tokens`` clips mid-value — the
+        mask leaves the open-string content un-replaced. The brace
+        count then reflects whatever brace-like characters happen to
+        sit inside the open string, which usually disagrees with
+        structural truth and breaks Strategy 4a's append.
+
+        The contract here is "fall through cleanly to ``ValueError``"
+        — never silently return a malformed dict. Without this pin a
+        future contributor 'fixing' the mask to cover open strings
+        could regress to producing JSON-shaped lies (e.g. a parsed
+        dict whose values are corrupted text). The two acceptable
+        outcomes are:
+
+        * ValueError("No valid JSON found in response") — preferred.
+        * A dict whose payload is BYTE-EQUAL to the un-clipped portion
+          of the response (Strategy 4b can sometimes recover this
+          when the trim-back finds a clean ``},`` boundary before the
+          open string).
+
+        Anything else is a regression.
+        """
+        # Truncation inside an open string literal. The closing
+        # ``"`` of ``"matched`` is missing; everything after that
+        # point is conceptually still "inside the string".
+        truncated_in_string = (
+            '{"false_positives": ['
+            '{"_index": 0, "false_positive_reason": "ok"},'
+            '{"_index": 1, "false_positive_reason": "matched'
+        )
+        try:
+            result = self.analyzer._extract_json_from_response(
+                truncated_in_string
+            )
+        except ValueError as e:
+            # Preferred branch: clean failure with the documented msg.
+            assert "No valid JSON" in str(e)
+            return
+        # Acceptable fallback: trim-back recovered the first complete
+        # element before the open string. The recovered dict MUST
+        # carry only complete data — nothing fabricated, nothing
+        # carrying the open-string fragment.
+        assert isinstance(result, dict)
+        assert list(result.keys()) == ["false_positives"]
+        assert all(
+            isinstance(fp, dict) and "_index" in fp
+            for fp in result["false_positives"]
+        ), (
+            "Strategy 4 must never return a dict whose values are "
+            "the open-string fragment. If the mask grew support for "
+            "open strings, the test still passes — this assertion "
+            "only catches silent corruption."
+        )
+        # The recovered subset must be a subsequence of the
+        # un-clipped data (no fabricated _index values).
+        for fp in result["false_positives"]:
+            assert fp["_index"] in (0, 1)
 
     def test_repair_logs_warning_on_recovery(self, caplog):
         """The repair path is observable — operators should see in logs
@@ -798,6 +885,12 @@ class TestApplyMetaAnalysis:
         """P2-3: two FP entries for the same ``_index`` keep
         last-write-wins semantics (the LLM hedge gets the final word)
         but emit a warning so operators can spot a confused model.
+
+        H4 hardening: pin the warning text. The unified warning used
+        to claim ``affected findings are NOT filtered`` for the
+        duplicates case — wrong, since duplicates ARE filtered (with
+        the second reason). The warning is now split into two distinct
+        messages so an operator inspecting the log doesn't mis-account.
         """
         records, target, h = self._capture_meta_warnings()
         try:
@@ -816,10 +909,62 @@ class TestApplyMetaAnalysis:
         assert len(dropped) == 1
         # Last write wins.
         assert dropped[0].details["meta_reason"] == "second"
-        # Warning emitted.
-        warnings = [r for r in records if "duplicates=" in r.getMessage()]
-        assert warnings
-        assert "0" in warnings[0].getMessage()
+        # Warning emitted, distinct from the invalid/out_of_range path.
+        dup_warnings = [r for r in records if "duplicates=" in r.getMessage()]
+        assert dup_warnings
+        msg = dup_warnings[0].getMessage()
+        assert "0" in msg
+        # H4 contract: this message MUST say findings WERE removed,
+        # NOT "NOT filtered" / "are kept" (those are the unusable-index
+        # phrases). A regression of the unified warning would pass the
+        # other two assertions but fail this one.
+        assert "WERE removed" in msg or "filtered" in msg
+        assert "NOT filtered" not in msg
+        assert "are kept" not in msg
+        # The pure-duplicate case must not trigger the unusable-index
+        # warning either.
+        unusable_warnings = [
+            r for r in records if "NOT filtered" in r.getMessage()
+        ]
+        assert unusable_warnings == [], (
+            "Pure-duplicate case must not emit the unusable-index "
+            "warning — H4 split makes the two cases distinguishable."
+        )
+
+    def test_unusable_index_warning_is_distinct_from_duplicate_warning(self):
+        """H4: combining unusable AND duplicate cases produces TWO
+        warnings, each with the action that actually applies. Without
+        the split, an operator parsing logs cannot tell which entries
+        were dropped vs kept.
+        """
+        records, target, h = self._capture_meta_warnings()
+        try:
+            kept, dropped = apply_meta_analysis(
+                [_make_finding(summary="A"), _make_finding(summary="B")],
+                MetaAnalysisResult(
+                    false_positives=[
+                        # Filtered (duplicates):
+                        {"_index": 0, "false_positive_reason": "first"},
+                        {"_index": 0, "false_positive_reason": "second"},
+                        # Not filtered (out of range):
+                        {"_index": 99, "false_positive_reason": "bogus"},
+                    ]
+                ),
+            )
+        finally:
+            target.removeHandler(h)
+        # Index 0 was filtered; index 1 kept; index 99 ignored.
+        assert len(kept) == 1
+        assert kept[0].summary == "B"
+        assert len(dropped) == 1
+        assert dropped[0].details["meta_reason"] == "second"
+        # Two warnings, each with its own contract.
+        unusable = [r for r in records if "NOT filtered" in r.getMessage()]
+        dup = [r for r in records if "duplicates=" in r.getMessage()]
+        assert len(unusable) == 1
+        assert "out_of_range=[99]" in unusable[0].getMessage()
+        assert len(dup) == 1
+        assert "duplicates=[0]" in dup[0].getMessage()
 
     def test_dropped_copy_preserves_all_securityfinding_attributes(self):
         """P3-1: pin that the defensive shallow-copy on the dropped
@@ -1951,6 +2096,228 @@ class TestApplyMetaToResults:
         # otherwise the next ``build_meta_audit_payload`` call would
         # claim findings were just filtered when meta in fact did not run.
         assert out is result
+        assert out.meta_filtered_findings == []
+
+    def test_prompt_no_findings_path_clears_stale_meta_filtered_findings(self):
+        """M1: prompt parallel of the tool reset test. Without a pin
+        here, a contributor reverting the prompt-helper reset would
+        silently regress with no test failure (the tool pin would
+        still pass).
+        """
+        import asyncio
+
+        from mcpscanner.core.result import PromptScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+
+        result = PromptScanResult(
+            prompt_name="p",
+            prompt_description="d",
+            status="completed",
+            analyzers=["yara", "meta"],
+            findings=[],
+        )
+        result.meta_filtered_findings = [
+            _make_finding(severity="HIGH", summary="stale prompt audit")
+        ]
+        sem = asyncio.Semaphore(1)
+        out = asyncio.run(scanner._meta_analyze_one_prompt(result, sem))
+        assert out is result
+        assert out.meta_filtered_findings == []
+
+    def test_prompt_exception_path_clears_stale_meta_filtered_findings(self):
+        """M1: prompt parallel of the exception-path tool test."""
+        import asyncio
+
+        from mcpscanner.core.result import PromptScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+
+        async def _explode(*a, **kw):
+            raise RuntimeError("LLM out")
+
+        scanner._meta_analyzer.analyze_findings = _explode
+        result = PromptScanResult(
+            prompt_name="p",
+            prompt_description="d",
+            status="completed",
+            analyzers=["yara", "meta"],
+            findings=[_make_finding(severity="HIGH", summary="real")],
+        )
+        result.meta_filtered_findings = [
+            _make_finding(severity="HIGH", summary="stale")
+        ]
+        sem = asyncio.Semaphore(1)
+        out = asyncio.run(scanner._meta_analyze_one_prompt(result, sem))
+        assert out is result
+        assert len(out.findings) == 1  # original kept on error
+        assert out.meta_filtered_findings == []
+
+    def test_resource_no_findings_path_clears_stale_meta_filtered_findings(self):
+        """M1: resource parallel of the tool reset test."""
+        import asyncio
+
+        from mcpscanner.core.result import ResourceScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+
+        result = ResourceScanResult(
+            resource_uri="res://x",
+            resource_name="x",
+            resource_mime_type="text/plain",
+            status="completed",
+            analyzers=["yara", "meta"],
+            findings=[],
+            resource_description="d",
+            resource_text="content",
+        )
+        result.meta_filtered_findings = [
+            _make_finding(severity="HIGH", summary="stale resource audit")
+        ]
+        sem = asyncio.Semaphore(1)
+        out = asyncio.run(scanner._meta_analyze_one_resource(result, sem))
+        assert out is result
+        assert out.meta_filtered_findings == []
+        # Description/text NOT zeroed by the early return — that's the
+        # other contract on this path (P0-3 carry-through).
+        assert out.resource_description == "d"
+        assert out.resource_text == "content"
+
+    def test_resource_exception_path_clears_stale_meta_filtered_findings(self):
+        """M1: resource parallel of the exception-path tool test."""
+        import asyncio
+
+        from mcpscanner.core.result import ResourceScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+
+        async def _explode(*a, **kw):
+            raise RuntimeError("LLM out")
+
+        scanner._meta_analyzer.analyze_findings = _explode
+        result = ResourceScanResult(
+            resource_uri="res://x",
+            resource_name="x",
+            resource_mime_type="text/plain",
+            status="completed",
+            analyzers=["yara", "meta"],
+            findings=[_make_finding(severity="HIGH", summary="real")],
+            resource_description="d",
+            resource_text="content",
+        )
+        result.meta_filtered_findings = [
+            _make_finding(severity="HIGH", summary="stale")
+        ]
+        sem = asyncio.Semaphore(1)
+        out = asyncio.run(scanner._meta_analyze_one_resource(result, sem))
+        assert out is result
+        assert len(out.findings) == 1
+        assert out.meta_filtered_findings == []
+
+    def test_instructions_meta_not_in_analyzers_clears_audit(self):
+        """H1: the instructions helper was missed in the original P2-2
+        sweep. Pin all three early-exit / exception paths so the
+        asymmetry the review caught cannot recur.
+        """
+        import asyncio
+
+        from mcpscanner.core.models import AnalyzerEnum
+        from mcpscanner.core.result import InstructionsScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+
+        result = InstructionsScanResult(
+            instructions="hello",
+            server_name="srv",
+            protocol_version="2025-06-18",
+            status="completed",
+            analyzers=["yara"],
+            findings=[_make_finding(severity="HIGH", summary="real")],
+        )
+        result.meta_filtered_findings = [
+            _make_finding(severity="HIGH", summary="STALE FROM PRIOR PASS")
+        ]
+        out = asyncio.run(
+            scanner._run_meta_analysis_on_instructions_result(
+                result, [AnalyzerEnum.YARA]
+            )
+        )
+        assert out is result
+        assert out.meta_filtered_findings == []
+
+    def test_instructions_no_findings_clears_audit(self):
+        """H1: the no-findings path on the instructions helper."""
+        import asyncio
+
+        from mcpscanner.core.models import AnalyzerEnum
+        from mcpscanner.core.result import InstructionsScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+
+        result = InstructionsScanResult(
+            instructions="hello",
+            server_name="srv",
+            protocol_version="2025-06-18",
+            status="completed",
+            analyzers=["yara"],
+            findings=[],
+        )
+        result.meta_filtered_findings = [
+            _make_finding(severity="HIGH", summary="STALE")
+        ]
+        out = asyncio.run(
+            scanner._run_meta_analysis_on_instructions_result(
+                result, [AnalyzerEnum.META]
+            )
+        )
+        assert out is result
+        assert out.meta_filtered_findings == []
+
+    def test_instructions_exception_path_clears_audit(self):
+        """H1: the exception path on the instructions helper."""
+        import asyncio
+
+        from mcpscanner.core.models import AnalyzerEnum
+        from mcpscanner.core.result import InstructionsScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+
+        async def _explode(*a, **kw):
+            raise RuntimeError("LLM out")
+
+        scanner._meta_analyzer.analyze_findings = _explode
+        result = InstructionsScanResult(
+            instructions="hello",
+            server_name="srv",
+            protocol_version="2025-06-18",
+            status="completed",
+            analyzers=["yara"],
+            findings=[_make_finding(severity="HIGH", summary="real")],
+        )
+        result.meta_filtered_findings = [
+            _make_finding(severity="HIGH", summary="STALE")
+        ]
+        out = asyncio.run(
+            scanner._run_meta_analysis_on_instructions_result(
+                result, [AnalyzerEnum.META]
+            )
+        )
+        assert out is result
+        assert len(out.findings) == 1
         assert out.meta_filtered_findings == []
 
     def test_exception_path_clears_stale_meta_filtered_findings(self):

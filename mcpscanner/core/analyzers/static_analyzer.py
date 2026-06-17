@@ -26,6 +26,59 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .base import BaseAnalyzer, SecurityFinding
 from ..models import AnalyzerEnum
+from ...utils.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
+def _extract_html_text_if_needed(content: str, mime_type: Optional[str]) -> str:
+    """Strip HTML tags from a resource body when ``mime_type`` is ``text/html``.
+
+    H5 fix: the remote scan path (``Scanner._analyze_resource``)
+    already runs BeautifulSoup on ``text/html`` resources before
+    passing the body to API/LLM analyzers and persisting it in
+    ``ResourceScanResult.resource_text``. The static path used to
+    skip this step, so the same resource scanned via two paths
+    produced two different ``resource_text`` shapes — and therefore
+    two different meta-analyzer prompts when ``--enable-meta`` ran.
+
+    Keeping the helper module-level (rather than inside ``StaticAnalyzer``)
+    so a future reviewer who needs to make the two paths byte-equal
+    can lift the remote path's inline copy onto this helper too.
+
+    BeautifulSoup is an optional dependency; if it's unavailable, fall
+    back to the raw content with a single warning per import failure
+    (matches the remote path's exact behaviour).
+    """
+    if mime_type != "text/html" or not content:
+        return content
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        logger.warning(
+            "BeautifulSoup not installed; static-path HTML resource will "
+            "be analysed (and surfaced in resource_text) as raw markup. "
+            "Install bs4 to match the remote-path behaviour."
+        )
+        return content
+    try:
+        soup = BeautifulSoup(content, "html.parser")
+        return soup.get_text(separator="\n", strip=True)
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            "Static-path HTML extraction failed (%s); using raw content. "
+            "resource_text will diverge from remote-path output for this "
+            "resource.",
+            e,
+        )
+        return content
+    except Exception as e:  # pragma: no cover - defensive parity with remote path
+        logger.error(
+            "Unexpected error in static-path HTML extraction (%s); using "
+            "raw content.",
+            e,
+        )
+        return content
 
 
 class StaticAnalyzer:
@@ -449,6 +502,15 @@ class StaticAnalyzer:
         resource_mime = resource_data.get("mimeType") or first_content.get("mimeType")
         if not resource_mime:
             resource_mime = "text/plain" if text_content else "application/octet-stream"
+
+        # H5 fix: strip HTML on the static path so ``resource_text``
+        # produced here byte-matches what ``Scanner._analyze_resource``
+        # produces on the remote path. Without this, a ``text/html``
+        # resource scanned from a JSON file shipped raw markup to the
+        # meta-analyzer while the same resource scanned via
+        # ``scan-remote-server`` shipped extracted text — divergent
+        # prompts → divergent FP-filter decisions for the same content.
+        text_content = _extract_html_text_if_needed(text_content, resource_mime)
 
         if skip_blob_only and saw_blob and not text_content:
             return {

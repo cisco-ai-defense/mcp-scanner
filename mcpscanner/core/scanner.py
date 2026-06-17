@@ -286,6 +286,30 @@ class Scanner:
             raise ValueError(error_msg)
 
     @staticmethod
+    def _build_instructions_description_for_meta(
+        result: "InstructionsScanResult", budget: int = 8000
+    ) -> str:
+        """Synthesize a description string for instructions meta-analysis.
+
+        M3 fix: prior to this the meta helper truncated to a hard 500-byte
+        slice of ``result.instructions``, leaving the meta-analyzer
+        unable to see evidence past that boundary. Mirror the
+        resource-side budgeted-snippet shape so behaviour is consistent
+        across entity types.
+
+        Returns an empty string when ``result.instructions`` is falsy
+        (no risk of TypeError on ``None``); otherwise the full text up
+        to ``budget`` bytes with a clear truncation marker.
+        """
+        text = (getattr(result, "instructions", "") or "").strip()
+        if not text:
+            return ""
+        if len(text) <= budget:
+            return text
+        elided = len(text) - budget
+        return text[:budget] + f"... [instructions truncated, {elided} bytes elided]"
+
+    @staticmethod
     def _build_resource_description_for_meta(
         result: ResourceScanResult, budget: int = 8000
     ) -> str:
@@ -500,6 +524,47 @@ class Scanner:
                 result.meta_filtered_findings = []
                 return result
 
+    @classmethod
+    def for_meta_only(cls, config: Config) -> "Scanner":
+        """Construct a lightweight Scanner that only owns ``_meta_analyzer``.
+
+        M2 fix: the static-config CLI path used to call
+        ``Scanner(cfg, rules_dir=...)`` purely to gain access to
+        ``apply_meta_to_results``. The full constructor instantiates
+        ApiAnalyzer (HTTP client + endpoint validation), YaraAnalyzer
+        (compiles every rule on disk), Behavioral / VT / Readiness /
+        PromptDefense — every cycle of every static scan, despite the
+        primary analysis having already run. On a 50-rule YARA tree
+        with ``--enable-meta`` that's roughly half a second of pure
+        startup overhead per CLI invocation, plus warning output for
+        analyzers the operator never asked for.
+
+        This factory builds a near-empty ``Scanner`` whose ``__init__``
+        is bypassed (``__new__``) and only initialises the meta gate
+        and concurrency bookkeeping that ``apply_meta_to_results``
+        actually depends on. Behaviour is otherwise identical: the
+        same ``MetaAnalyzer(config)`` constructed under the same
+        ``api_key OR bedrock`` gate as the full ``__init__`` path.
+        """
+        instance = cls.__new__(cls)
+        instance._config = config
+        is_bedrock = bool(config.llm_model and "bedrock/" in config.llm_model)
+        instance._meta_analyzer = (
+            MetaAnalyzer(config)
+            if (config.llm_provider_api_key or is_bedrock)
+            else None
+        )
+        # Attributes apply_meta_to_results / dispatch helpers consult.
+        instance._api_analyzer = None
+        instance._yara_analyzer = None
+        instance._llm_analyzer = None
+        instance._behavioral_analyzer = None
+        instance._vt_analyzer = None
+        instance._readiness_analyzer = None
+        instance._prompt_defense_analyzer = None
+        instance._custom_analyzers = []
+        return instance
+
     async def apply_meta_to_results(
         self,
         scan_results: Sequence[ScanResult],
@@ -623,17 +688,36 @@ class Scanner:
         result: InstructionsScanResult,
         analyzers: List[AnalyzerEnum],
     ) -> InstructionsScanResult:
-        """Run meta-analysis on instructions scan result if META analyzer is enabled."""
+        """Run meta-analysis on instructions scan result if META analyzer is enabled.
+
+        H1 follow-up: parity with the other three ``_meta_analyze_one_*``
+        helpers — every early-return / exception path resets
+        ``meta_filtered_findings`` so a re-invocation cannot leak a prior
+        run's audit list into the new response. Without this the
+        instructions helper alone would report stale filtering
+        (asymmetric with tools/prompts/resources, which the P2-2 fix
+        already covers).
+        """
         if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+            result.meta_filtered_findings = []
             return result
 
         if not result.findings:
+            result.meta_filtered_findings = []
             return result
 
+        # M3 follow-up: mirror P0-3's resource-context fix. The previous
+        # ``[:500]`` truncation made the meta-analyzer second-guess
+        # findings against ~500 bytes of evidence; if a finding cited
+        # text past byte 500 the LLM couldn't see it and FP filtering
+        # devolved into "trust whatever the LLM hallucinates from the
+        # opening paragraph". Use the same budgeted-snippet helper as
+        # resources so instructions get the full context window the
+        # primary analyzers consumed.
         entity_context = {
             "type": "instructions",
             "name": result.server_name,
-            "description": result.instructions[:500] if result.instructions else "",
+            "description": self._build_instructions_description_for_meta(result),
         }
         instr_analyzers = list({f.analyzer for f in result.findings})
 
@@ -657,6 +741,7 @@ class Scanner:
             return enriched_result
         except Exception as e:
             logger.error(f'Meta-analysis failed for instructions from "{result.server_name}": {e}')
+            result.meta_filtered_findings = []
             return result
 
     async def _run_meta_analysis_on_single_tool(

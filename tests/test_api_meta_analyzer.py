@@ -126,6 +126,12 @@ class TestResolvedAnalyzers:
 
         The model_validator must NOT raise; we keep the existing
         pattern (explicit META in the list) working for back-compat.
+
+        L2 hardening: explicitly clear the per-process dedupe flag
+        before exercising so this test still observes a WARNING (not
+        DEBUG) regardless of test ordering. The L2 dedupe behaviour
+        itself is pinned in
+        ``test_disagreement_warning_is_deduped_to_once_per_process``.
         """
         import logging
 
@@ -135,10 +141,14 @@ class TestResolvedAnalyzers:
             def emit(self, record):
                 records.append(record)
 
+        # Reset the L2 process-level dedupe flag so this test is
+        # order-independent.
+        APIScanRequest._disagreement_warning_emitted = False
+
         # ``setup_logger`` sets propagate=False on the project loggers,
         # so caplog can't capture; harvest from the named logger.
         target = logging.getLogger("mcpscanner.core.models")
-        h = _Cap(level=logging.WARNING)
+        h = _Cap(level=logging.DEBUG)  # capture at DEBUG to detect regressions
         target.addHandler(h)
         try:
             req = APIScanRequest(
@@ -151,21 +161,25 @@ class TestResolvedAnalyzers:
 
         # Behaviour preserved: META still runs.
         assert AnalyzerEnum.META in req.resolved_analyzers()
-        # Warning emitted.
+        # Warning emitted at WARNING level (first occurrence).
         warnings = [
-            r for r in records if "enable_meta=False" in r.getMessage()
+            r for r in records
+            if "enable_meta=False" in r.getMessage()
+            and r.levelno == logging.WARNING
         ]
         assert warnings, (
             "Operators must be warned about the surprising "
-            "enable_meta=False + meta-in-analyzers combination."
+            "enable_meta=False + meta-in-analyzers combination "
+            "(at WARNING level for the first occurrence)."
         )
         msg = warnings[0].getMessage()
         assert "additive" in msg or "still run" in msg
 
-    def test_consistent_meta_request_does_not_warn(self):
-        """No warning when both forms agree: enable_meta=True with or
-        without explicit META in analyzers, OR enable_meta=False with
-        no META in analyzers.
+    def test_disagreement_warning_is_deduped_to_once_per_process(self):
+        """L2: high-volume API clients (asset inventory walker, CI
+        gate) should not see one WARNING per request for a known
+        config quirk. The first match logs at WARNING; subsequent
+        matches drop to DEBUG.
         """
         import logging
 
@@ -175,8 +189,60 @@ class TestResolvedAnalyzers:
             def emit(self, record):
                 records.append(record)
 
+        APIScanRequest._disagreement_warning_emitted = False
         target = logging.getLogger("mcpscanner.core.models")
-        h = _Cap(level=logging.WARNING)
+        prior_level = target.level
+        # Force the named logger to DEBUG so the handler can see the
+        # follow-up DEBUG records. ``setup_logger`` sets the project
+        # default to INFO/WARNING, which would silently drop them.
+        target.setLevel(logging.DEBUG)
+        h = _Cap(level=logging.DEBUG)
+        target.addHandler(h)
+        try:
+            for _ in range(5):
+                APIScanRequest(
+                    server_url="https://example.com/mcp",
+                    analyzers=[AnalyzerEnum.YARA, AnalyzerEnum.META],
+                    enable_meta=False,
+                )
+        finally:
+            target.removeHandler(h)
+            target.setLevel(prior_level)
+
+        all_msgs = [r for r in records if "enable_meta=False" in r.getMessage()]
+        warnings = [r for r in all_msgs if r.levelno == logging.WARNING]
+        debugs = [r for r in all_msgs if r.levelno == logging.DEBUG]
+
+        # 5 inconsistent requests → 1 WARNING + 4 DEBUG.
+        assert len(warnings) == 1, (
+            f"Expected exactly one WARNING per process, got {len(warnings)}. "
+            "L2 dedupe regressed → log spam under high-volume API use."
+        )
+        assert len(debugs) == 4, (
+            f"Expected 4 DEBUG follow-ups, got {len(debugs)}. "
+            "Subsequent matches must remain inspectable at DEBUG, not "
+            "be dropped silently."
+        )
+
+    def test_consistent_meta_request_does_not_warn(self):
+        """No log entries (WARNING or DEBUG) when both forms agree:
+        ``enable_meta=True`` with or without explicit META in
+        ``analyzers``, or ``enable_meta=False`` with no META in
+        ``analyzers``.
+        """
+        import logging
+
+        records: list[logging.LogRecord] = []
+
+        class _Cap(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        # L2: capture at DEBUG so we'd notice if the dedupe path
+        # accidentally fired on a consistent request too.
+        APIScanRequest._disagreement_warning_emitted = False
+        target = logging.getLogger("mcpscanner.core.models")
+        h = _Cap(level=logging.DEBUG)
         target.addHandler(h)
         try:
             # All-off (default) — silent.

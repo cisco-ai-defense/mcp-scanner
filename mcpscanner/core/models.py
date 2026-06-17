@@ -21,15 +21,22 @@ This module contains Pydantic models for consistent data validation
 and structure throughout the codebase.
 """
 
+import logging
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, ClassVar, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..utils.logging_config import get_logger
-
-_models_logger = get_logger(__name__)
 from .auth import APIAuthConfig, AuthType
+
+# L1 fix: keep the module-level logger BELOW every ``from`` /
+# ``import`` so flake8 / pyflakes doesn't flag E402 (module-level
+# code between import statements). The previous placement worked
+# at runtime but was a code-quality lint violation that would have
+# blocked CI under any project that runs ``flake8 --max-line-length
+# ... --select=E,W,F``.
+_models_logger = get_logger(__name__)
 
 
 class OutputFormat(str, Enum):
@@ -357,27 +364,53 @@ class APIScanRequest(BaseModel):
             )
         return value
 
+    # L2 fix: dedupe the disagreement warning at the process level so
+    # high-volume API clients (the inventory walker, the asset
+    # collector, CI gates that scan each PR) don't blow up
+    # CloudWatch with one WARNING per request. The contract from
+    # P2-5 is "tell the operator this combination is misleading"; one
+    # WARNING per process accomplishes that without log spam. After
+    # the first match we drop to DEBUG so it's still inspectable
+    # under ``--log-level DEBUG`` for someone diagnosing weirdness
+    # mid-stream.
+    _disagreement_warning_emitted: ClassVar[bool] = False
+
     @model_validator(mode="after")
     def _warn_on_meta_field_disagreement(self) -> "APIScanRequest":
-        """P2-5: warn (don't reject) when ``enable_meta=False`` but
-        ``meta`` is in ``analyzers``.
+        """P2-5 + L2: warn (don't reject) when ``enable_meta=False``
+        but ``meta`` is in ``analyzers``, but only ONCE per process.
 
         ``enable_meta`` is OR-merged with the list — never subtractive
         — so this combination still runs META, which surprises callers
         who read ``enable_meta=False`` as a kill-switch. We emit a
-        WARNING so the inconsistency shows up in operator logs without
-        breaking the existing pattern of explicitly listing META in
-        ``analyzers`` (which predates the flag).
+        WARNING the first time and DEBUG every subsequent inconsistent
+        request, so the inconsistency shows up in operator logs
+        without breaking the existing pattern of explicitly listing
+        META in ``analyzers`` (which predates the flag).
         """
         if (
             not self.enable_meta
             and AnalyzerEnum.META in self.analyzers
         ):
-            _models_logger.warning(
+            cls = type(self)
+            level = logging.WARNING
+            if cls._disagreement_warning_emitted:
+                level = logging.DEBUG
+            else:
+                # First match in this process — flip the flag so the
+                # next request drops to DEBUG. Touching it via the
+                # class object is safe under FastAPI's per-request
+                # threadpool: even a benign race here just produces
+                # at-most-2 warnings, which is still a 1000x
+                # reduction over the un-deduped path.
+                cls._disagreement_warning_emitted = True
+            _models_logger.log(
+                level,
                 "APIScanRequest: enable_meta=False but 'meta' is in "
                 "analyzers=%r — META will still run (the flag is "
                 "additive, not subtractive). Either remove 'meta' "
-                "from analyzers OR set enable_meta=True for clarity.",
+                "from analyzers OR set enable_meta=True for clarity. "
+                "(further occurrences logged at DEBUG)",
                 [a.value for a in self.analyzers],
             )
         return self

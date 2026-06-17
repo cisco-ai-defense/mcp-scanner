@@ -1673,9 +1673,15 @@ async def main():
                 # helpers and produced two real bugs (P0-4 silently dropped
                 # resource/instructions enrichment, P0-5 silently no-op'd
                 # on the IAM-only Bedrock flow). One source of truth.
-                meta_scanner = Scanner(
-                    cfg, rules_dir=getattr(args, "rules_path", None)
-                )
+                #
+                # M2 fix: use ``for_meta_only`` so the static path doesn't
+                # pay the cost of constructing every primary analyzer
+                # (Yara compilation, ApiAnalyzer endpoint validation,
+                # Behavioral / VT / Readiness / PromptDefense) just to
+                # invoke a single LLM-backed entrypoint. ``rules_dir``
+                # is intentionally dropped here — the meta-only path
+                # never touches Yara.
+                meta_scanner = Scanner.for_meta_only(cfg)
                 all_results = await meta_scanner.apply_meta_to_results(
                     all_results, [AnalyzerEnum.META]
                 )

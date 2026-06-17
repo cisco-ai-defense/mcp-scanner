@@ -766,14 +766,31 @@ def apply_meta_analysis(
             "confidence": fp.get("confidence"),
         }
 
-    if invalid_indices or out_of_range or duplicates:
+    # H4 fix: split the warning into two messages so the operator can
+    # tell which entries actually no-op'd vs which were filtered (just
+    # with a redundant reason). Previously the unified warning lumped
+    # duplicates in with invalid/out_of_range and claimed "affected
+    # findings are NOT filtered" — false for duplicates (last-write-wins
+    # still drops the finding). An operator reading the prior text would
+    # mis-account for FP filtering against the duplicate-index case.
+    if invalid_indices or out_of_range:
         logger.warning(
-            "Meta-analyzer FP entries with malformed _index values "
-            "(silently dropped): invalid=%r, out_of_range=%r, "
-            "duplicates=%r (n_findings=%d). The LLM may be hallucinating "
-            "or confused; affected findings are NOT filtered.",
+            "Meta-analyzer FP entries with unusable _index values "
+            "(NOT filtered): invalid=%r, out_of_range=%r "
+            "(n_findings=%d). The LLM may be hallucinating; affected "
+            "findings are kept on the result.",
             invalid_indices,
             out_of_range,
+            n_findings,
+        )
+    if duplicates:
+        logger.warning(
+            "Meta-analyzer emitted duplicate _index values "
+            "(filtered, last-write-wins applied): duplicates=%r "
+            "(n_findings=%d). The corresponding findings WERE removed "
+            "from the result; the second FP entry's reason is recorded "
+            "in the audit trail. Most likely cause: the model hedged "
+            "twice on the same finding.",
             duplicates,
             n_findings,
         )
