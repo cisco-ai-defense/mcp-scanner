@@ -455,6 +455,14 @@ class StaticAnalyzer:
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
                 "resource_mime_type": resource_mime,
+                # Surface the MCP-advertised description and the text we
+                # would have analysed even on the skip path; downstream
+                # ``ResourceScanResult`` construction can persist them
+                # verbatim, and the meta-analyzer can second-guess
+                # follow-up reads of the same resource against the same
+                # evidence the primary pass saw.
+                "resource_description": resource_description,
+                "resource_text": text_content,
                 "is_safe": True,
                 "findings": [],
                 "status": "skipped",
@@ -470,6 +478,8 @@ class StaticAnalyzer:
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
                 "resource_mime_type": resource_mime,
+                "resource_description": resource_description,
+                "resource_text": text_content,
                 "is_safe": True,
                 "findings": [],
                 "status": "skipped",
@@ -497,6 +507,24 @@ class StaticAnalyzer:
             "resource_uri": resource_uri,
             "resource_name": resource_name,
             "resource_mime_type": resource_mime,
+            # P0-3 plumbing for the static path. The remote ``_analyze_resource``
+            # already persists these on the resulting ``ResourceScanResult``;
+            # without these dict keys the CLI couldn't wire them through and
+            # ``--enable-meta`` would feed the meta-analyzer ``"N/A"`` for
+            # description (sees only name + uri + mime_type), making FP
+            # filtering on file-based resource scans unsupervised.
+            #
+            # Canonical shape (matches the remote path and the skip
+            # branches above): ``resource_description`` is the
+            # MCP-advertised description verbatim, and ``resource_text``
+            # is the resource BODY only — never the LLM-formatted
+            # ``analysis_content`` blob (which prepends ``Resource URI:``,
+            # ``Name:``, ``Description:``, ``MIME Type:`` headers and
+            # would duplicate the description into the body when the
+            # meta-analyzer concats them via
+            # ``Scanner._build_resource_description_for_meta``).
+            "resource_description": resource_description,
+            "resource_text": text_content,
             "is_safe": len(findings) == 0,
             "findings": findings,
             "status": "completed",

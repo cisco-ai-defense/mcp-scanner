@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ..core.analyzers.meta_analyzer import build_meta_audit_payload
 from ..core.auth import Auth
 from ..core.exceptions import (
     MCPAuthenticationError,
@@ -61,6 +62,22 @@ def get_scanner() -> ScannerFactory:
     """
     raise NotImplementedError(
         "This dependency must be overridden in the main application."
+    )
+
+
+def _build_meta_analysis_audit(scanner_result: Any) -> Optional[Dict[str, Any]]:
+    """Build the API ``meta_analysis`` audit block from a scan result.
+
+    Thin shim over
+    ``mcpscanner.core.analyzers.meta_analyzer.build_meta_audit_payload``
+    so the API and CLI artifacts (``report_generator.results_to_json``)
+    stay byte-identical on field names, ordering, and defaults. Earlier
+    versions duplicated the formatting in two places and the two
+    serializers drifted on the default reason text — keep them on one
+    code path.
+    """
+    return build_meta_audit_payload(
+        getattr(scanner_result, "meta_filtered_findings", None) or []
     )
 
 
@@ -304,6 +321,7 @@ def _convert_scanner_result_to_tool_api_result(
         status=scanner_result.status,
         findings=grouped_findings,
         is_safe=scanner_result.is_safe,
+        meta_analysis=_build_meta_analysis_audit(scanner_result),
     )
 
 
@@ -594,6 +612,9 @@ async def scan_prompt_endpoint(
             "is_safe": result.is_safe,
             "findings": grouped_findings,
         }
+        meta_audit = _build_meta_analysis_audit(result)
+        if meta_audit is not None:
+            response["meta_analysis"] = meta_audit
 
         logger.debug(f"Prompt scan completed successfully for {request.prompt_name}")
         return response
@@ -662,15 +683,17 @@ async def scan_all_prompts_endpoint(
             # Use helper function to group findings
             grouped_findings = _group_findings_for_api(result, scanner)
 
-            prompt_results.append(
-                {
-                    "prompt_name": result.prompt_name,
-                    "prompt_description": result.prompt_description,
-                    "status": result.status,
-                    "is_safe": result.is_safe,
-                    "findings": grouped_findings,
-                }
-            )
+            prompt_entry = {
+                "prompt_name": result.prompt_name,
+                "prompt_description": result.prompt_description,
+                "status": result.status,
+                "is_safe": result.is_safe,
+                "findings": grouped_findings,
+            }
+            meta_audit = _build_meta_analysis_audit(result)
+            if meta_audit is not None:
+                prompt_entry["meta_analysis"] = meta_audit
+            prompt_results.append(prompt_entry)
 
         response = {
             "server_url": request.server_url,
@@ -765,6 +788,9 @@ async def scan_resource_endpoint(
             "is_safe": result.is_safe if result.status == "completed" else None,
             "findings": grouped_findings,
         }
+        meta_audit = _build_meta_analysis_audit(result)
+        if meta_audit is not None:
+            response["meta_analysis"] = meta_audit
 
         logger.debug(f"Resource scan completed successfully for {request.resource_uri}")
         return response
@@ -840,16 +866,18 @@ async def scan_all_resources_endpoint(
                 # Use helper function to group findings
                 grouped_findings = _group_findings_for_api(result, scanner)
 
-                resource_results.append(
-                    {
-                        "resource_uri": result.resource_uri,
-                        "resource_name": result.resource_name,
-                        "resource_mime_type": result.resource_mime_type,
-                        "status": result.status,
-                        "is_safe": result.is_safe,
-                        "findings": grouped_findings,
-                    }
-                )
+                resource_entry = {
+                    "resource_uri": result.resource_uri,
+                    "resource_name": result.resource_name,
+                    "resource_mime_type": result.resource_mime_type,
+                    "status": result.status,
+                    "is_safe": result.is_safe,
+                    "findings": grouped_findings,
+                }
+                meta_audit = _build_meta_analysis_audit(result)
+                if meta_audit is not None:
+                    resource_entry["meta_analysis"] = meta_audit
+                resource_results.append(resource_entry)
             else:
                 # Skipped or failed resources
                 resource_results.append(
@@ -950,6 +978,9 @@ async def scan_instructions_endpoint(
             "is_safe": result.is_safe if result.status == "completed" else None,
             "findings": grouped_findings,
         }
+        meta_audit = _build_meta_analysis_audit(result)
+        if meta_audit is not None:
+            response["meta_analysis"] = meta_audit
 
         logger.debug(f"Instructions scan completed successfully")
         return response

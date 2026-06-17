@@ -52,7 +52,9 @@ from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
-from mcpscanner.core.analyzers.meta_analyzer import MetaAnalyzer, apply_meta_analysis
+# P1-6 fix: CLI no longer imports MetaAnalyzer / apply_meta_analysis directly.
+# The static-config meta path now routes through ``Scanner.apply_meta_to_results``
+# so all four entity types stay in lock-step with the remote-scan path.
 
 logger = get_logger(__name__)
 
@@ -1642,74 +1644,41 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        # Thread the description / text the static analyzer
+                        # consumed so ``--enable-meta`` can second-guess
+                        # findings against the same evidence the primary
+                        # pass saw. Without these the meta-analyzer falls
+                        # back to ``"N/A"`` for description and FP triage
+                        # on file-based resources is unsupervised.
+                        resource_description=r.get("resource_description", ""),
+                        resource_text=r.get("resource_text", ""),
                     )
                     all_results.append(resource_result)
 
-            if AnalyzerEnum.META in selected_analyzers and cfg.llm_provider_api_key:
-                from mcpscanner.core.result import ToolScanResult, PromptScanResult
-
-                meta_analyzer = MetaAnalyzer(cfg)
-                enriched_results = []
-                for result in all_results:
-                    if not result.findings:
-                        enriched_results.append(result)
-                        continue
-
-                    if isinstance(result, ToolScanResult):
-                        entity_context = {
-                            "type": "tool",
-                            "name": result.tool_name,
-                            "description": result.tool_description,
-                        }
-                    elif isinstance(result, PromptScanResult):
-                        entity_context = {
-                            "type": "prompt",
-                            "name": result.prompt_name,
-                            "description": result.prompt_description,
-                        }
-                    else:
-                        entity_context = {
-                            "type": "resource",
-                            "name": getattr(result, "resource_name", "unknown"),
-                        }
-
-                    tool_analyzers = list({f.analyzer for f in result.findings})
-                    try:
-                        meta_result = await meta_analyzer.analyze_findings(
-                            findings=result.findings,
-                            analyzers_used=tool_analyzers,
-                            entity_context=entity_context,
-                        )
-                        enriched_findings = apply_meta_analysis(
-                            result.findings, meta_result
-                        )
-                        if isinstance(result, ToolScanResult):
-                            enriched_results.append(
-                                ToolScanResult(
-                                    tool_name=result.tool_name,
-                                    tool_description=result.tool_description,
-                                    status=result.status,
-                                    analyzers=result.analyzers,
-                                    findings=enriched_findings,
-                                )
-                            )
-                        elif isinstance(result, PromptScanResult):
-                            enriched_results.append(
-                                PromptScanResult(
-                                    prompt_name=result.prompt_name,
-                                    prompt_description=result.prompt_description,
-                                    status=result.status,
-                                    analyzers=result.analyzers,
-                                    findings=enriched_findings,
-                                )
-                            )
-                        else:
-                            enriched_results.append(result)
-                    except Exception as e:
-                        logger.error(f"Meta-analysis failed for static result: {e}")
-                        enriched_results.append(result)
-
-                all_results = enriched_results
+            # P0-5 fix: also accept Bedrock-via-AWS-credentials. Previously
+            # this gate only honoured ``llm_provider_api_key`` and silently
+            # no-op'd on the IAM-only Lambda flow this branch was built for.
+            # Mirror Scanner.__init__'s ``(api_key or is_bedrock)`` rule so
+            # ``--enable-meta`` with ``MCP_SCANNER_LLM_MODEL=bedrock/...`` and
+            # an AWS profile works end-to-end.
+            _meta_is_bedrock = bool(
+                cfg.llm_model and "bedrock/" in cfg.llm_model
+            )
+            if AnalyzerEnum.META in selected_analyzers and (
+                cfg.llm_provider_api_key or _meta_is_bedrock
+            ):
+                # P1-6 fix: route through Scanner.apply_meta_to_results
+                # rather than reimplementing per-result meta-analysis here.
+                # The previous inline loop had drifted from the Scanner
+                # helpers and produced two real bugs (P0-4 silently dropped
+                # resource/instructions enrichment, P0-5 silently no-op'd
+                # on the IAM-only Bedrock flow). One source of truth.
+                meta_scanner = Scanner(
+                    cfg, rules_dir=getattr(args, "rules_path", None)
+                )
+                all_results = await meta_scanner.apply_meta_to_results(
+                    all_results, [AnalyzerEnum.META]
+                )
 
             results = await results_to_json(all_results)
 

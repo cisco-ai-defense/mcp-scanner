@@ -20,7 +20,7 @@ This module provides classes and utilities for handling scan results.
 """
 
 import json
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from .analyzers.base import SecurityFinding
 
@@ -34,6 +34,13 @@ class ScanResult:
         findings (List[SecurityFinding]): The security findings found during the scan.
         server_source (str): The source server/config for this result.
         server_name (str): The name of the server from config.
+        meta_filtered_findings (List[SecurityFinding]): Findings the meta-analyzer
+            judged to be false positives and removed from ``findings``. Each
+            finding carries audit fields (``meta_false_positive=True``,
+            ``meta_reason``, optional ``meta_confidence``) in its ``details``.
+            Empty when meta-analysis did not run or did not drop anything;
+            non-empty here is the only signal an operator has that meta
+            filtering changed the scan output.
     """
 
     def __init__(
@@ -58,6 +65,10 @@ class ScanResult:
         self.findings = findings
         self.server_source = server_source
         self.server_name = server_name
+        # Set by ``Scanner._run_meta_analysis_on_*`` after meta filtering.
+        # Default empty so every result has the attribute and downstream
+        # serializers don't need ``getattr(..., default=[])`` everywhere.
+        self.meta_filtered_findings: List[SecurityFinding] = []
 
     @property
     def is_safe(self) -> bool:
@@ -156,6 +167,17 @@ class ResourceScanResult(ScanResult):
         resource_uri (str): The URI of the scanned resource.
         resource_name (str): The name of the scanned resource.
         resource_mime_type (str): The MIME type of the resource.
+        resource_description (str): The MCP-advertised description of the
+            resource (defaults to ``""`` if absent — never ``None``).
+            Mirrors the way prompt and tool scan results carry
+            ``prompt_description`` / ``tool_description``.
+        resource_text (str): The text content the primary analyzers
+            actually consumed (defaults to ``""``). Retained on the
+            result so downstream consumers (meta-analyzer, diagnostics)
+            can second-guess findings against the same evidence the
+            analyzers saw. The artifact serializers do not include this
+            field, so retention does not bloat JSON / Markdown reports
+            or API responses.
     """
 
     def __init__(
@@ -168,6 +190,8 @@ class ResourceScanResult(ScanResult):
         findings: List[SecurityFinding],
         server_source: str = None,
         server_name: str = None,
+        resource_description: Optional[str] = None,
+        resource_text: Optional[str] = None,
     ):
         """Initialize a new ResourceScanResult instance.
 
@@ -180,10 +204,20 @@ class ResourceScanResult(ScanResult):
             findings (List[SecurityFinding]): Inherited - The security findings.
             server_source (str): Inherited - The source server/config.
             server_name (str): Inherited - The name of the server from config.
+            resource_description (Optional[str]): MCP-advertised
+                description. Stored as ``str`` on the instance (``None``
+                input is normalised to ``""``).
+            resource_text (Optional[str]): Text content the analyzers
+                consumed. Stored as ``str`` on the instance (``None``
+                input is normalised to ``""``).
         """
         self.resource_uri = resource_uri
         self.resource_name = resource_name
         self.resource_mime_type = resource_mime_type
+        # Default to empty string (not ``None``) so consumers can rely on
+        # truthiness / ``str`` operations without ``getattr(..., "") or ""``.
+        self.resource_description = resource_description or ""
+        self.resource_text = resource_text or ""
         super().__init__(status, analyzers, findings, server_source, server_name)
 
     def __str__(self) -> str:
