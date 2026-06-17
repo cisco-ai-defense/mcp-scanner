@@ -435,11 +435,18 @@ class ThreatMapping:
         "ROLE_ESCAPE": {
             "scanner_category": "PROMPT INJECTION",
             "severity": "HIGH",
-            "aitech": "AITech-1.1",
-            "aitech_name": "Direct Prompt Injection",
-            "aisubtech": "AISubtech-1.1.1",
-            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Missing defense against role escape attacks where the model is tricked into breaking out of its assigned persona or role constraints.",
+            # Role escape ("never break character", "stay in role",
+            # "do not pretend to be ...") defends against persona-break
+            # jailbreaks, not direct instruction overrides. The
+            # canonical taxonomy puts persona breaking under
+            # AITech-2.1 Jailbreak / AISubtech-2.1.1 Context
+            # Manipulation (Jailbreak), not under AITech-1.1 Direct
+            # Prompt Injection.
+            "aitech": "AITech-2.1",
+            "aitech_name": "Jailbreak",
+            "aisubtech": "AISubtech-2.1.1",
+            "aisubtech_name": "Context Manipulation (Jailbreak)",
+            "description": "Missing defense against role escape (persona-break) jailbreaks where the model is tricked through context manipulation into abandoning its assigned persona, role, or operating constraints.",
         },
         "INDIRECT_INJECTION": {
             "scanner_category": "PROMPT INJECTION",
@@ -447,17 +454,31 @@ class ThreatMapping:
             "aitech": "AITech-1.2",
             "aitech_name": "Indirect Prompt Injection",
             "aisubtech": "AISubtech-1.2.1",
-            "aisubtech_name": "Indirect Prompt Injection via External Content",
-            "description": "Missing defense against indirect prompt injection where malicious instructions are embedded in external content processed by the tool.",
+            # The previous label "Indirect Prompt Injection via
+            # External Content" does not exist in the canonical
+            # taxonomy — the canonical name for AISubtech-1.2.1 is
+            # "Instruction Manipulation (Indirect Prompt Injection)".
+            "aisubtech_name": "Instruction Manipulation (Indirect Prompt Injection)",
+            "description": "Missing defense against indirect prompt injection where attacker-controlled instructions embedded in external content (URLs, files, RAG sources, third-party tool outputs) processed by the tool are followed as if they were trusted operator commands.",
         },
         "OUTPUT_WEAPONIZATION": {
             "scanner_category": "HARMFUL CONTENT",
             "severity": "HIGH",
-            "aitech": "AITech-3.1",
-            "aitech_name": "Harmful Content Generation",
-            "aisubtech": "AISubtech-3.1.1",
-            "aisubtech_name": "Generation of Harmful or Dangerous Content",
-            "description": "Missing defense against output weaponization where the model is manipulated into generating harmful, dangerous, or illegal content.",
+            # The previous mapping (AITech-3.1 / AISubtech-3.1.1) is
+            # canonically "Masquerading / Obfuscation / Impersonation"
+            # → "Identity Obfuscation", which has nothing to do with
+            # generating harmful content. The rule fires when the
+            # description lacks guardrails against producing
+            # weapons/exploit/illegal content (regex matches
+            # ``harmful|dangerous|malicious|illegal|weapon|exploit``)
+            # — that is canonically Harmful Content (AITech-15.1)
+            # and most specifically Cybersecurity and Hacking:
+            # Malware / Exploits (AISubtech-15.1.1).
+            "aitech": "AITech-15.1",
+            "aitech_name": "Harmful Content",
+            "aisubtech": "AISubtech-15.1.1",
+            "aisubtech_name": "Cybersecurity and Hacking: Malware / Exploits",
+            "description": "Missing defense against output weaponization where the model is manipulated into generating harmful, dangerous, or illegal content — for example malware, exploit code, or weaponizable instructions — without explicit refusal language or content guardrails in the tool description.",
         },
         "OUTPUT_MANIPULATION": {
             "scanner_category": "PROMPT INJECTION",
@@ -471,38 +492,58 @@ class ThreatMapping:
         "MULTILANG_BYPASS": {
             "scanner_category": "PROMPT INJECTION",
             "severity": "MEDIUM",
+            # Switching language to bypass an English-only safety
+            # filter is canonically obfuscation, not plain
+            # instruction manipulation. The right code is
+            # AISubtech-1.1.2 Obfuscation (Direct Prompt Injection),
+            # not AISubtech-1.1.1.
             "aitech": "AITech-1.1",
             "aitech_name": "Direct Prompt Injection",
-            "aisubtech": "AISubtech-1.1.1",
-            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Missing defense against multilingual bypass attacks where non-English or mixed-language prompts are used to circumvent safety filters.",
+            "aisubtech": "AISubtech-1.1.2",
+            "aisubtech_name": "Obfuscation (Direct Prompt Injection)",
+            "description": "Missing defense against multilingual obfuscation where non-English or mixed-language prompts are used to obfuscate instructions and bypass language-scoped safety filters.",
         },
         "UNICODE_ATTACK": {
             "scanner_category": "PROMPT INJECTION",
             "severity": "MEDIUM",
+            # Homoglyph / zero-width / invisible-character tricks are
+            # the textbook example of obfuscation, so the canonical
+            # subtech is AISubtech-1.1.2 Obfuscation, not the more
+            # generic AISubtech-1.1.1 Instruction Manipulation.
             "aitech": "AITech-1.1",
             "aitech_name": "Direct Prompt Injection",
-            "aisubtech": "AISubtech-1.1.1",
-            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Missing defense against unicode-based attacks using homoglyphs, zero-width characters, or invisible characters to bypass input filters.",
+            "aisubtech": "AISubtech-1.1.2",
+            "aisubtech_name": "Obfuscation (Direct Prompt Injection)",
+            "description": "Missing defense against unicode-based obfuscation using homoglyphs, zero-width characters, or invisible characters to smuggle attacker-controlled instructions past input filters.",
         },
         "CONTEXT_OVERFLOW": {
-            "scanner_category": "DENIAL OF SERVICE",
+            "scanner_category": "CONTEXT BOUNDARY",
             "severity": "MEDIUM",
-            "aitech": "AITech-4.1",
-            "aitech_name": "Denial of Service",
-            "aisubtech": "AISubtech-4.1.1",
-            "aisubtech_name": "Context Window Overflow",
-            "description": "Missing defense against context overflow attacks where excessively long inputs are used to overflow context windows and degrade performance.",
+            # The previous mapping (AITech-4.1 / AISubtech-4.1.1) is
+            # canonically "Agent Injection" → "Rogue Agent
+            # Introduction" — which has nothing to do with context
+            # windows. Context window exploitation lives under
+            # AITech-4.2 Context Boundary Attacks /
+            # AISubtech-4.2.1 Context Window Exploitation.
+            "aitech": "AITech-4.2",
+            "aitech_name": "Context Boundary Attacks",
+            "aisubtech": "AISubtech-4.2.1",
+            "aisubtech_name": "Context Window Exploitation",
+            "description": "Missing defense against context window exploitation where excessively long inputs are crafted to overflow the model's context window and push prior instructions or guardrails out of scope.",
         },
         "SOCIAL_ENGINEERING": {
             "scanner_category": "PROMPT INJECTION",
             "severity": "MEDIUM",
-            "aitech": "AITech-1.1",
-            "aitech_name": "Direct Prompt Injection",
-            "aisubtech": "AISubtech-1.1.1",
-            "aisubtech_name": "Instruction Manipulation (Direct Prompt Injection)",
-            "description": "Missing defense against social engineering attacks using emotional manipulation, fake urgency, or authority impersonation to bypass safety measures.",
+            # Emotional manipulation, fake urgency, and authority
+            # impersonation to coax the model out of its safety
+            # posture is canonically Semantic Manipulation under
+            # Jailbreak (AISubtech-2.1.3), not direct instruction
+            # manipulation.
+            "aitech": "AITech-2.1",
+            "aitech_name": "Jailbreak",
+            "aisubtech": "AISubtech-2.1.3",
+            "aisubtech_name": "Semantic Manipulation (Jailbreak)",
+            "description": "Missing defense against semantic-manipulation jailbreaks that use emotional pressure, fake urgency, or authority impersonation to coax the model into ignoring safety guardrails.",
         },
         "INPUT_VALIDATION": {
             "scanner_category": "INJECTION ATTACK",
@@ -510,8 +551,12 @@ class ThreatMapping:
             "aitech": "AITech-9.1",
             "aitech_name": "Model or Agentic System Manipulation",
             "aisubtech": "AISubtech-9.1.4",
-            "aisubtech_name": "Injection Attacks (SQL, Command Execution, XSS)",
-            "description": "Missing defense for input validation, sanitization, or filtering, leaving the tool vulnerable to injection attacks.",
+            # Canonical subtech name uses the "(e.g., ...)" form;
+            # keep it identical so cross-analyzer aggregation does
+            # not split otherwise-identical findings into two
+            # buckets.
+            "aisubtech_name": "Injection Attacks (e.g., SQL, Command Execution, XSS)",
+            "description": "Missing defense for input validation, sanitization, or filtering, leaving the tool vulnerable to injection attacks (SQL, command execution, XSS, etc.).",
         },
         "ABUSE_PREVENTION": {
             "scanner_category": "DENIAL OF SERVICE",
