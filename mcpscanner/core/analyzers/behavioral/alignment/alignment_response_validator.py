@@ -199,24 +199,58 @@ class AlignmentResponseValidator:
                 if not data:
                     return None
 
-            # Validate each item in the array
+            # An empty list against a non-empty batch is a verification
+            # failure, not "all clean" — previously we silently padded
+            # with ``mismatch_detected=False`` which let Bedrock-style
+            # ``[]`` responses masquerade as a clean bill of health.
+            # Returning None forces the orchestrator into per-function
+            # fallback, where each function emits an LLM_UNAVAILABLE
+            # sentinel via ``check_alignment``.
+            if expected_count > 0 and len(data) == 0:
+                self.logger.warning(
+                    f"Batch response is an empty array but expected "
+                    f"{expected_count} items; treating as verification failure"
+                )
+                return None
+
+            # Validate each item in the array. Any item that is not a
+            # dict OR is missing the required ``mismatch_detected`` key
+            # is ambiguous — could be a clean clear-out, could be a
+            # malformed/short response. Returning None for the whole
+            # batch is the safe choice: it routes every function in the
+            # batch through ``check_alignment`` per-function fallback,
+            # which surfaces a sentinel and an ERROR finding rather
+            # than silently emitting SAFE rows.
             results = []
             for idx, item in enumerate(data):
                 if not isinstance(item, dict):
-                    self.logger.warning(f"Batch item {idx} is not a dict")
-                    results.append({"mismatch_detected": False})
-                    continue
+                    self.logger.warning(
+                        f"Batch item {idx} is not a dict: {type(item).__name__}; "
+                        f"forcing per-function fallback for the batch"
+                    )
+                    return None
 
-                # Check for required fields
                 if "mismatch_detected" not in item:
-                    # Default to no mismatch if field missing
-                    item["mismatch_detected"] = False
+                    self.logger.warning(
+                        f"Batch item {idx} missing required "
+                        f"'mismatch_detected' field (keys={list(item.keys())}); "
+                        f"forcing per-function fallback for the batch"
+                    )
+                    return None
 
                 results.append(item)
 
-            # Pad with empty results if we got fewer than expected
-            while len(results) < expected_count:
-                results.append({"mismatch_detected": False})
+            # Truncated response: model returned fewer items than
+            # expected. Same reasoning as the empty-array branch — fall
+            # back rather than fabricating SAFE rows for the missing
+            # tail.
+            if len(results) < expected_count:
+                self.logger.warning(
+                    f"Batch response had {len(results)} items but "
+                    f"expected {expected_count}; forcing per-function "
+                    f"fallback for the batch"
+                )
+                return None
 
             self.logger.debug(f"Validated batch response with {len(results)} results")
             return results

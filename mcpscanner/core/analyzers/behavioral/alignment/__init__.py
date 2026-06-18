@@ -29,7 +29,10 @@ All components use the 'alignment_' prefix to indicate they are part of
 the semantic alignment verification layer.
 """
 
-from .alignment_orchestrator import AlignmentOrchestrator
+from .alignment_orchestrator import (
+    LLM_UNAVAILABLE_KEY,
+    AlignmentOrchestrator,
+)
 from .alignment_prompt_builder import AlignmentPromptBuilder
 from .alignment_llm_client import AlignmentLLMClient
 from .alignment_response_validator import AlignmentResponseValidator
@@ -39,4 +42,10 @@ __all__ = [
     "AlignmentPromptBuilder",
     "AlignmentLLMClient",
     "AlignmentResponseValidator",
+    # Marker key on orchestrator result dicts that signals LLM
+    # verification could not complete for a function. SDK consumers
+    # that read raw orchestrator output (rather than going through
+    # BehavioralCodeAnalyzer's SecurityFinding wrapping) need this to
+    # distinguish "verified clean" from "couldn't verify".
+    "LLM_UNAVAILABLE_KEY",
 ]

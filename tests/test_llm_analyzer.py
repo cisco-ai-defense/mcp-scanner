@@ -230,11 +230,20 @@ class TestLLMAnalyzer:
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_analyze_api_failure(self, mock_completion):
-        """Test analysis when LLM API fails."""
+        """LLM transport failure must surface as an ERROR finding.
+
+        Pre-fix this test asserted ``len(findings) == 0`` — that locked
+        the silent-failure bug as the contract: any LLM transport
+        error (rate limit, timeout, model id invalid, network outage)
+        produced an empty findings list, which downstream code treated
+        as "the LLM cleared this tool". The fix routes verification
+        failures through ``_create_llm_unavailable_finding`` so the
+        absence of threat findings is never confused with "verified
+        clean".
+        """
         config = Config(llm_provider_api_key="test-api-key")
         analyzer = LLMAnalyzer(config)
 
-        # Mock API failure
         mock_completion.side_effect = Exception("API rate limit exceeded")
 
         content = "Test content"
@@ -242,7 +251,20 @@ class TestLLMAnalyzer:
 
         findings = await analyzer.analyze(content, context)
 
-        assert len(findings) == 0
+        assert len(findings) == 1, (
+            "LLM API failures must emit exactly one ERROR finding, not "
+            f"silently return []; got {len(findings)} findings"
+        )
+        finding = findings[0]
+        assert finding.severity == "ERROR"
+        assert finding.analyzer == "LLM"
+        assert finding.threat_category == "", (
+            "ERROR rows must have an empty threat_category so they "
+            "don't pollute threat-name aggregates"
+        )
+        assert finding.details["llm_unavailable"] is True
+        assert finding.details["tool_name"] == "test_tool"
+        assert "rate limit" in finding.details["error_message"].lower()
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")

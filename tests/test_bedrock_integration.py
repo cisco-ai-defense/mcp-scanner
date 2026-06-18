@@ -207,8 +207,15 @@ class TestBedrockErrorHandling:
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_bedrock_access_denied_error(self, mock_completion):
-        """Test handling of Bedrock AccessDenied errors."""
-        # Mock AccessDenied error
+        """Bedrock AccessDenied (after retries) must surface as ERROR finding.
+
+        Pre-fix this asserted ``len(findings) == 0`` — that locked the
+        silent-failure contract for Bedrock-specific errors. The new
+        contract emits a ``severity="ERROR"`` sentinel finding so a
+        misconfigured AWS account or revoked Bedrock model access is
+        never silently reported as "tool is clean". Retry behaviour is
+        unchanged.
+        """
         mock_completion.side_effect = Exception("BedrockException: AccessDenied")
 
         config = Config(
@@ -222,18 +229,27 @@ class TestBedrockErrorHandling:
         content = "Test content"
         context = {"tool_name": "test_tool"}
 
-        # Should return empty list on error after retries
         findings = await analyzer.analyze(content, context)
-        assert len(findings) == 0
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.severity == "ERROR"
+        assert f.details["llm_unavailable"] is True
+        assert "AccessDenied" in f.details["error_message"]
 
-        # Verify retries occurred (initial + max_retries)
+        # Verify retries occurred (initial + max_retries) — retry
+        # behaviour is unchanged by the sentinel fix.
         assert mock_completion.call_count == 3
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_bedrock_throttling_error(self, mock_completion):
-        """Test handling of Bedrock ThrottlingException errors."""
-        # Mock ThrottlingException error
+        """Bedrock ThrottlingException (after retries) must surface as ERROR finding.
+
+        Same contract update as ``test_bedrock_access_denied_error``:
+        sustained rate-limiting that exhausts retries is reported as a
+        ``severity="ERROR"`` sentinel rather than silently treated as
+        "tool is clean". Retry/backoff behaviour is unchanged.
+        """
         mock_completion.side_effect = Exception("ThrottlingException: Rate exceeded")
 
         config = Config(
@@ -248,7 +264,11 @@ class TestBedrockErrorHandling:
         context = {"tool_name": "test_tool"}
 
         findings = await analyzer.analyze(content, context)
-        assert len(findings) == 0
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.severity == "ERROR"
+        assert f.details["llm_unavailable"] is True
+        assert "ThrottlingException" in f.details["error_message"]
 
         # Verify retries with exponential backoff
         assert mock_completion.call_count == 3

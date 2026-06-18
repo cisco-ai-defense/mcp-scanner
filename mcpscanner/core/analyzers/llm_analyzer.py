@@ -151,31 +151,44 @@ class LLMAnalyzer(BaseAnalyzer):
             self.logger.error(f"Failed to load prompt {prompt_file_name}: {e}")
             raise IOError(f"Could not load prompt {prompt_file_name}: {e}")
 
-    def _create_threat_analysis_prompt(
+    def _create_threat_analysis_prompt_parts(
         self,
         tool_name: str,
         description: str = None,
         parameters: Dict[str, Any] = None,
         _context: Optional[Dict[str, Any]] = None,
-    ) -> tuple[str, bool]:
-        """Create a threat analysis prompt for comprehensive tool analysis.
+    ) -> tuple[str, str, bool]:
+        """Build the threat-analysis prompt as a (system, user, injection_flag) split.
 
-        Args:
-            tool_name: Name of the tool to analyze
-            description: Tool description to analyze (optional)
-            parameters: Tool parameters schema (optional)
-            _context: Additional context (unused)
+        The framework prompts (~19 KB combined: ``boilerplate_protection_rule_prompt.md``
+        plus ``threat_analysis_prompt.md``) used to be concatenated into the
+        ``user`` message. That works against most providers but is the
+        wrong role assignment — the framework is static instructions, the
+        user message should carry only the per-call evidence. Splitting
+        it brings LLMAnalyzer in line with the behavioral path's
+        Bedrock-friendly shape (see
+        ``AlignmentPromptBuilder.build_prompt_parts``).
+
+        The two halves share the same random delimiter id so the
+        protection rules in the system prompt can reference the exact
+        delimited block emitted in the user prompt.
 
         Returns:
-            Tuple of (formatted prompt string, prompt_injection_detected)
-            prompt_injection_detected is True if delimiter injection was detected
+            Tuple ``(system_prompt, user_payload, prompt_injection_detected)``:
+
+            * ``system_prompt`` — protection rules + threat analysis
+              framework. Belongs in the ``system`` role.
+            * ``user_payload`` — the ``<!---UNTRUSTED_INPUT_*--->``-wrapped
+              per-tool evidence. Belongs in the ``user`` role.
+            * ``prompt_injection_detected`` — True if the untrusted
+              input contained one of our delimiter tags (the caller
+              short-circuits and emits a PROMPT INJECTION finding
+              instead of forwarding to the LLM).
         """
-        # Generate random delimiter tags to prevent prompt injection
         random_id = secrets.token_hex(16)
         start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
         end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
 
-        # Format parameters for display
         if parameters:
             param_list = []
             for param_name, param_info in parameters.items():
@@ -186,15 +199,11 @@ class LLMAnalyzer(BaseAnalyzer):
         else:
             params_text = "  No parameters"
 
-        # Build the analysis content
         analysis_content = f"Tool Name: {tool_name}\n"
-
         if description:
             analysis_content += f"Description: {description}\n"
-
         analysis_content += f"Parameters:\n{params_text}"
 
-        # Security validation: Check that the untrusted input doesn't contain our delimiter tags
         prompt_injection_detected = False
         if start_tag in analysis_content or end_tag in analysis_content:
             self.logger.warning(
@@ -202,21 +211,137 @@ class LLMAnalyzer(BaseAnalyzer):
             )
             prompt_injection_detected = True
 
-        # Create the updated protection rules with randomized delimiters
+        # Substitute the random delimiters into the protection rules so
+        # the rules' references like "anything between START and END is
+        # untrusted" line up with what we actually emit in the user role.
         updated_protection_rules = self._protection_rules.replace(
             "<!---UNTRUSTED_INPUT_START--->", start_tag
         ).replace("<!---UNTRUSTED_INPUT_END--->", end_tag)
 
-        prompt = f"""{updated_protection_rules}
+        system_prompt = (
+            f"{updated_protection_rules}\n\n{self._threat_analysis_prompt}"
+        ).strip()
+        user_payload = f"{start_tag}\n{analysis_content}\n{end_tag}"
 
-        {self._threat_analysis_prompt}
+        return system_prompt, user_payload, prompt_injection_detected
 
-        {start_tag}
-        {analysis_content}
-        {end_tag}
+    def _create_threat_analysis_prompt(
+        self,
+        tool_name: str,
+        description: str = None,
+        parameters: Dict[str, Any] = None,
+        _context: Optional[Dict[str, Any]] = None,
+    ) -> tuple[str, bool]:
+        """Backward-compatible wrapper around :meth:`_create_threat_analysis_prompt_parts`.
+
+        Returns the legacy single-string concatenated prompt (system
+        framework followed by the delimited user evidence). Callers
+        should prefer the parts API; this exists so external code that
+        hasn't migrated still works.
         """
-
+        system_prompt, user_payload, prompt_injection_detected = (
+            self._create_threat_analysis_prompt_parts(
+                tool_name,
+                description=description,
+                parameters=parameters,
+                _context=_context,
+            )
+        )
+        prompt = f"{system_prompt}\n\n{user_payload}"
         return prompt.strip(), prompt_injection_detected
+
+    @staticmethod
+    def _validate_threat_analysis_shape(parsed: Any) -> None:
+        """Confirm the parsed LLM response carries the expected schema.
+
+        Raises ``ValueError`` when the response is structurally unusable
+        (not a dict, missing the ``threat_analysis`` key, or the inner
+        object is missing the two fields downstream code reads). This is
+        the same "couldn't verify" → ``severity=ERROR`` distinction the
+        behavioral path enforces via ``AlignmentVerificationError``:
+        previously a Bedrock ``{}`` short-circuit silently produced an
+        empty findings list, conflating "verified clean" with "couldn't
+        verify".
+
+        Notes:
+            * A *well-formed* clean response (``threat_analysis`` present
+              with ``malicious_content_detected=False`` and
+              ``primary_threats=[]``) passes this check and continues
+              through ``_create_findings_from_threat_analysis``, which
+              correctly emits zero findings — the legitimate clean case.
+            * Unknown extra keys are allowed; the LLM is welcome to
+              decorate the response.
+        """
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"LLM response is not a JSON object "
+                f"(got {type(parsed).__name__})"
+            )
+        threat_analysis = parsed.get("threat_analysis")
+        if threat_analysis is None:
+            raise ValueError(
+                "LLM response missing required 'threat_analysis' key "
+                f"(got keys: {sorted(parsed.keys())})"
+            )
+        if not isinstance(threat_analysis, dict):
+            raise ValueError(
+                f"LLM response 'threat_analysis' is not a JSON object "
+                f"(got {type(threat_analysis).__name__})"
+            )
+        # The two fields downstream consumers always read.
+        # ``malicious_content_detected`` gates whether to emit findings;
+        # ``primary_threats`` is the list iterated to build them. A
+        # response missing either is ambiguous — could be "clean" or
+        # could be Bedrock-truncated. Treat as "couldn't verify".
+        for required in ("malicious_content_detected", "primary_threats"):
+            if required not in threat_analysis:
+                raise ValueError(
+                    f"LLM response 'threat_analysis' missing required "
+                    f"field '{required}' (got keys: "
+                    f"{sorted(threat_analysis.keys())})"
+                )
+
+    def _create_llm_unavailable_finding(
+        self, tool_name: str, error: BaseException
+    ) -> SecurityFinding:
+        """Build a ``severity=ERROR`` sentinel finding for verification failures.
+
+        Mirrors the behavioral path's ``LLM_UNAVAILABLE_KEY`` /
+        ``_create_llm_unavailable_finding`` pattern so consumers can
+        treat unverified-tool rows uniformly across the LLM and
+        behavioral analyzers. The finding:
+
+          * Has ``severity="ERROR"`` so it never collapses into the
+            ``HIGH``/``MEDIUM``/``LOW``/``SAFE`` aggregate buckets.
+          * Has an empty ``threat_category`` so it doesn't pollute
+            threat-name aggregates.
+          * Marks ``details.llm_unavailable=True`` so consumers can
+            filter/route ERROR rows separately from any future
+            ERROR-severity sources.
+          * Carries the truncated error message so operators can debug
+            without re-running with logging enabled.
+        """
+        error_message = str(error) if error is not None else ""
+        # Truncate to keep findings.json artefacts small. Full traces
+        # still go to the analyzer log via ``exc_info=True``.
+        truncated = error_message[:500]
+        return SecurityFinding(
+            severity="ERROR",
+            summary=(
+                f"LLM verification failed for tool '{tool_name}': "
+                f"{error_message[:200]}"
+            ),
+            analyzer="LLM",
+            threat_category="",
+            details={
+                "tool_name": tool_name,
+                "llm_unavailable": True,
+                "error_type": (
+                    type(error).__name__ if error is not None else "Unknown"
+                ),
+                "error_message": truncated,
+            },
+        )
 
     def _parse_response(self, response_content: str) -> Dict[str, Any]:
         """Parse the LLM response and extract analysis results.
@@ -368,8 +493,14 @@ class LLMAnalyzer(BaseAnalyzer):
 
             # Threat Analysis: Analyze tool name, description, and parameters together
             if tool_info.get("description") or tool_info.get("parameters"):
-                threat_prompt, prompt_injection_detected = (
-                    self._create_threat_analysis_prompt(
+                # Use the (system, user) split — keeps the ~19 KB
+                # framework prompts in the system role and only the
+                # delimited per-tool evidence in the user role. This
+                # matches the behavioral path and keeps Bedrock from
+                # mistaking the framework for a chat turn it has to
+                # respond *to*.
+                system_prompt, user_payload, prompt_injection_detected = (
+                    self._create_threat_analysis_prompt_parts(
                         tool_name,
                         description=tool_info.get("description"),
                         parameters=tool_info.get("parameters"),
@@ -396,17 +527,21 @@ class LLMAnalyzer(BaseAnalyzer):
                     # No prompt injection detected, proceed with normal LLM analysis
                     threat_response = await self._make_llm_request(
                         messages=[
-                            {
-                                "role": "system",
-                                "content": "You are a security expert analyzing MCP tools for threats. Follow the analysis framework provided.",
-                            },
-                            {"role": "user", "content": threat_prompt},
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_payload},
                         ],
                         context=f"threat analysis for {tool_name}",
                     )
 
                     threat_content = threat_response.choices[0].message.content
                     threat_analysis = self._parse_response(threat_content)
+                    # Reject empty-{} / missing-fields / non-dict
+                    # responses up front. These were previously routed
+                    # through ``_create_findings_from_threat_analysis``
+                    # which silently returned [] for any input lacking
+                    # the expected schema — collapsing "couldn't verify"
+                    # into "verified clean".
+                    self._validate_threat_analysis_shape(threat_analysis)
                     threat_findings = self._create_findings_from_threat_analysis(
                         threat_analysis, tool_name
                     )
@@ -415,11 +550,17 @@ class LLMAnalyzer(BaseAnalyzer):
             return findings
 
         except Exception as e:
+            # Verification could not complete (transport failure,
+            # parser failure, schema validation failure). Emit a
+            # ``severity="ERROR"`` sentinel finding so the absence of
+            # findings is never confused with "verified clean". This
+            # mirrors the behavioral path's LLM_UNAVAILABLE sentinel
+            # pattern. The full traceback still lands in the analyzer
+            # log; only a 500-char truncated message goes on the
+            # finding to keep findings.json artefacts small.
             self.logger.error(f"LLM analysis failed for {tool_name}: {str(e)}")
             self.logger.error(f"Full traceback for {tool_name}:", exc_info=True)
-            # Return empty findings list - don't pollute results with error states
-            # The error is logged above for debugging purposes
-            return []
+            return [self._create_llm_unavailable_finding(tool_name, e)]
 
     def _parse_tool_content(
         self, content: str, context: Optional[Dict[str, Any]] = None
