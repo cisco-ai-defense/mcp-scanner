@@ -15,8 +15,11 @@ rule code_execution{
 
     strings:
 
-        // Generic cross-language execution calls (catch-all safety net)
-        $generic_exec_calls = /\b(system|exec(file)?|popen|spawn|eval|compile|shell_exec|passthru|proc_open)\s*\(/i
+        // Generic cross-language execution calls (catch-all safety net).
+        // Case-sensitive and disallows a space before `(` so English
+        // prose like "Autonomous System (AS)" does not match. Real
+        // calls are always lowercase and have no separating space.
+        $generic_exec_calls = /\b(system|exec(file)?|popen|spawn|eval|compile|shell_exec|passthru|proc_open)\(/
 
         // Python specific execution calls
         $python_exec_calls = /\b(os\.(system|popen|spawn|execv?p?e?|spawnv?p?e?)|subprocess\.|__import__)\s*\(/i
