@@ -44,7 +44,7 @@ from mcpscanner.core.report_generator import (
     SeverityFilter,
     results_to_json,
 )
-from mcpscanner.utils.logging_config import set_verbose_logging
+from mcpscanner.utils.logging_config import set_verbose_logging, set_log_level
 from mcpscanner.core.auth import Auth
 from mcpscanner.core.mcp_models import StdioServer
 from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
@@ -129,6 +129,7 @@ def _build_config(
     llm_api_version = os.environ.get("MCP_SCANNER_LLM_API_VERSION")
     llm_model = os.environ.get("MCP_SCANNER_LLM_MODEL")
     llm_timeout = os.environ.get("MCP_SCANNER_LLM_TIMEOUT")
+    stdio_timeout = os.environ.get("MCP_SCANNER_STDIO_TIMEOUT")
     endpoint_url = endpoint_url or _get_endpoint_from_env()
 
     config_params = {
@@ -158,6 +159,8 @@ def _build_config(
         config_params["llm_api_version"] = llm_api_version
     if llm_timeout:
         config_params["llm_timeout"] = float(llm_timeout)
+    if stdio_timeout:
+        config_params["stdio_timeout"] = int(stdio_timeout)
 
     # VirusTotal configuration — pass API key so Config can wire it up;
     # remaining VT settings (max_files, extensions, etc.) fall back to
@@ -173,103 +176,193 @@ def _build_config(
     return Config(**config_params)
 
 
-async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
-    """Run behavioral analyzer on source code and format results.
+def _build_behavioral_results(
+    analyzer: Any,
+    findings: List[Any],
+    source_path: str,
+) -> List[Dict[str, Any]]:
+    """Build tool-style result dicts for every function analyzed by the behavioral analyzer.
+
+    The behavioral analyzer only emits a ``SecurityFinding`` when it detects a
+    docstring/behavior mismatch, which means functions that come back clean
+    would otherwise be invisible in the scan output. This helper uses
+    ``analyzer.analyzed_functions`` to ensure the returned list contains one
+    entry per tool discovered during the scan — safe tools (no findings) and
+    unsafe tools (with findings) alike.
 
     Args:
-        source_path: Path to Python file or directory to analyze
+        analyzer: A ``BehavioralCodeAnalyzer`` instance that has just completed
+            an ``analyze()`` call. Its ``analyzed_functions`` attribute is used
+            to enumerate every function the scan visited.
+        findings: The list of ``SecurityFinding`` objects returned by
+            ``analyzer.analyze(...)``.
+        source_path: The original path that was scanned (file or directory).
 
     Returns:
-        List of formatted result dictionaries
+        A list of result dictionaries matching the structure produced elsewhere
+        for tool scan results. Each dictionary exposes ``tool_name``,
+        ``tool_description``, ``status``, ``is_safe`` and ``findings``.
     """
-    from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
-
-    cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
-    analyzer = BehavioralCodeAnalyzer(cfg)
-
-    # Analyze the source file
-    findings = await analyzer.analyze(source_path, context={"file_path": source_path})
-
-    # Format results to match Scanner output structure
-    findings_by_function = {}
+    # Group findings by (source_file, function_name) so multi-file scans with
+    # identically named functions don't collide on a single result entry.
+    findings_by_key: Dict[tuple, List[Any]] = {}
     for finding in findings:
-        func_name = (
-            finding.details.get("function_name", "unknown")
-            if finding.details
-            else "unknown"
-        )
+        details = finding.details or {}
+        func_name = details.get("function_name", "unknown")
+        src_file = details.get("source_file", source_path)
+        findings_by_key.setdefault((src_file, func_name), []).append(finding)
 
-        if func_name not in findings_by_function:
-            findings_by_function[func_name] = []
-        findings_by_function[func_name].append(finding)
+    severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+    results: List[Dict[str, Any]] = []
+    seen_keys: set = set()
 
-    # Create ToolScanResult-like structure
-    results = []
-    for func_name, func_findings in findings_by_function.items():
-        severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
-        max_severity = max(
-            (f.severity for f in func_findings), key=lambda s: severity_order.get(s, 0)
-        )
+    # Iterate over every function the analyzer processed so that safe tools
+    # appear in the output even when no finding was produced for them.
+    analyzed_functions = getattr(analyzer, "analyzed_functions", []) or []
+    for analyzed in analyzed_functions:
+        func_name = analyzed.get("name", "unknown")
+        source_file = analyzed.get("source_file", source_path)
+        key = (source_file, func_name)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
 
-        source_file = (
-            func_findings[0].details.get("source_file", source_path)
-            if func_findings[0].details
+        display_name = (
+            os.path.basename(source_file)
+            if source_file and source_file != source_path
             else source_path
         )
-        display_name = (
-            os.path.basename(source_file) if source_file != source_path else source_path
-        )
 
-        # Collect unique MCP taxonomies from all findings
-        mcp_taxonomies = []
-        for finding in func_findings:
-            if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
+        func_findings = findings_by_key.get(key, [])
+
+        if func_findings:
+            max_severity = max(
+                (f.severity for f in func_findings),
+                key=lambda s: severity_order.get(s, 0),
+            )
+
+            mcp_taxonomies: List[Dict[str, Any]] = []
+            for finding in func_findings:
+                taxonomy = getattr(finding, "mcp_taxonomy", None)
+                if not taxonomy:
+                    continue
                 taxonomy_key = (
-                    finding.mcp_taxonomy.get("aitech"),
-                    finding.mcp_taxonomy.get("aisubtech"),
+                    taxonomy.get("aitech"),
+                    taxonomy.get("aisubtech"),
                 )
                 existing_keys = [
                     (t.get("aitech"), t.get("aisubtech")) for t in mcp_taxonomies
                 ]
                 if taxonomy_key not in existing_keys:
-                    mcp_taxonomies.append(finding.mcp_taxonomy)
+                    mcp_taxonomies.append(taxonomy)
 
-        # Get threat/vulnerability classification from first finding
-        threat_vuln_classification = None
-        if func_findings and func_findings[0].details:
-            threat_vuln_classification = func_findings[0].details.get(
-                "threat_vulnerability_classification"
+            threat_vuln_classification = None
+            if func_findings[0].details:
+                threat_vuln_classification = func_findings[0].details.get(
+                    "threat_vulnerability_classification"
+                )
+
+            # Derive is_safe from severity instead of hardcoding False.
+            # Analyzers can now emit SAFE-severity findings for tools that
+            # came back clean (see BehavioralCodeAnalyzer.analyze docstring);
+            # those rows must NOT be filtered out downstream as unsafe.
+            is_safe_row = max_severity == "SAFE"
+
+            analyzer_finding: Dict[str, Any] = {
+                "severity": max_severity,
+                "threat_summary": func_findings[0].summary,
+                "threat_names": sorted(
+                    {f.threat_category for f in func_findings if f.threat_category}
+                ),
+                "total_findings": len(func_findings),
+                "source_file": source_file,
+                "mcp_taxonomies": mcp_taxonomies,
+            }
+            if threat_vuln_classification:
+                analyzer_finding["threat_vulnerability_classification"] = (
+                    threat_vuln_classification
+                )
+
+            results.append(
+                {
+                    "tool_name": func_name,
+                    "tool_description": f"MCP function from {display_name}",
+                    "status": "completed",
+                    "is_safe": is_safe_row,
+                    "findings": {"behavioral_analyzer": analyzer_finding},
+                }
+            )
+        else:
+            # No mismatch detected for this tool — still surface it as a safe
+            # result so the scan output enumerates ALL tools that were found,
+            # not only the ones flagged as malicious.
+            results.append(
+                {
+                    "tool_name": func_name,
+                    "tool_description": f"MCP function from {display_name}",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {
+                        "behavioral_analyzer": {
+                            "severity": "SAFE",
+                            "threat_summary": "No behavioral mismatches detected",
+                            "threat_names": [],
+                            "total_findings": 0,
+                            "source_file": source_file,
+                            "mcp_taxonomies": [],
+                        }
+                    },
+                }
             )
 
-        analyzer_finding = {
-            "severity": max_severity,
-            "threat_summary": func_findings[0].summary,
-            "threat_names": list(
-                set([f.threat_category for f in func_findings])
-            ),  # Deduplicate
-            "total_findings": len(func_findings),
-            "source_file": source_file,
-            "mcp_taxonomies": mcp_taxonomies,
-        }
+    # Surface any findings that didn't match a recorded analyzed function
+    # (defensive: should be rare, but guarantees no finding is dropped).
+    for (src_file, func_name), func_findings in findings_by_key.items():
+        if (src_file, func_name) in seen_keys:
+            continue
+        seen_keys.add((src_file, func_name))
 
-        # Add threat/vulnerability classification if available
-        if threat_vuln_classification:
-            analyzer_finding["threat_vulnerability_classification"] = (
-                threat_vuln_classification
-            )
+        max_severity = max(
+            (f.severity for f in func_findings),
+            key=lambda s: severity_order.get(s, 0),
+        )
+        display_name = (
+            os.path.basename(src_file)
+            if src_file and src_file != source_path
+            else source_path
+        )
+        mcp_taxonomies = []
+        for finding in func_findings:
+            taxonomy = getattr(finding, "mcp_taxonomy", None)
+            if taxonomy and taxonomy not in mcp_taxonomies:
+                mcp_taxonomies.append(taxonomy)
 
         results.append(
             {
                 "tool_name": func_name,
                 "tool_description": f"MCP function from {display_name}",
                 "status": "completed",
-                "is_safe": False,
-                "findings": {"behavioral_analyzer": analyzer_finding},
+                # Same severity-derived semantics as the inventory loop
+                # above: a stray SAFE finding must not be misreported as
+                # unsafe and dropped by the downstream THREAT filter.
+                "is_safe": max_severity == "SAFE",
+                "findings": {
+                    "behavioral_analyzer": {
+                        "severity": max_severity,
+                        "threat_summary": func_findings[0].summary,
+                        "threat_names": sorted(
+                            {f.threat_category for f in func_findings if f.threat_category}
+                        ),
+                        "total_findings": len(func_findings),
+                        "source_file": src_file,
+                        "mcp_taxonomies": mcp_taxonomies,
+                    }
+                },
             }
         )
 
     if not results:
-        results = [
+        results.append(
             {
                 "tool_name": "No MCP functions found",
                 "tool_description": f"No @mcp.tool() decorators found in {source_path}",
@@ -277,9 +370,30 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
                 "is_safe": True,
                 "findings": {},
             }
-        ]
+        )
 
     return results
+
+
+async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
+    """Run behavioral analyzer on source code and format results.
+
+    Args:
+        source_path: Path to Python file or directory to analyze
+
+    Returns:
+        List of formatted result dictionaries containing every MCP tool the
+        analyzer visited, regardless of whether it produced a finding. Tools
+        with no behavioral mismatch are included with ``is_safe=True``.
+    """
+    from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+
+    cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
+    analyzer = BehavioralCodeAnalyzer(cfg)
+
+    findings = await analyzer.analyze(source_path, context={"file_path": source_path})
+
+    return _build_behavioral_results(analyzer, findings, source_path)
 
 
 async def scan_mcp_server_direct(
@@ -1073,6 +1187,63 @@ async def main():
         help="Output format (default: %(default)s)",
     )
 
+    # vulnerable-package subcommand - scan Python dependencies for known vulnerabilities
+    p_vuln_pkgs = subparsers.add_parser(
+        "vulnerable-package",
+        help="Scan Python dependencies for known vulnerabilities using pip-audit",
+    )
+    p_vuln_pkgs.add_argument(
+        "scan_path",
+        help="Path to a project directory or requirements file to audit",
+    )
+    p_vuln_pkgs.add_argument(
+        "--vulnerability-service",
+        choices=["pypi", "osv"],
+        default=None,
+        help="Vulnerability service to query (default: pypi)",
+    )
+    p_vuln_pkgs.add_argument(
+        "--fix", action="store_true", help="Automatically fix vulnerable dependencies"
+    )
+    p_vuln_pkgs.add_argument(
+        "--no-deps",
+        action="store_true",
+        dest="no_deps",
+        help="Skip transitive dependency resolution (only for fully-resolved/pinned inputs)",
+    )
+    p_vuln_pkgs.add_argument(
+        "--disable-pip",
+        action="store_true",
+        dest="disable_pip",
+        help="Disable pip for dependency resolution (use with --no-deps for pinned inputs)",
+    )
+    p_vuln_pkgs.add_argument(
+        "--output", "-o", help="Save scan results to a file"
+    )
+    p_vuln_pkgs.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_vuln_pkgs.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_vuln_pkgs.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_vuln_pkgs.add_argument(
+        "--format",
+        choices=[
+            "raw",
+            "summary",
+            "detailed",
+            "by_tool",
+            "by_analyzer",
+            "by_severity",
+            "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+
     # Stdio subcommand
     p_stdio = subparsers.add_parser(
         "stdio", help="Scan an MCP server via stdio (local command execution)"
@@ -1150,16 +1321,28 @@ async def main():
         type=int,
         help="Timeout in seconds for LLM API calls (overrides MCP_SCANNER_LLM_TIMEOUT environment variable)",
     )
+    parser.add_argument(
+        "--stdio-timeout",
+        type=int,
+        help="Timeout in seconds for stdio server connections (overrides MCP_SCANNER_STDIO_TIMEOUT environment variable, default: 60)",
+    )
 
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package (default: %(default)s)",
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=["debug", "info", "warning", "error", "critical"],
+        default=None,
+        help="Set log level for the mcpscanner library (overrides --verbose). "
+        "Useful for suppressing noisy output in CI/CD pipelines.",
     )
     parser.add_argument(
         "--detailed", "-d", action="store_true", help="Show detailed results"
@@ -1255,6 +1438,7 @@ async def main():
             "llm_analyzer",
             "behavioral_analyzer",
             "virustotal_analyzer",
+            "vulnerable_package_analyzer",
         ],
         help="Filter results by specific analyzer",
     )
@@ -1305,14 +1489,21 @@ async def main():
                 "Usage: mcp-scanner --source-path FILE --analyzers behavioral"
             )
 
-    if args.verbose:
+    if args.log_level:
+        effective_level = getattr(logging, args.log_level.upper())
+        logging.basicConfig(
+            level=effective_level,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            stream=sys.stdout,
+        )
+        set_log_level(effective_level)
+    elif args.verbose:
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             stream=sys.stdout,
         )
-        logging.getLogger("mcpscanner").setLevel(logging.DEBUG)
-        set_verbose_logging(True)
+        set_log_level(logging.DEBUG)
         logger.info("Verbose output enabled - detailed analyzer logs will be shown")
     else:
         logging.basicConfig(
@@ -1320,8 +1511,7 @@ async def main():
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             stream=sys.stdout,
         )
-        logging.getLogger("mcpscanner").setLevel(logging.WARNING)
-        set_verbose_logging(False)
+        set_log_level(logging.WARNING)
 
     if args.api_key:
         os.environ["MCP_SCANNER_API_KEY"] = args.api_key
@@ -1331,6 +1521,8 @@ async def main():
         os.environ["MCP_SCANNER_LLM_API_KEY"] = args.llm_api_key
     if args.llm_timeout:
         os.environ["MCP_SCANNER_LLM_TIMEOUT"] = str(args.llm_timeout)
+    if args.stdio_timeout:
+        os.environ["MCP_SCANNER_STDIO_TIMEOUT"] = str(args.stdio_timeout)
 
     try:
         # Handle static file scanning subcommand (matches 'prompts' and 'resources' pattern)
@@ -1825,121 +2017,29 @@ async def main():
                 source_path, context={"file_path": source_path}
             )
 
-            # Format results to match Scanner output structure
-            # Group findings by function to create tool-like results
-            findings_by_function = {}
-            for finding in findings:
-                # Extract function name from details (not summary!)
-                func_name = (
-                    finding.details.get("function_name", "unknown")
-                    if finding.details
-                    else "unknown"
-                )
+            # Build a result entry for every analyzed MCP tool — including
+            # tools with no findings (is_safe=True). This ensures the scan
+            # output enumerates ALL tools detected during the scan, not only
+            # tools flagged as malicious.
+            results = _build_behavioral_results(analyzer, findings, source_path)
 
-                if func_name not in findings_by_function:
-                    findings_by_function[func_name] = []
-                findings_by_function[func_name].append(finding)
-
-            # Create ToolScanResult-like structure for each function
-            results = []
-            for func_name, func_findings in findings_by_function.items():
-                # Get highest severity
-                severity_order = {
-                    "HIGH": 3,
-                    "MEDIUM": 2,
-                    "LOW": 1,
-                    "SAFE": 0,
-                    "UNKNOWN": 0,
-                }
-                max_severity = max(
-                    (f.severity for f in func_findings),
-                    key=lambda s: severity_order.get(s, 0),
-                )
-
-                # Get source file from findings (for directory scans)
-                source_file = (
-                    func_findings[0].details.get("source_file", source_path)
-                    if func_findings[0].details
-                    else source_path
-                )
-
-                display_name = (
-                    os.path.basename(source_file)
-                    if source_file != source_path
-                    else source_path
-                )
-
-                # Collect all taxonomies from findings
-                mcp_taxonomies = []
-                for finding in func_findings:
-                    if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
-                        if finding.mcp_taxonomy not in mcp_taxonomies:
-                            mcp_taxonomies.append(finding.mcp_taxonomy)
-
-                # Get threat/vulnerability classification from first finding
-                threat_vuln_classification = None
-                if func_findings and func_findings[0].details:
-                    threat_vuln_classification = func_findings[0].details.get(
-                        "threat_vulnerability_classification"
-                    )
-
-                # Determine if safe based on severity
-                is_safe = max_severity in ["SAFE", "LOW"]
-
-                analyzer_finding = {
-                    "severity": max_severity,
-                    "threat_summary": func_findings[0].summary,
-                    "threat_names": list(
-                        set([f.threat_category for f in func_findings])
-                    ),  # Deduplicate
-                    "total_findings": len(func_findings),
-                    "source_file": source_file,  # Include source file in output
-                    "mcp_taxonomies": mcp_taxonomies,  # All unique taxonomies
-                }
-
-                # Add threat/vulnerability classification if available
-                if threat_vuln_classification:
-                    analyzer_finding["threat_vulnerability_classification"] = (
-                        threat_vuln_classification
-                    )
-
-                results.append(
-                    {
-                        "tool_name": func_name,  # This should match the name from decorator params or function name
-                        "tool_description": f"MCP function from {display_name}",
-                        "status": "completed",
-                        "is_safe": is_safe,
-                        "findings": {"behavioral_analyzer": analyzer_finding},
-                    }
-                )
-
-            # If no findings, all functions are safe
-            if not results:
-                results.append(
-                    {
-                        "tool_name": source_path,
-                        "tool_description": "MCP server source code",
-                        "status": "completed",
-                        "is_safe": True,
-                        "findings": {},
-                    }
-                )
-
-            # Automatically filter out VULNERABILITY findings - only show THREATS
+            # Filter out VULNERABILITY findings — only surface THREATS — while
+            # always keeping safe results so every analyzed tool remains
+            # visible in the output.
             filtered_results = []
             for result in results:
-                # Check if result has behavioral_analyzer findings with classification
-                if "findings" in result and "behavioral_analyzer" in result["findings"]:
-                    analyzer_data = result["findings"]["behavioral_analyzer"]
-                    classification = analyzer_data.get(
-                        "threat_vulnerability_classification", ""
-                    ).upper()
+                if result.get("is_safe", False):
+                    filtered_results.append(result)
+                    continue
 
-                    # Only include THREAT findings, exclude VULNERABILITY
-                    if classification == "THREAT":
-                        filtered_results.append(result)
-                # Keep results without findings (safe results)
-                elif not result.get("findings"):
+                analyzer_data = result.get("findings", {}).get(
+                    "behavioral_analyzer", {}
+                )
+                classification = (
+                    analyzer_data.get("threat_vulnerability_classification") or ""
+                ).upper()
+
+                if classification == "THREAT":
                     filtered_results.append(result)
 
             results = filtered_results
@@ -1950,6 +2050,106 @@ async def main():
                     json.dump(results, f, indent=2)
                 if args.verbose:
                     print(f"Results saved to {args.output}")
+
+        elif args.cmd == "vulnerable-package":
+            import os
+            from mcpscanner.core.analyzers.vulnerable_package_analyzer import VulnerablePackageAnalyzer
+            from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
+
+            scan_path = args.scan_path
+
+            if not os.path.exists(scan_path):
+                print(f"Error: Path does not exist: {scan_path}", file=sys.stderr)
+                sys.exit(1)
+
+            vuln_service = (
+                args.vulnerability_service
+                or CONSTANTS.VULNERABLE_PACKAGE_VULNERABILITY_SERVICE
+            )
+
+            analyzer = VulnerablePackageAnalyzer(
+                enabled=True,
+                vulnerability_service=vuln_service,
+                timeout=CONSTANTS.VULNERABLE_PACKAGE_TIMEOUT,
+                fix_mode=getattr(args, "fix", False),
+                skip_deps=getattr(args, "no_deps", False),
+                disable_pip=getattr(args, "disable_pip", False),
+            )
+
+            findings = analyzer.analyze_path(scan_path)
+
+            results = []
+            if findings:
+                for finding in findings:
+                    pkg = finding.details.get("package_name", "unknown") if finding.details else "unknown"
+                    ver = finding.details.get("installed_version", "?") if finding.details else "?"
+                    vuln_id = finding.details.get("vulnerability_id", "") if finding.details else ""
+
+                    analyzer_finding = {
+                        "severity": finding.severity,
+                        "threat_summary": finding.summary,
+                        "threat_names": [finding.threat_category],
+                        "total_findings": 1,
+                        "mcp_taxonomies": [],
+                    }
+                    if finding.details:
+                        taxonomy = {}
+                        for key in ("aitech", "aitech_name", "aisubtech", "aisubtech_name", "taxonomy_description"):
+                            if key in finding.details:
+                                taxonomy[key.replace("taxonomy_description", "description")] = finding.details[key]
+                        if taxonomy:
+                            analyzer_finding["mcp_taxonomies"].append(taxonomy)
+
+                    aliases = finding.details.get("aliases", []) if finding.details else []
+                    desc = finding.details.get("description", "") if finding.details else ""
+                    alias_str = ", ".join(aliases) if aliases else ""
+
+                    tool_desc_parts = [f"{vuln_id}: {pkg}=={ver}"]
+                    if alias_str:
+                        tool_desc_parts.append(f"Aliases: {alias_str}")
+                    if desc:
+                        tool_desc_parts.append(desc)
+
+                    results.append({
+                        "package_name": f"{pkg}=={ver}",
+                        "vulnerability_description": " | ".join(tool_desc_parts),
+                        "status": "completed",
+                        "is_safe": False,
+                        "findings": {"vulnerable_package_analyzer": analyzer_finding},
+                    })
+            else:
+                results.append({
+                    "package_name": scan_path,
+                    "vulnerability_description": f"Vulnerable package scan of {os.path.basename(scan_path)}",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {
+                        "vulnerable_package_analyzer": {
+                            "severity": "SAFE",
+                            "threat_summary": "No known vulnerabilities found",
+                            "threat_names": [],
+                            "total_findings": 0,
+                            "mcp_taxonomies": [],
+                        }
+                    },
+                })
+
+            if analyzer.last_scan_summary:
+                summary = analyzer.last_scan_summary
+                logger.info(
+                    "vulnerable-package summary: %d packages, %d vulnerable (%d total vulns)",
+                    summary.get("total_packages", 0),
+                    summary.get("vulnerable_packages", 0),
+                    summary.get("total_vulnerabilities", 0),
+                )
+
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2)
+                if args.verbose:
+                    print(f"Results saved to {args.output}")
+
+            selected_analyzers = [AnalyzerEnum.VULNERABLE_PACKAGE]
 
         # Backward compatibility path (no subcommand used)
         elif args.stdio_command:
@@ -2083,6 +2283,8 @@ async def main():
             server_label = args.server_url
         elif hasattr(args, "cmd") and args.cmd == "virustotal":
             server_label = f"virustotal:{args.scan_path}"
+        elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
+            server_label = f"vulnerable-package:{args.scan_path}"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
@@ -2119,11 +2321,19 @@ async def main():
                 display_instructions_results(results, server_label, detailed=False)
             return
 
-        results_dict = {
-            "server_url": server_label,
-            "scan_results": results,
-            "requested_analyzers": selected_analyzers,
-        }
+        is_vuln_pkg_scan = hasattr(args, "cmd") and args.cmd == "vulnerable-package"
+        if is_vuln_pkg_scan:
+            results_dict = {
+                "scan_target": server_label,
+                "scan_results": results,
+                "requested_analyzers": selected_analyzers,
+            }
+        else:
+            results_dict = {
+                "server_url": server_label,
+                "scan_results": results,
+                "requested_analyzers": selected_analyzers,
+            }
         formatter = ReportGenerator(results_dict)
 
         if args.stats:
@@ -2198,6 +2408,8 @@ async def main():
             server_label = "well-known-configs"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
+            server_label = f"vulnerable-package:{args.scan_path}"
 
         # Handle prompts, resources, and instructions with detailed view
         if hasattr(args, "cmd") and args.cmd == "prompts":
@@ -2206,6 +2418,14 @@ async def main():
             display_resource_results(results, server_label, detailed=args.detailed)
         elif hasattr(args, "cmd") and args.cmd == "instructions":
             display_instructions_results(results, server_label, detailed=args.detailed)
+        elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
+            results_dict = {
+                "scan_target": server_label,
+                "scan_results": results,
+                "requested_analyzers": [AnalyzerEnum.VULNERABLE_PACKAGE],
+            }
+            formatter = ReportGenerator(results_dict)
+            print(formatter.format_output(format_type=OutputFormat.DETAILED))
         else:
             results_dict = {"server_url": server_label, "scan_results": results}
             display_results(results_dict, detailed=args.detailed)

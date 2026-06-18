@@ -294,6 +294,20 @@ class ThreatMapping:
         },
     }
 
+    # Vulnerable Package Analyzer Threats
+    # Note: These map known-vulnerable Python dependency findings
+    VULNERABLE_PACKAGE_THREATS = {
+        "VULNERABLE_DEPENDENCY": {
+            "scanner_category": "VULNERABLE DEPENDENCY",
+            "severity": "HIGH",
+            "aitech": "AITech-9.3",
+            "aitech_name": "Supply Chain Compromise",
+            "aisubtech": "AISubtech-9.3.1",
+            "aisubtech_name": "Malicious Package / Tool Injection",
+            "description": "Introduction of malicious or adversarial tools, APIs, or packages into the toolset, registry, or dependency chain used by a system or agent, enabling the model to unknowingly invoke compromised tools that can execute attacks or expose data.",
+        },
+    }
+
     # AI Defense API Analyzer Threats
     # Note: These are the actual classification values returned by Cisco AI Defense API
     AI_DEFENSE_THREATS = {
@@ -515,6 +529,7 @@ class ThreatMapping:
             "behavioral": cls.BEHAVIORAL_THREATS,
             "virustotal": cls.VIRUSTOTAL_THREATS,
             "prompt_defense": cls.PROMPT_DEFENSE_THREATS,
+            "vulnerable_package": cls.VULNERABLE_PACKAGE_THREATS,
         }
 
         analyzer_lower = analyzer.lower()
@@ -556,3 +571,4 @@ API_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.AI_DEFENSE_THREATS)
 BEHAVIORAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.BEHAVIORAL_THREATS)
 VIRUSTOTAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VIRUSTOTAL_THREATS)
 PROMPT_DEFENSE_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.PROMPT_DEFENSE_THREATS)
+VULNERABLE_PACKAGE_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VULNERABLE_PACKAGE_THREATS)

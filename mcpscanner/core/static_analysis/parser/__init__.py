@@ -18,5 +18,6 @@
 
 from .base import BaseParser
 from .python_parser import PythonParser
+from .treesitter_parser import TreeSitterParser, EXTENSION_TO_LANGUAGE
 
-__all__ = ["BaseParser", "PythonParser"]
+__all__ = ["BaseParser", "PythonParser", "TreeSitterParser", "EXTENSION_TO_LANGUAGE"]

@@ -132,13 +132,17 @@ class Scanner:
         self._api_analyzer = ApiAnalyzer(config) if config.api_key else None
         self._yara_analyzer = YaraAnalyzer(rules_dir=rules_dir)
 
-        # LLM analyzer can be used with either API key or Bedrock (AWS credentials)
+        # LLM analyzer can be used with either API key or Bedrock (AWS credentials).
+        # Behavioral analyzer follows the same gate now that AlignmentLLMClient
+        # supports Bedrock auth via bearer token / AWS provider chain.
         is_bedrock = config.llm_model and "bedrock/" in config.llm_model
         self._llm_analyzer = (
             LLMAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
         )
         self._behavioral_analyzer = (
-            BehavioralCodeAnalyzer(config) if config.llm_provider_api_key else None
+            BehavioralCodeAnalyzer(config)
+            if (config.llm_provider_api_key or is_bedrock)
+            else None
         )
         self._vt_analyzer = (
             VirusTotalAnalyzer(
@@ -213,7 +217,8 @@ class Scanner:
             and not self._behavioral_analyzer
         ):
             missing_requirements.append(
-                "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured"
+                "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured "
+                "(or AWS credentials for Bedrock models)"
             )
 
         if (
@@ -251,7 +256,23 @@ class Scanner:
 
     @staticmethod
     def _is_missing_capability_error(error: Exception) -> bool:
-        """Return True when the server reports a capability is unavailable."""
+        """Return True when the server reports a capability is unavailable.
+
+        Covers three real-world shapes of "this method isn't implemented":
+
+        1. Spec-compliant JSON-RPC ``-32601`` ("Method not found").
+        2. Free-form message tokens (some servers return ``-32603`` with a
+           ``"unsupported"``-style message).
+        3. The MCP Python SDK's synthetic ``32600`` + ``"Session terminated"``
+           that ``mcp/client/streamable_http.py`` emits when the server
+           replies to a JSON-RPC POST with a plain HTTP 404. Many real-world
+           MCP servers (BigQuery, several Google APIs, some Cloudflare/GitHub
+           endpoints) return 404 for unimplemented ``resources/list`` or
+           ``prompts/list`` instead of a proper ``-32601`` error, and the SDK
+           relabels that as a session-terminated error. Treat the synthetic
+           shape as a missing-capability signal so callers can return ``[]``
+           instead of bubbling a misleading 500.
+        """
         messages = [str(error)]
         code = getattr(error, "code", None)
 
@@ -272,6 +293,13 @@ class Scanner:
         if code == -32601:
             return True
 
+        # SDK-synthetic shape for "server returned HTTP 404 for this method".
+        # We require BOTH the code and the canonical message so we don't
+        # silently swallow real mid-session terminations (which can use the
+        # same 32600 code with different messages).
+        if code == 32600 and "session terminated" in combined_message:
+            return True
+
         tokens = (
             "method not found",
             "methodnotfound",
@@ -281,6 +309,31 @@ class Scanner:
             "doesn't have",
         )
         return any(token in combined_message for token in tokens)
+
+    @staticmethod
+    def _server_supports_capability(
+        session: Any, capability: str
+    ) -> Optional[bool]:
+        """Check whether the server advertised support for a capability.
+
+        Reads the ``InitializeResult.capabilities`` that ``_get_mcp_session``
+        stashes on the session as ``_init_result``. Returns:
+
+        * ``True``  — server explicitly advertised this capability.
+        * ``False`` — server explicitly omitted it; we can short-circuit.
+        * ``None``  — we don't have init info; caller must fall back to the
+                     try/except path on the actual JSON-RPC call.
+        """
+        init_result = getattr(session, "_init_result", None)
+        if init_result is None:
+            return None
+        capabilities = getattr(init_result, "capabilities", None)
+        if capabilities is None:
+            return None
+        # ServerCapabilities is a pydantic model; missing optional fields
+        # default to None. A non-None object (even if empty) signals the
+        # server advertised the capability.
+        return getattr(capabilities, capability, None) is not None
 
     async def _analyze_tool(
         self,
@@ -1308,14 +1361,14 @@ class Scanner:
         Args:
             server_config: The stdio server configuration
             analyzers: List of analyzers to use
-            timeout: Connection timeout in seconds
+            timeout: Connection timeout in seconds (defaults to config's stdio_timeout)
             errlog: Optional file-like object for stderr redirection
 
         Returns:
             List[ToolScanResult]: List of tool scan results
         """
         if timeout is None:
-            timeout = 60
+            timeout = self._config.stdio_timeout
 
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -1378,7 +1431,7 @@ class Scanner:
             server_config (StdioServer): The stdio server configuration.
             tool_name (str): The name of the tool to scan.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
-            timeout (Optional[int]): Timeout for the connection.
+            timeout (Optional[int]): Timeout for the connection (defaults to config's stdio_timeout).
             errlog: Optional file-like object for stderr redirection.
 
         Returns:
@@ -1387,6 +1440,8 @@ class Scanner:
         Raises:
             ValueError: If the tool is not found on the server.
         """
+        if timeout is None:
+            timeout = self._config.stdio_timeout
         if not server_config.command:
             raise ValueError("No command provided in stdio server configuration.")
 
@@ -1441,11 +1496,16 @@ class Scanner:
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
         expand_vars_default: Optional[str] = None,
+        errlog: Any = None,
     ) -> Dict[str, List[ToolScanResult]]:
         """Scan all well-known MCP configuration files and their servers.
 
         Args:
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
+            auth (Optional[Auth]): Authentication configuration for remote servers.
+            expand_vars_default (Optional[str]): Default variable expansion mode.
+            errlog: Optional file-like object for stderr redirection of stdio servers.
+                    Pass ``open(os.devnull, "w")`` to suppress server stderr.
 
         Returns:
             Dict[str, List[ToolScanResult]]: Dictionary mapping config file paths to scan results.
@@ -1486,7 +1546,7 @@ class Scanner:
                         # Scan stdio server with timeout and error recovery
                         try:
                             results = await self.scan_stdio_server_tools(
-                                server_config, analyzers
+                                server_config, analyzers, errlog=errlog
                             )
                             # Add server name and source to each result
                             for result in results:
@@ -1546,12 +1606,17 @@ class Scanner:
         analyzers: Optional[List[AnalyzerEnum]] = None,
         auth: Optional[Auth] = None,
         expand_vars_default: Optional[str] = None,
+        errlog: Any = None,
     ) -> List[ToolScanResult]:
         """Scan all servers in a specific MCP configuration file.
 
         Args:
             config_path (str): Path to the MCP configuration file.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
+            auth (Optional[Auth]): Authentication configuration for remote servers.
+            expand_vars_default (Optional[str]): Default variable expansion mode.
+            errlog: Optional file-like object for stderr redirection of stdio servers.
+                    Pass ``open(os.devnull, "w")`` to suppress server stderr.
 
         Returns:
             List[ToolScanResult]: The results of scanning all servers in the config file.
@@ -1591,7 +1656,7 @@ class Scanner:
                     # Scan stdio server with timeout and error recovery
                     try:
                         results = await self.scan_stdio_server_tools(
-                            server_config, analyzers
+                            server_config, analyzers, errlog=errlog
                         )
                         # Add server name and source to each result
                         for result in results:
@@ -1684,6 +1749,13 @@ class Scanner:
         try:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
+            # Capability gate: see scan_remote_server_resources for rationale.
+            if self._server_supports_capability(session, "prompts") is False:
+                logger.info(
+                    f"Server '{server_url}' did not advertise prompts capability; skipping prompt scan"
+                )
+                return []
+
             # List all prompts
             try:
                 prompt_list = await session.list_prompts()
@@ -1761,6 +1833,12 @@ class Scanner:
         session = None
         try:
             client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # Capability gate (same rationale as scan_remote_server_prompts).
+            if self._server_supports_capability(session, "prompts") is False:
+                message = f"Server '{server_url}' did not advertise prompts capability; cannot scan '{prompt_name}'."
+                logger.warning(message)
+                raise ValueError(message)
 
             # List all prompts and find the target prompt
             try:
@@ -1895,6 +1973,7 @@ class Scanner:
         server_config: StdioServer,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
+        errlog: Any = None,
     ) -> List[PromptScanResult]:
         """Scan prompts from a stdio MCP server.
 
@@ -1902,12 +1981,15 @@ class Scanner:
             server_config: The stdio server configuration
             analyzers: List of analyzers to use (defaults to API and LLM)
             timeout: Connection timeout in seconds
+            errlog: Optional file-like object for stderr redirection.
+                    Pass ``open(os.devnull, "w")`` to suppress server stderr.
+            timeout: Connection timeout in seconds (defaults to config's stdio_timeout)
 
         Returns:
             List of prompt scan results
         """
         if timeout is None:
-            timeout = 60
+            timeout = self._config.stdio_timeout
 
         # Default to API and LLM analyzers for prompts
         if analyzers is None:
@@ -1923,7 +2005,7 @@ class Scanner:
             async def connect_and_scan():
                 nonlocal client_context, session
                 client_context, session = await self._get_stdio_session(
-                    server_config, timeout
+                    server_config, timeout, errlog
                 )
 
                 # List all prompts
@@ -1965,6 +2047,7 @@ class Scanner:
         prompt_name: str,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
+        errlog: Any = None,
     ) -> PromptScanResult:
         """Scan a specific prompt on a stdio MCP server.
 
@@ -1973,6 +2056,9 @@ class Scanner:
             prompt_name (str): The name of the prompt to scan.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
             timeout (Optional[int]): Timeout for the connection.
+            errlog: Optional file-like object for stderr redirection.
+                    Pass ``open(os.devnull, "w")`` to suppress server stderr.
+            timeout (Optional[int]): Timeout for the connection (defaults to config's stdio_timeout).
 
         Returns:
             PromptScanResult: The result of the scan.
@@ -1980,6 +2066,8 @@ class Scanner:
         Raises:
             ValueError: If the prompt is not found on the server.
         """
+        if timeout is None:
+            timeout = self._config.stdio_timeout
         if not server_config.command:
             raise ValueError("No command provided in stdio server configuration.")
 
@@ -1994,7 +2082,7 @@ class Scanner:
         session = None
         try:
             client_context, session = await self._get_stdio_session(
-                server_config, timeout
+                server_config, timeout, errlog
             )
 
             # List all prompts and find the target prompt
@@ -2222,6 +2310,16 @@ class Scanner:
         try:
             client_context, session = await self._get_mcp_session(server_url, auth)
 
+            # Capability gate: if the InitializeResult didn't advertise
+            # resources support, don't bother calling list_resources — many
+            # real servers return HTTP 404 for the unsupported method which
+            # the MCP SDK relabels as "Session terminated".
+            if self._server_supports_capability(session, "resources") is False:
+                logger.info(
+                    f"Server '{server_url}' did not advertise resources capability; skipping resource scan"
+                )
+                return []
+
             # List all resources
             try:
                 resource_list = await session.list_resources()
@@ -2411,6 +2509,12 @@ class Scanner:
         session = None
         try:
             client_context, session = await self._get_mcp_session(server_url, auth)
+
+            # Capability gate (same rationale as scan_remote_server_resources).
+            if self._server_supports_capability(session, "resources") is False:
+                message = f"Server '{server_url}' did not advertise resources capability; cannot scan '{resource_uri}'."
+                logger.warning(message)
+                raise ValueError(message)
 
             # List all resources to find the target
             try:

@@ -57,6 +57,7 @@ class Config:
         aws_profile_name: str = None,
         aws_bearer_token_bedrock: str = None,
         llm_timeout: float = None,
+        stdio_timeout: int = None,
         oauth_client_id: str = None,
         oauth_client_secret: str = None,
         oauth_token_url: str = None,
@@ -124,6 +125,7 @@ class Config:
         self._aws_bearer_token_bedrock = aws_bearer_token_bedrock or os.getenv("AWS_BEARER_TOKEN_BEDROCK")
 
         self._llm_timeout = llm_timeout or CONSTANTS.DEFAULT_LLM_TIMEOUT
+        self._stdio_timeout = stdio_timeout or CONSTANTS.DEFAULT_STDIO_TIMEOUT
         self._oauth_client_id = oauth_client_id
         self._oauth_client_secret = oauth_client_secret
         self._oauth_token_url = oauth_token_url
@@ -280,6 +282,15 @@ class Config:
             float: The timeout in seconds.
         """
         return self._llm_timeout
+
+    @property
+    def stdio_timeout(self) -> int:
+        """Get the timeout for stdio server connections.
+
+        Returns:
+            int: The timeout in seconds.
+        """
+        return self._stdio_timeout
 
     @property
     def oauth_client_id(self) -> Optional[str]:

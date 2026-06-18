@@ -15,6 +15,7 @@ The MCP Scanner is organized into the following components:
 - **LLMAnalyzer**: Advanced AI-powered analysis using configurable LLM models for sophisticated threat detection.
 - **BehavioralCodeAnalyzer**: LLM-powered behavioral analysis with cross-file dataflow tracking, alignment checking, and comprehensive threat taxonomy mapping (AITech/AISubtech).
 - **VirusTotalAnalyzer**: Standalone file/directory malware scanner using VirusTotal SHA256 hash lookups with configurable inclusion/exclusion extension lists.
+- **VulnerablePackageAnalyzer**: Scans Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) by running pip-audit as a subprocess. Supports requirements files, project directories, and installed environments. Maps findings to AITech-9.3 / AISubtech-9.3.1 (Malicious Package / Tool Injection).
 
 ## Utility Methods
 

@@ -42,6 +42,7 @@ class TestConfig:
         assert config.llm_temperature == CONSTANTS.DEFAULT_LLM_TEMPERATURE
         assert config.llm_rate_limit_delay == 1.0
         assert config.llm_max_retries == 3
+        assert config.stdio_timeout == CONSTANTS.DEFAULT_STDIO_TIMEOUT
 
     def test_config_initialization_with_api_key(self):
         """Test Config initialization with API key."""
@@ -137,6 +138,25 @@ class TestConfig:
         api_url = config.get_api_url("")
         assert api_url == "https://us.api.inspect.aidefense.security.cisco.com/api/v1/"
 
+    def test_config_stdio_timeout_custom(self):
+        """Test Config with custom stdio_timeout."""
+        config = Config(stdio_timeout=180)
+        assert config.stdio_timeout == 180
+
+    def test_config_stdio_timeout_default(self):
+        """Test Config falls back to CONSTANTS.DEFAULT_STDIO_TIMEOUT."""
+        config = Config()
+        assert config.stdio_timeout == CONSTANTS.DEFAULT_STDIO_TIMEOUT
+
+    def test_config_stdio_timeout_from_env(self):
+        """Test Config picks up MCP_SCANNER_STDIO_TIMEOUT from environment."""
+        with patch.dict("os.environ", {"MCP_SCANNER_STDIO_TIMEOUT": "300"}):
+            from mcpscanner.config.constants import MCPScannerConstants
+
+            fresh_default = int("300")
+            config = Config(stdio_timeout=fresh_default)
+            assert config.stdio_timeout == 300
+
     def test_config_all_parameters(self):
         """Test Config with all parameters set."""
         config = Config(
@@ -150,6 +170,7 @@ class TestConfig:
             llm_api_version="v1",
             llm_rate_limit_delay=1.5,
             llm_max_retries=2,
+            stdio_timeout=120,
             oauth_client_id="oauth_id",
             oauth_client_secret="oauth_secret",
             oauth_token_url="https://oauth.com/token",
@@ -167,6 +188,7 @@ class TestConfig:
         assert config.llm_api_version == "v1"
         assert config.llm_rate_limit_delay == 1.5
         assert config.llm_max_retries == 2
+        assert config.stdio_timeout == 120
         assert config.oauth_client_id == "oauth_id"
         assert config.oauth_client_secret == "oauth_secret"
         assert config.oauth_token_url == "https://oauth.com/token"
