@@ -26,6 +26,59 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .base import BaseAnalyzer, SecurityFinding
 from ..models import AnalyzerEnum
+from ...utils.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
+def _extract_html_text_if_needed(content: str, mime_type: Optional[str]) -> str:
+    """Strip HTML tags from a resource body when ``mime_type`` is ``text/html``.
+
+    H5 fix: the remote scan path (``Scanner._analyze_resource``)
+    already runs BeautifulSoup on ``text/html`` resources before
+    passing the body to API/LLM analyzers and persisting it in
+    ``ResourceScanResult.resource_text``. The static path used to
+    skip this step, so the same resource scanned via two paths
+    produced two different ``resource_text`` shapes — and therefore
+    two different meta-analyzer prompts when ``--enable-meta`` ran.
+
+    Keeping the helper module-level (rather than inside ``StaticAnalyzer``)
+    so a future reviewer who needs to make the two paths byte-equal
+    can lift the remote path's inline copy onto this helper too.
+
+    BeautifulSoup is an optional dependency; if it's unavailable, fall
+    back to the raw content with a single warning per import failure
+    (matches the remote path's exact behaviour).
+    """
+    if mime_type != "text/html" or not content:
+        return content
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        logger.warning(
+            "BeautifulSoup not installed; static-path HTML resource will "
+            "be analysed (and surfaced in resource_text) as raw markup. "
+            "Install bs4 to match the remote-path behaviour."
+        )
+        return content
+    try:
+        soup = BeautifulSoup(content, "html.parser")
+        return soup.get_text(separator="\n", strip=True)
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            "Static-path HTML extraction failed (%s); using raw content. "
+            "resource_text will diverge from remote-path output for this "
+            "resource.",
+            e,
+        )
+        return content
+    except Exception as e:  # pragma: no cover - defensive parity with remote path
+        logger.error(
+            "Unexpected error in static-path HTML extraction (%s); using "
+            "raw content.",
+            e,
+        )
+        return content
 
 
 class StaticAnalyzer:
@@ -93,6 +146,20 @@ class StaticAnalyzer:
                 raise json.JSONDecodeError(
                     f"Invalid JSON in {file_path}: {e.msg}", e.doc, e.pos
                 )
+
+    @staticmethod
+    def _get_finding_analyzer_name(analyzer) -> str:
+        """Get the analyzer name as used in SecurityFinding.analyzer field.
+
+        BaseAnalyzer subclasses may set self.name differently from the value
+        they write into finding.analyzer. This mapping ensures the names
+        reported in result.analyzers match the finding-level names so the
+        report generator groups them correctly.
+        """
+        name_map = {
+            "LLMAnalyzer": "LLM",
+        }
+        return name_map.get(analyzer.name, analyzer.name)
 
     async def _analyze_content(
         self, content: str, context: Optional[Dict[str, Any]] = None
@@ -196,7 +263,7 @@ class StaticAnalyzer:
                 "is_safe": len(all_findings) == 0,
                 "findings": all_findings,
                 "status": "completed",
-                "analyzers": [a.name for a in self.analyzers],
+                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
             }
 
             results.append(result)
@@ -267,7 +334,7 @@ class StaticAnalyzer:
                 "is_safe": len(findings) == 0,
                 "findings": findings,
                 "status": "completed",
-                "analyzers": [a.name for a in self.analyzers],
+                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
             }
 
             results.append(result)
@@ -436,23 +503,45 @@ class StaticAnalyzer:
         if not resource_mime:
             resource_mime = "text/plain" if text_content else "application/octet-stream"
 
+        # H5 fix: strip HTML on the static path so ``resource_text``
+        # produced here byte-matches what ``Scanner._analyze_resource``
+        # produces on the remote path. Without this, a ``text/html``
+        # resource scanned from a JSON file shipped raw markup to the
+        # meta-analyzer while the same resource scanned via
+        # ``scan-remote-server`` shipped extracted text — divergent
+        # prompts → divergent FP-filter decisions for the same content.
+        text_content = _extract_html_text_if_needed(text_content, resource_mime)
+
         if skip_blob_only and saw_blob and not text_content:
             return {
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
                 "resource_mime_type": resource_mime,
+                # Surface the MCP-advertised description and the text we
+                # would have analysed even on the skip path; downstream
+                # ``ResourceScanResult`` construction can persist them
+                # verbatim, and the meta-analyzer can second-guess
+                # follow-up reads of the same resource against the same
+                # evidence the primary pass saw.
+                "resource_description": resource_description,
+                "resource_text": text_content,
                 "is_safe": True,
                 "findings": [],
                 "status": "skipped",
                 "analyzers": [],
             }
 
-        # Check MIME type filter
+        # Check MIME type filter — resource isn't scanned, return a "skipped"
+        # result that matches the shape used by the skip_blob_only branch above.
+        # Bug fix: previously this branch referenced an undefined `findings`
+        # variable, since `findings` is only assigned by the analysis path below.
         if allowed_mime_types and resource_mime not in allowed_mime_types:
             return {
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
                 "resource_mime_type": resource_mime,
+                "resource_description": resource_description,
+                "resource_text": text_content,
                 "is_safe": True,
                 "findings": [],
                 "status": "skipped",
@@ -480,6 +569,24 @@ class StaticAnalyzer:
             "resource_uri": resource_uri,
             "resource_name": resource_name,
             "resource_mime_type": resource_mime,
+            # P0-3 plumbing for the static path. The remote ``_analyze_resource``
+            # already persists these on the resulting ``ResourceScanResult``;
+            # without these dict keys the CLI couldn't wire them through and
+            # ``--enable-meta`` would feed the meta-analyzer ``"N/A"`` for
+            # description (sees only name + uri + mime_type), making FP
+            # filtering on file-based resource scans unsupervised.
+            #
+            # Canonical shape (matches the remote path and the skip
+            # branches above): ``resource_description`` is the
+            # MCP-advertised description verbatim, and ``resource_text``
+            # is the resource BODY only — never the LLM-formatted
+            # ``analysis_content`` blob (which prepends ``Resource URI:``,
+            # ``Name:``, ``Description:``, ``MIME Type:`` headers and
+            # would duplicate the description into the body when the
+            # meta-analyzer concats them via
+            # ``Scanner._build_resource_description_for_meta``).
+            "resource_description": resource_description,
+            "resource_text": text_content,
             "is_safe": len(findings) == 0,
             "findings": findings,
             "status": "completed",

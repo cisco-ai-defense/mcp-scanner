@@ -118,7 +118,15 @@ def _prepare_scanner_config(
         HTTPException: If API scan is requested but config is invalid.
     """
     api_scan = AnalyzerEnum.API in analyzers
-    llm_scan = AnalyzerEnum.LLM in analyzers
+    # All three of LLM, BEHAVIORAL, and META share the same LLM credential
+    # plumbing on Scanner (config.llm_provider_api_key + Bedrock fallbacks).
+    # If we blank those vars when only e.g. META is requested, Scanner's
+    # _validate_analyzer_requirements will reject the scan even though the
+    # operator's environment is correctly configured.
+    needs_llm_credentials = any(
+        a in analyzers
+        for a in (AnalyzerEnum.LLM, AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META)
+    )
 
     api_key_to_use = API_KEY
     llm_api_key_to_use = LLM_API_KEY
@@ -127,11 +135,11 @@ def _prepare_scanner_config(
     aws_session_token_to_use = AWS_SESSION_TOKEN
     aws_profile_to_use = AWS_PROFILE
 
-    # Validate configuration if API scan or LLM scan is requested
+    # Validate configuration if API scan or any LLM-backed analyzer is requested
     _validate_api_config(
         api_scan,
         api_key_to_use,
-        llm_scan,
+        needs_llm_credentials,
         llm_api_key_to_use,
         LLM_MODEL,
         aws_region_to_use,
@@ -142,8 +150,8 @@ def _prepare_scanner_config(
     if not api_scan:
         api_key_to_use = ""
 
-    # If not doing LLM scan, we don't need LLM-related configuration
-    if not llm_scan:
+    # If no LLM-backed analyzer is requested, we don't need LLM credentials
+    if not needs_llm_credentials:
         llm_api_key_to_use = ""
         aws_region_to_use = ""
         aws_session_token_to_use = ""
