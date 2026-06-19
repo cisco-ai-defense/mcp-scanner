@@ -52,6 +52,9 @@ from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
+# P1-6 fix: CLI no longer imports MetaAnalyzer / apply_meta_analysis directly.
+# The static-config meta path now routes through ``Scanner.apply_meta_to_results``
+# so all four entity types stay in lock-step with the remote-scan path.
 
 logger = get_logger(__name__)
 
@@ -140,6 +143,7 @@ def _build_config(
             if (
                 AnalyzerEnum.LLM in selected_analyzers
                 or AnalyzerEnum.BEHAVIORAL in selected_analyzers
+                or AnalyzerEnum.META in selected_analyzers
             )
             else ""
         ),
@@ -148,6 +152,7 @@ def _build_config(
             if (
                 AnalyzerEnum.LLM in selected_analyzers
                 or AnalyzerEnum.BEHAVIORAL in selected_analyzers
+                or AnalyzerEnum.META in selected_analyzers
             )
             else ""
         ),
@@ -1330,7 +1335,18 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package, meta (default: %(default)s)",
+    )
+
+    parser.add_argument(
+        "--enable-meta",
+        action="store_true",
+        help=(
+            "Enable the LLM meta-analyzer for second-pass analysis. "
+            "Reviews findings from all other analyzers to filter false positives, "
+            "prioritize by actual risk, and correlate related findings. "
+            "Requires MCP_SCANNER_LLM_API_KEY. Adds 'meta' to the analyzer list."
+        ),
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
@@ -1479,6 +1495,10 @@ async def main():
     # Convert to AnalyzerEnum list
     selected_analyzers = [AnalyzerEnum(name) for name in analyzer_names]
 
+    # Add META analyzer if --enable-meta flag is set
+    if getattr(args, "enable_meta", False) and AnalyzerEnum.META not in selected_analyzers:
+        selected_analyzers.append(AnalyzerEnum.META)
+
     # Validate behavioral analyzer requirements
     if AnalyzerEnum.BEHAVIORAL in selected_analyzers:
         if not args.source_path and not (
@@ -1624,8 +1644,47 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        # Thread the description / text the static analyzer
+                        # consumed so ``--enable-meta`` can second-guess
+                        # findings against the same evidence the primary
+                        # pass saw. Without these the meta-analyzer falls
+                        # back to ``"N/A"`` for description and FP triage
+                        # on file-based resources is unsupervised.
+                        resource_description=r.get("resource_description", ""),
+                        resource_text=r.get("resource_text", ""),
                     )
                     all_results.append(resource_result)
+
+            # P0-5 fix: also accept Bedrock-via-AWS-credentials. Previously
+            # this gate only honoured ``llm_provider_api_key`` and silently
+            # no-op'd on the IAM-only Lambda flow this branch was built for.
+            # Mirror Scanner.__init__'s ``(api_key or is_bedrock)`` rule so
+            # ``--enable-meta`` with ``MCP_SCANNER_LLM_MODEL=bedrock/...`` and
+            # an AWS profile works end-to-end.
+            _meta_is_bedrock = bool(
+                cfg.llm_model and "bedrock/" in cfg.llm_model
+            )
+            if AnalyzerEnum.META in selected_analyzers and (
+                cfg.llm_provider_api_key or _meta_is_bedrock
+            ):
+                # P1-6 fix: route through Scanner.apply_meta_to_results
+                # rather than reimplementing per-result meta-analysis here.
+                # The previous inline loop had drifted from the Scanner
+                # helpers and produced two real bugs (P0-4 silently dropped
+                # resource/instructions enrichment, P0-5 silently no-op'd
+                # on the IAM-only Bedrock flow). One source of truth.
+                #
+                # M2 fix: use ``for_meta_only`` so the static path doesn't
+                # pay the cost of constructing every primary analyzer
+                # (Yara compilation, ApiAnalyzer endpoint validation,
+                # Behavioral / VT / Readiness / PromptDefense) just to
+                # invoke a single LLM-backed entrypoint. ``rules_dir``
+                # is intentionally dropped here — the meta-only path
+                # never touches Yara.
+                meta_scanner = Scanner.for_meta_only(cfg)
+                all_results = await meta_scanner.apply_meta_to_results(
+                    all_results, [AnalyzerEnum.META]
+                )
 
             results = await results_to_json(all_results)
 
