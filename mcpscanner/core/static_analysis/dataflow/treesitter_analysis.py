@@ -232,10 +232,13 @@ class TreeSitterDataflowAnalysis:
         results = self._collect_results()
         reaches_ext = sum(1 for f in results if f.reaches_external)
         reaches_ret = sum(1 for f in results if f.reaches_returns)
+        # Microsecond resolution: per-function dataflow fixpoints over a
+        # tree-sitter CFG usually settle in well under 1ms, which made
+        # ms-level timing useless for spotting slow outliers.
         logger.debug(
             "static_dataflow treesitter done language=%s nodes=%d params=%d "
             "flows=%d reaches_external=%d reaches_returns=%d iterations=%d "
-            "capped=%s duration_ms=%d",
+            "capped=%s duration_us=%d",
             self.language,
             len(self.cfg.nodes),
             len(self.param_names),
@@ -244,7 +247,7 @@ class TreeSitterDataflowAnalysis:
             reaches_ret,
             iterations,
             capped,
-            int((time.perf_counter() - analyze_start) * 1000),
+            int((time.perf_counter() - analyze_start) * 1_000_000),
         )
         return results
     

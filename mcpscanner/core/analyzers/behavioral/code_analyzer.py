@@ -45,6 +45,22 @@ from ...static_analysis.interprocedural.treesitter_call_graph import (
 )
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
+from .alignment.alignment_orchestrator import _sanitise_log_value
+
+
+# Display order for severity rollups in log lines. Authoritative ordering
+# lives in :func:`mcpscanner.core.result.get_highest_severity`; this tuple
+# is the operator-facing presentation order. ``UNKNOWN`` and ``ERROR`` come
+# last so they don't visually mask the real severities at a glance.
+_SEVERITY_DISPLAY_ORDER = (
+    "HIGH",
+    "MEDIUM",
+    "LOW",
+    "INFO",
+    "SAFE",
+    "ERROR",
+    "UNKNOWN",
+)
 
 
 @dataclass(slots=True)
@@ -141,9 +157,28 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             all_findings = []
             # Reset per-call so consumers see only tools from this invocation.
             self.analyzed_functions = []
+            # Reset the alignment orchestrator's cumulative counters so the
+            # end-of-scan ``alignment summary`` and per-batch ``done`` lines
+            # describe THIS scan only. Without this, long-lived scanners
+            # (API server, daemonised CLI) report monotonically-growing
+            # lifetime totals as if they were per-scan totals.
+            self.alignment_orchestrator.reset_stats()
+            alignment_baseline = self.alignment_orchestrator.stats_snapshot()
 
             scan_start = time.perf_counter()
-            tool_label = context.get("tool_name") or context.get("file_path") or "<inline>"
+            # Pre-declare so the top-level ``except`` below can reference
+            # these names even if the exception fires before mode
+            # detection runs.
+            scan_mode = "unknown"
+            scan_target = "unknown"
+            tool_label_raw = (
+                context.get("tool_name") or context.get("file_path") or "<inline>"
+            )
+            # Sanitise the operator-facing tool label so a hostile tool
+            # name like ``foo bar=hax`` can't masquerade as additional
+            # structured fields in our INFO lines. Same scrubbing is
+            # applied to ``scope`` in ``log_summary``.
+            tool_label = _sanitise_log_value(tool_label_raw)
 
             # Determine scan mode for the start-of-scan INFO line. Keeping
             # this short and structured (mode=<…> target=<…>) so log
@@ -151,10 +186,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # free-form text.
             if os.path.isdir(content):
                 scan_mode = "directory"
-                scan_target = content
+                scan_target = _sanitise_log_value(content)
             elif os.path.isfile(content):
                 scan_mode = "file"
-                scan_target = content
+                scan_target = _sanitise_log_value(content)
             else:
                 scan_mode = "inline"
                 # Don't log the raw source — could be private code. Just
@@ -199,8 +234,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # for "did the prefilter find anything to scan?" — a
                 # silent fall-through to 0 capability files is the most
                 # common cause of empty scan results in the field.
+                # Pure key=value (no trailing prose) so log aggregators
+                # can extract the two numeric fields unambiguously.
                 self.logger.info(
-                    "behavioral prefilter scanned=%d kept=%d (files containing MCP markers)",
+                    "behavioral prefilter scanned=%d kept=%d",
                     len(source_files),
                     len(capability_files),
                 )
@@ -208,12 +245,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 if source_files and not capability_files:
                     # Helpful warning so operators don't get blank output
                     # without a clue: the prefilter dropped everything.
+                    # Explanation lives in the docstring; the log line
+                    # itself stays parser-friendly.
                     self.logger.warning(
                         "behavioral no_mcp_capabilities scanned=%d dir=%s "
-                        "-- no source files contained MCP capability markers "
-                        "(@mcp.tool, server.tool(...), etc.)",
+                        "reason=no_mcp_capability_markers",
                         len(source_files),
-                        content,
+                        _sanitise_log_value(content),
                     )
 
                 # Partition files by language family
@@ -231,13 +269,18 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     # One line per scan that names the languages and per-lang
                     # counts — useful when an operator says "I expected Go to
                     # be scanned but it wasn't". Sorted for stable output.
+                    # Per-language counts are projected as their own
+                    # ``lang_<name>=N`` fields so each language becomes a
+                    # first-class queryable field in log aggregators.
                     lang_counts = {
                         "python": len(python_files),
                         **{lang: len(files) for lang, files in sorted(ts_files_by_lang.items())},
                     }
+                    lang_fields = " ".join(
+                        f"lang_{lang}={n}" for lang, n in lang_counts.items() if n
+                    )
                     self.logger.info(
-                        "behavioral languages %s",
-                        " ".join(f"{lang}={n}" for lang, n in lang_counts.items() if n),
+                        "behavioral languages %s", lang_fields
                     )
 
                 # Build Python call graph
@@ -348,7 +391,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
                     self.logger.info(
                         "behavioral file done path=%s findings=%d non_safe=%d duration_ms=%d",
-                        accepted.path,
+                        _sanitise_log_value(accepted.path),
                         len(file_findings),
                         non_safe,
                         file_ms,
@@ -428,47 +471,58 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # without parsing free-form text. SAFE rows are included so
             # the total matches ``analyzed_functions``; non_safe is also
             # broken out for at-a-glance triage.
-            severity_counts = Counter(
+            severity_counts: Counter[str] = Counter(
                 (getattr(f, "severity", "") or "UNKNOWN") for f in all_findings
             )
             non_safe_total = sum(
                 v for k, v in severity_counts.items() if k != "SAFE"
             )
             scan_ms = int((time.perf_counter() - scan_start) * 1000)
+            # Project per-severity counts as their own ``sev_<NAME>=N``
+            # fields so log aggregators (Splunk KV_MODE, CloudWatch
+            # parse, Datadog facets) can extract them without choking on
+            # an embedded ``=`` inside a value. Display order follows the
+            # canonical severity ranking; any severity we don't have a
+            # rank for is appended at the end.
+            ordered_keys = [s for s in _SEVERITY_DISPLAY_ORDER if s in severity_counts]
+            ordered_keys += [s for s in severity_counts if s not in _SEVERITY_DISPLAY_ORDER]
+            sev_fields = " ".join(
+                f"sev_{key}={severity_counts[key]}" for key in ordered_keys
+            )
             self.logger.info(
                 "behavioral scan done mode=%s target=%s findings=%d non_safe=%d "
-                "analyzed_functions=%d severities=%s duration_ms=%d",
+                "analyzed_functions=%d duration_ms=%d %s",
                 scan_mode,
                 scan_target,
                 len(all_findings),
                 non_safe_total,
                 len(self.analyzed_functions),
-                # Pre-formatted as `H=2,M=1,SAFE=4`; gives operators a
-                # bounded, easy-to-grep severity rollup without dumping
-                # the raw dict.
-                ",".join(
-                    f"{k}={v}" for k, v in sorted(severity_counts.items())
-                ),
                 scan_ms,
+                sev_fields,
             )
             # Single grep-friendly line for alignment-layer stats so
             # operators see how many functions hit the LLM, how many
             # came back clean vs flagged vs errored — independent of
-            # the SAFE-row synthesis the analyzer does on top.
+            # the SAFE-row synthesis the analyzer does on top. ``scope``
+            # is value-sanitised inside ``log_summary`` so we don't have
+            # to do it here a second time.
             try:
-                self.alignment_orchestrator.log_summary(scope=f"{scan_mode}:{tool_label}")
+                self.alignment_orchestrator.log_summary(
+                    scope=f"{scan_mode}:{tool_label}",
+                    baseline=alignment_baseline,
+                )
             except Exception:  # pragma: no cover - logging must never raise
                 pass
             return all_findings
 
         except Exception as e:
+            # ``scan_mode`` / ``scan_target`` are pre-initialised above so
+            # we can reference them directly here even on early
+            # exceptions — no ``locals()`` introspection required.
             self.logger.error(
                 "behavioral scan failed mode=%s target=%s error_type=%s error=%s",
-                # ``scan_mode`` / ``scan_target`` may be unset if the
-                # exception fires before mode detection; fall back to
-                # "unknown" rather than swallow the error.
-                locals().get("scan_mode", "unknown"),
-                locals().get("scan_target", "unknown"),
+                scan_mode,
+                scan_target,
                 type(e).__name__,
                 e,
                 exc_info=True,
@@ -666,7 +720,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.logger.debug(
                 "behavioral _analyze_file ok path=%s findings=%d source_length=%d "
                 "duration_ms=%d",
-                file_path,
+                _sanitise_log_value(file_path),
                 len(findings),
                 len(source_code),
                 int((time.perf_counter() - analyze_start) * 1000),
@@ -677,7 +731,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.logger.error(
                 "behavioral _analyze_file failed path=%s duration_ms=%d "
                 "error_type=%s error=%s",
-                file_path,
+                _sanitise_log_value(file_path),
                 int((time.perf_counter() - analyze_start) * 1000),
                 type(e).__name__,
                 e,

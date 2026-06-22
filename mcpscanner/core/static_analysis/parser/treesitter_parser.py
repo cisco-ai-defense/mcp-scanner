@@ -239,7 +239,11 @@ class TreeSitterParser(BaseParser):
 
         self._tree = parser.parse(self.source_bytes)
         self._ast = self._tree
-        parse_ms = int((time.perf_counter() - parse_start) * 1000)
+        # Microsecond resolution: tree-sitter parses are typically
+        # sub-millisecond even on multi-KB files; ``duration_ms=0``
+        # everywhere hid performance regressions from log-only
+        # profiling.
+        parse_us = int((time.perf_counter() - parse_start) * 1_000_000)
         # `has_error` flag is true when tree-sitter recovered from syntax errors;
         # log at DEBUG (very common in partial/incomplete code), but include it
         # so operators can correlate downstream analysis quality drops.
@@ -248,13 +252,13 @@ class TreeSitterParser(BaseParser):
         )
         logger.debug(
             "static_parser treesitter parsed file=%s language=%s lines=%d "
-            "bytes=%d has_error=%s duration_ms=%d",
+            "bytes=%d has_error=%s duration_us=%d",
             self.file_path,
             self.language,
             len(self.lines),
             len(self.source_bytes),
             has_error,
-            parse_ms,
+            parse_us,
         )
         return self._tree
     

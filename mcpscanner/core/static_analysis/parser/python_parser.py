@@ -60,21 +60,25 @@ class PythonParser(BaseParser):
         parse_start = time.perf_counter()
         try:
             tree = ast.parse(self.source_code, filename=str(self.file_path))
-            parse_ms = int((time.perf_counter() - parse_start) * 1000)
+            # Microsecond resolution: ``ast.parse`` on small files routinely
+            # completes in under 1ms, which would have silently truncated
+            # to ``duration_ms=0`` and made performance regressions
+            # invisible in profiling.
+            parse_us = int((time.perf_counter() - parse_start) * 1_000_000)
             logger.debug(
-                "static_parser python parsed file=%s lines=%d bytes=%d duration_ms=%d",
+                "static_parser python parsed file=%s lines=%d bytes=%d duration_us=%d",
                 self.file_path,
                 len(self.lines),
                 len(self.source_code),
-                parse_ms,
+                parse_us,
             )
             return tree
         except SyntaxError as e:
-            parse_ms = int((time.perf_counter() - parse_start) * 1000)
+            parse_us = int((time.perf_counter() - parse_start) * 1_000_000)
             logger.warning(
-                "static_parser python syntax_error file=%s duration_ms=%d line=%s error=%s",
+                "static_parser python syntax_error file=%s duration_us=%d line=%s error=%s",
                 self.file_path,
-                parse_ms,
+                parse_us,
                 getattr(e, "lineno", "?"),
                 str(e)[:200],
             )

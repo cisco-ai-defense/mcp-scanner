@@ -27,14 +27,48 @@ The client manages:
 """
 
 import asyncio
+import itertools
 import logging
 import time
-from typing import Optional
 
 from litellm import acompletion
 
 from .....config.config import Config
 from .....config.constants import MCPScannerConstants
+
+
+# Process-wide monotonic id factories so two ``AlignmentLLMClient``
+# instances in the same process don't both emit ``request_id=1`` and
+# collide in search results. The counters are best-effort (not thread-
+# safe under freethreading) but adequate under the CPython GIL where
+# ``next(...)`` is a single bytecode dispatch.
+_PROCESS_CLIENT_IDS = itertools.count(1)
+_PROCESS_REQUEST_IDS = itertools.count(1)
+
+
+# Maximum length of an arbitrary string interpolated into an error log
+# line. ``litellm`` exception messages can include multi-KB request body
+# echoes (Bedrock dumps base64 payloads on validation failures); capping
+# at this size keeps log lines bounded without losing the root cause.
+_ERROR_TRUNCATE = 400
+# Cap on the size of a raw response dump in DEBUG logs. Same rationale
+# as the validator's prefix cap — keeps logs bounded when a hostile MCP
+# server's tool description coaxes the model into a multi-KB reply.
+_RESPONSE_DEBUG_MAX = 500
+
+
+def _truncate(value: object, limit: int) -> str:
+    """Stringify ``value`` and clip to ``limit`` chars with an ellipsis marker.
+
+    Centralised so every log line that interpolates an LLM-controlled
+    string (exception messages, response bodies) uses the same bound.
+    The trailing ``…(+N)`` suffix lets operators see something was
+    dropped without dumping it.
+    """
+    s = str(value)
+    if len(s) <= limit:
+        return s
+    return f"{s[:limit]}…(+{len(s) - limit})"
 
 
 def _classify_provider(model: str) -> str:
@@ -45,6 +79,10 @@ def _classify_provider(model: str) -> str:
     slow requests. Kept narrow on purpose — anything not on the known
     list collapses to ``"other"`` so a typo'd model name still produces
     a clean log message instead of a leaky prefix dump.
+
+    The ``o1-`` / ``o3-`` prefixes are anchored with the trailing hyphen
+    so a future model from a different provider that happens to start
+    with ``o1`` or ``o3`` won't be mis-classified as OpenAI.
     """
     if not model:
         return "unknown"
@@ -52,7 +90,7 @@ def _classify_provider(model: str) -> str:
         return "bedrock"
     if model.startswith("azure/"):
         return "azure"
-    if model.startswith(("openai/", "gpt-", "o1", "o3", "chatgpt-")):
+    if model.startswith(("openai/", "gpt-", "o1-", "o3-", "chatgpt-")):
         return "openai"
     if model.startswith("anthropic/"):
         return "anthropic"
@@ -129,10 +167,14 @@ class AlignmentLLMClient:
         self._aws_profile_name = config.aws_profile_name if is_bedrock else None
 
         self.logger = logging.getLogger(__name__)
-        # Counter for correlating retries with the originating request in
-        # logs (request_id=N in every line emitted by _make_llm_request).
-        # Per-instance so concurrent scanners don't collide in logs.
-        self._request_counter = 0
+        # ``client_id`` is process-unique and emitted on the init line
+        # below. The per-call ``request_id`` (assigned in
+        # ``verify_alignment``) is drawn from a separate process-wide
+        # sequence so two clients in the same process can be cleanly
+        # disentangled in search results even though they share the
+        # logger name. This replaces the previous per-instance counter
+        # which would collide on ``request_id=1`` across instances.
+        self._client_id = next(_PROCESS_CLIENT_IDS)
         # Bumped to INFO on init so operators see at-a-glance which model
         # + auth mode the behavioral analyzer is talking to without
         # having to flip the whole library to DEBUG. Emits exactly once
@@ -146,7 +188,9 @@ class AlignmentLLMClient:
             else:
                 auth_kind = "aws_provider_chain"
             self.logger.info(
-                "AlignmentLLMClient initialized: provider=%s model=%s region=%s auth=%s timeout=%ss",
+                "AlignmentLLMClient initialized client_id=%d provider=%s model=%s "
+                "region=%s auth=%s timeout=%ss",
+                self._client_id,
                 provider,
                 self._model,
                 self._aws_region,
@@ -155,7 +199,9 @@ class AlignmentLLMClient:
             )
         else:
             self.logger.info(
-                "AlignmentLLMClient initialized: provider=%s model=%s base_url=%s api_version=%s timeout=%ss",
+                "AlignmentLLMClient initialized client_id=%d provider=%s model=%s "
+                "base_url=%s api_version=%s timeout=%ss",
+                self._client_id,
                 provider,
                 self._model,
                 self._base_url or "default",
@@ -176,11 +222,9 @@ class AlignmentLLMClient:
             Exception: If LLM API call fails after retries
         """
         # Stable id correlates the prompt-length / attempt-N / completed lines
-        # for one logical verify_alignment() call. Threaded into every log
-        # line below so concurrent scans don't interleave incoherently in
-        # the operator's terminal.
-        self._request_counter += 1
-        request_id = self._request_counter
+        # for one logical verify_alignment() call. Drawn from a process-wide
+        # sequence so two clients in the same process don't collide.
+        request_id = next(_PROCESS_REQUEST_IDS)
 
         # Log prompt length for debugging
         prompt_length = len(prompt)
@@ -236,7 +280,7 @@ class AlignmentLLMClient:
                         attempt + 1,
                         max_retries,
                         type(e).__name__,
-                        e,
+                        _truncate(e, _ERROR_TRUNCATE),
                         delay,
                         self._model,
                     )
@@ -250,7 +294,7 @@ class AlignmentLLMClient:
                         max_retries,
                         total_ms,
                         type(e).__name__,
-                        e,
+                        _truncate(e, _ERROR_TRUNCATE),
                         self._model,
                     )
                     raise
@@ -365,8 +409,14 @@ class AlignmentLLMClient:
                     prompt_tokens,
                     completion_tokens,
                 )
+                # Cap the response dump so a hostile / pathological model
+                # response can't bloat a single log line into multi-MB.
+                # The full body is still available via the upstream
+                # litellm logger at TRACE if needed.
                 self.logger.debug(
-                    "LLM request_id=%d full_response=%r", request_id, response
+                    "LLM request_id=%d full_response=%s",
+                    request_id,
+                    _truncate(repr(response), _RESPONSE_DEBUG_MAX),
                 )
             else:
                 self.logger.debug(
@@ -407,7 +457,7 @@ class AlignmentLLMClient:
                 attempt,
                 attempt_ms,
                 type(e).__name__,
-                e,
+                _truncate(e, _ERROR_TRUNCATE),
                 self._model,
                 exc_info=True,
             )

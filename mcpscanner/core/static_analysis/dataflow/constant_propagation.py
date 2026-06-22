@@ -88,13 +88,15 @@ class ConstantPropagationAnalysis:
         if isinstance(self.analyzer, PythonParser):
             self._analyze_python(ast_root)
 
+        # Microsecond resolution: constant propagation is a fast
+        # per-file analysis and ms-level timing rounded everything to 0.
         logger.debug(
             "static_dataflow constprop done file=%s constants=%d symbols=%d "
-            "duration_ms=%d",
+            "duration_us=%d",
             getattr(self.analyzer, "file_path", "<unknown>"),
             len(self.constants),
             len(self.symbolic_values),
-            int((time.perf_counter() - analyze_start) * 1000),
+            int((time.perf_counter() - analyze_start) * 1_000_000),
         )
 
     def _analyze_python(self, node: ast.AST) -> None:

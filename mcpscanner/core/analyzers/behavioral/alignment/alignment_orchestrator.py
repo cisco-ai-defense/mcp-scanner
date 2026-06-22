@@ -27,6 +27,7 @@ This is the entry point for all alignment verification operations.
 """
 
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,6 +38,44 @@ from .alignment_prompt_builder import AlignmentPromptBuilder
 from .alignment_llm_client import AlignmentLLMClient
 from .alignment_response_validator import AlignmentResponseValidator
 from .threat_vulnerability_classifier import ThreatVulnerabilityClassifier
+
+
+# Characters that would break naive ``key=value`` log parsers when present
+# inside a structured value (whitespace ends a field; ``=`` introduces a
+# new pseudo-field; quotes confuse aggregators that try to unwrap them).
+_LOG_VALUE_SCRUB = re.compile(r"[\s=\"'`]")
+
+# Cap on the size of any exception message interpolated into a log line.
+# ``litellm`` exceptions occasionally include base64-encoded request body
+# echoes (especially Bedrock validation failures); truncating keeps log
+# aggregator events bounded without losing the root cause.
+_ERROR_TRUNCATE = 400
+
+
+def _truncate_error(value: object) -> str:
+    """Return ``str(value)`` clipped to :data:`_ERROR_TRUNCATE` chars.
+
+    The trailing ``…(+N)`` marker indicates how many characters were
+    dropped so operators know to look at upstream tracebacks if the
+    message is interesting.
+    """
+    s = str(value)
+    if len(s) <= _ERROR_TRUNCATE:
+        return s
+    return f"{s[:_ERROR_TRUNCATE]}…(+{len(s) - _ERROR_TRUNCATE})"
+
+
+def _sanitise_log_value(value: str) -> str:
+    """Replace whitespace, ``=`` and quote characters with ``_``.
+
+    Operators see e.g. ``scope=directory:/My_Project/server.py`` instead of
+    ``scope=directory:/My Project/server.py`` (which breaks key=value
+    extractors in Splunk / CloudWatch Insights / Datadog) or
+    ``scope=foo bar=hax`` (which is field-injection-shaped).
+    """
+    if not value:
+        return "-"
+    return _LOG_VALUE_SCRUB.sub("_", str(value))
 
 
 class AlignmentOrchestrator:
@@ -68,8 +107,21 @@ class AlignmentOrchestrator:
         self.response_validator = AlignmentResponseValidator()
         self.threat_vuln_classifier = ThreatVulnerabilityClassifier(config)
 
-        # Track analysis statistics
-        self.stats = {
+        # Track analysis statistics. These are cumulative across the orchestrator's
+        # lifetime; callers should snapshot via :meth:`stats_snapshot` and compute
+        # a delta if they want per-scan numbers, or call :meth:`reset_stats` at
+        # the start of a logical scan to zero them.
+        self.stats = self._fresh_stats()
+
+        self.logger.debug("AlignmentOrchestrator initialized")
+
+    @staticmethod
+    def _fresh_stats() -> Dict[str, int]:
+        """Return a fresh, zeroed stats dict.
+
+        Centralised so ``__init__`` and ``reset_stats`` can't drift on keys.
+        """
+        return {
             "total_analyzed": 0,
             "mismatches_detected": 0,
             "no_mismatch": 0,
@@ -77,7 +129,20 @@ class AlignmentOrchestrator:
             "skipped_error": 0,
         }
 
-        self.logger.debug("AlignmentOrchestrator initialized")
+    def reset_stats(self) -> None:
+        """Reset cumulative counters to zero.
+
+        Call this at the start of a logical scan when you want the next
+        ``log_summary()`` / ``check_alignment_batch`` "done" line to
+        describe just that scan instead of the orchestrator's lifetime.
+        ``BehavioralCodeAnalyzer.analyze`` calls this once per invocation.
+        """
+        for key in self.stats:
+            self.stats[key] = 0
+
+    def stats_snapshot(self) -> Dict[str, int]:
+        """Return a shallow copy of current stats — useful for delta math."""
+        return dict(self.stats)
 
     async def check_alignment(
         self, func_context: FunctionContext
@@ -218,7 +283,9 @@ class AlignmentOrchestrator:
                 func_context.name,
                 check_ms,
                 type(e).__name__,
-                e,
+                # Truncate so a multi-KB litellm error body can't bloat
+                # the operator-facing log line.
+                _truncate_error(e),
             )
             self.stats["skipped_error"] += 1
             return None
@@ -242,6 +309,12 @@ class AlignmentOrchestrator:
 
         total_funcs = len(func_contexts)
         total_batches = (total_funcs + batch_size - 1) // batch_size if batch_size else 0
+        # Snapshot cumulative stats so the "done" line below reports the delta
+        # produced by THIS call only. ``self.stats`` is otherwise lifetime-
+        # cumulative across all batches the orchestrator has ever processed —
+        # logging that as the per-scan total was misleading in long-lived
+        # processes (API server, daemonised CLI).
+        stats_before = self.stats_snapshot()
         # One-shot INFO so operators see the planned shape of the scan
         # before potentially-long LLM calls start consuming wall time.
         self.logger.info(
@@ -342,32 +415,39 @@ class AlignmentOrchestrator:
                 batch_ms = int((time.perf_counter() - batch_start) * 1000)
                 self.logger.error(
                     "batch %d/%d failed size=%d duration_ms=%d error_type=%s "
-                    "error=%s -- falling back to individual analysis",
+                    "error=%s fallback=individual_analysis",
                     batch_idx,
                     total_batches,
                     len(batch),
                     batch_ms,
                     type(e).__name__,
-                    e,
+                    _truncate_error(e),
                 )
-                # Fallback to individual analysis
+                # Fallback to individual analysis. ``check_alignment``
+                # already catches and logs its own exceptions and
+                # returns ``None`` on failure (incrementing
+                # ``stats["skipped_error"]``), so we don't need an inner
+                # try/except here — wrapping it again would swallow a
+                # future regression where the function does start
+                # re-raising and hide the real cause.
                 for func_context in batch:
-                    try:
-                        result = await self.check_alignment(func_context)
-                        if result:
-                            results.append(result)
-                    except Exception:
-                        pass
+                    result = await self.check_alignment(func_context)
+                    if result:
+                        results.append(result)
 
         scan_ms = int((time.perf_counter() - scan_start) * 1000)
+        # Report the delta vs ``stats_before`` so this line describes only
+        # this batch scan, not the orchestrator's cumulative lifetime.
         self.logger.info(
-            "alignment batch scan done total_functions=%d mismatches=%d clean=%d "
-            "skipped_error=%d skipped_invalid_response=%d duration_ms=%d",
+            "alignment batch scan done total_functions=%d analyzed=%d mismatches=%d "
+            "clean=%d skipped_error=%d skipped_invalid_response=%d duration_ms=%d",
             total_funcs,
-            self.stats["mismatches_detected"],
-            self.stats["no_mismatch"],
-            self.stats["skipped_error"],
-            self.stats["skipped_invalid_response"],
+            self.stats["total_analyzed"] - stats_before["total_analyzed"],
+            self.stats["mismatches_detected"] - stats_before["mismatches_detected"],
+            self.stats["no_mismatch"] - stats_before["no_mismatch"],
+            self.stats["skipped_error"] - stats_before["skipped_error"],
+            self.stats["skipped_invalid_response"]
+            - stats_before["skipped_invalid_response"],
             scan_ms,
         )
         return results
@@ -405,7 +485,12 @@ class AlignmentOrchestrator:
         """
         return self.stats.copy()
 
-    def log_summary(self, scope: str = "behavioral") -> None:
+    def log_summary(
+        self,
+        scope: str = "behavioral",
+        *,
+        baseline: Optional[Dict[str, int]] = None,
+    ) -> None:
         """Emit a single grep-friendly INFO summary line for the current stats.
 
         Intended to be called at the end of a behavioral scan
@@ -422,17 +507,31 @@ class AlignmentOrchestrator:
 
         Args:
             scope: Free-form label to disambiguate when the same scanner
-                runs the orchestrator more than once in a process (e.g.
-                ``"file:server.py"``). Defaults to ``"behavioral"``.
+                runs the orchestrator more than once in a process. The
+                value is sanitised by the caller (spaces/``=`` replaced)
+                before being interpolated into the line.
+            baseline: Optional snapshot of ``self.stats`` captured at the
+                start of the logical scan. When supplied, the line
+                reports the delta relative to that snapshot instead of
+                the orchestrator's lifetime counters. The orchestrator
+                is reused across scans in long-lived processes (API
+                server, daemonised CLI); without a baseline the numbers
+                would silently grow forever.
         """
         s = self.stats
+        b = baseline or {key: 0 for key in s}
+        # Sanitise scope so a hostile tool name like "foo bar=hax" can't
+        # masquerade as a structured field. Mirrors the same sanitisation
+        # logic in BehavioralCodeAnalyzer so callers pre-sanitising stays
+        # safe.
+        safe_scope = _sanitise_log_value(scope)
         self.logger.info(
             "alignment summary scope=%s total=%d mismatches=%d clean=%d "
             "skipped_invalid_response=%d skipped_error=%d",
-            scope,
-            s["total_analyzed"],
-            s["mismatches_detected"],
-            s["no_mismatch"],
-            s["skipped_invalid_response"],
-            s["skipped_error"],
+            safe_scope,
+            s["total_analyzed"] - b.get("total_analyzed", 0),
+            s["mismatches_detected"] - b.get("mismatches_detected", 0),
+            s["no_mismatch"] - b.get("no_mismatch", 0),
+            s["skipped_invalid_response"] - b.get("skipped_invalid_response", 0),
+            s["skipped_error"] - b.get("skipped_error", 0),
         )

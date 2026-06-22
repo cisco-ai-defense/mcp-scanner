@@ -135,6 +135,21 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
             List of all flow paths from parameters
         """
         flow_start = time.perf_counter()
+        # Short-circuit when there are no parameters to track: building
+        # the CFG and running the worklist is pointless work in that
+        # case because the initial fact would be empty and no source
+        # could ever reach a sink. This is a hot path on parameterless
+        # MCP capabilities (resources, no-arg tools) where the previous
+        # behaviour did the full O(nodes) walk for nothing.
+        if not self.parameter_names:
+            logger.debug(
+                "static_dataflow forward_flows skipped file=%s reason=no_parameters "
+                "duration_us=%d",
+                getattr(self.analyzer, "file_path", "<unknown>"),
+                int((time.perf_counter() - flow_start) * 1_000_000),
+            )
+            return self.all_flows
+
         self.build_cfg()
 
         # Initialize: mark all parameters as tainted with unique labels
@@ -155,15 +170,19 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
 
         reaches_ext = sum(1 for f in self.all_flows if f.reaches_external)
         reaches_ret = sum(1 for f in self.all_flows if f.reaches_returns)
+        # Microsecond resolution: per-function forward-flow analyses
+        # typically settle in well under 1ms; ms truncated them all to
+        # 0 and erased the only signal worth alerting on (the slow
+        # outliers).
         logger.debug(
             "static_dataflow forward_flows done file=%s params=%d flows=%d "
-            "reaches_external=%d reaches_returns=%d duration_ms=%d",
+            "reaches_external=%d reaches_returns=%d duration_us=%d",
             getattr(self.analyzer, "file_path", "<unknown>"),
             len(self.parameter_names),
             len(self.all_flows),
             reaches_ext,
             reaches_ret,
-            int((time.perf_counter() - flow_start) * 1000),
+            int((time.perf_counter() - flow_start) * 1_000_000),
         )
         return self.all_flows
 

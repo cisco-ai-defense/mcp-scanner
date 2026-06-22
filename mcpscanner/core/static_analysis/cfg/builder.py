@@ -137,11 +137,14 @@ class DataFlowAnalyzer(Generic[T]):
             self._build_python_cfg(ast_root, cfg)
 
         self.cfg = cfg
+        # Microsecond resolution: CFG construction for one function is
+        # routinely sub-ms; ms truncated everything to ``0`` and erased
+        # the signal needed to spot per-file build regressions.
         logger.debug(
-            "static_cfg python built file=%s nodes=%d duration_ms=%d",
+            "static_cfg python built file=%s nodes=%d duration_us=%d",
             getattr(self.analyzer, "file_path", "<unknown>"),
             len(cfg.nodes),
-            int((time.perf_counter() - build_start) * 1000),
+            int((time.perf_counter() - build_start) * 1_000_000),
         )
         return cfg
 
@@ -354,16 +357,20 @@ class DataFlowAnalyzer(Generic[T]):
                             worklist.append(pred)
                             in_worklist.add(pred.id)
 
+        # Microsecond resolution: per-function dataflow fixpoints
+        # usually settle in a handful of iterations and complete well
+        # under 1ms; ms truncated the signal we need to diagnose the
+        # *slow* outliers (the only ones operators actually care about).
         logger.debug(
             "static_dataflow %s done file=%s nodes=%d iterations=%d "
-            "direction=%s capped=%s duration_ms=%d",
+            "direction=%s capped=%s duration_us=%d",
             analysis_name,
             file_path,
             len(self.cfg.nodes),
             iteration_count,
             "forward" if forward else "backward",
             capped,
-            int((time.perf_counter() - analyze_start) * 1000),
+            int((time.perf_counter() - analyze_start) * 1_000_000),
         )
 
     def transfer(self, node: CFGNode, in_fact: T) -> T:

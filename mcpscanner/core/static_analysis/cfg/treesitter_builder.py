@@ -190,13 +190,16 @@ class TreeSitterCFGBuilder:
         else:
             self.cfg.add_edge(self.cfg.entry, self.cfg.exit)
 
+        # Microsecond resolution: per-function tree-sitter CFG builds
+        # are typically sub-ms; ms truncated them all to 0 and made
+        # per-function regressions invisible in DEBUG profiling.
         logger.debug(
             "static_cfg treesitter built language=%s function_type=%s nodes=%d "
-            "duration_ms=%d",
+            "duration_us=%d",
             self.language,
             function_node.type,
             len(self.cfg.nodes),
-            int((time.perf_counter() - build_start) * 1000),
+            int((time.perf_counter() - build_start) * 1_000_000),
         )
         return self.cfg
     
