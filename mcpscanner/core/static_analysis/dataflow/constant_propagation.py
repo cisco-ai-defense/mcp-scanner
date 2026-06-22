@@ -17,12 +17,16 @@
 """Constant propagation for pattern matching with symbolic value tracking."""
 
 import ast
+import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+
+logger = logging.getLogger(__name__)
 
 
 class ValueKind(Enum):
@@ -78,10 +82,20 @@ class ConstantPropagationAnalysis:
 
     def analyze(self) -> None:
         """Analyze code and build constant table."""
+        analyze_start = time.perf_counter()
         ast_root = self.analyzer.get_ast()
 
         if isinstance(self.analyzer, PythonParser):
             self._analyze_python(ast_root)
+
+        logger.debug(
+            "static_dataflow constprop done file=%s constants=%d symbols=%d "
+            "duration_ms=%d",
+            getattr(self.analyzer, "file_path", "<unknown>"),
+            len(self.constants),
+            len(self.symbolic_values),
+            int((time.perf_counter() - analyze_start) * 1000),
+        )
 
     def _analyze_python(self, node: ast.AST) -> None:
         """Analyze Python code for constants and symbolic values.

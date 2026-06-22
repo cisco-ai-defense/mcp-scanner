@@ -23,6 +23,8 @@ This module implements the REVERSED approach:
 """
 
 import ast
+import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Set
 
@@ -30,6 +32,8 @@ from ..cfg.builder import CFGNode, DataFlowAnalyzer
 from ..taint.tracker import ShapeEnvironment, Taint, TaintStatus
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -130,6 +134,7 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
         Returns:
             List of all flow paths from parameters
         """
+        flow_start = time.perf_counter()
         self.build_cfg()
 
         # Initialize: mark all parameters as tainted with unique labels
@@ -148,6 +153,18 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
         # Collect all flows
         self._collect_flows()
 
+        reaches_ext = sum(1 for f in self.all_flows if f.reaches_external)
+        reaches_ret = sum(1 for f in self.all_flows if f.reaches_returns)
+        logger.debug(
+            "static_dataflow forward_flows done file=%s params=%d flows=%d "
+            "reaches_external=%d reaches_returns=%d duration_ms=%d",
+            getattr(self.analyzer, "file_path", "<unknown>"),
+            len(self.parameter_names),
+            len(self.all_flows),
+            reaches_ext,
+            reaches_ret,
+            int((time.perf_counter() - flow_start) * 1000),
+        )
         return self.all_flows
 
     def transfer(self, node: CFGNode, in_fact: ForwardFlowFact) -> ForwardFlowFact:

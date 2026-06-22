@@ -21,6 +21,7 @@ Kotlin, C#, Ruby, Rust, and PHP codebases.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -108,7 +109,10 @@ class TreeSitterCallGraphAnalyzer:
         self.files: Dict[Path, tuple] = {}  # file_path -> (tree, source_bytes)
         self.import_map: Dict[Path, List[str]] = {}
         self.logger = logging.getLogger(__name__)
-        
+        self._skipped_files: int = 0
+        self._added_files: int = 0
+        self._language_load_warned: bool = False
+
         self._parser: Optional[Parser] = None
         self._lang: Optional[Language] = None
     
@@ -150,15 +154,25 @@ class TreeSitterCallGraphAnalyzer:
             
             self._parser = Parser(self._lang)
             return self._parser
-        except ImportError:
+        except ImportError as exc:
+            if not self._language_load_warned:
+                self._language_load_warned = True
+                self.logger.warning(
+                    "static_interproc treesitter language_module_missing "
+                    "language=%s error_type=%s error=%s",
+                    self.language,
+                    type(exc).__name__,
+                    str(exc)[:200],
+                )
             return None
     
     def add_file(self, file_path: Path, source_code: str) -> bool:
         """Add a file to the analysis."""
         parser = self._get_parser()
         if not parser:
+            self._skipped_files += 1
             return False
-        
+
         try:
             source_bytes = source_code.encode("utf-8")
             tree = parser.parse(source_bytes)
@@ -169,10 +183,19 @@ class TreeSitterCallGraphAnalyzer:
             
             # Extract imports
             self._extract_imports(file_path, tree.root_node, source_bytes)
-            
+
+            self._added_files += 1
             return True
         except Exception as e:
-            self.logger.debug(f"Failed to parse {file_path}: {e}")
+            self._skipped_files += 1
+            self.logger.debug(
+                "static_interproc treesitter parse_failed file=%s language=%s "
+                "error_type=%s error=%s",
+                file_path,
+                self.language,
+                type(e).__name__,
+                str(e)[:200],
+            )
             return False
     
     def _extract_functions(self, file_path: Path, root: Node, source_bytes: bytes, class_name: str = "") -> None:
@@ -248,9 +271,23 @@ class TreeSitterCallGraphAnalyzer:
     
     def build_call_graph(self) -> TSCallGraph:
         """Build the complete call graph."""
+        build_start = time.perf_counter()
         for file_path, (tree, source_bytes) in self.files.items():
             self._extract_calls(file_path, tree.root_node, source_bytes)
-        
+
+        functions = len(self.call_graph.functions)
+        calls = len(self.call_graph.calls)
+        self.logger.info(
+            "static_interproc treesitter call_graph_built language=%s "
+            "files=%d added=%d skipped=%d functions=%d calls=%d duration_ms=%d",
+            self.language,
+            len(self.files),
+            self._added_files,
+            self._skipped_files,
+            functions,
+            calls,
+            int((time.perf_counter() - build_start) * 1000),
+        )
         return self.call_graph
     
     def _extract_calls(self, file_path: Path, root: Node, source_bytes: bytes, current_func: str = "") -> None:

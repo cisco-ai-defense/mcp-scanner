@@ -21,11 +21,15 @@ static analysis engine, following SAST tool conventions.
 """
 
 import ast
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
 from .base import BaseParser
 from ..types import Position, Range
+
+logger = logging.getLogger(__name__)
 
 
 class PythonParser(BaseParser):
@@ -53,9 +57,27 @@ class PythonParser(BaseParser):
         Raises:
             SyntaxError: If source code has syntax errors
         """
+        parse_start = time.perf_counter()
         try:
-            return ast.parse(self.source_code, filename=str(self.file_path))
+            tree = ast.parse(self.source_code, filename=str(self.file_path))
+            parse_ms = int((time.perf_counter() - parse_start) * 1000)
+            logger.debug(
+                "static_parser python parsed file=%s lines=%d bytes=%d duration_ms=%d",
+                self.file_path,
+                len(self.lines),
+                len(self.source_code),
+                parse_ms,
+            )
+            return tree
         except SyntaxError as e:
+            parse_ms = int((time.perf_counter() - parse_start) * 1000)
+            logger.warning(
+                "static_parser python syntax_error file=%s duration_ms=%d line=%s error=%s",
+                self.file_path,
+                parse_ms,
+                getattr(e, "lineno", "?"),
+                str(e)[:200],
+            )
             raise SyntaxError(f"Failed to parse {self.file_path}: {e}") from e
 
     def get_node_range(self, node: ast.AST) -> Range:
