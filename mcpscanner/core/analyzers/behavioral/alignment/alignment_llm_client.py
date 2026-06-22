@@ -28,12 +28,37 @@ The client manages:
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from litellm import acompletion
 
 from .....config.config import Config
 from .....config.constants import MCPScannerConstants
+
+
+def _classify_provider(model: str) -> str:
+    """Return a short, log-safe provider label for the given litellm model id.
+
+    Operators triage by provider (e.g. "is Bedrock slow today?") so this
+    label is included on the init line and on the warning emitted for
+    slow requests. Kept narrow on purpose — anything not on the known
+    list collapses to ``"other"`` so a typo'd model name still produces
+    a clean log message instead of a leaky prefix dump.
+    """
+    if not model:
+        return "unknown"
+    if model.startswith("bedrock/"):
+        return "bedrock"
+    if model.startswith("azure/"):
+        return "azure"
+    if model.startswith(("openai/", "gpt-", "o1", "o3", "chatgpt-")):
+        return "openai"
+    if model.startswith("anthropic/"):
+        return "anthropic"
+    if model.startswith("gemini/") or model.startswith("vertex_ai/"):
+        return "google"
+    return "other"
 
 
 class AlignmentLLMClient:
@@ -104,22 +129,38 @@ class AlignmentLLMClient:
         self._aws_profile_name = config.aws_profile_name if is_bedrock else None
 
         self.logger = logging.getLogger(__name__)
+        # Counter for correlating retries with the originating request in
+        # logs (request_id=N in every line emitted by _make_llm_request).
+        # Per-instance so concurrent scanners don't collide in logs.
+        self._request_counter = 0
+        # Bumped to INFO on init so operators see at-a-glance which model
+        # + auth mode the behavioral analyzer is talking to without
+        # having to flip the whole library to DEBUG. Emits exactly once
+        # per AlignmentLLMClient instance.
+        provider = _classify_provider(self._model)
         if is_bedrock:
             if self._api_key:
                 # Don't leak which mode (key vs bearer); both look identical
                 # downstream and the distinction is only useful in support tickets.
-                auth_kind = "api_key/bearer_token"
+                auth_kind = "api_key_or_bearer"
             else:
-                auth_kind = "AWS provider chain (profile/IAM/session)"
-            self.logger.debug(
-                "AlignmentLLMClient initialized with bedrock model=%s region=%s auth=%s",
+                auth_kind = "aws_provider_chain"
+            self.logger.info(
+                "AlignmentLLMClient initialized: provider=%s model=%s region=%s auth=%s timeout=%ss",
+                provider,
                 self._model,
                 self._aws_region,
                 auth_kind,
+                self._llm_timeout,
             )
         else:
-            self.logger.debug(
-                "AlignmentLLMClient initialized with model: %s", self._model
+            self.logger.info(
+                "AlignmentLLMClient initialized: provider=%s model=%s base_url=%s api_version=%s timeout=%ss",
+                provider,
+                self._model,
+                self._base_url or "default",
+                self._api_version or "default",
+                self._llm_timeout,
             )
 
     async def verify_alignment(self, prompt: str) -> str:
@@ -134,42 +175,97 @@ class AlignmentLLMClient:
         Raises:
             Exception: If LLM API call fails after retries
         """
+        # Stable id correlates the prompt-length / attempt-N / completed lines
+        # for one logical verify_alignment() call. Threaded into every log
+        # line below so concurrent scans don't interleave incoherently in
+        # the operator's terminal.
+        self._request_counter += 1
+        request_id = self._request_counter
+
         # Log prompt length for debugging
         prompt_length = len(prompt)
-        self.logger.debug(f"Prompt length: {prompt_length} characters")
+        self.logger.debug(
+            "LLM request_id=%d prompt_length=%d model=%s",
+            request_id,
+            prompt_length,
+            self._model,
+        )
 
         # Check against configurable threshold
         if prompt_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
             self.logger.warning(
-                f"Large prompt detected: {prompt_length} characters "
-                f"(threshold: {MCPScannerConstants.PROMPT_LENGTH_THRESHOLD}) - may be truncated by LLM"
+                "LLM request_id=%d large_prompt prompt_length=%d threshold=%d model=%s "
+                "-- may be truncated by the model",
+                request_id,
+                prompt_length,
+                MCPScannerConstants.PROMPT_LENGTH_THRESHOLD,
+                self._model,
             )
 
         # Retry logic with exponential backoff (configurable via constants)
         max_retries = MCPScannerConstants.LLM_MAX_RETRIES
         base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
+        verify_start = time.perf_counter()
 
         for attempt in range(max_retries):
             try:
-                return await self._make_llm_request(prompt)
+                response = await self._make_llm_request(prompt, request_id, attempt + 1)
+                total_ms = int((time.perf_counter() - verify_start) * 1000)
+                # Single INFO milestone per successful verify_alignment call.
+                # Operators get one searchable line per LLM round-trip
+                # ("LLM request_id=42 ok") with all key timing metadata.
+                self.logger.info(
+                    "LLM request_id=%d ok provider=%s model=%s attempts=%d duration_ms=%d "
+                    "prompt_length=%d response_length=%d",
+                    request_id,
+                    _classify_provider(self._model),
+                    self._model,
+                    attempt + 1,
+                    total_ms,
+                    prompt_length,
+                    len(response) if response else 0,
+                )
+                return response
             except Exception as e:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2**attempt)
                     self.logger.warning(
-                        f"LLM request failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {delay}s..."
+                        "LLM request_id=%d retry attempt=%d/%d error_type=%s "
+                        "error=%s backoff_s=%.1f model=%s",
+                        request_id,
+                        attempt + 1,
+                        max_retries,
+                        type(e).__name__,
+                        e,
+                        delay,
+                        self._model,
                     )
                     await asyncio.sleep(delay)
                 else:
+                    total_ms = int((time.perf_counter() - verify_start) * 1000)
                     self.logger.error(
-                        f"LLM request failed after {max_retries} attempts: {e}"
+                        "LLM request_id=%d failed attempts=%d duration_ms=%d "
+                        "error_type=%s error=%s model=%s",
+                        request_id,
+                        max_retries,
+                        total_ms,
+                        type(e).__name__,
+                        e,
+                        self._model,
                     )
                     raise
 
-    async def _make_llm_request(self, prompt: str) -> str:
+    async def _make_llm_request(
+        self, prompt: str, request_id: int = 0, attempt: int = 1
+    ) -> str:
         """Make a single LLM API request.
 
         Args:
             prompt: Prompt to send
+            request_id: Caller-supplied id so retries share a correlation
+                key. Defaults to 0 for direct callers (rare in practice;
+                ``verify_alignment`` always supplies a real id).
+            attempt: 1-based attempt number for retry visibility.
 
         Returns:
             LLM response content
@@ -177,6 +273,7 @@ class AlignmentLLMClient:
         Raises:
             Exception: If API call fails
         """
+        attempt_start = time.perf_counter()
         try:
             request_params = {
                 "model": self._model,
@@ -226,23 +323,92 @@ class AlignmentLLMClient:
                 request_params["aws_profile_name"] = self._aws_profile_name
 
             self.logger.debug(
-                f"Sending alignment verification request to {self._model}"
+                "LLM request_id=%d attempt=%d sending model=%s temperature=%s "
+                "max_tokens=%d",
+                request_id,
+                attempt,
+                self._model,
+                self._temperature,
+                self._max_tokens,
             )
-            self.logger.debug(f"Sending request to model: {self._model}")
             response = await acompletion(**request_params)
 
             # Extract content from response
             content = response.choices[0].message.content
 
+            attempt_ms = int((time.perf_counter() - attempt_start) * 1000)
+
+            # Pull token usage when the provider returned it. Bedrock /
+            # OpenAI / Azure all expose ``usage`` on the response object;
+            # treat as best-effort so a provider that omits it never
+            # breaks the log line.
+            usage = getattr(response, "usage", None) or {}
+            prompt_tokens = (
+                getattr(usage, "prompt_tokens", None)
+                if not isinstance(usage, dict)
+                else usage.get("prompt_tokens")
+            )
+            completion_tokens = (
+                getattr(usage, "completion_tokens", None)
+                if not isinstance(usage, dict)
+                else usage.get("completion_tokens")
+            )
+
             # Log response for debugging
             if not content or not content.strip():
-                self.logger.warning(f"Empty response from LLM model {self._model}")
-                self.logger.debug(f"Full response object: {response}")
+                self.logger.warning(
+                    "LLM request_id=%d empty_response model=%s duration_ms=%d "
+                    "prompt_tokens=%s completion_tokens=%s",
+                    request_id,
+                    self._model,
+                    attempt_ms,
+                    prompt_tokens,
+                    completion_tokens,
+                )
+                self.logger.debug(
+                    "LLM request_id=%d full_response=%r", request_id, response
+                )
             else:
-                self.logger.debug(f"LLM response length: {len(content)} chars")
+                self.logger.debug(
+                    "LLM request_id=%d attempt=%d response_length=%d duration_ms=%d "
+                    "prompt_tokens=%s completion_tokens=%s",
+                    request_id,
+                    attempt,
+                    len(content),
+                    attempt_ms,
+                    prompt_tokens,
+                    completion_tokens,
+                )
+
+            # Surface slow round-trips at WARNING so operators triaging
+            # "scan feels slow" don't have to switch the library to
+            # DEBUG just to see per-call timing. Threshold is configurable
+            # via MCP_SCANNER_LLM_SLOW_REQUEST_THRESHOLD_MS.
+            if attempt_ms >= MCPScannerConstants.LLM_SLOW_REQUEST_THRESHOLD_MS:
+                self.logger.warning(
+                    "LLM request_id=%d slow_response provider=%s model=%s "
+                    "duration_ms=%d threshold_ms=%d -- check provider latency, "
+                    "region routing, or model warm-up",
+                    request_id,
+                    _classify_provider(self._model),
+                    self._model,
+                    attempt_ms,
+                    MCPScannerConstants.LLM_SLOW_REQUEST_THRESHOLD_MS,
+                )
 
             return content if content else ""
 
         except Exception as e:
-            self.logger.error(f"LLM alignment verification failed: {e}", exc_info=True)
+            attempt_ms = int((time.perf_counter() - attempt_start) * 1000)
+            self.logger.error(
+                "LLM request_id=%d attempt=%d failed duration_ms=%d error_type=%s error=%s "
+                "model=%s",
+                request_id,
+                attempt,
+                attempt_ms,
+                type(e).__name__,
+                e,
+                self._model,
+                exc_info=True,
+            )
             raise

@@ -27,6 +27,8 @@ This analyzer:
 """
 
 import os
+import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -140,6 +142,33 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # Reset per-call so consumers see only tools from this invocation.
             self.analyzed_functions = []
 
+            scan_start = time.perf_counter()
+            tool_label = context.get("tool_name") or context.get("file_path") or "<inline>"
+
+            # Determine scan mode for the start-of-scan INFO line. Keeping
+            # this short and structured (mode=<…> target=<…>) so log
+            # aggregators can split scans by mode without parsing
+            # free-form text.
+            if os.path.isdir(content):
+                scan_mode = "directory"
+                scan_target = content
+            elif os.path.isfile(content):
+                scan_mode = "file"
+                scan_target = content
+            else:
+                scan_mode = "inline"
+                # Don't log the raw source — could be private code. Just
+                # log the length so operators can correlate with their
+                # input.
+                scan_target = f"<source:{len(content)}b>"
+
+            self.logger.info(
+                "behavioral scan start mode=%s target=%s tool=%s",
+                scan_mode,
+                scan_target,
+                tool_label,
+            )
+
             # Check if content is a directory
             if os.path.isdir(content):
                 self.logger.debug(f"Scanning directory: {content}")
@@ -166,10 +195,26 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # 3 parses + 3 call-graph entries.
                 # =====================================================
                 capability_files = self._prefilter_capability_files(source_files)
-                self.logger.debug(
-                    f"Prefilter: {len(capability_files)} of "
-                    f"{len(source_files)} files contain MCP markers"
+                # Bumped to INFO: this is the operator's primary signal
+                # for "did the prefilter find anything to scan?" — a
+                # silent fall-through to 0 capability files is the most
+                # common cause of empty scan results in the field.
+                self.logger.info(
+                    "behavioral prefilter scanned=%d kept=%d (files containing MCP markers)",
+                    len(source_files),
+                    len(capability_files),
                 )
+
+                if source_files and not capability_files:
+                    # Helpful warning so operators don't get blank output
+                    # without a clue: the prefilter dropped everything.
+                    self.logger.warning(
+                        "behavioral no_mcp_capabilities scanned=%d dir=%s "
+                        "-- no source files contained MCP capability markers "
+                        "(@mcp.tool, server.tool(...), etc.)",
+                        len(source_files),
+                        content,
+                    )
 
                 # Partition files by language family
                 python_files: List[_AcceptedFile] = []
@@ -181,6 +226,19 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     elif ext in self._EXT_TO_TS_LANGUAGE:
                         lang = self._EXT_TO_TS_LANGUAGE[ext]
                         ts_files_by_lang.setdefault(lang, []).append(accepted)
+
+                if capability_files:
+                    # One line per scan that names the languages and per-lang
+                    # counts — useful when an operator says "I expected Go to
+                    # be scanned but it wasn't". Sorted for stable output.
+                    lang_counts = {
+                        "python": len(python_files),
+                        **{lang: len(files) for lang, files in sorted(ts_files_by_lang.items())},
+                    }
+                    self.logger.info(
+                        "behavioral languages %s",
+                        " ".join(f"{lang}={n}" for lang, n in lang_counts.items() if n),
+                    )
 
                 # Build Python call graph
                 py_call_graph_analyzer: Optional[CallGraphAnalyzer] = None
@@ -273,11 +331,27 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     else:
                         file_cga = None
 
+                    file_start = time.perf_counter()
                     file_findings = await self._analyze_file(
                         accepted.path,
                         context,
                         file_cga,
                         cached_source=accepted.source_text or None,
+                    )
+                    file_ms = int((time.perf_counter() - file_start) * 1000)
+                    # Per-file beat at INFO so operators get a heartbeat on
+                    # multi-file scans (silence for minutes on a big repo is
+                    # the #1 "is it stuck?" complaint). Compact key=value
+                    # shape so directory scans don't drown CloudWatch.
+                    non_safe = sum(
+                        1 for f in file_findings if getattr(f, "severity", "") != "SAFE"
+                    )
+                    self.logger.info(
+                        "behavioral file done path=%s findings=%d non_safe=%d duration_ms=%d",
+                        accepted.path,
+                        len(file_findings),
+                        non_safe,
+                        file_ms,
                     )
                     all_findings.extend(file_findings)
 
@@ -349,13 +423,56 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 all_findings = await self._analyze_source_code(content, context)
 
-            self.logger.debug(
-                f"Behavioural analysis complete: {len(all_findings)} finding(s) detected"
+            # End-of-scan rollup. We log severity counts in a stable
+            # key=value shape so log aggregators can chart trends
+            # without parsing free-form text. SAFE rows are included so
+            # the total matches ``analyzed_functions``; non_safe is also
+            # broken out for at-a-glance triage.
+            severity_counts = Counter(
+                (getattr(f, "severity", "") or "UNKNOWN") for f in all_findings
             )
+            non_safe_total = sum(
+                v for k, v in severity_counts.items() if k != "SAFE"
+            )
+            scan_ms = int((time.perf_counter() - scan_start) * 1000)
+            self.logger.info(
+                "behavioral scan done mode=%s target=%s findings=%d non_safe=%d "
+                "analyzed_functions=%d severities=%s duration_ms=%d",
+                scan_mode,
+                scan_target,
+                len(all_findings),
+                non_safe_total,
+                len(self.analyzed_functions),
+                # Pre-formatted as `H=2,M=1,SAFE=4`; gives operators a
+                # bounded, easy-to-grep severity rollup without dumping
+                # the raw dict.
+                ",".join(
+                    f"{k}={v}" for k, v in sorted(severity_counts.items())
+                ),
+                scan_ms,
+            )
+            # Single grep-friendly line for alignment-layer stats so
+            # operators see how many functions hit the LLM, how many
+            # came back clean vs flagged vs errored — independent of
+            # the SAFE-row synthesis the analyzer does on top.
+            try:
+                self.alignment_orchestrator.log_summary(scope=f"{scan_mode}:{tool_label}")
+            except Exception:  # pragma: no cover - logging must never raise
+                pass
             return all_findings
 
         except Exception as e:
-            self.logger.error(f"Behavioural analysis failed: {e}", exc_info=True)
+            self.logger.error(
+                "behavioral scan failed mode=%s target=%s error_type=%s error=%s",
+                # ``scan_mode`` / ``scan_target`` may be unset if the
+                # exception fires before mode detection; fall back to
+                # "unknown" rather than swallow the error.
+                locals().get("scan_mode", "unknown"),
+                locals().get("scan_target", "unknown"),
+                type(e).__name__,
+                e,
+                exc_info=True,
+            )
             return []
 
     # Maps file extensions to tree-sitter language identifiers used by
@@ -527,6 +644,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         Returns:
             List of SecurityFinding objects
         """
+        analyze_start = time.perf_counter()
         try:
             if cached_source is not None:
                 source_code = cached_source
@@ -545,10 +663,25 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 if finding.details:
                     finding.details["source_file"] = file_path
 
+            self.logger.debug(
+                "behavioral _analyze_file ok path=%s findings=%d source_length=%d "
+                "duration_ms=%d",
+                file_path,
+                len(findings),
+                len(source_code),
+                int((time.perf_counter() - analyze_start) * 1000),
+            )
             return findings
 
         except Exception as e:
-            self.logger.error(f"Failed to analyze {file_path}: {e}")
+            self.logger.error(
+                "behavioral _analyze_file failed path=%s duration_ms=%d "
+                "error_type=%s error=%s",
+                file_path,
+                int((time.perf_counter() - analyze_start) * 1000),
+                type(e).__name__,
+                e,
+            )
             return []
 
     async def _analyze_source_code(

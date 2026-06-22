@@ -55,35 +55,67 @@ class AlignmentResponseValidator:
         Returns:
             Parsed alignment check result or None if invalid
         """
+        response_length = len(response) if response else 0
         if not response or not response.strip():
-            self.logger.warning("Empty response from LLM")
+            # response_length tells operators whether the body was empty
+            # or whitespace-only — useful for distinguishing a real
+            # transport-level empty from a model that returned " ".
+            self.logger.warning(
+                "validator empty_response response_length=%d", response_length
+            )
             return None
 
         try:
             data = parse_json_from_llm(response)
 
             if data is None:
-                self.logger.warning(f"Invalid JSON response")
-                self.logger.debug(f"Raw response (first 500 chars): {response[:500]}")
+                self.logger.warning(
+                    "validator invalid_json response_length=%d", response_length
+                )
+                self.logger.debug(
+                    "validator raw_response_prefix=%r", response[:500]
+                )
                 return None
 
             # Validate it's a dictionary
             if not isinstance(data, dict):
-                self.logger.warning(f"Response is not a JSON object: {type(data)}")
+                self.logger.warning(
+                    "validator not_a_json_object response_length=%d got_type=%s",
+                    response_length,
+                    type(data).__name__,
+                )
                 return None
 
             # Check for required fields
             if not self._has_required_fields(data):
+                # Sort + cap the key list so the log line is stable and
+                # bounded — otherwise a hostile/large response could push
+                # multi-KB key lists into the log stream.
+                keys = sorted(data.keys())
+                if len(keys) > 25:
+                    keys = keys[:25] + ["...(truncated)"]
                 self.logger.warning(
-                    f"Response missing required fields. Got: {list(data.keys())}"
+                    "validator missing_required_fields response_length=%d keys=%s",
+                    response_length,
+                    keys,
                 )
                 return None
 
-            self.logger.debug(f"LLM response: {data}")
+            self.logger.debug(
+                "validator ok response_length=%d mismatch_detected=%s threat_name=%s",
+                response_length,
+                data.get("mismatch_detected"),
+                data.get("threat_name", "<unset>"),
+            )
             return data
 
         except Exception as e:
-            self.logger.error(f"Unexpected error validating response: {e}")
+            self.logger.error(
+                "validator unexpected_error response_length=%d error_type=%s error=%s",
+                response_length,
+                type(e).__name__,
+                e,
+            )
             return None
 
     def _has_required_fields(self, data: Dict[str, Any]) -> bool:
@@ -183,8 +215,13 @@ class AlignmentResponseValidator:
         Returns:
             List of parsed alignment check results or None if invalid
         """
+        response_length = len(response) if response else 0
         if not response or not response.strip():
-            self.logger.warning("Empty batch response from LLM")
+            self.logger.warning(
+                "validator batch empty_response response_length=%d expected_count=%d",
+                response_length,
+                expected_count,
+            )
             return None
 
         try:
@@ -193,40 +230,96 @@ class AlignmentResponseValidator:
 
             # Validate it's a list
             if not isinstance(data, list):
-                self.logger.warning(f"Batch response is not a JSON array: {type(data)}")
+                self.logger.warning(
+                    "validator batch not_a_json_array got_type=%s response_length=%d "
+                    "expected_count=%d -- trying markdown fallback",
+                    type(data).__name__,
+                    response_length,
+                    expected_count,
+                )
                 # Try to extract from markdown
                 data = self._extract_json_array_from_markdown(response)
                 if not data:
+                    self.logger.warning(
+                        "validator batch markdown_fallback_failed response_length=%d "
+                        "expected_count=%d",
+                        response_length,
+                        expected_count,
+                    )
                     return None
 
             # Validate each item in the array
             results = []
+            invalid_items = 0
+            padded_items = 0
             for idx, item in enumerate(data):
                 if not isinstance(item, dict):
-                    self.logger.warning(f"Batch item {idx} is not a dict")
+                    self.logger.warning(
+                        "validator batch item_not_dict idx=%d got_type=%s",
+                        idx,
+                        type(item).__name__,
+                    )
+                    invalid_items += 1
                     results.append({"mismatch_detected": False})
                     continue
 
                 # Check for required fields
                 if "mismatch_detected" not in item:
                     # Default to no mismatch if field missing
+                    self.logger.debug(
+                        "validator batch item_missing_field idx=%d "
+                        "field=mismatch_detected -- defaulting to False",
+                        idx,
+                    )
                     item["mismatch_detected"] = False
+                    padded_items += 1
 
                 results.append(item)
 
             # Pad with empty results if we got fewer than expected
+            initial_len = len(results)
             while len(results) < expected_count:
                 results.append({"mismatch_detected": False})
+            short_padding = len(results) - initial_len
+            if short_padding:
+                self.logger.warning(
+                    "validator batch truncated_response got=%d expected=%d padded=%d "
+                    "-- LLM returned fewer items than batch size; downstream will "
+                    "treat the padded slots as clean",
+                    initial_len,
+                    expected_count,
+                    short_padding,
+                )
 
-            self.logger.debug(f"Validated batch response with {len(results)} results")
+            self.logger.debug(
+                "validator batch ok response_length=%d results=%d invalid_items=%d "
+                "padded_items=%d",
+                response_length,
+                len(results),
+                invalid_items,
+                padded_items,
+            )
             return results
 
         except json.JSONDecodeError as e:
-            self.logger.warning(f"Invalid JSON in batch response: {e}")
+            self.logger.warning(
+                "validator batch invalid_json response_length=%d expected_count=%d "
+                "error=%s -- trying markdown fallback",
+                response_length,
+                expected_count,
+                e,
+            )
             # Try to extract JSON array from markdown
             return self._extract_json_array_from_markdown(response)
         except Exception as e:
-            self.logger.error(f"Unexpected error validating batch response: {e}")
+            self.logger.error(
+                "validator batch unexpected_error response_length=%d expected_count=%d "
+                "error_type=%s error=%s",
+                response_length,
+                expected_count,
+                type(e).__name__,
+                e,
+            )
             return None
 
     def _extract_json_array_from_markdown(self, response: str) -> Optional[List[Dict[str, Any]]]:

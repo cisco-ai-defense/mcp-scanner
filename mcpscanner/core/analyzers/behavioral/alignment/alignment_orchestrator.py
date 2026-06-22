@@ -27,6 +27,7 @@ This is the entry point for all alignment verification operations.
 """
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from .....config.config import Config
@@ -97,6 +98,7 @@ class AlignmentOrchestrator:
             Tuple of (analysis_dict, func_context) if mismatch detected, None if aligned
         """
         self.stats["total_analyzed"] += 1
+        check_start = time.perf_counter()
 
         try:
             # Step 1: Build alignment verification prompt
@@ -146,7 +148,13 @@ class AlignmentOrchestrator:
 
             # Step 4: Return analysis if mismatch detected
             if result.get("mismatch_detected"):
-                self.logger.debug(f"Alignment mismatch detected in {func_context.name}")
+                check_ms = int((time.perf_counter() - check_start) * 1000)
+                self.logger.info(
+                    "alignment mismatch function=%s threat=%s duration_ms=%d",
+                    func_context.name,
+                    result.get("threat_name", "<unset>") or "<unset>",
+                    check_ms,
+                )
                 self.stats["mismatches_detected"] += 1
 
                 # Step 5: Classify as threat or vulnerability (second alignment layer)
@@ -194,12 +202,24 @@ class AlignmentOrchestrator:
 
                 return (result, func_context)
             else:
-                self.logger.debug(f"No alignment mismatch in {func_context.name}")
+                check_ms = int((time.perf_counter() - check_start) * 1000)
+                self.logger.debug(
+                    "alignment ok function=%s duration_ms=%d",
+                    func_context.name,
+                    check_ms,
+                )
                 self.stats["no_mismatch"] += 1
                 return None
 
         except Exception as e:
-            self.logger.error(f"Alignment check failed for {func_context.name}: {e}")
+            check_ms = int((time.perf_counter() - check_start) * 1000)
+            self.logger.error(
+                "alignment check failed function=%s duration_ms=%d error_type=%s error=%s",
+                func_context.name,
+                check_ms,
+                type(e).__name__,
+                e,
+            )
             self.stats["skipped_error"] += 1
             return None
 
@@ -219,24 +239,46 @@ class AlignmentOrchestrator:
             List of (analysis_dict, func_context) tuples for detected mismatches
         """
         results = []
-        
+
+        total_funcs = len(func_contexts)
+        total_batches = (total_funcs + batch_size - 1) // batch_size if batch_size else 0
+        # One-shot INFO so operators see the planned shape of the scan
+        # before potentially-long LLM calls start consuming wall time.
+        self.logger.info(
+            "alignment batch scan start total_functions=%d batches=%d batch_size=%d",
+            total_funcs,
+            total_batches,
+            batch_size,
+        )
+        scan_start = time.perf_counter()
+
         # Process in batches
         for i in range(0, len(func_contexts), batch_size):
             batch = func_contexts[i:i + batch_size]
-            self.logger.debug(f"Processing batch of {len(batch)} functions")
-            
+            batch_idx = i // batch_size + 1
+            batch_start = time.perf_counter()
+            self.logger.debug(
+                "batch %d/%d start size=%d", batch_idx, total_batches, len(batch)
+            )
+
             try:
                 # Build batched prompt
                 prompt = self.prompt_builder.build_batch_prompt(batch)
-                
+
                 # Query LLM
                 response = await self.llm_client.verify_alignment(prompt)
-                
+
                 # Parse batched response
                 batch_results = self.response_validator.validate_batch(response, len(batch))
-                
+
                 if not batch_results:
-                    self.logger.warning("Invalid batch response, falling back to individual analysis")
+                    self.logger.warning(
+                        "batch %d/%d invalid_response fallback=individual size=%d "
+                        "-- LLM returned an unparseable batch, retrying each function individually",
+                        batch_idx,
+                        total_batches,
+                        len(batch),
+                    )
                     # Fallback to individual analysis
                     for func_context in batch:
                         result = await self.check_alignment(func_context)
@@ -245,15 +287,18 @@ class AlignmentOrchestrator:
                     continue
                 
                 # Process each result in the batch
+                batch_mismatches = 0
+                batch_clean = 0
                 for idx, result in enumerate(batch_results):
                     if idx >= len(batch):
                         break
-                    
+
                     func_context = batch[idx]
                     self.stats["total_analyzed"] += 1
-                    
+
                     if result and result.get("mismatch_detected"):
                         self.stats["mismatches_detected"] += 1
+                        batch_mismatches += 1
                         
                         # Classify as threat or vulnerability
                         threat_name = result.get("threat_name", "")
@@ -280,9 +325,31 @@ class AlignmentOrchestrator:
                         results.append((result, func_context))
                     else:
                         self.stats["no_mismatch"] += 1
-                        
+                        batch_clean += 1
+
+                batch_ms = int((time.perf_counter() - batch_start) * 1000)
+                self.logger.info(
+                    "batch %d/%d done size=%d mismatches=%d clean=%d duration_ms=%d",
+                    batch_idx,
+                    total_batches,
+                    len(batch),
+                    batch_mismatches,
+                    batch_clean,
+                    batch_ms,
+                )
+
             except Exception as e:
-                self.logger.error(f"Batch analysis failed: {e}, falling back to individual")
+                batch_ms = int((time.perf_counter() - batch_start) * 1000)
+                self.logger.error(
+                    "batch %d/%d failed size=%d duration_ms=%d error_type=%s "
+                    "error=%s -- falling back to individual analysis",
+                    batch_idx,
+                    total_batches,
+                    len(batch),
+                    batch_ms,
+                    type(e).__name__,
+                    e,
+                )
                 # Fallback to individual analysis
                 for func_context in batch:
                     try:
@@ -291,7 +358,18 @@ class AlignmentOrchestrator:
                             results.append(result)
                     except Exception:
                         pass
-        
+
+        scan_ms = int((time.perf_counter() - scan_start) * 1000)
+        self.logger.info(
+            "alignment batch scan done total_functions=%d mismatches=%d clean=%d "
+            "skipped_error=%d skipped_invalid_response=%d duration_ms=%d",
+            total_funcs,
+            self.stats["mismatches_detected"],
+            self.stats["no_mismatch"],
+            self.stats["skipped_error"],
+            self.stats["skipped_invalid_response"],
+            scan_ms,
+        )
         return results
 
     @staticmethod
@@ -326,3 +404,35 @@ class AlignmentOrchestrator:
             - skipped_error: Functions skipped due to errors
         """
         return self.stats.copy()
+
+    def log_summary(self, scope: str = "behavioral") -> None:
+        """Emit a single grep-friendly INFO summary line for the current stats.
+
+        Intended to be called at the end of a behavioral scan
+        (``BehavioralCodeAnalyzer.analyze``) so operators get one stable
+        line per scan that captures the LLM verification outcome:
+
+        ``alignment summary scope=<scope> total=… mismatches=… clean=…
+        skipped_invalid_response=… skipped_error=…``
+
+        Designed for log aggregators (CloudWatch Insights, Datadog,
+        Splunk) — the key=value shape parses cleanly without a custom
+        formatter. Callers don't have to log this themselves; calling
+        ``log_summary()`` keeps the line text stable across versions.
+
+        Args:
+            scope: Free-form label to disambiguate when the same scanner
+                runs the orchestrator more than once in a process (e.g.
+                ``"file:server.py"``). Defaults to ``"behavioral"``.
+        """
+        s = self.stats
+        self.logger.info(
+            "alignment summary scope=%s total=%d mismatches=%d clean=%d "
+            "skipped_invalid_response=%d skipped_error=%d",
+            scope,
+            s["total_analyzed"],
+            s["mismatches_detected"],
+            s["no_mismatch"],
+            s["skipped_invalid_response"],
+            s["skipped_error"],
+        )
