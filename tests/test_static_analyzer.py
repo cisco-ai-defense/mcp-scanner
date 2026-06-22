@@ -525,6 +525,107 @@ class TestResourcesScanning:
         assert results[0]["analyzers"] == []
         assert marker.seen == []
 
+    @pytest.mark.asyncio
+    async def test_scan_resource_dict_includes_description_and_text(
+        self, temp_json_file
+    ):
+        """Static-path P0-3 plumbing: every resource result dict must
+        carry ``resource_description`` and ``resource_text`` so the CLI
+        can thread them into ``ResourceScanResult`` and the meta-analyzer
+        gets the same evidence the primary pass saw.
+
+        Without these keys, ``--enable-meta`` on a static resource scan
+        falls back to ``"N/A"`` for description and FP triage on
+        file-based resources is unsupervised.
+
+        Canonical shape (P1-1 follow-up): ``resource_description`` is
+        the verbatim MCP-advertised description, ``resource_text`` is
+        the resource BODY only — never the LLM-formatted
+        ``analysis_content`` blob with ``Resource URI:`` / ``Name:`` /
+        ``Description:`` / ``MIME Type:`` headers prepended (which
+        would cause double-description / metadata-leak when piped
+        through ``Scanner._build_resource_description_for_meta`` to the
+        meta-analyzer LLM).
+        """
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///documents/notes.txt",
+                    "name": "Notes",
+                    "description": "Safe README content for the resource.",
+                    "mimeType": "text/plain",
+                    "text": "Body that explains apiKey is a JSON Schema field.",
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(temp_json_file)
+
+        assert len(results) == 1
+        # Description survives verbatim.
+        assert (
+            results[0]["resource_description"]
+            == "Safe README content for the resource."
+        )
+        # Body-only contract.
+        assert (
+            results[0]["resource_text"]
+            == "Body that explains apiKey is a JSON Schema field."
+        )
+        # Canonical-shape pin: no LLM-formatted preamble allowed.
+        # If a future contributor reverts to ``analysis_content`` here,
+        # the meta-analyzer would receive duplicate description text
+        # and leaked URI/name/MIME headers framed as "Content".
+        rt = results[0]["resource_text"]
+        assert "Resource URI:" not in rt
+        assert "Name: Notes" not in rt
+        assert "MIME Type:" not in rt
+        # And critically: the description must NOT also be embedded
+        # inside resource_text (it lives in resource_description).
+        assert "Description: Safe README content" not in rt
+
+    @pytest.mark.asyncio
+    async def test_scan_resource_skip_mime_keeps_description_and_text(
+        self, temp_json_file
+    ):
+        """Even on the MIME-filter skip path the dict must include the
+        new keys (set to whatever the input provided). Otherwise the
+        CLI's ``r.get("resource_description", "")`` falls silently to
+        empty and re-running meta on the skipped result would feed N/A.
+        """
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///data.bin",
+                    "name": "Binary File",
+                    "description": "advertised description",
+                    "mimeType": "application/octet-stream",
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(
+            temp_json_file, allowed_mime_types=["text/plain"]
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        # Even on skip, the keys must be present (CLI uses ``.get`` so
+        # absence falls silently to ``""`` — pin presence here).
+        assert "resource_description" in results[0]
+        assert "resource_text" in results[0]
+        assert results[0]["resource_description"] == "advertised description"
+
 
 class TestEdgeCases:
     """Test edge cases and error handling."""
