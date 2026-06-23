@@ -90,8 +90,12 @@ rule tool_poisoning{
         // Cached externally
         $cached_externally = /\b(cache|cached|store|stored)\s+(externally|remotely|off[_\-]?site|on\s+server|in\s+cloud)/i
 
-        // Processed data includes sensitive info
-        $processed_includes_sensitive = /\b(processed|includes?|including|contains?)\s*,?\s*(names?|account\s+numbers?|passwords?|credentials?|credit\s+cards?|ssn|social\s+security|pii|personal|private|sensitive)/i
+        // Processed data includes sensitive info. Bare `name(s)` is
+        // dropped because it matches innocuous API field listings like
+        // "returns event details including name, price, …". We keep
+        // PII-flag phrases ("full name", "real name", "user name") and
+        // unambiguously sensitive terms.
+        $processed_includes_sensitive = /\b(processed|includes?|including|contains?)\s*,?\s*((full|real|legal|user|patient|customer|employee)\s+names?|account\s+numbers?|passwords?|credentials?|credit\s+cards?|ssn|social\s+security|pii|personal|private|sensitive)/i
 
     condition:
         // Hidden secondary actions
