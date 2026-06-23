@@ -10,7 +10,7 @@ authors = [
     {name = "Cisco"},
 ]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11.4"
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -30,6 +30,12 @@ dependencies = [
     "litellm==1.80.16",
     "expandvars>=0.12.0",
     "puremagic>=1.28",
+    # JS/TS parsing for npm behavioral analysis (function-context extraction).
+    # tree-sitter-typescript ships its own tree-sitter binding, but we pin the
+    # core runtime to keep ABI compatibility across the three packs.
+    "tree-sitter>=0.23,<0.26",
+    "tree-sitter-javascript>=0.23,<0.26",
+    "tree-sitter-typescript>=0.23,<0.26",
 ]
 
 [dependency-groups]

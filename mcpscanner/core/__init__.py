@@ -22,6 +22,19 @@ from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .models import ScanRequest
 from mcp.types import Tool as MCPTool
+from .npm_scanner import NPMPackageScanner, NPMScanError
+from .package_sandbox import (
+    PackageDownloadError,
+    PackageExtractionError,
+    PackageIntegrityError,
+)
+from .pypi_scanner import (
+    DockerNotAvailableError,
+    LLMNotConfiguredError,
+    PyPIPackageScanner,
+    PyPIScanError,
+    analysis_scan_status,
+)
 from .result import ScanResult
 from .scanner import Scanner
 
@@ -35,4 +48,14 @@ __all__ = [
     "ScanRequest",
     "ScanResult",
     "Scanner",
+    "PyPIPackageScanner",
+    "PyPIScanError",
+    "NPMPackageScanner",
+    "NPMScanError",
+    "DockerNotAvailableError",
+    "LLMNotConfiguredError",
+    "PackageDownloadError",
+    "PackageExtractionError",
+    "PackageIntegrityError",
+    "analysis_scan_status",
 ]

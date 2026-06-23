@@ -1,6 +1,9 @@
-# PyPI Package Scanning (Docker-sandboxed)
+# PyPI Package Scanning
 
-The PyPI package scanner downloads Python packages from PyPI inside an isolated Docker container, extracts the source code, and runs behavioral analysis. Docker is **mandatory** — untrusted packages are never extracted on the host.
+The PyPI package scanner downloads Python packages from PyPI, extracts the source, and runs behavioral analysis. Two execution modes:
+
+- **Docker mode (default, recommended):** the package is downloaded and scanned inside an isolated `mcp-scanner-pypi` container. Untrusted code never touches the host filesystem outside that container.
+- **Local (SDK) mode (opt-in via `--no-docker` / `use_docker=False`):** for SDK and CI environments where Docker isn't available. The package archive is downloaded to a temp dir, extracted via `tarfile.extractall(filter="data")` (which rejects symlinks / absolute paths / `..` traversal), bounded by hard size and file-count caps, and analysed in-process. The package's own code is *never executed* — only parsed. Local mode is a weaker sandbox than Docker; prefer Docker for anything untrusted.
 
 ## Prerequisites
 
@@ -54,6 +57,14 @@ mcp-scanner pypi-scan flask --raw
 mcp-scanner pypi-scan flask --rebuild-image
 ```
 
+### Local mode (no Docker, SDK/CI runners)
+
+```bash
+mcp-scanner pypi-scan flask --no-docker
+```
+
+Local mode runs the scan in-process. The package archive is downloaded to a temp directory, validated against archive size + file-count caps, extracted with `tarfile`'s `data` filter, and parsed by the behavioral analyzer. No package code is executed.
+
 ### All options
 
 ```bash
@@ -71,19 +82,23 @@ Global flags like `--severity-filter`, `--tool-filter`, `--analyzer-filter`, `--
 ```python
 from mcpscanner.core.pypi_scanner import PyPIPackageScanner
 
+# Docker mode (recommended).
 scanner = PyPIPackageScanner()
-
-# Scan latest version
 results = scanner.scan_package("flask")
-print(f"Safe: {results['is_safe']}")
-print(f"Findings: {results['total_findings']}")
+print(f"Safe: {results['is_safe']}, Findings: {results['total_findings']}")
 
-# Scan specific version
+# Specific version
 results = scanner.scan_package("requests", version="2.31.0")
 
-# Access individual findings
+# Individual findings
 for finding in results["findings"]:
     print(f"[{finding['severity']}] {finding['summary']}")
+
+# Local SDK mode — no Docker required. Code from the package is never
+# executed; only parsed. Use when Docker is not available (e.g. shared CI
+# runners).
+sdk_scanner = PyPIPackageScanner(use_docker=False)
+results = sdk_scanner.scan_package("flask")
 ```
 
 See `examples/sdk_pypi_scanner.py` for a complete example.
@@ -110,12 +125,23 @@ The image is built automatically on first use and cached. Use `--rebuild-image` 
 
 ## Security
 
-- **Docker is mandatory** — there is no `--no-docker` or local fallback. PyPI packages may contain malware and must be handled in a sandbox.
+### Docker mode (default)
+
 - **No host volume mounts** — the package is downloaded and scanned entirely inside the container. Only JSON results come back via stdout.
 - **Source preferred, wheel fallback** — prefers source distributions for full source analysis; falls back to wheels (which still contain `.py` files) if source builds fail.
-- **Container auto-removed** — the `--rm` flag ensures the container is deleted after the scan completes.
+- **Container auto-removed** — `--rm` ensures the container is deleted after each scan.
 - **LLM keys via env vars** — credentials are passed at runtime via `-e` flags, never baked into the image.
-- **Bridge networking** — the container has network access (needed for PyPI download and LLM API calls) but uses the default bridge network, not host networking.
+- **Bridge networking** — the container has network access (needed for PyPI + LLM calls) but uses the default bridge network, not host networking.
+
+### Local (no-Docker) mode
+
+- **No package execution.** Local mode parses sources; it never runs `setup.py`, `pip install`, or any code from the downloaded package.
+- **HTTPS-only download** to a private temp directory the scanner owns and cleans up.
+- **Archive size cap** (`MCP_SCANNER_PACKAGE_ARCHIVE_MAX_BYTES`, default 50 MB) enforced both via `Content-Length` and streaming byte count.
+- **Extraction caps**: `MCP_SCANNER_PACKAGE_EXTRACTED_MAX_BYTES` (default 200 MB) and `MCP_SCANNER_PACKAGE_EXTRACTED_MAX_FILES` (default 10 000).
+- **`tarfile.extractall(filter="data")`** (Python 3.12+) rejects symlinks, hardlinks, absolute paths, parent traversal, device files, and setuid/setgid members.
+
+Docker is still the recommended path for untrusted packages. Local mode exists for SDK consumers (CI, sandboxed runners) where Docker isn't available — it's a smaller blast radius than `pip install`, but a weaker boundary than a container.
 
 ## Output Format
 
@@ -129,6 +155,7 @@ The image is built automatically on first use and cached. Use `--rebuild-image` 
   "total_findings": 1,
   "behavioral_findings": 1,
   "is_safe": false,
+  "scan_status": "completed",
   "findings": [
     {
       "analyzer": "behavioral",
@@ -140,3 +167,24 @@ The image is built automatically on first use and cached. Use `--rebuild-image` 
   ]
 }
 ```
+
+`scan_status` is one of:
+
+| Value       | Meaning                                                                                          |
+|-------------|--------------------------------------------------------------------------------------------------|
+| `completed` | Scan ran end-to-end. `is_safe` is `true`/`false` based on `total_findings`.                      |
+| `error`     | Scan could not be trusted. `is_safe` is `null`. Either it aborted before findings could be produced (then `error` / `error_code` are present), or every function failed to analyse (e.g. the LLM was unreachable) so a zero-finding result must not be reported as safe. |
+| `skipped`   | Reserved for future use (e.g. unsupported package format).                                       |
+
+### Error reporting
+
+When `scan_status == "error"`, the JSON also includes `error` (human-readable message) and `error_code` (stable machine-readable token). SDK / CLI callers branch on `error_code` to surface typed exceptions and exit codes:
+
+| `error_code`                  | Mapped Python exception          | CLI exit code | Notes                                                              |
+|-------------------------------|----------------------------------|---------------|--------------------------------------------------------------------|
+| `llm_not_configured`          | `LLMNotConfiguredError`          | `2`           | `MCP_SCANNER_LLM_API_KEY` (or `LLM_API_KEY` inside Docker) unset.  |
+| `package_download_failed`     | `PyPIScanError`                  | `1`           | HTTPS/host/integrity failure during tarball fetch.                 |
+| `package_extraction_failed`   | `PyPIScanError`                  | `1`           | Archive failed traversal / size / file-count caps.                 |
+| `scan_failed`                 | `PyPIScanError`                  | `1`           | Catch-all (analyzer crash, unexpected internal error).             |
+
+The contract is identical between Docker and SDK modes, so code paths that handle one work for both.

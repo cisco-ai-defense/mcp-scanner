@@ -120,6 +120,50 @@ def _create_auth_with_headers(
         return Auth.custom(custom_headers)
 
 
+def _package_scan_to_tool_results(
+    *,
+    scan_results: dict,
+    pkg_spec: str,
+    ecosystem_label: str,
+) -> list:
+    """Render a package scanner JSON payload into the per-tool result shape
+    the report generator consumes. Shared between the ``pypi-scan`` and
+    ``npm-scan`` CLI handlers so the two flows stay aligned."""
+    out: list = []
+    for finding in scan_results.get("findings", []):
+        analyzer_name = (finding.get("analyzer", "unknown") or "unknown") + "_analyzer"
+        out.append(
+            {
+                "tool_name": (
+                    (finding.get("details") or {}).get("function_name", pkg_spec)
+                ),
+                "tool_description": finding.get("summary", ""),
+                "status": "completed",
+                "is_safe": False,
+                "findings": {
+                    analyzer_name: {
+                        "severity": finding.get("severity", "UNKNOWN"),
+                        "threat_summary": finding.get("summary", ""),
+                        "threat_names": [finding.get("threat_category", "UNKNOWN")],
+                        "total_findings": 1,
+                        "mcp_taxonomies": [],
+                    }
+                },
+            }
+        )
+    if not out:
+        out.append(
+            {
+                "tool_name": pkg_spec,
+                "tool_description": f"{ecosystem_label} package scan of {pkg_spec}",
+                "status": "completed",
+                "is_safe": True,
+                "findings": {},
+            }
+        )
+    return out
+
+
 def _build_config(
     selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None
 ) -> Config:
@@ -1105,6 +1149,63 @@ async def main():
         action="store_true",
         help="Force rebuild of the Docker scanner image",
     )
+    p_pypi.add_argument(
+        "--no-docker",
+        action="store_true",
+        help=(
+            "Run the PyPI scan locally without Docker. Intended for SDK / CI "
+            "environments where Docker is unavailable; archives are size-capped "
+            "and extracted via tarfile data filter. The package's own code is "
+            "never executed, but local mode is a weaker sandbox than Docker."
+        ),
+    )
+
+    # npm package scan subcommand (Docker-sandboxed by default; --no-docker
+    # opt-in for SDK environments).
+    p_npm = subparsers.add_parser(
+        "npm-scan",
+        help="Download and scan an npm package in a Docker sandbox",
+    )
+    p_npm.add_argument(
+        "package",
+        help="npm package name (supports @scope/name, e.g. @modelcontextprotocol/server-everything)",
+    )
+    p_npm.add_argument(
+        "--version", help="Specific package version (default: latest)"
+    )
+    p_npm.add_argument(
+        "--output", "-o", help="Save scan results to a file"
+    )
+    p_npm.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_npm.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_npm.add_argument(
+        "--format",
+        choices=[
+            "raw", "summary", "detailed", "by_tool",
+            "by_analyzer", "by_severity", "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+    p_npm.add_argument(
+        "--rebuild-image",
+        action="store_true",
+        help="Force rebuild of the npm Docker scanner image",
+    )
+    p_npm.add_argument(
+        "--no-docker",
+        action="store_true",
+        help=(
+            "Run the npm scan locally without Docker. Intended for SDK / CI "
+            "environments where Docker is unavailable; tarballs are size-capped "
+            "and extracted via tarfile data filter. The package's JS is never "
+            "executed (only parsed), but local mode is a weaker sandbox than Docker."
+        ),
+    )
 
     # Stdio subcommand
     p_stdio = subparsers.add_parser(
@@ -1987,13 +2088,15 @@ async def main():
         elif args.cmd == "pypi-scan":
             from mcpscanner.core.pypi_scanner import (
                 DockerNotAvailableError,
+                LLMNotConfiguredError,
                 PyPIPackageScanner,
                 PyPIScanError,
             )
 
+            use_docker = not getattr(args, "no_docker", False)
             try:
-                scanner = PyPIPackageScanner()
-                if getattr(args, "rebuild_image", False):
+                scanner = PyPIPackageScanner(use_docker=use_docker)
+                if use_docker and getattr(args, "rebuild_image", False):
                     scanner.build_image(force=True)
 
                 scan_results = scanner.scan_package(
@@ -2006,33 +2109,11 @@ async def main():
                 if getattr(args, "version", None):
                     pkg_spec = f"{args.package}=={args.version}"
 
-                results = []
-                for finding in scan_results.get("findings", []):
-                    analyzer_name = finding.get("analyzer", "unknown") + "_analyzer"
-                    results.append({
-                        "tool_name": finding.get("details", {}).get("function_name", pkg_spec),
-                        "tool_description": finding.get("summary", ""),
-                        "status": "completed",
-                        "is_safe": False,
-                        "findings": {
-                            analyzer_name: {
-                                "severity": finding.get("severity", "UNKNOWN"),
-                                "threat_summary": finding.get("summary", ""),
-                                "threat_names": [finding.get("threat_category", "UNKNOWN")],
-                                "total_findings": 1,
-                                "mcp_taxonomies": [],
-                            }
-                        },
-                    })
-
-                if not results:
-                    results.append({
-                        "tool_name": pkg_spec,
-                        "tool_description": f"PyPI package scan of {pkg_spec}",
-                        "status": "completed",
-                        "is_safe": True,
-                        "findings": {},
-                    })
+                results = _package_scan_to_tool_results(
+                    scan_results=scan_results,
+                    pkg_spec=pkg_spec,
+                    ecosystem_label="PyPI",
+                )
 
                 if args.output:
                     with open(args.output, "w", encoding="utf-8") as f:
@@ -2043,7 +2124,58 @@ async def main():
             except DockerNotAvailableError as e:
                 print(f"Error: {e}", file=sys.stderr)
                 sys.exit(1)
+            except LLMNotConfiguredError as e:
+                print(f"Config Error: {e}", file=sys.stderr)
+                sys.exit(2)
             except PyPIScanError as e:
+                print(f"Scan Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.cmd == "npm-scan":
+            from mcpscanner.core.npm_scanner import (
+                NPMPackageScanner,
+                NPMScanError,
+            )
+            from mcpscanner.core.pypi_scanner import (
+                DockerNotAvailableError,
+                LLMNotConfiguredError,
+            )
+
+            use_docker = not getattr(args, "no_docker", False)
+            try:
+                scanner = NPMPackageScanner(use_docker=use_docker)
+                if use_docker and getattr(args, "rebuild_image", False):
+                    scanner.build_image(force=True)
+
+                scan_results = scanner.scan_package(
+                    package=args.package,
+                    version=getattr(args, "version", None),
+                    verbose=getattr(args, "verbose", False),
+                )
+
+                pkg_spec = args.package
+                if getattr(args, "version", None):
+                    pkg_spec = f"{args.package}@{args.version}"
+
+                results = _package_scan_to_tool_results(
+                    scan_results=scan_results,
+                    pkg_spec=pkg_spec,
+                    ecosystem_label="npm",
+                )
+
+                if args.output:
+                    with open(args.output, "w", encoding="utf-8") as f:
+                        json.dump(results, f, indent=2)
+                    if args.verbose:
+                        print(f"Results saved to {args.output}")
+
+            except DockerNotAvailableError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            except LLMNotConfiguredError as e:
+                print(f"Config Error: {e}", file=sys.stderr)
+                sys.exit(2)
+            except NPMScanError as e:
                 print(f"Scan Error: {e}", file=sys.stderr)
                 sys.exit(1)
 
@@ -2186,6 +2318,11 @@ async def main():
             if getattr(args, "version", None):
                 pkg_spec = f"{args.package}=={args.version}"
             server_label = f"pypi:{pkg_spec}"
+        elif hasattr(args, "cmd") and args.cmd == "npm-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}@{args.version}"
+            server_label = f"npm:{pkg_spec}"
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
             server_label = f"behavioral:{args.source_path}"
         elif args.stdio_command:
@@ -2304,6 +2441,11 @@ async def main():
             if getattr(args, "version", None):
                 pkg_spec = f"{args.package}=={args.version}"
             server_label = f"pypi:{pkg_spec}"
+        elif hasattr(args, "cmd") and args.cmd == "npm-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}@{args.version}"
+            server_label = f"npm:{pkg_spec}"
 
         # Handle prompts, resources, and instructions with detailed view
         if hasattr(args, "cmd") and args.cmd == "prompts":

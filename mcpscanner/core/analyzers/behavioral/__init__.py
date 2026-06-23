@@ -25,9 +25,11 @@ Following SAST tool conventions:
 """
 
 from .code_analyzer import BehavioralCodeAnalyzer
+from .js_code_analyzer import JSBehavioralCodeAnalyzer
 from .alignment import AlignmentOrchestrator
 
 __all__ = [
     "BehavioralCodeAnalyzer",
+    "JSBehavioralCodeAnalyzer",
     "AlignmentOrchestrator",
 ]

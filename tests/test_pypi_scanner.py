@@ -16,6 +16,7 @@
 
 """Tests for PyPI Package Scanner (Docker-sandboxed)."""
 
+import asyncio
 import json
 import subprocess
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,7 @@ import pytest
 
 from mcpscanner.core.pypi_scanner import (
     DockerNotAvailableError,
+    LLMNotConfiguredError,
     PyPIPackageScanner,
     PyPIScanError,
 )
@@ -310,3 +312,143 @@ class TestConfiguration:
         call_args = mock_run.call_args[0][0]
         assert "--rm" in call_args
         assert "--network=bridge" in call_args
+
+
+class TestErrorCodeSurfacing:
+    """Container-side ``error_code`` must round-trip to typed
+    exceptions on the host."""
+
+    @patch.object(PyPIPackageScanner, "build_image")
+    @patch.object(PyPIPackageScanner, "check_docker")
+    @patch("mcpscanner.core.pypi_scanner.subprocess.run")
+    def test_llm_not_configured_code_raises_typed_exception(
+        self, mock_run, _mock_check, _mock_build
+    ):
+        """When the container reports ``error_code=llm_not_configured``
+        the host must raise ``LLMNotConfiguredError`` so CLI exit codes
+        / SDK try/excepts can distinguish a config error from a generic
+        scan failure (regression guard for L1)."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout=json.dumps(
+                {
+                    "package": "demo",
+                    "version": "latest",
+                    "error": "LLM_API_KEY not provided to the container",
+                    "error_code": "llm_not_configured",
+                    "is_safe": None,
+                    "scan_status": "error",
+                    "findings": [],
+                }
+            ),
+            stderr="",
+        )
+        scanner = PyPIPackageScanner()
+        with pytest.raises(LLMNotConfiguredError, match="LLM_API_KEY"):
+            scanner.scan_package("demo")
+
+    @patch.object(PyPIPackageScanner, "build_image")
+    @patch.object(PyPIPackageScanner, "check_docker")
+    @patch("mcpscanner.core.pypi_scanner.subprocess.run")
+    def test_unknown_error_code_falls_back_to_PyPIScanError(
+        self, mock_run, _mock_check, _mock_build
+    ):
+        """Containers missing the field, or emitting an unknown code,
+        must still surface as ``PyPIScanError`` — never silently as a
+        successful scan."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout=json.dumps(
+                {
+                    "package": "demo",
+                    "version": "latest",
+                    "error": "tarball corrupt",
+                    "is_safe": None,
+                    "scan_status": "error",
+                    "findings": [],
+                }
+            ),
+            stderr="",
+        )
+        scanner = PyPIPackageScanner()
+        with pytest.raises(PyPIScanError, match="tarball corrupt"):
+            scanner.scan_package("demo")
+
+
+class TestAsyncEntrypoint:
+    """``scan_package_async`` is the SDK shape for callers already
+    inside an event loop."""
+
+    def test_sync_scan_in_async_context_raises_clear_error(self):
+        """Calling the sync entrypoint from a running loop used to
+        deadlock; now it raises a clear RuntimeError pointing the
+        caller at ``scan_package_async`` (regression guard for P2).
+
+        The check fires before any Docker/network I/O, so we use the
+        local path to keep this test hermetic."""
+        from mcpscanner.config.config import Config
+
+        scanner = PyPIPackageScanner(
+            use_docker=False,
+            config=Config(llm_provider_api_key="test-key"),
+        )
+
+        async def _run():
+            scanner.scan_package("demo")
+
+        with pytest.raises(RuntimeError, match="scan_package_async"):
+            asyncio.run(_run())
+
+    @patch.object(PyPIPackageScanner, "build_image")
+    @patch.object(PyPIPackageScanner, "check_docker")
+    @patch("mcpscanner.core.pypi_scanner.subprocess.run")
+    def test_async_scan_composes_with_existing_event_loop(
+        self, mock_run, _mock_check, _mock_build
+    ):
+        """The async entrypoint must work from inside an active loop —
+        the supported SDK shape for FastAPI/async batch jobs."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "package": "demo",
+                    "version": "1.0.0",
+                    "findings": [],
+                    "is_safe": True,
+                    "total_findings": 0,
+                }
+            ),
+            stderr="",
+        )
+        scanner = PyPIPackageScanner()
+
+        async def _run():
+            return await scanner.scan_package_async("demo")
+
+        result = asyncio.run(_run())
+        assert result["is_safe"] is True
+
+
+class TestLocalFileCount:
+    """The local PyPI scan must count the same files the analyzer scans."""
+
+    def test_file_count_skips_hidden_dirs_like_analyzer(self, tmp_path):
+        """Regression: local mode used ``rglob("*.py")`` which counted
+        files in hidden dirs (e.g. ``.tox``/``.venv``) that the
+        analyzer's ``_find_python_files`` explicitly skips — inflating
+        ``python_files_scanned`` past what was actually analysed. We now
+        use the shared ``count_source_files`` which skips hidden paths,
+        matching both the analyzer and the Docker entrypoint."""
+        from mcpscanner.core.package_sandbox import count_source_files
+
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "mod.py").write_text("x = 1\n")
+        hidden = tmp_path / ".tox" / "lib"
+        hidden.mkdir(parents=True)
+        (hidden / "vendored.py").write_text("y = 2\n")
+
+        count = count_source_files(tmp_path, extensions=(".py",), skip_dirs=())
+
+        # Only pkg/mod.py — the hidden .tox tree is ignored. A naive
+        # rglob would have returned 2.
+        assert count == 1
