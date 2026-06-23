@@ -171,8 +171,9 @@ async def main() -> None:
         # ``registry_host`` was resolved above for the manifest fetch.
         allowed_hosts: tuple[str, ...] = ()
         if registry_host:
+            registry_host = registry_host.lower()
             allowed_hosts = (registry_host,)
-            if registry_host.endswith("npmjs.org"):
+            if registry_host == "npmjs.org" or registry_host.endswith(".npmjs.org"):
                 allowed_hosts = allowed_hosts + ("npmjs.com", "npmjs.org")
 
         DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)

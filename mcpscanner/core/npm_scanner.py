@@ -344,7 +344,7 @@ class NPMPackageScanner:
         allowed_hosts: tuple[str, ...]
         if registry_host:
             allowed_hosts = (registry_host,)
-            if registry_host.endswith("npmjs.org"):
+            if registry_host == "npmjs.org" or registry_host.endswith(".npmjs.org"):
                 allowed_hosts = allowed_hosts + ("npmjs.com", "npmjs.org")
         else:
             allowed_hosts = ()

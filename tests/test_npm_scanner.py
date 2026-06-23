@@ -1281,3 +1281,91 @@ def test_local_mode_degraded_analysis_not_reported_safe(
     assert result["total_findings"] == 0
     assert result["scan_status"] == "error"
     assert result["is_safe"] is None
+
+
+# ---------------------------------------------------------------------------
+# CodeQL: incomplete URL substring sanitization on the registry host check
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_lookalike_registry_host_not_granted_npmjs_allowlist():
+    """Regression for CodeQL 'Incomplete URL substring sanitization'.
+
+    A look-alike registry host such as ``evilnpmjs.org`` must NOT be
+    treated as the real npm registry (it used to pass a naive
+    ``endswith("npmjs.org")`` check) and therefore must NOT get
+    ``npmjs.com`` / ``npmjs.org`` added to the tarball download
+    allow-list. Here the manifest points the tarball at ``npmjs.com``;
+    with the look-alike registry that download must be refused because
+    the host is not in the (registry-only) allow-list."""
+    respx.get("https://evilnpmjs.org/demo/latest").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "name": "demo",
+                "version": "0.0.1",
+                "dist": {"tarball": "https://npmjs.com/demo/-/demo-0.0.1.tgz"},
+            },
+        )
+    )
+
+    scanner = NPMPackageScanner(
+        use_docker=False,
+        registry_url="https://evilnpmjs.org",
+        config=_FakeConfig(),
+    )
+    with pytest.raises(NPMScanError, match="allow-list"):
+        scanner.scan_package("demo")
+
+
+@respx.mock
+def test_subdomain_npmjs_registry_keeps_cdn_allowlist(fake_npm_tarball):
+    """The legitimate ``registry.npmjs.org`` host still matches via the
+    ``.npmjs.org`` suffix and keeps the ``npmjs.com`` CDN alias, so a
+    tarball served from ``registry.npmjs.com`` is accepted end-to-end."""
+    _tarball, _pkg, tarball_bytes = fake_npm_tarball
+
+    respx.get("https://registry.npmjs.org/demo/latest").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "name": "demo",
+                "version": "0.0.1",
+                "dist": {
+                    "tarball": "https://registry.npmjs.com/demo/-/demo-0.0.1.tgz"
+                },
+            },
+        )
+    )
+    respx.get("https://registry.npmjs.com/demo/-/demo-0.0.1.tgz").mock(
+        return_value=httpx.Response(
+            200,
+            content=tarball_bytes,
+            headers={"content-length": str(len(tarball_bytes))},
+        )
+    )
+
+    from types import SimpleNamespace
+
+    def fake_init(self, config):
+        self.alignment_orchestrator = SimpleNamespace(
+            get_statistics=lambda: {"skipped_error": 0}
+        )
+
+    monkeypatch_attrs = (
+        "mcpscanner.core.analyzers.behavioral.js_code_analyzer."
+        "JSBehavioralCodeAnalyzer"
+    )
+    with patch(f"{monkeypatch_attrs}.__init__", fake_init), patch(
+        f"{monkeypatch_attrs}.analyze", AsyncMock(return_value=[])
+    ):
+        scanner = NPMPackageScanner(
+            use_docker=False,
+            registry_url="https://registry.npmjs.org",
+            config=_FakeConfig(),
+        )
+        result = scanner.scan_package("demo")
+
+    assert result["scan_status"] == "completed"
+    assert result["is_safe"] is True
