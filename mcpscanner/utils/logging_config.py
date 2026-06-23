@@ -55,8 +55,7 @@ def setup_logger(
     else:
         logger.setLevel(logging.INFO)
 
-    # Create console handler
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(sys.stderr)
     handler.setLevel(logger.level)
 
     # Set formatter
