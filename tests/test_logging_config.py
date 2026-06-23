@@ -90,9 +90,10 @@ class TestSetLogLevel:
         child.error("this should appear")
 
         captured = capfd.readouterr()
-        assert "this should be suppressed" not in captured.out
-        assert "this should also be suppressed" not in captured.out
-        assert "this should appear" in captured.out
+        assert captured.out == ""
+        assert "this should be suppressed" not in captured.err
+        assert "this should also be suppressed" not in captured.err
+        assert "this should appear" in captured.err
 
     def test_set_log_level_to_debug_shows_all(self, capfd):
         child = get_logger("mcpscanner.test_child_b")
@@ -102,8 +103,9 @@ class TestSetLogLevel:
         child.info("info message")
 
         captured = capfd.readouterr()
-        assert "debug message" in captured.out
-        assert "info message" in captured.out
+        assert captured.out == ""
+        assert "debug message" in captured.err
+        assert "info message" in captured.err
 
     def test_set_log_level_deep_child(self):
         deep = get_logger("mcpscanner.test_child_a.deep")

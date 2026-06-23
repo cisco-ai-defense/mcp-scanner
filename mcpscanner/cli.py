@@ -52,10 +52,6 @@ from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
-# P1-6 fix: CLI no longer imports MetaAnalyzer / apply_meta_analysis directly.
-# The static-config meta path now routes through ``Scanner.apply_meta_to_results``
-# so all four entity types stay in lock-step with the remote-scan path.
-
 logger = get_logger(__name__)
 
 from dotenv import load_dotenv
@@ -1514,14 +1510,14 @@ async def main():
         logging.basicConfig(
             level=effective_level,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            stream=sys.stdout,
+            stream=sys.stderr,
         )
         set_log_level(effective_level)
     elif args.verbose:
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            stream=sys.stdout,
+            stream=sys.stderr,
         )
         set_log_level(logging.DEBUG)
         logger.info("Verbose output enabled - detailed analyzer logs will be shown")
@@ -1529,7 +1525,7 @@ async def main():
         logging.basicConfig(
             level=logging.WARNING,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            stream=sys.stdout,
+            stream=sys.stderr,
         )
         set_log_level(logging.WARNING)
 
