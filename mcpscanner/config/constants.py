@@ -127,6 +127,9 @@ class MCPScannerConstants:
     DEFAULT_LLM_API_VERSION: str = os.getenv("MCP_SCANNER_LLM_API_VERSION", None)
     DEFAULT_LLM_TIMEOUT: int = int(os.getenv("MCP_SCANNER_LLM_TIMEOUT", "30"))
 
+    # Stdio server connection timeout
+    DEFAULT_STDIO_TIMEOUT: int = int(os.getenv("MCP_SCANNER_STDIO_TIMEOUT", "60"))
+
     # LLM Prompt Configuration
     PROMPT_LENGTH_THRESHOLD: int = int(
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
@@ -285,6 +288,14 @@ class MCPScannerConstants:
     )
     PACKAGE_DOWNLOAD_TIMEOUT: int = int(
         os.getenv("MCP_SCANNER_PACKAGE_DOWNLOAD_TIMEOUT", "60")
+    )
+
+    # Vulnerable Package Configuration
+    VULNERABLE_PACKAGE_VULNERABILITY_SERVICE: str = os.getenv(
+        "MCP_SCANNER_VULNERABLE_PACKAGE_SERVICE", "pypi"
+    )
+    VULNERABLE_PACKAGE_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_VULNERABLE_PACKAGE_TIMEOUT", "120")
     )
 
     # OAuth Configuration

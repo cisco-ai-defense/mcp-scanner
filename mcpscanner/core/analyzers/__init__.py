@@ -26,8 +26,11 @@ from .api_analyzer import ApiAnalyzer
 from .base import BaseAnalyzer, SecurityFinding
 from .behavioral import BehavioralCodeAnalyzer, AlignmentOrchestrator
 from .llm_analyzer import LLMAnalyzer
+from .meta_analyzer import MetaAnalyzer, MetaAnalysisResult, apply_meta_analysis
 from .yara_analyzer import YaraAnalyzer
 from .virustotal_analyzer import VirusTotalAnalyzer
+from .prompt_defense_analyzer import PromptDefenseAnalyzer
+from .vulnerable_package_analyzer import VulnerablePackageAnalyzer
 from .readiness import ReadinessAnalyzer, ReadinessLLMJudge, OpaProvider
 
 __all__ = [
@@ -36,9 +39,14 @@ __all__ = [
     "ApiAnalyzer",
     "YaraAnalyzer",
     "LLMAnalyzer",
+    "MetaAnalyzer",
+    "MetaAnalysisResult",
+    "apply_meta_analysis",
     "BehavioralCodeAnalyzer",
     "AlignmentOrchestrator",
     "VirusTotalAnalyzer",
+    "PromptDefenseAnalyzer",
+    "VulnerablePackageAnalyzer",
     "ReadinessAnalyzer",
     "ReadinessLLMJudge",
     "OpaProvider",

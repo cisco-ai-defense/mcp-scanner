@@ -50,6 +50,7 @@ from .core.result import (
     ResourceScanResult,
 )
 from .core.models import AnalyzerEnum
+from .utils.logging_config import set_log_level, set_verbose_logging
 
 __all__ = [
     "Config",
@@ -77,4 +78,6 @@ __all__ = [
     "AnalyzerEnum",
     "get_scanner",
     "router",
+    "set_log_level",
+    "set_verbose_logging",
 ]

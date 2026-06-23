@@ -85,6 +85,28 @@ class TestCliHelperFunctions:
             assert config.api_key == ""  # API not selected
             assert config.llm_provider_api_key == "test_llm_key"
 
+    def test_build_config_with_stdio_timeout(self):
+        """Test _build_config passes MCP_SCANNER_STDIO_TIMEOUT to Config."""
+        analyzers = [AnalyzerEnum.YARA]
+
+        with patch.dict(
+            "os.environ",
+            {"MCP_SCANNER_STDIO_TIMEOUT": "180"},
+        ):
+            config = _build_config(analyzers)
+            assert config.stdio_timeout == 180
+
+    def test_build_config_stdio_timeout_default(self):
+        """Test _build_config uses default stdio_timeout when env var is not set."""
+        analyzers = [AnalyzerEnum.YARA]
+
+        with patch.dict("os.environ", {}, clear=False):
+            env = dict(**{k: v for k, v in __import__("os").environ.items()})
+            env.pop("MCP_SCANNER_STDIO_TIMEOUT", None)
+            with patch.dict("os.environ", env, clear=True):
+                config = _build_config(analyzers)
+                assert config.stdio_timeout == 60
+
     def test_build_config_no_analyzers(self):
         """Test _build_config with no analyzers selected."""
         analyzers = []
@@ -490,6 +512,7 @@ class TestStaticSubcommandCLI:
                     "name": "test_resource",
                     "description": "A test resource",
                     "mimeType": "text/plain",
+                    "text": "actual resource body for the canonical shape pin",
                 }
             ]
         }
@@ -533,7 +556,11 @@ class TestStaticSubcommandCLI:
         assert len(results) == 1
         r = results[0]
 
-        # Verify we can create a ResourceScanResult - this is what CLI does
+        # Verify we can create a ResourceScanResult - this is what CLI does.
+        # Mirror the CLI's actual call site (mcpscanner/cli.py): the static
+        # path now threads ``resource_description`` and ``resource_text``
+        # through so ``--enable-meta`` can second-guess the same evidence
+        # the primary analyzers consumed.
         resource_result = ResourceScanResult(
             resource_uri=r["resource_uri"],
             resource_name=r["resource_name"],
@@ -541,11 +568,25 @@ class TestStaticSubcommandCLI:
             status=r["status"],
             analyzers=r.get("analyzers", []),
             findings=r["findings"],
+            resource_description=r.get("resource_description", ""),
+            resource_text=r.get("resource_text", ""),
         )
 
         assert resource_result.resource_uri == "file:///test/resource.txt"
         assert resource_result.resource_name == "test_resource"
         assert resource_result.status == "completed"
+        # P0-3 + P1-1 canonical-shape pin: ``resource_description`` holds
+        # the MCP description verbatim, ``resource_text`` holds the
+        # resource BODY only (no LLM-formatted preamble, no description
+        # duplication, no URI/name/MIME header leak).
+        assert resource_result.resource_description == "A test resource"
+        assert (
+            resource_result.resource_text
+            == "actual resource body for the canonical shape pin"
+        )
+        assert "Resource URI:" not in resource_result.resource_text
+        assert "Description: A test resource" not in resource_result.resource_text
+        assert "MIME Type:" not in resource_result.resource_text
 
     @pytest.mark.asyncio
     async def test_static_prompts_scan(self, prompts_json_file, capsys):

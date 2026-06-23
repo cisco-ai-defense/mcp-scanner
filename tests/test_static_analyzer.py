@@ -26,6 +26,29 @@ from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.base import SecurityFinding
 
 
+class MarkerAnalyzer:
+    """Small test analyzer that records content and flags a marker string."""
+
+    name = "Marker"
+
+    def __init__(self):
+        self.seen = []
+
+    async def analyze(self, content, context=None):
+        self.seen.append((content, context or {}))
+        if "subprocess.run" not in content:
+            return []
+        return [
+            SecurityFinding(
+                severity="HIGH",
+                summary="Marker found",
+                analyzer=self.name,
+                threat_category="CODE EXECUTION",
+                details={"threat_type": "CODE EXECUTION"},
+            )
+        ]
+
+
 @pytest.fixture
 def temp_json_file():
     """Create a temporary JSON file for testing."""
@@ -354,6 +377,254 @@ class TestResourcesScanning:
         assert results[0]["resource_name"] == "System Passwords"
         assert results[0]["is_safe"] == False
         assert len(results[0]["findings"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_scan_resource_inline_text_content(self, temp_json_file):
+        """Test scanning text content included with a resources/list item."""
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///documents/report.txt",
+                    "name": "Annual Report",
+                    "description": "Company annual report",
+                    "mimeType": "text/plain",
+                    "text": "Hidden payload calls subprocess.run() later.",
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(temp_json_file)
+
+        assert len(results) == 1
+        assert results[0]["resource_name"] == "Annual Report"
+        assert results[0]["is_safe"] == False
+        assert results[0]["findings"][0].analyzer == "Marker"
+        assert "Content:\nHidden payload calls subprocess.run()" in marker.seen[0][0]
+        assert marker.seen[0][1]["has_resource_content"] is True
+
+    @pytest.mark.asyncio
+    async def test_scan_resources_read_contents_snapshot(self, temp_json_file):
+        """Test scanning a resources/read contents snapshot."""
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "contents": [
+                {
+                    "uri": "file:///documents/notes.txt",
+                    "mimeType": "text/plain",
+                    "text": "This resource body mentions subprocess.run().",
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(temp_json_file)
+
+        assert len(results) == 1
+        assert results[0]["resource_uri"] == "file:///documents/notes.txt"
+        assert results[0]["resource_name"] == "file:///documents/notes.txt"
+        assert results[0]["is_safe"] == False
+        assert (
+            "Content:\nThis resource body mentions subprocess.run()"
+            in marker.seen[0][0]
+        )
+
+    @pytest.mark.asyncio
+    async def test_scan_resources_list_with_matching_read_contents(
+        self, temp_json_file
+    ):
+        """Test merging resources/list metadata with matching read contents."""
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///documents/notes.txt",
+                    "name": "Notes",
+                    "description": "Safe metadata",
+                    "mimeType": "text/plain",
+                }
+            ],
+            "contents": [
+                {
+                    "uri": "file:///documents/notes.txt",
+                    "mimeType": "text/plain",
+                    "text": "The body contains subprocess.run().",
+                }
+            ],
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(temp_json_file)
+
+        assert len(results) == 1
+        assert results[0]["resource_name"] == "Notes"
+        assert results[0]["is_safe"] == False
+        assert "Name: Notes" in marker.seen[0][0]
+        assert "Content:\nThe body contains subprocess.run()." in marker.seen[0][0]
+
+    @pytest.mark.asyncio
+    async def test_scan_resources_read_blob_only_is_skipped(self, temp_json_file):
+        """Test that binary-only resources/read snapshots are skipped."""
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "contents": [
+                {
+                    "uri": "file:///documents/image.png",
+                    "mimeType": "image/png",
+                    "blob": "iVBORw0KGgo=",
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(temp_json_file)
+
+        assert len(results) == 1
+        assert results[0]["resource_uri"] == "file:///documents/image.png"
+        assert results[0]["status"] == "skipped"
+        assert results[0]["analyzers"] == []
+        assert marker.seen == []
+
+    @pytest.mark.asyncio
+    async def test_scan_resources_read_content_with_mime_filter(self, temp_json_file):
+        """Test MIME filtering for resources/read content snapshots."""
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "contents": [
+                {
+                    "uri": "file:///documents/data.json",
+                    "mimeType": "application/json",
+                    "text": '{"command": "subprocess.run()"}',
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(
+            temp_json_file, allowed_mime_types=["text/plain"]
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        assert results[0]["analyzers"] == []
+        assert marker.seen == []
+
+    @pytest.mark.asyncio
+    async def test_scan_resource_dict_includes_description_and_text(
+        self, temp_json_file
+    ):
+        """Static-path P0-3 plumbing: every resource result dict must
+        carry ``resource_description`` and ``resource_text`` so the CLI
+        can thread them into ``ResourceScanResult`` and the meta-analyzer
+        gets the same evidence the primary pass saw.
+
+        Without these keys, ``--enable-meta`` on a static resource scan
+        falls back to ``"N/A"`` for description and FP triage on
+        file-based resources is unsupervised.
+
+        Canonical shape (P1-1 follow-up): ``resource_description`` is
+        the verbatim MCP-advertised description, ``resource_text`` is
+        the resource BODY only — never the LLM-formatted
+        ``analysis_content`` blob with ``Resource URI:`` / ``Name:`` /
+        ``Description:`` / ``MIME Type:`` headers prepended (which
+        would cause double-description / metadata-leak when piped
+        through ``Scanner._build_resource_description_for_meta`` to the
+        meta-analyzer LLM).
+        """
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///documents/notes.txt",
+                    "name": "Notes",
+                    "description": "Safe README content for the resource.",
+                    "mimeType": "text/plain",
+                    "text": "Body that explains apiKey is a JSON Schema field.",
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(temp_json_file)
+
+        assert len(results) == 1
+        # Description survives verbatim.
+        assert (
+            results[0]["resource_description"]
+            == "Safe README content for the resource."
+        )
+        # Body-only contract.
+        assert (
+            results[0]["resource_text"]
+            == "Body that explains apiKey is a JSON Schema field."
+        )
+        # Canonical-shape pin: no LLM-formatted preamble allowed.
+        # If a future contributor reverts to ``analysis_content`` here,
+        # the meta-analyzer would receive duplicate description text
+        # and leaked URI/name/MIME headers framed as "Content".
+        rt = results[0]["resource_text"]
+        assert "Resource URI:" not in rt
+        assert "Name: Notes" not in rt
+        assert "MIME Type:" not in rt
+        # And critically: the description must NOT also be embedded
+        # inside resource_text (it lives in resource_description).
+        assert "Description: Safe README content" not in rt
+
+    @pytest.mark.asyncio
+    async def test_scan_resource_skip_mime_keeps_description_and_text(
+        self, temp_json_file
+    ):
+        """Even on the MIME-filter skip path the dict must include the
+        new keys (set to whatever the input provided). Otherwise the
+        CLI's ``r.get("resource_description", "")`` falls silently to
+        empty and re-running meta on the skipped result would feed N/A.
+        """
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///data.bin",
+                    "name": "Binary File",
+                    "description": "advertised description",
+                    "mimeType": "application/octet-stream",
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(
+            temp_json_file, allowed_mime_types=["text/plain"]
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        # Even on skip, the keys must be present (CLI uses ``.get`` so
+        # absence falls silently to ``""`` — pin presence here).
+        assert "resource_description" in results[0]
+        assert "resource_text" in results[0]
+        assert results[0]["resource_description"] == "advertised description"
 
 
 class TestEdgeCases:

@@ -23,8 +23,13 @@ rule data_exfiltration{
         // Suspicious domain patterns in descriptions
         $suspicious_domains = /\b(attacker|evil|malware|collect|exfil|steal|hack|malicious|c2|command-?and-?control)\.(com|net|org|io|xyz)\b/i
 
-        // External endpoint patterns
-        $external_endpoints = /\b(external\s+(endpoint|server|api|service)|remote\s+(server|endpoint|api|storage)|third[- ]party\s+(server|service))\b/i
+        // External endpoint patterns. Requires a transfer/leak verb in
+        // proximity to the endpoint phrase so generic mentions of
+        // "remote server" / "external service" in legitimate descriptions
+        // (e.g. "the remote server does not install anything") do not
+        // trigger this rule on their own. The verb set mirrors
+        // `$upload_external` and adds explicit malice-flag words.
+        $external_endpoints = /\b(upload|send|post|transmit|forward|sync|backup|store|save|push|export|transfer|stream|share|relay|exfiltrat|leak|ship|dispatch)(s|ed|ing)?\s+([^.\n]{0,40}\s+)?(to\s+|into\s+|via\s+|through\s+|towards?\s+)?(an?\s+|the\s+|some\s+)?(external\s+(endpoint|server|api|service)|remote\s+(server|endpoint|api|storage)|third[- ]party\s+(server|service))\b/i
 
         // Data collection to remote
         $remote_collection = /\b(collect|gather|aggregate|compile|harvest)(s|ing|ed)?\s+(and\s+)?(send|upload|transmit|forward|sync|store)/i
@@ -62,7 +67,7 @@ rule data_exfiltration{
         $keylog_patterns = /\b(keylog|keystroke|key\s+press|typing|input)\s*(capture|record|log|monitor|track|send|upload)/i
 
         // File content exfiltration
-        $file_exfil = /\b(all\s+files?|every\s+file|file\s+contents?|directory\s+contents?)\s+(matching|in|from)?\s*(upload|send|transmit|copy|sync|backup)\s+(to\s+)?(external|remote|server|cloud)/i
+        $file_exfil = /\b(all\s+files?|every\s+file|file\s+contents?|directory\s+contents?)\s+(matching|in|from)?\s*(upload|send|transmit|copy|sync|backup)\s+(to\s+)?(external|remote|server|cloud|https?:\/\/|wss?:\/\/)/i
 
         ////////////////////////////////////////////////
         // Negated patterns to reduce false positives
@@ -79,46 +84,50 @@ rule data_exfiltration{
 
     condition:
         (
-            // External upload patterns
-            $upload_external or
+            (
+                // Generic external upload patterns are often used in examples.
+                (
+                    $upload_external or
+                    $external_endpoints
+                )
+                and not $template_indicators
+            ) or
 
             // Suspicious domains
-            $suspicious_domains or
+            (
+                $suspicious_domains or
 
-            // External endpoints
-            $external_endpoints or
+                // Remote collection
+                $remote_collection or
 
-            // Remote collection
-            $remote_collection or
+                // Hidden transfer
+                $hidden_transfer or
 
-            // Hidden transfer
-            $hidden_transfer or
+                // Hide from user
+                $hide_from_user or
 
-            // Hide from user
-            $hide_from_user or
+                // Clipboard exfiltration
+                $clipboard_exfil or
 
-            // Clipboard exfiltration
-            $clipboard_exfil or
+                // Conversation exfiltration
+                $conversation_exfil or
 
-            // Conversation exfiltration
-            $conversation_exfil or
+                // Sends conversation
+                $sends_conversation or
 
-            // Sends conversation
-            $sends_conversation or
+                // External logging endpoint
+                $external_logging or
 
-            // External logging endpoint
-            $external_logging or
+                // Screen exfiltration
+                $screen_exfil or
 
-            // Screen exfiltration
-            $screen_exfil or
+                // Keylogging
+                $keylog_patterns or
 
-            // Keylogging
-            $keylog_patterns or
-
-            // File exfiltration
-            $file_exfil
+                // File exfiltration
+                $file_exfil
+            )
         )
-        and not $template_indicators
         and not $generic_config_ops
         and not $legitimate_backup
 }

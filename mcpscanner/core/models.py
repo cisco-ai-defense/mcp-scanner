@@ -21,11 +21,22 @@ This module contains Pydantic models for consistent data validation
 and structure throughout the codebase.
 """
 
+import logging
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, ClassVar, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from ..utils.logging_config import get_logger
 from .auth import APIAuthConfig, AuthType
+
+# L1 fix: keep the module-level logger BELOW every ``from`` /
+# ``import`` so flake8 / pyflakes doesn't flag E402 (module-level
+# code between import statements). The previous placement worked
+# at runtime but was a code-quality lint violation that would have
+# blocked CI under any project that runs ``flake8 --max-line-length
+# ... --select=E,W,F``.
+_models_logger = get_logger(__name__)
 
 
 class OutputFormat(str, Enum):
@@ -60,6 +71,25 @@ class AnalyzerEnum(str, Enum):
     BEHAVIORAL = "behavioral"
     VIRUSTOTAL = "virustotal"
     READINESS = "readiness"
+    PROMPT_DEFENSE = "prompt_defense"
+    VULNERABLE_PACKAGE = "vulnerable_package"
+    META = "meta"
+
+
+# Analyzers that are exposed via the FastAPI HTTP surface. The other
+# analyzers (BEHAVIORAL, PROMPT_DEFENSE, VIRUSTOTAL, READINESS,
+# VULNERABLE_PACKAGE) ship via the SDK / CLI only — they were producing
+# findings the API response shape silently dropped (see _group_findings_for_api),
+# so we reject them at the request boundary with a clear 422 instead of
+# letting operators believe a scan ran.
+API_ALLOWED_ANALYZERS: frozenset[AnalyzerEnum] = frozenset(
+    {
+        AnalyzerEnum.API,
+        AnalyzerEnum.YARA,
+        AnalyzerEnum.LLM,
+        AnalyzerEnum.META,
+    }
+)
 
 
 class AnalysisContext(BaseModel):
@@ -274,7 +304,30 @@ class APIScanRequest(BaseModel):
     server_url: str
     analyzers: List[AnalyzerEnum] = Field(
         default=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM],
-        description="List of analyzers to run",
+        description=(
+            "List of analyzers to run. The HTTP API is restricted to "
+            f"{sorted(a.value for a in API_ALLOWED_ANALYZERS)}. The remaining "
+            "analyzers (behavioral, prompt_defense, virustotal, readiness, "
+            "vulnerable_package) are SDK/CLI-only — requesting them via API "
+            "returns 422."
+        ),
+    )
+    enable_meta: bool = Field(
+        default=False,
+        description=(
+            "Enable the second-pass LLM meta-analyzer for false-positive "
+            "filtering. Mirrors the CLI --enable-meta flag.\n\n"
+            "**Semantics (OR-merge with `analyzers`):** META runs if "
+            "EITHER `enable_meta` is True OR `meta` appears in `analyzers`. "
+            "This flag is purely additive — it never subtracts. Setting "
+            "`enable_meta=False` while `meta` is already in `analyzers` "
+            "does NOT disable META; remove `meta` from `analyzers` "
+            "instead. The two forms are equivalent and the recommended "
+            "spelling is `enable_meta=True` with META omitted from the "
+            "list (it appears in OpenAPI as a discoverable boolean).\n\n"
+            "Requires an LLM API key (or AWS credentials for Bedrock "
+            "models)."
+        ),
     )
     output_format: OutputFormat = OutputFormat.RAW
     severity_filter: SeverityFilter = SeverityFilter.ALL
@@ -284,6 +337,99 @@ class APIScanRequest(BaseModel):
     show_stats: bool = False
     rules_path: Optional[str] = None
     auth: Optional[APIAuthConfig] = None
+
+    @field_validator("analyzers")
+    @classmethod
+    def _enforce_api_allowlist(
+        cls, value: List[AnalyzerEnum]
+    ) -> List[AnalyzerEnum]:
+        """Reject analyzers that are not exposed over the HTTP surface.
+
+        We validate at the request boundary rather than silently filtering
+        because (a) the response shape used to drop findings from blocked
+        analyzers without telling the caller, and (b) callers explicitly
+        asking for behavioral/prompt_defense/virustotal/readiness/vulnerable_package
+        almost certainly mean to use the SDK or CLI and need the loud error.
+        """
+        if not value:
+            return value
+        rejected = sorted(
+            {a.value for a in value if a not in API_ALLOWED_ANALYZERS}
+        )
+        if rejected:
+            allowed = sorted(a.value for a in API_ALLOWED_ANALYZERS)
+            raise ValueError(
+                f"Analyzers {rejected} are not available over the HTTP API. "
+                f"Allowed: {allowed}. Use the CLI/SDK for the remaining analyzers."
+            )
+        return value
+
+    # L2 fix: dedupe the disagreement warning at the process level so
+    # high-volume API clients (the inventory walker, the asset
+    # collector, CI gates that scan each PR) don't blow up
+    # CloudWatch with one WARNING per request. The contract from
+    # P2-5 is "tell the operator this combination is misleading"; one
+    # WARNING per process accomplishes that without log spam. After
+    # the first match we drop to DEBUG so it's still inspectable
+    # under ``--log-level DEBUG`` for someone diagnosing weirdness
+    # mid-stream.
+    _disagreement_warning_emitted: ClassVar[bool] = False
+
+    @model_validator(mode="after")
+    def _warn_on_meta_field_disagreement(self) -> "APIScanRequest":
+        """P2-5 + L2: warn (don't reject) when ``enable_meta=False``
+        but ``meta`` is in ``analyzers``, but only ONCE per process.
+
+        ``enable_meta`` is OR-merged with the list — never subtractive
+        — so this combination still runs META, which surprises callers
+        who read ``enable_meta=False`` as a kill-switch. We emit a
+        WARNING the first time and DEBUG every subsequent inconsistent
+        request, so the inconsistency shows up in operator logs
+        without breaking the existing pattern of explicitly listing
+        META in ``analyzers`` (which predates the flag).
+        """
+        if (
+            not self.enable_meta
+            and AnalyzerEnum.META in self.analyzers
+        ):
+            cls = type(self)
+            level = logging.WARNING
+            if cls._disagreement_warning_emitted:
+                level = logging.DEBUG
+            else:
+                # First match in this process — flip the flag so the
+                # next request drops to DEBUG. Touching it via the
+                # class object is safe under FastAPI's per-request
+                # threadpool: even a benign race here just produces
+                # at-most-2 warnings, which is still a 1000x
+                # reduction over the un-deduped path.
+                cls._disagreement_warning_emitted = True
+            _models_logger.log(
+                level,
+                "APIScanRequest: enable_meta=False but 'meta' is in "
+                "analyzers=%r — META will still run (the flag is "
+                "additive, not subtractive). Either remove 'meta' "
+                "from analyzers OR set enable_meta=True for clarity. "
+                "(further occurrences logged at DEBUG)",
+                [a.value for a in self.analyzers],
+            )
+        return self
+
+    def resolved_analyzers(self) -> List[AnalyzerEnum]:
+        """Return the effective analyzer list with `enable_meta` applied.
+
+        The CLI ``--enable-meta`` flag and an explicit ``meta`` entry in
+        ``analyzers`` are equivalent. This helper keeps that contract in one
+        place so every scan endpoint resolves the list the same way.
+
+        Returns:
+            List[AnalyzerEnum]: ``analyzers`` with ``META`` appended if
+            ``enable_meta`` is True and ``META`` is not already present.
+        """
+        analyzers = list(self.analyzers)
+        if self.enable_meta and AnalyzerEnum.META not in analyzers:
+            analyzers.append(AnalyzerEnum.META)
+        return analyzers
 
 
 class SpecificToolScanRequest(APIScanRequest):
@@ -319,6 +465,31 @@ class AnalyzerFinding(BaseModel):
     total_findings: int
 
 
+class MetaAnalysisAudit(BaseModel):
+    """Audit trail for meta-analyzer false-positive filtering.
+
+    Attached to a scan result whenever the meta-analyzer (``enable_meta=True``
+    or ``analyzers=["...","meta"]``) judged at least one finding to be a
+    false positive. Without this block, ``"is_safe": true`` cannot be
+    distinguished between *clean tool* and *meta filtered everything to
+    clean* — making this the only operator-visible signal that meta
+    filtering changed the response.
+    """
+
+    filtered_count: int = Field(
+        ...,
+        description="Number of findings the meta-analyzer marked as false positives.",
+    )
+    filtered_findings: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Compact records of the dropped findings: ``analyzer``, ``severity``, "
+            "``summary``, ``threat_category``, ``meta_reason`` (LLM-supplied "
+            "rationale), and optional ``meta_confidence``."
+        ),
+    )
+
+
 class ToolScanResult(BaseModel):
     """Scan result for a single tool with grouped analyzer findings."""
 
@@ -326,6 +497,14 @@ class ToolScanResult(BaseModel):
     status: str
     findings: dict  # Dictionary with analyzer names as keys
     is_safe: bool
+    meta_analysis: Optional[MetaAnalysisAudit] = Field(
+        default=None,
+        description=(
+            "Meta-analyzer audit trail. Present iff meta-analysis ran AND "
+            "filtered at least one finding; otherwise omitted to keep the "
+            "response shape backwards-compatible."
+        ),
+    )
 
 
 class AllToolsScanResponse(BaseModel):
