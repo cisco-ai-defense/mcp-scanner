@@ -24,7 +24,6 @@ Kept here for compatibility and full-featured cross-file analysis.
 """
 
 import ast
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Set
@@ -32,6 +31,8 @@ from typing import Any, Dict, List, Set
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
 from ..semantic.type_analyzer import TypeAnalyzer
+from ....utils.log_format import sanitize_log_value, truncate
+from ....utils.logging_config import get_logger
 
 
 class CallGraph:
@@ -105,7 +106,7 @@ class CrossFileAnalyzer:
         self.analyzers: Dict[Path, BaseParser] = {}
         self.import_map: Dict[Path, List[Path]] = {}  # file -> imported files
         self.type_analyzers: Dict[Path, TypeAnalyzer] = {}  # file -> type analyzer
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self._skipped_files: int = 0
         self._added_files: int = 0
 
@@ -137,9 +138,9 @@ class CrossFileAnalyzer:
             self.logger.debug(
                 "static_interproc python skipped_unparseable file=%s "
                 "error_type=%s error=%s",
-                file_path,
+                sanitize_log_value(file_path),
                 type(e).__name__,
-                str(e)[:200],
+                truncate(e, 200),
             )
 
     def _extract_python_functions(

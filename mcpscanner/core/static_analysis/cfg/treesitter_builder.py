@@ -21,13 +21,14 @@ any tree-sitter parsed language, enabling full dataflow analysis
 across TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, and PHP.
 """
 
-import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 from tree_sitter import Node
 
-logger = logging.getLogger(__name__)
+from ....utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -190,9 +191,6 @@ class TreeSitterCFGBuilder:
         else:
             self.cfg.add_edge(self.cfg.entry, self.cfg.exit)
 
-        # Microsecond resolution: per-function tree-sitter CFG builds
-        # are typically sub-ms; ms truncated them all to 0 and made
-        # per-function regressions invisible in DEBUG profiling.
         logger.debug(
             "static_cfg treesitter built language=%s function_type=%s nodes=%d "
             "duration_us=%d",

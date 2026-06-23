@@ -17,7 +17,6 @@
 """Constant propagation for pattern matching with symbolic value tracking."""
 
 import ast
-import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -25,8 +24,10 @@ from typing import Any
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ....utils.log_format import sanitize_log_value
+from ....utils.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ValueKind(Enum):
@@ -88,12 +89,10 @@ class ConstantPropagationAnalysis:
         if isinstance(self.analyzer, PythonParser):
             self._analyze_python(ast_root)
 
-        # Microsecond resolution: constant propagation is a fast
-        # per-file analysis and ms-level timing rounded everything to 0.
         logger.debug(
             "static_dataflow constprop done file=%s constants=%d symbols=%d "
             "duration_us=%d",
-            getattr(self.analyzer, "file_path", "<unknown>"),
+            sanitize_log_value(getattr(self.analyzer, "file_path", "<unknown>")),
             len(self.constants),
             len(self.symbolic_values),
             int((time.perf_counter() - analyze_start) * 1_000_000),

@@ -31,8 +31,39 @@ from typing import Any, Dict, List, Optional
 
 from ...base import SecurityFinding
 from .....threats.threats import ThreatMapping
+from .....utils.log_format import truncate
 from ....static_analysis.context_extractor import FunctionContext
 from .json_utils import parse_json_from_llm
+
+
+# Internal sentinel key used on per-item batch results to signal that
+# the LLM did *not* successfully analyse the corresponding function
+# (short-padding, non-dict item, missing field, or malformed mismatch).
+# The orchestrator routes any slot carrying this key to
+# ``errored_function_names`` instead of ``no_mismatch``.
+#
+# It MUST NOT survive on an LLM-supplied dict: a model could otherwise
+# coerce its own clean responses into the "errored" bucket simply by
+# emitting ``"_unanalysed": true``. ``validate()`` and ``_validate_items``
+# both strip this key from every passthrough item via
+# :func:`_strip_unanalysed`.
+#
+# Cross-module callers should prefer :func:`is_unanalysed` over reading
+# the raw key so we can swap implementations later without churning
+# every consumer.
+_UNANALYSED_KEY = "_unanalysed"
+
+
+def _unanalysed_sentinel() -> Dict[str, Any]:
+    """Return a fresh per-slot sentinel marking a non-analysed function."""
+    return {"mismatch_detected": False, _UNANALYSED_KEY: True}
+
+
+def is_unanalysed(result: Any) -> bool:
+    """Return True iff ``result`` is a sentinel from
+    :func:`_unanalysed_sentinel` (or otherwise carries the internal
+    sentinel key). Safe to call on arbitrary objects."""
+    return isinstance(result, dict) and bool(result.get(_UNANALYSED_KEY))
 
 
 class AlignmentResponseValidator:
@@ -46,6 +77,34 @@ class AlignmentResponseValidator:
         """Initialize the alignment response validator."""
         self.logger = logging.getLogger(__name__)
 
+    def _strip_unanalysed(
+        self, item: Dict[str, Any], *, context: str, idx: int = -1
+    ) -> Dict[str, Any]:
+        """Return ``item`` with any adversarial ``_unanalysed`` key
+        removed. Per-call site emits a DEBUG breadcrumb; aggregation
+        into one WARNING is the caller's responsibility.
+
+        Args:
+            item: LLM-supplied dict (mutated copy returned; original
+                is never modified).
+            context: Free-form label for log breadcrumbs (e.g.
+                ``"single"`` or ``"batch"``).
+            idx: Batch index, or ``-1`` for single-shot.
+
+        Returns:
+            ``item`` unchanged if the sentinel is absent, else a fresh
+            dict with the sentinel removed.
+        """
+        if _UNANALYSED_KEY not in item:
+            return item
+        self.logger.debug(
+            "validator %s llm_supplied_sentinel idx=%d -- stripping '%s'",
+            context,
+            idx,
+            _UNANALYSED_KEY,
+        )
+        return {k: v for k, v in item.items() if k != _UNANALYSED_KEY}
+
     def validate(self, response: str) -> Optional[Dict[str, Any]]:
         """Parse and validate alignment check response.
 
@@ -57,9 +116,6 @@ class AlignmentResponseValidator:
         """
         response_length = len(response) if response else 0
         if not response or not response.strip():
-            # response_length tells operators whether the body was empty
-            # or whitespace-only — useful for distinguishing a real
-            # transport-level empty from a model that returned " ".
             self.logger.warning(
                 "validator empty_response response_length=%d", response_length
             )
@@ -86,11 +142,7 @@ class AlignmentResponseValidator:
                 )
                 return None
 
-            # Check for required fields
             if not self._has_required_fields(data):
-                # Sort + cap the key list so the log line is stable and
-                # bounded — otherwise a hostile/large response could push
-                # multi-KB key lists into the log stream.
                 keys = sorted(data.keys())
                 if len(keys) > 25:
                     keys = keys[:25] + ["...(truncated)"]
@@ -100,6 +152,18 @@ class AlignmentResponseValidator:
                     keys,
                 )
                 return None
+
+            # Defence in depth: the LLM must not be able to inject our
+            # private sentinel into a single-shot result. Same rule
+            # applies in ``_validate_items``.
+            stripped = _UNANALYSED_KEY in data
+            data = self._strip_unanalysed(data, context="single")
+            if stripped:
+                self.logger.warning(
+                    "validator single llm_supplied_sentinel stripped=1 "
+                    "-- adversarial '%s' key removed from single-shot result",
+                    _UNANALYSED_KEY,
+                )
 
             self.logger.debug(
                 "validator ok response_length=%d mismatch_detected=%s threat_name=%s",
@@ -114,7 +178,7 @@ class AlignmentResponseValidator:
                 "validator unexpected_error response_length=%d error_type=%s error=%s",
                 response_length,
                 type(e).__name__,
-                e,
+                truncate(e),
             )
             return None
 
@@ -225,10 +289,8 @@ class AlignmentResponseValidator:
             return None
 
         try:
-            # Try to parse JSON
             data = json.loads(response)
 
-            # Validate it's a list
             if not isinstance(data, list):
                 self.logger.warning(
                     "validator batch not_a_json_array got_type=%s response_length=%d "
@@ -237,9 +299,8 @@ class AlignmentResponseValidator:
                     response_length,
                     expected_count,
                 )
-                # Try to extract from markdown
                 data = self._extract_json_array_from_markdown(response)
-                if not data:
+                if data is None:
                     self.logger.warning(
                         "validator batch markdown_fallback_failed response_length=%d "
                         "expected_count=%d",
@@ -248,69 +309,23 @@ class AlignmentResponseValidator:
                     )
                     return None
 
-            # Validate each item in the array
-            results = []
-            invalid_items = 0
-            padded_items = 0
-            for idx, item in enumerate(data):
-                if not isinstance(item, dict):
-                    self.logger.warning(
-                        "validator batch item_not_dict idx=%d got_type=%s",
-                        idx,
-                        type(item).__name__,
-                    )
-                    invalid_items += 1
-                    results.append({"mismatch_detected": False})
-                    continue
-
-                # Check for required fields
-                if "mismatch_detected" not in item:
-                    # Default to no mismatch if field missing
-                    self.logger.debug(
-                        "validator batch item_missing_field idx=%d "
-                        "field=mismatch_detected -- defaulting to False",
-                        idx,
-                    )
-                    item["mismatch_detected"] = False
-                    padded_items += 1
-
-                results.append(item)
-
-            # Pad with empty results if we got fewer than expected
-            initial_len = len(results)
-            while len(results) < expected_count:
-                results.append({"mismatch_detected": False})
-            short_padding = len(results) - initial_len
-            if short_padding:
-                self.logger.warning(
-                    "validator batch truncated_response got=%d expected=%d padded=%d "
-                    "-- LLM returned fewer items than batch size; downstream will "
-                    "treat the padded slots as clean",
-                    initial_len,
-                    expected_count,
-                    short_padding,
-                )
-
-            self.logger.debug(
-                "validator batch ok response_length=%d results=%d invalid_items=%d "
-                "padded_items=%d",
-                response_length,
-                len(results),
-                invalid_items,
-                padded_items,
-            )
-            return results
-
         except json.JSONDecodeError as e:
             self.logger.warning(
                 "validator batch invalid_json response_length=%d expected_count=%d "
                 "error=%s -- trying markdown fallback",
                 response_length,
                 expected_count,
-                e,
+                truncate(e),
             )
-            # Try to extract JSON array from markdown
-            return self._extract_json_array_from_markdown(response)
+            data = self._extract_json_array_from_markdown(response)
+            if data is None:
+                self.logger.warning(
+                    "validator batch markdown_fallback_failed response_length=%d "
+                    "expected_count=%d",
+                    response_length,
+                    expected_count,
+                )
+                return None
         except Exception as e:
             self.logger.error(
                 "validator batch unexpected_error response_length=%d expected_count=%d "
@@ -318,9 +333,123 @@ class AlignmentResponseValidator:
                 response_length,
                 expected_count,
                 type(e).__name__,
-                e,
+                truncate(e),
             )
             return None
+
+        return self._validate_items(data, expected_count, response_length)
+
+    def _validate_items(
+        self,
+        data: List[Any],
+        expected_count: int,
+        response_length: int,
+    ) -> List[Dict[str, Any]]:
+        """Coerce ``data`` into a list of well-shaped per-function result dicts.
+
+        Each returned slot is one of:
+
+        * a real, well-formed result dict from the LLM (with any
+          adversarial ``_unanalysed`` key stripped), or
+        * the :func:`_unanalysed_sentinel` dict — when the LLM returned a
+          non-dict, an item missing ``mismatch_detected``, an item
+          claiming a mismatch without the required ``threat_name`` /
+          ``summary`` fields, or simply fewer items than
+          ``expected_count``.
+
+        The orchestrator routes every ``_unanalysed`` slot to
+        ``errored_function_names`` so callers don't mis-label
+        never-analysed functions as clean.
+        """
+        results: List[Dict[str, Any]] = []
+        invalid_items = 0
+        stripped_sentinels = 0
+        for idx, item in enumerate(data):
+            if not isinstance(item, dict):
+                self.logger.warning(
+                    "validator batch item_not_dict idx=%d got_type=%s",
+                    idx,
+                    type(item).__name__,
+                )
+                invalid_items += 1
+                results.append(_unanalysed_sentinel())
+                continue
+
+            if "mismatch_detected" not in item:
+                self.logger.warning(
+                    "validator batch item_missing_field idx=%d "
+                    "field=mismatch_detected -- routing to errored",
+                    idx,
+                )
+                invalid_items += 1
+                results.append(_unanalysed_sentinel())
+                continue
+
+            # If the item claims a mismatch, ``threat_name`` and ``summary``
+            # must both be present — otherwise downstream classification
+            # silently drops the finding, producing no output at all for
+            # the function. Mirror what ``validate()`` enforces for the
+            # single-item path.
+            if item.get("mismatch_detected"):
+                missing = [
+                    field for field in ("threat_name", "summary")
+                    if field not in item
+                ]
+                if missing:
+                    self.logger.warning(
+                        "validator batch mismatch_missing_fields idx=%d "
+                        "fields=%s -- routing to errored",
+                        idx,
+                        ",".join(missing),
+                    )
+                    invalid_items += 1
+                    results.append(_unanalysed_sentinel())
+                    continue
+
+            # Defence in depth: strip any adversarial ``_unanalysed``
+            # key from LLM-supplied dicts. Per-item DEBUG breadcrumbs
+            # come from the helper; we aggregate into one WARNING
+            # below to keep logs sane under adversarial input.
+            if _UNANALYSED_KEY in item:
+                stripped_sentinels += 1
+                item = self._strip_unanalysed(item, context="batch", idx=idx)
+
+            results.append(item)
+
+        if stripped_sentinels:
+            self.logger.warning(
+                "validator batch llm_supplied_sentinel stripped=%d "
+                "-- adversarial '%s' keys removed; see DEBUG for per-item idx",
+                stripped_sentinels,
+                _UNANALYSED_KEY,
+            )
+
+        initial_len = len(results)
+        while len(results) < expected_count:
+            # Tag short-padding slots so the orchestrator can route them
+            # to ``errored_function_names`` rather than ``no_mismatch``
+            # (a function the LLM never analysed is not "safe").
+            results.append(_unanalysed_sentinel())
+        short_padding = len(results) - initial_len
+        if short_padding:
+            self.logger.warning(
+                "validator batch truncated_response got=%d expected=%d padded=%d "
+                "-- LLM returned fewer items than batch size; the orchestrator "
+                "will route the padded slots to errored/unknown",
+                initial_len,
+                expected_count,
+                short_padding,
+            )
+
+        self.logger.debug(
+            "validator batch ok response_length=%d results=%d invalid_items=%d "
+            "short_padding=%d",
+            response_length,
+            len(results),
+            invalid_items,
+            short_padding,
+        )
+        return results
 
     def _extract_json_array_from_markdown(self, response: str) -> Optional[List[Dict[str, Any]]]:
         """Try to extract JSON array from markdown code blocks.
@@ -332,23 +461,39 @@ class AlignmentResponseValidator:
             Parsed JSON array or None
         """
         try:
-            # Look for ```json ... ``` or ``` ... ```
             if "```json" in response:
                 start = response.find("```json") + 7
-                end = response.find("```", start)
-                json_str = response[start:end].strip()
             elif "```" in response:
                 start = response.find("```") + 3
-                end = response.find("```", start)
-                json_str = response[start:end].strip()
             else:
+                self.logger.debug(
+                    "validator batch markdown no_fence_found response_length=%d",
+                    len(response) if response else 0,
+                )
                 return None
+
+            end = response.find("```", start)
+            # A missing closing fence is common when the LLM is truncated
+            # mid-response. Slice through end-of-string instead of relying
+            # on the ``[start:-1]`` quirk of ``str.find`` returning ``-1``.
+            if end == -1:
+                json_str = response[start:].strip()
+            else:
+                json_str = response[start:end].strip()
 
             data = json.loads(json_str)
             if isinstance(data, list):
                 return data
+            self.logger.debug(
+                "validator batch markdown not_a_list got_type=%s",
+                type(data).__name__,
+            )
 
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.debug(
+                "validator batch markdown parse_failed error_type=%s error=%s",
+                type(e).__name__,
+                truncate(e),
+            )
 
         return None

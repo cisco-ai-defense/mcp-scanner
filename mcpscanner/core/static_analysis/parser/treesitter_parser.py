@@ -22,7 +22,6 @@ following the same BaseParser interface as PythonParser.
 Supported languages: TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, PHP
 """
 
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -31,13 +30,13 @@ from tree_sitter import Language, Parser, Node, Tree
 
 from .base import BaseParser
 from ..types import Position, Range
+from ....utils.log_format import sanitize_log_value
+from ....utils.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-# Language module cache
 _LANGUAGE_CACHE: Dict[str, Language] = {}
-# One-shot warning de-dup so a missing grammar logs once per process, not per file.
 _LANG_LOAD_WARNED: Set[str] = set()
 
 
@@ -232,28 +231,21 @@ class TreeSitterParser(BaseParser):
             logger.warning(
                 "static_parser treesitter parse_skipped file=%s language=%s "
                 "reason=unsupported_or_missing_grammar",
-                self.file_path,
+                sanitize_log_value(self.file_path),
                 self.language,
             )
             raise ValueError(f"Unsupported language: {self.language}")
 
         self._tree = parser.parse(self.source_bytes)
         self._ast = self._tree
-        # Microsecond resolution: tree-sitter parses are typically
-        # sub-millisecond even on multi-KB files; ``duration_ms=0``
-        # everywhere hid performance regressions from log-only
-        # profiling.
         parse_us = int((time.perf_counter() - parse_start) * 1_000_000)
-        # `has_error` flag is true when tree-sitter recovered from syntax errors;
-        # log at DEBUG (very common in partial/incomplete code), but include it
-        # so operators can correlate downstream analysis quality drops.
         has_error = bool(
             getattr(self._tree.root_node, "has_error", False)
         )
         logger.debug(
             "static_parser treesitter parsed file=%s language=%s lines=%d "
             "bytes=%d has_error=%s duration_us=%d",
-            self.file_path,
+            sanitize_log_value(self.file_path),
             self.language,
             len(self.lines),
             len(self.source_bytes),

@@ -20,13 +20,15 @@ Provides interprocedural analysis across TypeScript, JavaScript, Go, Java,
 Kotlin, C#, Ruby, Rust, and PHP codebases.
 """
 
-import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from tree_sitter import Language, Parser, Node
+
+from ....utils.log_format import sanitize_log_value, truncate
+from ....utils.logging_config import get_logger
 
 
 @dataclass
@@ -108,7 +110,7 @@ class TreeSitterCallGraphAnalyzer:
         self.call_graph = TSCallGraph()
         self.files: Dict[Path, tuple] = {}  # file_path -> (tree, source_bytes)
         self.import_map: Dict[Path, List[str]] = {}
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self._skipped_files: int = 0
         self._added_files: int = 0
         self._language_load_warned: bool = False
@@ -162,7 +164,7 @@ class TreeSitterCallGraphAnalyzer:
                     "language=%s error_type=%s error=%s",
                     self.language,
                     type(exc).__name__,
-                    str(exc)[:200],
+                    truncate(exc, 200),
                 )
             return None
     
@@ -191,10 +193,10 @@ class TreeSitterCallGraphAnalyzer:
             self.logger.debug(
                 "static_interproc treesitter parse_failed file=%s language=%s "
                 "error_type=%s error=%s",
-                file_path,
+                sanitize_log_value(file_path),
                 self.language,
                 type(e).__name__,
-                str(e)[:200],
+                truncate(e, 200),
             )
             return False
     
@@ -202,11 +204,6 @@ class TreeSitterCallGraphAnalyzer:
         """Extract function definitions from AST."""
         func_types = self.FUNCTION_TYPES.get(self.language, set())
         class_types = {"class_declaration", "class", "struct_item", "impl_item", "object_declaration"}
-        # Containers we should transparently descend through. ``export_statement``
-        # / ``export_declaration`` wrap function declarations in ESM modules
-        # (``export async function fn() { ... }``); without recursing into them
-        # we never see the function and cross-file resolution silently misses
-        # any handler that's registered from another module.
         container_types = {
             "program",
             "source_file",

@@ -21,15 +21,16 @@ static analysis engine, following SAST tool conventions.
 """
 
 import ast
-import logging
 import time
 from pathlib import Path
 from typing import Any
 
 from .base import BaseParser
 from ..types import Position, Range
+from ....utils.log_format import sanitize_log_value, truncate
+from ....utils.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PythonParser(BaseParser):
@@ -60,14 +61,10 @@ class PythonParser(BaseParser):
         parse_start = time.perf_counter()
         try:
             tree = ast.parse(self.source_code, filename=str(self.file_path))
-            # Microsecond resolution: ``ast.parse`` on small files routinely
-            # completes in under 1ms, which would have silently truncated
-            # to ``duration_ms=0`` and made performance regressions
-            # invisible in profiling.
             parse_us = int((time.perf_counter() - parse_start) * 1_000_000)
             logger.debug(
                 "static_parser python parsed file=%s lines=%d bytes=%d duration_us=%d",
-                self.file_path,
+                sanitize_log_value(self.file_path),
                 len(self.lines),
                 len(self.source_code),
                 parse_us,
@@ -77,10 +74,10 @@ class PythonParser(BaseParser):
             parse_us = int((time.perf_counter() - parse_start) * 1_000_000)
             logger.warning(
                 "static_parser python syntax_error file=%s duration_us=%d line=%s error=%s",
-                self.file_path,
+                sanitize_log_value(self.file_path),
                 parse_us,
                 getattr(e, "lineno", "?"),
-                str(e)[:200],
+                truncate(e, 200),
             )
             raise SyntaxError(f"Failed to parse {self.file_path}: {e}") from e
 

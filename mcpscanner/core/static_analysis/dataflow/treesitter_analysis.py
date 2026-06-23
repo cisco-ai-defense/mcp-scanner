@@ -21,7 +21,6 @@ tree-sitter supported languages, providing the same level of taint
 tracking as the Python-specific ForwardDataflowAnalysis.
 """
 
-import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
@@ -29,8 +28,9 @@ from tree_sitter import Node
 
 from ..cfg.treesitter_builder import TreeSitterCFG, TreeSitterCFGBuilder, TSCFGNode
 from ..taint.tracker import Taint, TaintStatus, TaintShape, ShapeEnvironment, SourceTrace
+from ....utils.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -216,8 +216,6 @@ class TreeSitterDataflowAnalysis:
             visited.add(node.node_id)
 
         if worklist:
-            # Previously a silent bail-out; surface it so operators can see
-            # when the dataflow analysis stopped before reaching fixpoint.
             capped = True
             logger.warning(
                 "static_dataflow treesitter iteration_cap_hit language=%s "
@@ -232,9 +230,6 @@ class TreeSitterDataflowAnalysis:
         results = self._collect_results()
         reaches_ext = sum(1 for f in results if f.reaches_external)
         reaches_ret = sum(1 for f in results if f.reaches_returns)
-        # Microsecond resolution: per-function dataflow fixpoints over a
-        # tree-sitter CFG usually settle in well under 1ms, which made
-        # ms-level timing useless for spotting slow outliers.
         logger.debug(
             "static_dataflow treesitter done language=%s nodes=%d params=%d "
             "flows=%d reaches_external=%d reaches_returns=%d iterations=%d "

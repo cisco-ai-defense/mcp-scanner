@@ -17,16 +17,17 @@
 """Dataflow analysis framework."""
 
 import ast
-import logging
 import time
 from typing import Any, Generic, TypeVar
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ....utils.log_format import sanitize_log_value
+from ....utils.logging_config import get_logger
 
 T = TypeVar("T")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CFGNode:
@@ -137,12 +138,9 @@ class DataFlowAnalyzer(Generic[T]):
             self._build_python_cfg(ast_root, cfg)
 
         self.cfg = cfg
-        # Microsecond resolution: CFG construction for one function is
-        # routinely sub-ms; ms truncated everything to ``0`` and erased
-        # the signal needed to spot per-file build regressions.
         logger.debug(
             "static_cfg python built file=%s nodes=%d duration_us=%d",
-            getattr(self.analyzer, "file_path", "<unknown>"),
+            sanitize_log_value(getattr(self.analyzer, "file_path", "<unknown>")),
             len(cfg.nodes),
             int((time.perf_counter() - build_start) * 1_000_000),
         )
@@ -275,7 +273,9 @@ class DataFlowAnalyzer(Generic[T]):
         """
         analyze_start = time.perf_counter()
         analysis_name = type(self).__name__
-        file_path = getattr(self.analyzer, "file_path", "<unknown>")
+        file_path = sanitize_log_value(
+            getattr(self.analyzer, "file_path", "<unknown>")
+        )
 
         if not self.cfg:
             self.build_cfg()
@@ -357,10 +357,6 @@ class DataFlowAnalyzer(Generic[T]):
                             worklist.append(pred)
                             in_worklist.add(pred.id)
 
-        # Microsecond resolution: per-function dataflow fixpoints
-        # usually settle in a handful of iterations and complete well
-        # under 1ms; ms truncated the signal we need to diagnose the
-        # *slow* outliers (the only ones operators actually care about).
         logger.debug(
             "static_dataflow %s done file=%s nodes=%d iterations=%d "
             "direction=%s capped=%s duration_us=%d",
