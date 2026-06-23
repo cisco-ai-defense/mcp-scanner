@@ -24,6 +24,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional, Union
 
+from .analyzers.meta_analyzer import build_meta_audit_payload
 from .models import OutputFormat, SeverityFilter
 from .result import get_highest_severity
 
@@ -143,6 +144,18 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
             "is_safe": result.is_safe,
             "findings": findings_by_analyzer,
         }
+
+        # Surface meta-analyzer audit trail. Without this, "0 findings"
+        # cannot be distinguished between *clean tool* and *meta filtered
+        # everything to clean* — the operator has no way to tell which.
+        # Single-source-of-truth lives in
+        # ``mcpscanner.core.analyzers.meta_analyzer.build_meta_audit_payload``;
+        # the API router (``api/router.py``) delegates to the same helper.
+        meta_audit = build_meta_audit_payload(
+            getattr(result, "meta_filtered_findings", None) or []
+        )
+        if meta_audit is not None:
+            result_dict["meta_analysis"] = meta_audit
 
         # Add type-specific fields
         if hasattr(result, "tool_name"):
