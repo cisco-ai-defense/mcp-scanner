@@ -27,9 +27,19 @@ Focus on the contracts that the alignment orchestrator depends on:
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from mcpscanner.core.static_analysis.javascript import JSContextExtractor
+
+# The extractor logs via ``logging.getLogger(__name__)``, so its logger
+# name is exactly the class's defining module. Other tests in the suite
+# can call ``mcpscanner.utils.logging_config.set_log_level`` which raises
+# every ``mcpscanner.*`` child logger to WARNING; pinning ``caplog`` to
+# this specific logger keeps the INFO assertions deterministic regardless
+# of suite ordering.
+_EXTRACTOR_LOGGER = JSContextExtractor.__module__
 
 
 class TestRegistrationDetection:
@@ -224,7 +234,7 @@ class TestWeaklyAttributedRegistrations:
 
     def test_no_mcp_import_marks_match_weakly_attributed(self, caplog):
         src = 'server.tool("t", "d", async () => null);'
-        with caplog.at_level("INFO"):
+        with caplog.at_level(logging.INFO, logger=_EXTRACTOR_LOGGER):
             ctxs = JSContextExtractor(src, "demo.ts").extract_mcp_function_contexts()
         assert len(ctxs) == 1
         decorator = ctxs[0].decorator_params["tool"]
@@ -238,7 +248,7 @@ class TestWeaklyAttributedRegistrations:
         import { McpServer } from "@modelcontextprotocol/sdk/server";
         server.tool("t", "d", async () => null);
         """
-        with caplog.at_level("INFO"):
+        with caplog.at_level(logging.INFO, logger=_EXTRACTOR_LOGGER):
             ctxs = JSContextExtractor(src, "demo.ts").extract_mcp_function_contexts()
         assert len(ctxs) == 1
         decorator = ctxs[0].decorator_params["tool"]
