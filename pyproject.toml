@@ -130,6 +130,7 @@ filterwarnings = [
 ]
 markers = [
     "integration: mark for tests that hit external services (run with -m integration)",
+    "slow: mark test as slow (perf benchmarks, large fixtures); skipped by default for fast iteration",
 ]
 
 [tool.setuptools.packages.find]
