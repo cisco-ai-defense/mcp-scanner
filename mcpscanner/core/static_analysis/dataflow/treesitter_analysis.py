@@ -21,12 +21,16 @@ tree-sitter supported languages, providing the same level of taint
 tracking as the Python-specific ForwardDataflowAnalysis.
 """
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 from tree_sitter import Node
 
 from ..cfg.treesitter_builder import TreeSitterCFG, TreeSitterCFGBuilder, TSCFGNode
 from ..taint.tracker import Taint, TaintStatus, TaintShape, ShapeEnvironment, SourceTrace
+from ....utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -168,6 +172,7 @@ class TreeSitterDataflowAnalysis:
         Returns:
             List of FlowPath objects for each parameter
         """
+        analyze_start = time.perf_counter()
         # Initialize entry fact with tainted parameters
         entry_fact = TSFlowFact()
         for param in self.param_names:
@@ -187,7 +192,8 @@ class TreeSitterDataflowAnalysis:
         visited = set()
         max_iterations = len(self.cfg.nodes) * 10  # Prevent infinite loops
         iterations = 0
-        
+        capped = False
+
         while worklist and iterations < max_iterations:
             iterations += 1
             node = worklist.pop(0)
@@ -208,9 +214,37 @@ class TreeSitterDataflowAnalysis:
                 worklist.extend(node.successors)
             
             visited.add(node.node_id)
-        
-        # Collect results from all nodes
-        return self._collect_results()
+
+        if worklist:
+            capped = True
+            logger.warning(
+                "static_dataflow treesitter iteration_cap_hit language=%s "
+                "nodes=%d iterations=%d max=%d worklist_remaining=%d",
+                self.language,
+                len(self.cfg.nodes),
+                iterations,
+                max_iterations,
+                len(worklist),
+            )
+
+        results = self._collect_results()
+        reaches_ext = sum(1 for f in results if f.reaches_external)
+        reaches_ret = sum(1 for f in results if f.reaches_returns)
+        logger.debug(
+            "static_dataflow treesitter done language=%s nodes=%d params=%d "
+            "flows=%d reaches_external=%d reaches_returns=%d iterations=%d "
+            "capped=%s duration_us=%d",
+            self.language,
+            len(self.cfg.nodes),
+            len(self.param_names),
+            len(results),
+            reaches_ext,
+            reaches_ret,
+            iterations,
+            capped,
+            int((time.perf_counter() - analyze_start) * 1_000_000),
+        )
+        return results
     
     def _get_input_fact(self, node: TSCFGNode) -> TSFlowFact:
         """Get input fact by merging predecessor facts."""

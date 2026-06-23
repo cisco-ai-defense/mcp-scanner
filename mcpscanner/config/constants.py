@@ -138,6 +138,15 @@ class MCPScannerConstants:
     LLM_RETRY_BASE_DELAY: float = float(
         os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0")
     )
+    # Above this duration a single LLM round-trip is logged at WARNING so
+    # operators can spot regional / quota / model-warming issues without
+    # bumping every behavioral log to DEBUG. 15s is roomy for a long
+    # alignment-verification prompt on Bedrock but aggressive enough to
+    # catch genuinely slow paths (e.g. cold-start Bedrock, cross-region
+    # OpenAI hops). Tune via env var when needed.
+    LLM_SLOW_REQUEST_THRESHOLD_MS: int = int(
+        os.getenv("MCP_SCANNER_LLM_SLOW_REQUEST_THRESHOLD_MS", "15000")
+    )
 
     # Behavioral Analyzer File Size Limits
     MAX_FILE_SIZE_BYTES: int = int(
