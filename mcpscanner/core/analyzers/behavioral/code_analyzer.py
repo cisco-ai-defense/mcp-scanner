@@ -60,6 +60,21 @@ _SEVERITY_DISPLAY_ORDER = (
 )
 
 
+def _relative_parts(file_path: Path, root: Path) -> tuple[str, ...]:
+    """Return ``file_path``'s path components relative to ``root``.
+
+    Skip/hidden heuristics must only consider directories *inside* the
+    scanned tree. Using the absolute ``Path.parts`` would also inspect
+    ancestors of ``root`` (e.g. a hidden ``TMPDIR`` such as
+    ``/Users/me/.cache/T/...``) and wrongly drop every file. Falls back to
+    the absolute parts only if ``file_path`` is somehow not under ``root``.
+    """
+    try:
+        return file_path.relative_to(root).parts
+    except ValueError:  # pragma: no cover - rglob results stay under root
+        return file_path.parts
+
+
 @dataclass(slots=True)
 class _AcceptedFile:
     """A capability-file that survived the byte-level prefilter."""
@@ -105,6 +120,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # callers report on ALL tools detected during a scan (safe and unsafe),
         # not only the ones that triggered a SecurityFinding.
         self.analyzed_functions: List[Dict[str, Any]] = []
+
+        # Counts failures that prevent a file/scan from reaching the
+        # orchestrator at all (read errors, AST/context-extraction crashes,
+        # or a top-level crash in analyze()). The orchestrator only records
+        # per-function LLM-stage errors via ``skipped_error``; without this
+        # counter a wholesale extraction failure would surface zero findings
+        # and be misreported as a clean ("is_safe=True") package by the
+        # package scanners. ``analysis_scan_status`` reads it to downgrade
+        # such scans to ``error``.
+        self.analysis_errors: int = 0
 
         self.logger.debug(
             "BehavioralCodeAnalyzer initialized with alignment verification"
@@ -207,6 +232,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # failure between calls doesn't leave stale ``analyzed_functions``
         # behind for the next caller.
         self.analyzed_functions = []
+        self.analysis_errors = 0
         try:
             all_findings = []
             self.alignment_orchestrator.reset_stats()
@@ -454,6 +480,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             return all_findings
 
         except Exception as e:
+            self.analysis_errors += 1
             self.logger.error(
                 "behavioral scan failed mode=%s target=%s error_type=%s error=%s",
                 scan_mode,
@@ -499,11 +526,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         candidates: List[Path] = []
         for ext in extensions:
             for source_file in path.rglob(f"*{ext}"):
-                file_str = str(source_file)
+                # Inspect only components below the scan root; an absolute
+                # ``parts`` would treat a hidden ancestor dir (e.g. a dotted
+                # TMPDIR) as reason to skip every file, silently emptying
+                # the scan.
+                rel_parts = _relative_parts(source_file, path)
                 if (
-                    "__pycache__" not in file_str
-                    and "node_modules" not in file_str
-                    and not any(part.startswith(".") for part in source_file.parts)
+                    "__pycache__" not in rel_parts
+                    and "node_modules" not in rel_parts
+                    and not any(part.startswith(".") for part in rel_parts)
                 ):
                     candidates.append(source_file)
 
@@ -569,8 +600,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         candidates: List[Path] = []
         for py_file in path.rglob("*.py"):
-            if "__pycache__" not in str(py_file) and not any(
-                part.startswith(".") for part in py_file.parts
+            rel_parts = _relative_parts(py_file, path)
+            if "__pycache__" not in rel_parts and not any(
+                part.startswith(".") for part in rel_parts
             ):
                 candidates.append(py_file)
 
@@ -634,6 +666,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             return findings
 
         except Exception as e:
+            self.analysis_errors += 1
             self.logger.error(
                 "behavioral _analyze_file failed path=%s duration_ms=%d "
                 "error_type=%s error=%s",
@@ -849,6 +882,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
 
         except Exception as e:
+            # This swallow-and-return is the pipeline's last resort: context
+            # extraction (NativeAnalyzer / ContextExtractor) or batch
+            # alignment crashed for the whole file. Because we return the
+            # (likely empty) findings list rather than re-raising, the
+            # counted ``except`` in ``_analyze_file`` never sees it — so we
+            # must record the failure here, otherwise a wholesale extraction
+            # crash would surface zero findings and be misreported as a
+            # clean (``is_safe=True``) package.
+            self.analysis_errors += 1
             self.logger.error(
                 "behavioral _analyze_source_code failed path=%s error_type=%s error=%s",
                 sanitize_log_value(file_path),

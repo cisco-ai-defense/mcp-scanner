@@ -1,0 +1,27 @@
+# NPM behavioural scanner image.
+#
+# Built from a tagged python:3.13-alpine digest (same base as the PyPI
+# scanner image) so the build pins via Docker content-addressed layers. We
+# don't need Node.js inside the container at all — we never *execute* the
+# downloaded package, only parse its sources via tree-sitter-javascript /
+# tree-sitter-typescript.
+
+FROM python:3.13-alpine
+
+# Build tools required to compile tree-sitter native extensions.
+RUN apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev \
+    && pip install --no-cache-dir cisco-ai-mcp-scanner \
+    && apk del .build-deps
+
+COPY entrypoint_npm.py /entrypoint_npm.py
+
+# Drop to a non-root user so the analyzer can't write outside its work
+# directory even if a malicious package somehow induces an effect via the
+# Python parser (we never execute the package's JS).
+RUN adduser -D -u 10001 scanner \
+ && mkdir -p /work \
+ && chown -R scanner:scanner /work /entrypoint_npm.py
+USER scanner
+WORKDIR /work
+
+ENTRYPOINT ["python", "/entrypoint_npm.py"]

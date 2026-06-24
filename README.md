@@ -27,6 +27,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
 - **VirusTotal Binary Scanning**: Automatically detect malware in binary files (images, PDFs, executables, archives) bundled with MCP servers using VirusTotal hash lookups.
+- **PyPI Package Scanning**: Download and scan PyPI packages inside a Docker sandbox with behavioral analysis.
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for detecting threats.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
@@ -285,7 +286,9 @@ asyncio.run(main())
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
 - **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
 - **virustotal**: scan files or directories for malware using VirusTotal hash lookups. Requires a `scan_path` argument (file or directory).
-- **supplychain**: scan source code of an MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
+- **pypi-scan**: download and scan a PyPI package with behavioral analysis. Docker-sandboxed by default; pass `--no-docker` (or `use_docker=False` in the SDK) to run in-process — package code is never executed in either mode.
+- **npm-scan**: download and scan an npm package with full behavioral analysis on JavaScript / TypeScript sources. Docker-sandboxed by default; supports `--no-docker` for SDK / CI environments.
+- **supplychain**: scan source code of an MCP server for Behavioural analysis. Requires path to MCP Server source code or source file.
 - **vulnerable-package**: scan Python dependencies for known vulnerabilities using pip-audit. Requires a path to a requirements file or project directory.
 - **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
@@ -478,6 +481,41 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
+
+#### PyPI Package Scanning
+
+Download and scan PyPI packages with behavioral analysis to detect hidden behaviors like data exfiltration, backdoors, and prompt injection. Docker-sandboxed by default; pass `--no-docker` for SDK / CI environments — package code is never executed in either mode.
+
+```bash
+# Scan a package (latest version)
+mcp-scanner pypi-scan flask
+
+# Scan a specific version
+mcp-scanner pypi-scan requests --version 2.31.0
+
+# Save results
+mcp-scanner pypi-scan fastapi -o results.json --format detailed
+
+# Force rebuild the Docker image
+mcp-scanner pypi-scan flask --rebuild-image
+```
+
+See [PyPI Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/pypi-scanning.md) for complete details.
+
+#### Scan an npm Package
+
+```bash
+# Scan latest version (Docker-sandboxed)
+mcp-scanner npm-scan @modelcontextprotocol/server-everything
+
+# Specific version
+mcp-scanner npm-scan my-mcp-server --version 1.2.3
+
+# No-Docker SDK / CI runner mode
+mcp-scanner npm-scan my-mcp-server --no-docker
+```
+
+See [npm Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/npm-scanning.md) for complete details.
 
 #### Vulnerable Packages Scanning
 
@@ -761,6 +799,8 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
 - **[Behavioral Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
 - **[VirusTotal Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/virustotal-scanning.md)** - File and directory malware scanning with VirusTotal
+- **[PyPI Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/pypi-scanning.md)** - PyPI package scanning (Docker or local SDK mode)
+- **[npm Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/npm-scanning.md)** - npm package scanning with full JS/TS behavioral analysis (Docker or local SDK mode)
 - **[Vulnerable Package Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/vulnerable-package-scanning.md)** - Python dependency vulnerability scanning with pip-audit
 - **[LLM Providers](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/llm-providers.md)** - LLM configuration for all providers
 - **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy

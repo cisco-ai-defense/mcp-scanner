@@ -10,7 +10,7 @@ authors = [
     {name = "Cisco"},
 ]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11.4"
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -29,10 +29,13 @@ dependencies = [
     # Pinned to 1.83.7 to include the proxy API key verification SQL injection fix while avoiding 1.82.x. BerriAI/litellm#24512.
     "litellm==1.83.7",
     "expandvars>=0.12.0",
-    "tree-sitter>=0.21.0",
+    # JS/TS parsing for npm behavioral analysis pins the shared tree-sitter
+    # runtime to a tested ABI range (other language packs stay >=0.21.0,
+    # which the <0.26 ceiling still satisfies).
+    "tree-sitter>=0.23,<0.26",
     "tree-sitter-python>=0.21.0",
-    "tree-sitter-javascript>=0.21.0",
-    "tree-sitter-typescript>=0.21.0",
+    "tree-sitter-javascript>=0.23,<0.26",
+    "tree-sitter-typescript>=0.23,<0.26",
     "tree-sitter-go>=0.21.0",
     "tree-sitter-java>=0.21.0",
     "tree-sitter-kotlin>=0.21.0",
@@ -46,9 +49,9 @@ dependencies = [
 
 [project.optional-dependencies]
 js = [
-    "tree-sitter>=0.21.0",
-    "tree-sitter-javascript>=0.21.0",
-    "tree-sitter-typescript>=0.21.0",
+    "tree-sitter>=0.23,<0.26",
+    "tree-sitter-javascript>=0.23,<0.26",
+    "tree-sitter-typescript>=0.23,<0.26",
 ]
 go = [
     "tree-sitter>=0.21.0",
@@ -79,9 +82,9 @@ php = [
     "tree-sitter-php>=0.21.0",
 ]
 all-languages = [
-    "tree-sitter>=0.21.0",
-    "tree-sitter-javascript>=0.21.0",
-    "tree-sitter-typescript>=0.21.0",
+    "tree-sitter>=0.23,<0.26",
+    "tree-sitter-javascript>=0.23,<0.26",
+    "tree-sitter-typescript>=0.23,<0.26",
     "tree-sitter-go>=0.21.0",
     "tree-sitter-java>=0.21.0",
     "tree-sitter-kotlin>=0.21.0",
