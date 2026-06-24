@@ -407,6 +407,23 @@ def test_redact_argv_masks_sensitive_env_pairs():
     assert "***REDACTED***" in rendered
 
 
+def test_redact_argv_masks_combined_option_equals_form():
+    """A future caller using the combined ``--env=KEY=VALUE`` single-token
+    form (rather than ``-e KEY=VALUE`` split tokens) must still get the
+    credential masked."""
+    argv = [
+        "docker", "run",
+        "--env=LLM_API_KEY=sk-combined-secret",
+        "--env=LLM_MODEL=gpt-4o-mini",
+        "image",
+    ]
+    rendered = redact_argv_for_logging(argv)
+    assert "sk-combined-secret" not in rendered
+    assert "***REDACTED***" in rendered
+    # Non-sensitive combined options are left intact.
+    assert "--env=LLM_MODEL=gpt-4o-mini" in rendered
+
+
 def test_log_does_not_contain_llm_api_key(caplog, monkeypatch):
     """End-to-end check that the docker debug log line doesn't carry
     the LLM API key value. Guards against regressions on the redaction
@@ -1369,3 +1386,102 @@ def test_subdomain_npmjs_registry_keeps_cdn_allowlist(fake_npm_tarball):
 
     assert result["scan_status"] == "completed"
     assert result["is_safe"] is True
+
+
+# ---------------------------------------------------------------------------
+# Pre-orchestrator analysis failures must not become a false "safe" result
+# ---------------------------------------------------------------------------
+
+
+def test_analysis_scan_status_counts_analyzer_errors():
+    """A scan that produced no findings but recorded pre-orchestrator
+    failures (parse/extract crashes counted in ``analysis_errors``) is
+    unreliable even when the orchestrator's own ``skipped_error`` is 0."""
+    from types import SimpleNamespace
+
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    analyzer = SimpleNamespace(
+        alignment_orchestrator=SimpleNamespace(
+            get_statistics=lambda: {"skipped_error": 0}
+        ),
+        analysis_errors=2,
+    )
+    assert analysis_scan_status(analyzer, []) == "error"
+
+
+def test_analysis_scan_status_error_from_analysis_errors_when_stats_unreadable():
+    """Even if the orchestrator stats can't be read, a recorded
+    ``analysis_errors`` tally must still downgrade a zero-finding scan to
+    ``error`` rather than silently failing open to ``completed``."""
+    from types import SimpleNamespace
+
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    # No ``alignment_orchestrator`` attribute at all → stats read fails.
+    analyzer = SimpleNamespace(analysis_errors=1)
+    assert analysis_scan_status(analyzer, []) == "error"
+
+
+def test_analysis_scan_status_findings_present_ignores_analyzer_errors():
+    """Surfaced findings always win — analyzer errors don't downgrade a
+    scan that already produced (non-safe) results."""
+    from types import SimpleNamespace
+
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    analyzer = SimpleNamespace(analysis_errors=5)
+    assert analysis_scan_status(analyzer, ["finding"]) == "completed"
+
+
+def test_js_analyzer_extract_failure_marks_scan_error(tmp_path, monkeypatch):
+    """If JS context extraction blows up for every file, the analyzer must
+    record the failure in ``analysis_errors`` so the package is reported as
+    ``error`` (``is_safe=None``) rather than analysed-and-clean.
+
+    This closes the residual false-safe gap where a broken/unavailable
+    tree-sitter parser produced zero findings indistinguishable from a
+    genuinely clean package."""
+    from mcpscanner.core.analyzers.behavioral import js_code_analyzer as jmod
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+    from mcpscanner.core.static_analysis import javascript as jsstatic
+
+    # Keep analyzer construction cheap and offline.
+    monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
+
+    js_file = tmp_path / "server.ts"
+    js_file.write_text("export const handler = async () => 42;\n")
+
+    def boom(self):
+        raise RuntimeError("tree-sitter unavailable")
+
+    monkeypatch.setattr(
+        jsstatic.JSContextExtractor, "extract_mcp_function_contexts", boom
+    )
+
+    analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
+    findings = asyncio.run(analyzer.analyze(str(tmp_path), {}))
+
+    assert findings == []
+    assert analyzer.analysis_errors >= 1
+    assert analysis_scan_status(analyzer, findings) == "error"
+
+
+def test_count_source_files_ignores_hidden_ancestor_dirs(tmp_path):
+    """``count_source_files`` must apply its hidden-dir rule relative to
+    the scan root: a hidden *ancestor* (e.g. a dotted ``TMPDIR``) must not
+    zero the count, while a hidden directory *inside* the package is still
+    skipped."""
+    from mcpscanner.core.package_sandbox import count_source_files
+
+    # The package itself lives under a hidden ancestor directory.
+    root = tmp_path / ".hidden_cache" / "pkg"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.py").write_text("x = 1\n")
+    (root / "sub" / "b.py").write_text("y = 2\n")
+    # A hidden dir *within* the package should still be excluded.
+    (root / ".venv").mkdir()
+    (root / ".venv" / "c.py").write_text("z = 3\n")
+
+    count = count_source_files(root, extensions=(".py",), skip_dirs=())
+    assert count == 2

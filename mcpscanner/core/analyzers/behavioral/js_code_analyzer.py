@@ -71,6 +71,14 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         super().__init__(name="Behavioural (JS)")
         self._config = config
         self.alignment_orchestrator = AlignmentOrchestrator(config)
+        # Counts failures that happen *before* the orchestrator is reached
+        # (extractor construction, AST context extraction, or a top-level
+        # crash in ``analyze``). The orchestrator only tracks per-function
+        # LLM-stage errors, so without this counter a wholesale parse/extract
+        # failure would surface zero findings and be misread as "safe".
+        # ``analysis_scan_status`` reads it to downgrade such scans to
+        # ``error`` instead of reporting ``is_safe=True``.
+        self.analysis_errors = 0
         self.logger.debug(
             "JSBehavioralCodeAnalyzer initialised with alignment orchestrator"
         )
@@ -90,6 +98,7 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
             ``SecurityFinding`` records for each mismatch the orchestrator
             confirms.
         """
+        self.analysis_errors = 0
         try:
             if os.path.isdir(content):
                 return await self._analyze_directory(content, context)
@@ -100,6 +109,7 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                 content, context.get("file_path", "inline.ts"), context
             )
         except Exception as e:  # noqa: BLE001 - surface any failure as zero findings
+            self.analysis_errors += 1
             self.logger.error(
                 "js behavioural analysis failed error=%s", e, exc_info=True
             )
@@ -141,6 +151,7 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
             with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
                 source_code = fh.read()
         except OSError as e:
+            self.analysis_errors += 1
             self.logger.warning(
                 "js behavioural failed_to_read file=%s error=%s", file_path, e
             )
@@ -162,10 +173,19 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                 continue
             if path.suffix.lower() not in _JS_EXTENSIONS:
                 continue
-            if any(part in _SKIP_DIRS for part in path.parts):
+            # Only inspect components *below* the scan root: an absolute
+            # ``path.parts`` would also see ancestor dirs (e.g. a hidden
+            # ``TMPDIR``) and wrongly skip every file. Keep this in lockstep
+            # with ``count_source_files`` so reported and analysed counts
+            # never diverge.
+            try:
+                rel_parts = path.relative_to(root).parts
+            except ValueError:  # pragma: no cover - rglob stays under root
+                rel_parts = path.parts
+            if any(part in _SKIP_DIRS for part in rel_parts):
                 continue
-            # Skip hidden dotfiles.
-            if any(part.startswith(".") for part in path.parts):
+            # Skip hidden dotfiles / dotted dirs within the package.
+            if any(part.startswith(".") for part in rel_parts):
                 continue
             out.append(str(path))
         return sorted(out)
@@ -185,15 +205,28 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
             extractor = JSContextExtractor(source_code, file_path)
         except ValueError as e:
             # Unsupported extension; raw source analysed via analyze() with
-            # no .ts suffix is the usual cause.
+            # no .ts suffix is the usual cause. This is a benign "nothing to
+            # do here", not an infrastructure failure, so it is NOT counted.
             self.logger.debug(
                 "js behavioural unsupported_extension file=%s error=%s", file_path, e
+            )
+            return []
+        except Exception as e:  # noqa: BLE001
+            # tree-sitter unavailable / parser construction crash. This means
+            # we genuinely could not analyse the file, so record it as an
+            # error rather than letting a zero-finding result look "safe".
+            self.analysis_errors += 1
+            self.logger.error(
+                "js behavioural extractor_init_failed file=%s error=%s",
+                file_path,
+                e,
             )
             return []
 
         try:
             contexts = extractor.extract_mcp_function_contexts()
         except Exception as e:  # noqa: BLE001
+            self.analysis_errors += 1
             self.logger.error(
                 "js behavioural extract_failed file=%s error=%s", file_path, e
             )

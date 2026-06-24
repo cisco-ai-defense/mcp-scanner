@@ -452,3 +452,69 @@ class TestLocalFileCount:
         # Only pkg/mod.py — the hidden .tox tree is ignored. A naive
         # rglob would have returned 2.
         assert count == 1
+
+    def test_file_count_skips_pycache_and_node_modules(self, tmp_path):
+        """The PyPI counter must mirror the analyzer's ``_find_source_files``
+        exclusions so ``python_files_scanned`` never counts files under
+        ``__pycache__``/``node_modules`` that the analyzer skips."""
+        from mcpscanner.core.package_sandbox import count_source_files
+
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "mod.py").write_text("x = 1\n")
+        cache = tmp_path / "pkg" / "__pycache__"
+        cache.mkdir()
+        (cache / "stale.py").write_text("y = 2\n")
+        vendored = tmp_path / "node_modules" / "dep"
+        vendored.mkdir(parents=True)
+        (vendored / "polyglot.py").write_text("z = 3\n")
+
+        count = count_source_files(
+            tmp_path,
+            extensions=(".py",),
+            skip_dirs=("__pycache__", "node_modules"),
+        )
+        assert count == 1
+
+
+class _FakeConfig:
+    """Minimal config stand-in for behavioural analyzer construction."""
+
+    def __init__(self, llm_provider_api_key: str = "test-key"):
+        self.llm_provider_api_key = llm_provider_api_key
+        self.llm_model = "gpt-4o-mini"
+        self.llm_base_url = ""
+        self.llm_api_version = ""
+
+
+def test_python_analyzer_extraction_crash_marks_scan_error(monkeypatch):
+    """Regression: a wholesale context-extraction failure in the Python
+    behavioural analyzer is swallowed by ``_analyze_source_code`` (it
+    returns an empty findings list rather than re-raising). It must still
+    bump ``analysis_errors`` so ``analysis_scan_status`` reports ``error``
+    — otherwise a package whose sources crashed the extractor would be
+    reported ``is_safe=True``."""
+    from mcpscanner.core.analyzers.behavioral import code_analyzer as cmod
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    # Keep construction offline; analysis_scan_status reads analysis_errors.
+    monkeypatch.setattr(cmod, "AlignmentOrchestrator", MagicMock())
+
+    class _Boom:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("extractor exploded")
+
+    # Both the primary and fallback extractors blow up for this file.
+    monkeypatch.setattr(cmod, "ContextExtractor", _Boom)
+    monkeypatch.setattr(cmod, "NativeAnalyzer", _Boom)
+
+    analyzer = cmod.BehavioralCodeAnalyzer(_FakeConfig())
+    findings = asyncio.run(
+        analyzer._analyze_source_code(
+            "@mcp.tool()\ndef greet(name):\n    return name\n",
+            {"file_path": "server.py"},
+        )
+    )
+
+    assert findings == []
+    assert analyzer.analysis_errors == 1
+    assert analysis_scan_status(analyzer, findings) == "error"

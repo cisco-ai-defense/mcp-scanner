@@ -430,8 +430,14 @@ class PyPIPackageScanner:
             # ``_find_python_files`` which ignores hidden/``__pycache__``
             # paths. A plain ``rglob("*.py")`` over-counted files the
             # analyzer never actually looked at.
+            # Match the behavioural analyzer's own exclusions
+            # (``_find_source_files`` skips these) so the reported
+            # ``python_files_scanned`` never counts files the analyzer
+            # never looked at. Hidden dirs are dropped by ``skip_hidden``.
             py_files = count_source_files(
-                source_root, extensions=(".py",), skip_dirs=()
+                source_root,
+                extensions=(".py",),
+                skip_dirs=("__pycache__", "node_modules"),
             )
 
             return _build_scan_result(
@@ -565,38 +571,51 @@ def analysis_scan_status(analyzer: Any, findings: Sequence[Any]) -> str:
     was degraded by analyzer-infrastructure failures (LLM unreachable,
     prompt build crash, response-validation errors, etc.).
 
-    The alignment orchestrator swallows per-function failures and returns
-    ``None`` for that function, so a scan where *every* function failed to
-    analyse surfaces zero findings — indistinguishable from a genuinely
-    clean package unless we look at the orchestrator's error tally. We
-    must not report ``is_safe=True`` for a package we never managed to
-    analyse.
+    Two distinct failure tallies feed this decision:
+
+    * The alignment orchestrator swallows per-function failures and returns
+      ``None`` for that function, recording a ``skipped_error``. A scan
+      where every function failed at the LLM stage surfaces zero findings.
+    * The analyzer itself swallows failures that happen *before* the
+      orchestrator is reached — file-read errors, AST/context-extraction
+      crashes, an unavailable tree-sitter parser, or a top-level crash —
+      tracking them in ``analysis_errors``. Without this, a package whose
+      sources never parsed would surface zero findings and be misread as
+      clean.
+
+    Either tally, combined with zero findings, means we never actually
+    analysed the package and therefore must not report ``is_safe=True``.
 
     Rules:
 
     * If we surfaced any findings, the scan is ``completed`` regardless of
       partial errors — the findings stand on their own and ``is_safe`` is
       already ``False``.
-    * If we surfaced no findings *and* the orchestrator recorded at least
-      one ``skipped_error``, the result is unreliable → ``error``. The
-      caller maps this to ``is_safe=None``.
+    * If we surfaced no findings *and* either tally is non-zero, the result
+      is unreliable → ``error``. The caller maps this to ``is_safe=None``.
     * Otherwise (no findings, no errors — nothing to analyse or everything
       aligned cleanly) the scan is ``completed``.
 
     The analyzer is duck-typed: any object exposing
-    ``alignment_orchestrator.get_statistics()`` works, which covers both
-    the Python and JS behavioural analyzers. If the stats can't be read we
-    fail open to ``completed`` rather than masking a real (already
-    surfaced) result.
+    ``alignment_orchestrator.get_statistics()`` and/or an
+    ``analysis_errors`` int works, which covers both the Python and JS
+    behavioural analyzers. Reading the stats is wrapped defensively so a
+    bookkeeping glitch can't crash a scan, but a glitch there still lets
+    the ``analysis_errors`` tally (read separately) drive the decision.
     """
     if findings:
         return "completed"
+    error_tally = 0
     try:
         stats = analyzer.alignment_orchestrator.get_statistics()
-        skipped_error = int(stats.get("skipped_error", 0))
+        error_tally += int(stats.get("skipped_error", 0))
     except Exception:  # noqa: BLE001 - never let stats bookkeeping fail a scan
-        return "completed"
-    return "error" if skipped_error > 0 else "completed"
+        pass
+    try:
+        error_tally += int(getattr(analyzer, "analysis_errors", 0) or 0)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        pass
+    return "error" if error_tally > 0 else "completed"
 
 
 def _build_scan_result(

@@ -171,9 +171,12 @@ async def main():
         )
 
         # Shared counter so SDK and Docker emit the same value for the
-        # same package tree.
+        # same package tree. Skip dirs mirror the behavioural analyzer's
+        # own exclusions so we never count files it never analysed.
         py_files = count_source_files(
-            source_dir, extensions=(".py",), skip_dirs=()
+            source_dir,
+            extensions=(".py",),
+            skip_dirs=("__pycache__", "node_modules"),
         )
 
         # A degraded scan (LLM unreachable, etc.) reports no findings but

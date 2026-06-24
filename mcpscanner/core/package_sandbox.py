@@ -26,7 +26,9 @@ same defensive parsing path:
 
 * HTTPS-only downloads to a temporary directory the caller owns.
 * Streamed writes with an explicit byte cap (``PACKAGE_ARCHIVE_MAX_BYTES``).
-* :mod:`tarfile` ``filter="data"`` extraction (Python 3.12+): drops symlinks,
+* :mod:`tarfile` ``filter="data"`` extraction (available on every Python
+  this project supports — the filter landed in 3.12 and was backported to
+  3.11.4, which is our ``requires-python`` floor): drops symlinks,
   hardlinks, device files, absolute paths, and ``..`` traversal.
 * Hard caps on total extracted bytes and file count to defend against
   zip-bombs.
@@ -119,15 +121,37 @@ def redact_argv_for_logging(argv: Sequence[str]) -> str:
     """
     redacted: list[str] = []
     for piece in argv:
-        if "=" in piece and not piece.startswith("-"):
-            # ``-e KEY=VALUE`` is two argv entries (``-e``, ``KEY=VALUE``);
-            # the value entry has the ``=`` so we redact here.
-            key, _, value = piece.partition("=")
-            if value and _is_sensitive_env_name(key):
-                redacted.append(f"{key}=***REDACTED***")
-                continue
-        redacted.append(piece)
+        masked = _redact_argv_piece(piece)
+        redacted.append(masked if masked is not None else piece)
     return " ".join(redacted)
+
+
+def _redact_argv_piece(piece: str) -> Optional[str]:
+    """Return a redacted copy of ``piece`` if it carries a sensitive
+    ``KEY=VALUE`` assignment, else ``None`` (caller keeps the original).
+
+    Handles both shapes the scanners can emit:
+
+    * The split form ``-e``/``--env`` followed by ``KEY=VALUE`` as a
+      separate argv entry (``KEY=VALUE`` doesn't start with ``-``).
+    * The combined option form ``--env=KEY=VALUE`` (a single entry that
+      starts with ``-``), so a future caller switching to the
+      ``--opt=...`` style can't silently start leaking keys.
+    """
+    if "=" not in piece:
+        return None
+    if piece.startswith("-"):
+        # ``--env=KEY=VALUE`` → strip the option, re-examine the remainder.
+        option, _, remainder = piece.partition("=")
+        if "=" in remainder:
+            key, _, value = remainder.partition("=")
+            if value and _is_sensitive_env_name(key):
+                return f"{option}={key}=***REDACTED***"
+        return None
+    key, _, value = piece.partition("=")
+    if value and _is_sensitive_env_name(key):
+        return f"{key}=***REDACTED***"
+    return None
 
 
 def _is_sensitive_env_name(name: str) -> bool:
@@ -562,7 +586,8 @@ def safe_extract_tar_gz(
     """Extract a gzipped tarball under ``dest_dir`` using the tarfile
     ``data`` filter, with hard caps on total bytes and file count.
 
-    The ``data`` filter (Python 3.12+) drops:
+    The ``data`` filter (added in Python 3.12, backported to 3.11.4 — our
+    ``requires-python`` floor) drops:
 
     * Members with absolute paths or ``..`` traversal.
     * Symlinks and hardlinks pointing outside the extraction root.
@@ -861,10 +886,18 @@ def count_source_files(
             continue
         if path.suffix.lower() not in ext_lower:
             continue
-        parts = path.parts
-        if any(part in skip_set for part in parts):
+        # Evaluate skip/hidden rules against the path *relative* to
+        # ``source_root`` only. Using the absolute ``path.parts`` would
+        # also inspect ancestor directories (e.g. a ``TMPDIR`` like
+        # ``/Users/me/.cache/T/...``) and wrongly drop every file when an
+        # ancestor happens to be hidden or named like a skip dir.
+        try:
+            rel_parts = path.relative_to(source_root).parts
+        except ValueError:  # pragma: no cover - rglob results are always under root
+            rel_parts = path.parts
+        if any(part in skip_set for part in rel_parts):
             continue
-        if skip_hidden and any(part.startswith(".") for part in parts):
+        if skip_hidden and any(part.startswith(".") for part in rel_parts):
             continue
         count += 1
     return count
