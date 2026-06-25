@@ -49,6 +49,7 @@ from litellm import acompletion
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
+from ...utils.bedrock import ensure_bedrock_dependencies
 from ...utils.logging_config import get_logger
 from .base import SecurityFinding
 
@@ -185,6 +186,11 @@ class MetaAnalyzer:
 
         self._model = config.llm_model
         is_bedrock = self._model and "bedrock/" in self._model
+
+        # Fail fast with an actionable message if boto3 is missing, instead of
+        # litellm's opaque "No module named 'boto3'" at request time.
+        if is_bedrock:
+            ensure_bedrock_dependencies(self._model)
 
         if not is_bedrock:
             if not config.llm_provider_api_key:

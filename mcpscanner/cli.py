@@ -1685,11 +1685,20 @@ async def main():
             if AnalyzerEnum.YARA in selected_analyzers:
                 analyzers.append(YaraAnalyzer(rules_dir=args.rules_path))
             if AnalyzerEnum.LLM in selected_analyzers:
-                if cfg.llm_provider_api_key:
+                # Mirror Scanner.__init__'s ``(api_key or is_bedrock)`` gate so
+                # that ``bedrock/*`` models authenticating via the AWS
+                # credential chain (IAM/SSO) activate the analyzer without
+                # requiring a (placeholder) MCP_SCANNER_LLM_API_KEY.
+                _llm_is_bedrock = bool(
+                    cfg.llm_model and "bedrock/" in cfg.llm_model
+                )
+                if cfg.llm_provider_api_key or _llm_is_bedrock:
                     analyzers.append(LLMAnalyzer(cfg))
                 else:
                     print(
-                        "Warning: LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not set",
+                        "Warning: LLM analyzer requested but MCP_SCANNER_LLM_API_KEY "
+                        "not set (for bedrock/* models, configure AWS credentials "
+                        "instead of an API key)",
                         file=sys.stderr,
                     )
             if AnalyzerEnum.API in selected_analyzers:
