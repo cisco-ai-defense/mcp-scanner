@@ -29,6 +29,7 @@ from litellm import acompletion
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
 from ...threats.threats import LLM_THREAT_MAPPING
+from ...utils.bedrock import ensure_bedrock_dependencies
 from .base import BaseAnalyzer, SecurityFinding
 
 
@@ -71,6 +72,11 @@ class LLMAnalyzer(BaseAnalyzer):
 
         # Detect Bedrock model
         is_bedrock = self._model and "bedrock/" in self._model
+
+        # Fail fast with an actionable message if boto3 is missing, instead of
+        # litellm's opaque "No module named 'boto3'" at request time.
+        if is_bedrock:
+            ensure_bedrock_dependencies(self._model)
 
         # Authentication strategy based on provider:
         # 1. Non-Bedrock providers (OpenAI, Anthropic, etc.): API key required
