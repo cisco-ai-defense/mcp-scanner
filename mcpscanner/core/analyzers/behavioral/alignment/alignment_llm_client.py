@@ -35,6 +35,7 @@ from litellm import acompletion
 
 from .....config.config import Config
 from .....config.constants import MCPScannerConstants
+from .....utils.bedrock import ensure_bedrock_dependencies
 from .....utils.log_format import ERROR_TRUNCATE, RESPONSE_DEBUG_MAX, truncate
 
 
@@ -111,6 +112,12 @@ class AlignmentLLMClient:
         self._api_version = config.llm_api_version
 
         is_bedrock = bool(self._model and "bedrock/" in self._model)
+
+        # Fail fast with an actionable message if boto3 is missing, instead of
+        # litellm's opaque "No module named 'boto3'" at request time.
+        if is_bedrock:
+            ensure_bedrock_dependencies(self._model)
+
         api_key = getattr(config, "llm_provider_api_key", None)
         bearer_token = getattr(config, "aws_bearer_token_bedrock", None)
 
