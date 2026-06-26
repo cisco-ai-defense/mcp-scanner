@@ -4096,6 +4096,16 @@ class NativeAnalyzer:
             is not None
         )
 
+    @staticmethod
+    def _ts_node_contains(ancestor: "Node", descendant: "Node") -> bool:
+        """Return True if ``descendant`` is nested under ``ancestor``."""
+        cur = descendant
+        while cur is not None:
+            if cur is ancestor:
+                return True
+            cur = cur.parent
+        return False
+
     def _ts_shadowed_names_at(self, use_node: "Node") -> Set[str]:
         """Names shadowed at ``use_node`` by parameters or earlier locals.
 
@@ -4104,6 +4114,9 @@ class NativeAnalyzer:
         function and calls through that binding must still classify as sinks.
         Only non-alias bindings (parameters, ordinary locals) suppress a
         visible module-level alias with the same name.
+
+        Bindings in nested functions/classes that do not enclose ``use_node``
+        are ignored so out-of-scope locals cannot suppress a visible alias.
         """
         fn = self._ts_enclosing_function(use_node)
         if fn is None:
@@ -4114,6 +4127,9 @@ class NativeAnalyzer:
             if name:
                 shadowed.add(name)
         use_byte = use_node.start_byte
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
+        nested_scope_types = func_types | class_types
 
         def collect_bindings(n: "Node") -> None:
             if n.start_byte >= use_byte:
@@ -4126,6 +4142,12 @@ class NativeAnalyzer:
                     if not self._ts_is_sink_alias_binding(n):
                         shadowed.add(self._ts_get_node_text(target))
             for child in n.children:
+                if (
+                    child.type in nested_scope_types
+                    and child is not fn
+                    and not self._ts_node_contains(child, use_node)
+                ):
+                    continue
                 collect_bindings(child)
 
         collect_bindings(fn)
