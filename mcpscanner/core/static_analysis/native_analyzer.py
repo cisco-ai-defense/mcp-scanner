@@ -4056,8 +4056,55 @@ class NativeAnalyzer:
             cur = cur.parent
         return None
 
+    def _ts_sink_category_for_language(self):
+        """Return ``sink_category_for(text) -> category|None`` for this language."""
+        cache = getattr(self, "_sink_leaf_category_cache", None)
+        if cache is None:
+            cache = {}
+            self._sink_leaf_category_cache = cache
+        if self.language in cache:
+            return cache[self.language]
+
+        from .taint.patterns import get_all_sinks_for_language
+
+        sinks = get_all_sinks_for_language(self.language)
+        leaf_to_category: Dict[str, str] = {}
+        for category, sink_set in sinks.items():
+            for s in sink_set:
+                leaf = s.replace("::", ".").split(".")[-1].strip()
+                if leaf:
+                    leaf_to_category.setdefault(leaf, category)
+
+        def sink_category_for(text: str) -> Optional[str]:
+            leaf = text.replace("::", ".").split(".")[-1].strip()
+            return leaf_to_category.get(leaf)
+
+        cache[self.language] = sink_category_for
+        return sink_category_for
+
+    def _ts_is_sink_alias_binding(self, binding_node: "Node") -> bool:
+        """Return True when a declaration re-binds a name to a dangerous sink alias."""
+        value = None
+        if binding_node.type == "variable_declarator":
+            value = binding_node.child_by_field_name("value")
+        elif binding_node.type == "assignment_expression":
+            value = binding_node.child_by_field_name("right")
+        if value is None:
+            return False
+        return (
+            self._ts_alias_value_category(value, self._ts_sink_category_for_language())
+            is not None
+        )
+
     def _ts_shadowed_names_at(self, use_node: "Node") -> Set[str]:
-        """Names shadowed at ``use_node`` by parameters or earlier locals."""
+        """Names shadowed at ``use_node`` by parameters or earlier locals.
+
+        Sink-alias declarations (``const run = promisify(exec)``) are not
+        treated as shadowing: they re-introduce the alias in the current
+        function and calls through that binding must still classify as sinks.
+        Only non-alias bindings (parameters, ordinary locals) suppress a
+        visible module-level alias with the same name.
+        """
         fn = self._ts_enclosing_function(use_node)
         if fn is None:
             return set()
@@ -4071,10 +4118,13 @@ class NativeAnalyzer:
         def collect_bindings(n: "Node") -> None:
             if n.start_byte >= use_byte:
                 return
-            if n.type == "variable_declarator":
-                target = n.child_by_field_name("name")
+            if n.type in ("variable_declarator", "assignment_expression"):
+                target = n.child_by_field_name("name") or n.child_by_field_name(
+                    "left"
+                )
                 if target is not None and target.type == "identifier":
-                    shadowed.add(self._ts_get_node_text(target))
+                    if not self._ts_is_sink_alias_binding(n):
+                        shadowed.add(self._ts_get_node_text(target))
             for child in n.children:
                 collect_bindings(child)
 
@@ -4117,19 +4167,7 @@ class NativeAnalyzer:
         if cache_key in store:
             return store[cache_key]
 
-        from .taint.patterns import get_all_sinks_for_language
-
-        sinks = get_all_sinks_for_language(self.language)
-        leaf_to_category: Dict[str, str] = {}
-        for category, sink_set in sinks.items():
-            for s in sink_set:
-                leaf = s.replace("::", ".").split(".")[-1].strip()
-                if leaf:
-                    leaf_to_category.setdefault(leaf, category)
-
-        def sink_category_for(text: str) -> Optional[str]:
-            leaf = text.replace("::", ".").split(".")[-1].strip()
-            return leaf_to_category.get(leaf)
+        sink_category_for = self._ts_sink_category_for_language()
 
         alias_map: Dict[str, str] = {}
 
@@ -4196,7 +4234,12 @@ class NativeAnalyzer:
             root = self._ts_root(handler_node)
             index = self._ts_build_function_index(root, func_types)
             ambiguous_bare = self._ts_ambiguous_bare_functions(root)
-        except Exception:  # pragma: no cover - defensive
+        except Exception as e:  # pragma: no cover - defensive
+            self.logger.debug(
+                "Callee enrichment setup failed for handler at byte %s: %s",
+                getattr(handler_node, "start_byte", "?"),
+                e,
+            )
             return
         if not index:
             return

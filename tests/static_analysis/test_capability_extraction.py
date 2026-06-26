@@ -994,8 +994,27 @@ server.registerTool(
   "safe_echo",
   { description: "Echo input without shell execution." },
   async ({ run }) => {
-  // parameter ``run`` shadows the module-level promisify(exec) alias
-    return { content: [{ type: "text", text: String(run) }] };
+    // parameter ``run`` shadows the module-level promisify(exec) alias
+    const out = await run(run);
+    return { content: [{ type: "text", text: out.stdout ?? "" }] };
+  }
+);
+"""
+
+LOCAL_ALIAS_IN_HANDLER_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Run shell command in handler scope." },
+  async ({ command }) => {
+    const run = promisify(exec);
+    await run(command);
+    return { content: [{ type: "text", text: "done" }] };
   }
 );
 """
@@ -1033,13 +1052,26 @@ server.registerTool(
 
 
 def test_shadowed_parameter_does_not_inherit_module_alias() -> None:
-    """A local parameter named like a module alias must not be treated as a
-    subprocess sink."""
+    """A parameter named like a module alias must not inherit that alias when
+    invoked as the callee of a call expression."""
     analyzer = NativeAnalyzer(SHADOWED_ALIAS_TS, "shadow.ts")
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1
     ctx = caps[0]
     assert ctx.has_subprocess_calls is False
+
+
+def test_local_sink_alias_in_handler_is_detected() -> None:
+    """A sink alias declared inside the handler (``const run = promisify(exec)``
+    then ``run(cmd)``) must still classify as a subprocess sink."""
+    analyzer = NativeAnalyzer(LOCAL_ALIAS_IN_HANDLER_TS, "local_alias.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
 
 
 def test_qualified_delegate_resolves_correct_class_method() -> None:
