@@ -46,7 +46,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Union
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from .context_extractor import FunctionContext
 from .parser.python_parser import PythonParser
@@ -3111,12 +3111,23 @@ class NativeAnalyzer:
             return cached[cache_key]
 
         index: Dict[str, "Node"] = {}
+        ambiguous_bare: Set[str] = set()
+
+        def _index_bare(bare: str, node: "Node") -> None:
+            if bare in index and index[bare].start_byte != node.start_byte:
+                ambiguous_bare.add(bare)
+            else:
+                index.setdefault(bare, node)
 
         def visit(node: "Node") -> None:
             if node.type in func_types:
                 name_node = node.child_by_field_name("name")
                 if name_node is not None:
-                    index.setdefault(self._ts_get_node_text(name_node), node)
+                    bare = self._ts_get_node_text(name_node)
+                    _index_bare(bare, node)
+                    class_name = self._ts_find_enclosing_class_name(node)
+                    if class_name:
+                        index[f"{class_name}.{bare}"] = node
                 # ``const handler = async (args) => { ... };``
                 # ``handler = async (args) => { ... };``
                 if node.type in ("arrow_function", "function_expression"):
@@ -3130,14 +3141,17 @@ class NativeAnalyzer:
                         if parent_name is None:
                             parent_name = parent.child_by_field_name("left")
                         if parent_name is not None:
-                            index.setdefault(
-                                self._ts_get_node_text(parent_name), node
-                            )
+                            _index_bare(self._ts_get_node_text(parent_name), node)
             for child in node.children:
                 visit(child)
 
         visit(root)
         cached[cache_key] = index
+        amb_store = getattr(self, "_func_index_ambiguous_cache", None)
+        if amb_store is None:
+            amb_store = {}
+            self._func_index_ambiguous_cache = amb_store
+        amb_store[cache_key] = ambiguous_bare
         return index
 
     # =========================================================================
@@ -4001,6 +4015,86 @@ class NativeAnalyzer:
             cur = cur.parent
         return cur
 
+    @staticmethod
+    def _ts_normalize_call_ref(ref: str) -> str:
+        """Normalize a call-site reference for index lookup."""
+        return ref.replace("::", ".").split("(")[0].strip()
+
+    def _ts_ambiguous_bare_functions(self, root: "Node") -> Set[str]:
+        """Return bare function names that map to multiple definitions."""
+        cache_key = (id(root), self.language)
+        store = getattr(self, "_func_index_ambiguous_cache", None)
+        if store is None:
+            return set()
+        return store.get(cache_key, set())
+
+    def _ts_resolve_indexed_function(
+        self, ref: str, index: Dict[str, "Node"], ambiguous_bare: Set[str]
+    ) -> Optional[Tuple[str, "Node"]]:
+        """Resolve a call reference, preferring qualified names."""
+        normalized = self._ts_normalize_call_ref(ref)
+        if not normalized:
+            return None
+        if normalized in index:
+            return normalized, index[normalized]
+        leaf = normalized.rsplit(".", 1)[-1]
+        if leaf in ambiguous_bare:
+            return None
+        matches = [k for k in index if k == leaf or k.endswith("." + leaf)]
+        if len(matches) == 1:
+            key = matches[0]
+            return key, index[key]
+        return None
+
+    def _ts_enclosing_function(self, node: "Node") -> Optional["Node"]:
+        """Return the innermost enclosing function node, if any."""
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        cur = node
+        while cur is not None:
+            if cur.type in func_types:
+                return cur
+            cur = cur.parent
+        return None
+
+    def _ts_shadowed_names_at(self, use_node: "Node") -> Set[str]:
+        """Names shadowed at ``use_node`` by parameters or earlier locals."""
+        fn = self._ts_enclosing_function(use_node)
+        if fn is None:
+            return set()
+        shadowed: Set[str] = set()
+        for param in self._ts_extract_parameters(fn):
+            name = param.get("name")
+            if name:
+                shadowed.add(name)
+        use_byte = use_node.start_byte
+
+        def collect_bindings(n: "Node") -> None:
+            if n.start_byte >= use_byte:
+                return
+            if n.type == "variable_declarator":
+                target = n.child_by_field_name("name")
+                if target is not None and target.type == "identifier":
+                    shadowed.add(self._ts_get_node_text(target))
+            for child in n.children:
+                collect_bindings(child)
+
+        collect_bindings(fn)
+        return shadowed
+
+    def _ts_sync_param_flow_summary(self, ctx: FunctionContext) -> None:
+        """Keep ``dataflow_summary['param_flows']`` aligned with ``parameter_flows``."""
+        summary = dict(ctx.dataflow_summary or {})
+        summary["param_flows"] = {
+            flow["parameter_name"]: {
+                "reaches_calls": flow.get("reaches_calls", []),
+                "reaches_returns": flow.get("reaches_returns", False),
+                "reaches_external": flow.get("reaches_external", False),
+            }
+            for flow in ctx.parameter_flows
+            if flow.get("parameter_name")
+        }
+        ctx.dataflow_summary = summary
+
     def _ts_build_sink_alias_map(self, root: "Node") -> Dict[str, str]:
         """Map locally-aliased dangerous sinks to their category.
 
@@ -4101,52 +4195,60 @@ class NativeAnalyzer:
         try:
             root = self._ts_root(handler_node)
             index = self._ts_build_function_index(root, func_types)
+            ambiguous_bare = self._ts_ambiguous_bare_functions(root)
         except Exception:  # pragma: no cover - defensive
             return
         if not index:
             return
 
-        def callee_leaves(node: "Node") -> List[str]:
-            leaves: List[str] = []
-            for c in self._ts_extract_calls(node):
-                nm = (c.get("name") or "").replace("::", ".")
-                leaf = nm.split(".")[-1].strip().split("(")[0]
-                if leaf:
-                    leaves.append(leaf)
-            return leaves
+        def callee_refs(node: "Node") -> List[str]:
+            refs: List[str] = []
+            for call in self._ts_extract_calls(node):
+                nm = self._ts_normalize_call_ref(call.get("name") or "")
+                if nm:
+                    refs.append(nm)
+            return refs
 
         # Bounded BFS over local callees (depth 3 covers handler -> helper
         # -> sink-wrapper without walking the whole transitive graph).
         visited: Set[str] = set()
-        reachable: List["tuple[str, Node]"] = []
-        frontier: List["tuple[Node, int]"] = [(handler_node, 0)]
+        reachable: List[Tuple[str, "Node"]] = []
+        frontier: List[Tuple["Node", int]] = [(handler_node, 0)]
         while frontier:
             node, depth = frontier.pop()
             if depth >= 3:
                 continue
-            for leaf in callee_leaves(node):
-                if leaf in visited:
+            for ref in callee_refs(node):
+                resolved = self._ts_resolve_indexed_function(
+                    ref, index, ambiguous_bare
+                )
+                if resolved is None:
                     continue
-                target = index.get(leaf)
-                if target is None:
+                resolved_key, target = resolved
+                if resolved_key in visited:
                     continue
                 if target.start_byte == handler_node.start_byte:
                     continue
-                visited.add(leaf)
-                reachable.append((leaf, target))
+                visited.add(resolved_key)
+                reachable.append((resolved_key, target))
                 frontier.append((target, depth + 1))
 
         if not reachable:
             return
 
-        dangerous_leaves: Set[str] = set()
+        dangerous_refs: Set[str] = set()
         reachable_names = list(ctx.reachable_functions or [])
-        for leaf, target in reachable:
-            if leaf not in reachable_names:
-                reachable_names.append(leaf)
+        for resolved_key, target in reachable:
+            if resolved_key not in reachable_names:
+                reachable_names.append(resolved_key)
             try:
                 ops = self._ts_detect_security_ops(target)
-            except Exception:  # pragma: no cover - defensive
+            except Exception as e:  # pragma: no cover - defensive
+                self.logger.debug(
+                    "Callee security-op analysis failed for %r: %s",
+                    resolved_key,
+                    e,
+                )
                 continue
             ctx.has_file_operations = ctx.has_file_operations or ops[
                 "has_file_operations"
@@ -4159,7 +4261,7 @@ class NativeAnalyzer:
             ]
             ctx.has_eval_exec = ctx.has_eval_exec or ops["has_eval_exec"]
             if any(ops.values()):
-                dangerous_leaves.add(leaf)
+                dangerous_refs.add(resolved_key)
 
         ctx.reachable_functions = reachable_names
 
@@ -4167,16 +4269,22 @@ class NativeAnalyzer:
         # security-relevant external operation, even though the sink itself
         # lives in the callee. Reflect that so downstream analysis sees the
         # parameter -> sink data flow.
-        if dangerous_leaves:
+        if dangerous_refs:
             for flow in ctx.parameter_flows:
                 reaches = flow.get("reaches_calls") or []
                 for call in reaches:
-                    leaf = (
-                        str(call).replace("::", ".").split(".")[-1].strip().split("(")[0]
-                    )
-                    if leaf in dangerous_leaves:
+                    norm = self._ts_normalize_call_ref(str(call))
+                    if norm in dangerous_refs:
                         flow["reaches_external"] = True
                         break
+                    if any(
+                        norm.endswith("." + dref) or dref.endswith("." + norm)
+                        for dref in dangerous_refs
+                    ):
+                        flow["reaches_external"] = True
+                        break
+
+        self._ts_sync_param_flow_summary(ctx)
 
     def _ts_extract_return_type(self, node: "Node") -> Optional[str]:
         """Extract return type annotation from tree-sitter node."""
@@ -4622,23 +4730,27 @@ class NativeAnalyzer:
                     has_deserialization = True
 
                 # Check against locally-aliased sinks (``execAsync`` from
-                # ``const execAsync = promisify(exec)``), matched by leaf name.
+                # ``const execAsync = promisify(exec)``), matched by leaf name
+                # only when the alias is not shadowed by a local parameter or
+                # earlier declaration in the enclosing function.
                 if alias_map:
                     leaf = func_text.replace("::", ".").split(".")[-1].strip()
                     leaf = leaf.split("(")[0]
-                    alias_cat = alias_map.get(leaf)
-                    if alias_cat == "command":
-                        has_subprocess = True
-                    elif alias_cat == "eval":
-                        has_eval = True
-                    elif alias_cat == "sql":
-                        has_sql = True
-                    elif alias_cat == "file":
-                        has_file = True
-                    elif alias_cat == "network":
-                        has_network = True
-                    elif alias_cat == "deserialization":
-                        has_deserialization = True
+                    shadowed = self._ts_shadowed_names_at(n)
+                    if leaf not in shadowed:
+                        alias_cat = alias_map.get(leaf)
+                        if alias_cat == "command":
+                            has_subprocess = True
+                        elif alias_cat == "eval":
+                            has_eval = True
+                        elif alias_cat == "sql":
+                            has_sql = True
+                        elif alias_cat == "file":
+                            has_file = True
+                        elif alias_cat == "network":
+                            has_network = True
+                        elif alias_cat == "deserialization":
+                            has_deserialization = True
 
             for child in n.children:
                 visit(child)

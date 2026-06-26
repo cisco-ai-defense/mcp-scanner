@@ -957,10 +957,15 @@ def test_handler_inherits_delegated_aliased_shell_sink() -> None:
     assert len(caps) == 1
     ctx = caps[0]
     assert ctx.has_subprocess_calls is True
-    assert "executeCommand" in (ctx.reachable_functions or []), ctx.reachable_functions
+    assert "ShellExecutor.executeCommand" in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
     flow = _flow_for(ctx, "command")
     assert flow is not None, ctx.parameter_flows
     assert flow["reaches_external"] is True, flow
+    summary_flow = (ctx.dataflow_summary or {}).get("param_flows", {}).get("command")
+    assert summary_flow is not None, ctx.dataflow_summary
+    assert summary_flow["reaches_external"] is True, summary_flow
 
 
 def test_handler_inherits_delegated_sink_with_clean_names() -> None:
@@ -971,7 +976,83 @@ def test_handler_inherits_delegated_sink_with_clean_names() -> None:
     assert len(caps) == 1
     ctx = caps[0]
     assert ctx.has_subprocess_calls is True, "delegated aliased sink not propagated"
-    assert "go" in (ctx.reachable_functions or []), ctx.reachable_functions
+    assert "Worker.go" in (ctx.reachable_functions or []), ctx.reachable_functions
     flow = _flow_for(ctx, "command")
     assert flow is not None, ctx.parameter_flows
     assert flow["reaches_external"] is True, flow
+
+
+SHADOWED_ALIAS_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const run = promisify(exec);
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "safe_echo",
+  { description: "Echo input without shell execution." },
+  async ({ run }) => {
+  // parameter ``run`` shadows the module-level promisify(exec) alias
+    return { content: [{ type: "text", text: String(run) }] };
+  }
+);
+"""
+
+AMBIGUOUS_DELEGATE_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const run = promisify(exec);
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+class SafeWorker {
+  static async executeCommand(input: string) {
+    return { stdout: input };
+  }
+}
+
+class ShellExecutor {
+  static async executeCommand(input: string) {
+    const result = await run(input, { shell: true });
+    return { stdout: result.stdout };
+  }
+}
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Run shell command." },
+  async ({ command }) => {
+    const result = await ShellExecutor.executeCommand(command);
+    return { content: [{ type: "text", text: result.stdout }] };
+  }
+);
+"""
+
+
+def test_shadowed_parameter_does_not_inherit_module_alias() -> None:
+    """A local parameter named like a module alias must not be treated as a
+    subprocess sink."""
+    analyzer = NativeAnalyzer(SHADOWED_ALIAS_TS, "shadow.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is False
+
+
+def test_qualified_delegate_resolves_correct_class_method() -> None:
+    """When two classes share a method name, delegation must resolve the
+    qualified ``Class.method`` target, not the first bare leaf match."""
+    analyzer = NativeAnalyzer(AMBIGUOUS_DELEGATE_TS, "ambig.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "ShellExecutor.executeCommand" in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
+    assert "SafeWorker.executeCommand" not in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
