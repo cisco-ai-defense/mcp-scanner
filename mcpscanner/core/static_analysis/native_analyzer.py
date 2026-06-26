@@ -2170,6 +2170,13 @@ class NativeAnalyzer:
         if cap_tag not in ctx.decorator_types:
             ctx.decorator_types.append(cap_tag)
 
+        # Attribute sinks reached through same-file helpers to the handler so
+        # delegated dangerous behavior (handler -> helper -> exec) is visible.
+        try:
+            self._ts_enrich_capability_with_callees(ctx, handler_node)
+        except Exception as e:  # pragma: no cover - defensive
+            self.logger.debug(f"Callee enrichment failed for MCP handler: {e}")
+
         out.append(ctx)
 
     def _ts_find_enclosing_class_name(self, node: "Node") -> str:
@@ -3847,10 +3854,29 @@ class NativeAnalyzer:
                 if child.type == "identifier":
                     # Simple identifier (JS/TS)
                     param_info["name"] = self._ts_get_node_text(child)
-                
+
+                elif child.type in ("object_pattern", "array_pattern"):
+                    # JS destructured parameter, e.g. ``({ command }) => ...``.
+                    # Expand to its bound identifiers so taint tracking can
+                    # match the names actually used in the body.
+                    for bname in self._ts_extract_binding_identifiers(child):
+                        params.append({"name": bname})
+                    continue
+
                 elif child.type in ("required_parameter", "optional_parameter", "rest_parameter"):
                     # TypeScript parameters
                     name_node = child.child_by_field_name("pattern") or child.child_by_field_name("name")
+                    if name_node is not None and name_node.type in (
+                        "object_pattern",
+                        "array_pattern",
+                    ):
+                        # TS destructured parameter, e.g.
+                        # ``async ({ command }: Args) => ...``. Expand to its
+                        # bound identifiers (the literal pattern text
+                        # ``{ command }`` never matches the body identifier).
+                        for bname in self._ts_extract_binding_identifiers(name_node):
+                            params.append({"name": bname})
+                        continue
                     if name_node:
                         param_info["name"] = self._ts_get_node_text(name_node)
                     type_node = child.child_by_field_name("type")
@@ -3895,6 +3921,262 @@ class NativeAnalyzer:
                     params.append(param_info)
         
         return params
+
+    def _ts_extract_binding_identifiers(self, node: "Node") -> List[str]:
+        """Flatten a JS/TS binding pattern into its bound identifier names.
+
+        Destructured tool handlers (``async ({ command }) => ...``) are the
+        norm for TypeScript/JavaScript MCP servers. Without expanding the
+        pattern, the parameter is recorded as the literal text ``{ command }``,
+        which never matches the identifier ``command`` used in the body. That
+        breaks parameter -> sink taint flows, so a tool that runs its argument
+        through ``execSync``/``eval`` looks SAFE. Expanding the pattern into
+        ``command`` restores flow tracking parity with named-parameter
+        languages (Go/Rust/Java).
+
+        Handles object patterns (incl. ``{ key: binding }`` renames, ``...rest``,
+        and ``{ x = default }`` defaults), array patterns, and nested patterns.
+        Default-value expressions on the right-hand side are intentionally not
+        descended into so unrelated identifiers are not treated as parameters.
+        """
+        names: List[str] = []
+
+        def walk(n: "Node") -> None:
+            t = n.type
+            if t in (
+                "identifier",
+                "shorthand_property_identifier_pattern",
+                "shorthand_property_identifier",
+            ):
+                names.append(self._ts_get_node_text(n))
+                return
+            if t == "pair_pattern":
+                # ``key: binding`` -- the binding (value side) is in scope.
+                value = n.child_by_field_name("value")
+                if value is not None:
+                    walk(value)
+                return
+            if t in ("rest_pattern", "rest_element"):
+                for c in n.children:
+                    if c.type in ("identifier", "object_pattern", "array_pattern"):
+                        walk(c)
+                return
+            if t in ("assignment_pattern", "object_assignment_pattern"):
+                # Default value (``{ x = 1 }`` / ``[a = 1]``): bind only the
+                # left side; do not descend into the default expression.
+                left = n.child_by_field_name("left")
+                if left is not None:
+                    walk(left)
+                else:
+                    for c in n.children:
+                        if c.type in (
+                            "identifier",
+                            "object_pattern",
+                            "array_pattern",
+                            "shorthand_property_identifier_pattern",
+                        ):
+                            walk(c)
+                            break
+                return
+            if t in ("object_pattern", "array_pattern"):
+                for c in n.children:
+                    walk(c)
+                return
+
+        walk(node)
+
+        seen: Set[str] = set()
+        ordered: List[str] = []
+        for nm in names:
+            if nm and nm not in seen:
+                seen.add(nm)
+                ordered.append(nm)
+        return ordered
+
+    @staticmethod
+    def _ts_root(node: "Node") -> "Node":
+        """Walk to the tree-sitter root from any node."""
+        cur = node
+        while cur.parent is not None:
+            cur = cur.parent
+        return cur
+
+    def _ts_build_sink_alias_map(self, root: "Node") -> Dict[str, str]:
+        """Map locally-aliased dangerous sinks to their category.
+
+        Recognizes ``const execAsync = promisify(exec)`` /
+        ``util.promisify(child_process.exec)`` and direct aliases
+        ``const e = exec``. Returns ``{alias_name: category}`` where
+        category is one of ``command``/``eval``/``sql``/``file``/
+        ``network``/``deserialization``.
+
+        Without this, a call through an alias is only detected when the
+        alias name coincidentally contains the SDK function name (e.g.
+        ``execAsync`` happens to contain ``exec``); a clean alias like
+        ``run`` slips through and the tool looks SAFE.
+        """
+        cache_key = (id(root), self.language)
+        store = getattr(self, "_sink_alias_cache", None)
+        if store is None:
+            store = {}
+            self._sink_alias_cache = store
+        if cache_key in store:
+            return store[cache_key]
+
+        from .taint.patterns import get_all_sinks_for_language
+
+        sinks = get_all_sinks_for_language(self.language)
+        leaf_to_category: Dict[str, str] = {}
+        for category, sink_set in sinks.items():
+            for s in sink_set:
+                leaf = s.replace("::", ".").split(".")[-1].strip()
+                if leaf:
+                    leaf_to_category.setdefault(leaf, category)
+
+        def sink_category_for(text: str) -> Optional[str]:
+            leaf = text.replace("::", ".").split(".")[-1].strip()
+            return leaf_to_category.get(leaf)
+
+        alias_map: Dict[str, str] = {}
+
+        def visit(n: "Node") -> None:
+            if n.type in ("variable_declarator", "assignment_expression"):
+                target = n.child_by_field_name("name") or n.child_by_field_name(
+                    "left"
+                )
+                value = n.child_by_field_name("value") or n.child_by_field_name(
+                    "right"
+                )
+                if (
+                    target is not None
+                    and value is not None
+                    and target.type == "identifier"
+                ):
+                    cat = self._ts_alias_value_category(value, sink_category_for)
+                    if cat:
+                        alias_map[self._ts_get_node_text(target)] = cat
+            for c in n.children:
+                visit(c)
+
+        visit(root)
+        store[cache_key] = alias_map
+        return alias_map
+
+    def _ts_alias_value_category(self, value: "Node", sink_category_for) -> Optional[str]:
+        """Return the sink category an assignment's right-hand side aliases."""
+        t = value.type
+        if t in ("identifier", "member_expression"):
+            return sink_category_for(self._ts_get_node_text(value))
+        if t in ("call_expression", "new_expression"):
+            callee = value.child_by_field_name("function")
+            args = value.child_by_field_name("arguments")
+            if callee is not None:
+                leaf = self._ts_get_node_text(callee).split(".")[-1].strip()
+                if leaf == "promisify" and args is not None:
+                    for a in args.children:
+                        if a.type in ("identifier", "member_expression"):
+                            cat = sink_category_for(self._ts_get_node_text(a))
+                            if cat:
+                                return cat
+        return None
+
+    def _ts_enrich_capability_with_callees(
+        self, ctx: FunctionContext, handler_node: "Node"
+    ) -> None:
+        """Fold sinks reachable through same-file callees into ``ctx``.
+
+        MCP tool handlers frequently delegate the dangerous operation to a
+        helper (``async ({ command }) => ShellExecutor.executeCommand(command)``
+        where ``executeCommand`` runs ``execAsync(command)``). Inspecting only
+        the handler body then misses the sink and the tool is reported SAFE,
+        diverging from named-sink languages (Go/Rust) where the sink sits in
+        the handler. We resolve the handler's local callees (bounded depth),
+        detect their security operations (alias-aware), and OR the resulting
+        flags into the handler, record ``reachable_functions``, and mark any
+        tainted parameter that reaches a dangerous callee as ``reaches_external``.
+        """
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        if not func_types:
+            return
+        try:
+            root = self._ts_root(handler_node)
+            index = self._ts_build_function_index(root, func_types)
+        except Exception:  # pragma: no cover - defensive
+            return
+        if not index:
+            return
+
+        def callee_leaves(node: "Node") -> List[str]:
+            leaves: List[str] = []
+            for c in self._ts_extract_calls(node):
+                nm = (c.get("name") or "").replace("::", ".")
+                leaf = nm.split(".")[-1].strip().split("(")[0]
+                if leaf:
+                    leaves.append(leaf)
+            return leaves
+
+        # Bounded BFS over local callees (depth 3 covers handler -> helper
+        # -> sink-wrapper without walking the whole transitive graph).
+        visited: Set[str] = set()
+        reachable: List["tuple[str, Node]"] = []
+        frontier: List["tuple[Node, int]"] = [(handler_node, 0)]
+        while frontier:
+            node, depth = frontier.pop()
+            if depth >= 3:
+                continue
+            for leaf in callee_leaves(node):
+                if leaf in visited:
+                    continue
+                target = index.get(leaf)
+                if target is None:
+                    continue
+                if target.start_byte == handler_node.start_byte:
+                    continue
+                visited.add(leaf)
+                reachable.append((leaf, target))
+                frontier.append((target, depth + 1))
+
+        if not reachable:
+            return
+
+        dangerous_leaves: Set[str] = set()
+        reachable_names = list(ctx.reachable_functions or [])
+        for leaf, target in reachable:
+            if leaf not in reachable_names:
+                reachable_names.append(leaf)
+            try:
+                ops = self._ts_detect_security_ops(target)
+            except Exception:  # pragma: no cover - defensive
+                continue
+            ctx.has_file_operations = ctx.has_file_operations or ops[
+                "has_file_operations"
+            ]
+            ctx.has_network_operations = ctx.has_network_operations or ops[
+                "has_network_operations"
+            ]
+            ctx.has_subprocess_calls = ctx.has_subprocess_calls or ops[
+                "has_subprocess_calls"
+            ]
+            ctx.has_eval_exec = ctx.has_eval_exec or ops["has_eval_exec"]
+            if any(ops.values()):
+                dangerous_leaves.add(leaf)
+
+        ctx.reachable_functions = reachable_names
+
+        # A tainted parameter that flows into a dangerous callee reaches a
+        # security-relevant external operation, even though the sink itself
+        # lives in the callee. Reflect that so downstream analysis sees the
+        # parameter -> sink data flow.
+        if dangerous_leaves:
+            for flow in ctx.parameter_flows:
+                reaches = flow.get("reaches_calls") or []
+                for call in reaches:
+                    leaf = (
+                        str(call).replace("::", ".").split(".")[-1].strip().split("(")[0]
+                    )
+                    if leaf in dangerous_leaves:
+                        flow["reaches_external"] = True
+                        break
 
     def _ts_extract_return_type(self, node: "Node") -> Optional[str]:
         """Extract return type annotation from tree-sitter node."""
@@ -4283,7 +4565,11 @@ class NativeAnalyzer:
         file_sinks = sinks.get("file", set())
         network_sinks = sinks.get("network", set())
         deser_sinks = sinks.get("deserialization", set())
-        
+
+        # Resolve locally-aliased sinks (``const e = promisify(exec)``) so a
+        # call through the alias is still attributed to the right category.
+        alias_map = self._ts_build_sink_alias_map(self._ts_root(node))
+
         def matches_sink(func_text: str, sink_set: set) -> bool:
             """Check if function text matches any sink pattern."""
             # Normalize the function text
@@ -4334,7 +4620,26 @@ class NativeAnalyzer:
                     has_network = True
                 if matches_sink(func_text, deser_sinks):
                     has_deserialization = True
-            
+
+                # Check against locally-aliased sinks (``execAsync`` from
+                # ``const execAsync = promisify(exec)``), matched by leaf name.
+                if alias_map:
+                    leaf = func_text.replace("::", ".").split(".")[-1].strip()
+                    leaf = leaf.split("(")[0]
+                    alias_cat = alias_map.get(leaf)
+                    if alias_cat == "command":
+                        has_subprocess = True
+                    elif alias_cat == "eval":
+                        has_eval = True
+                    elif alias_cat == "sql":
+                        has_sql = True
+                    elif alias_cat == "file":
+                        has_file = True
+                    elif alias_cat == "network":
+                        has_network = True
+                    elif alias_cat == "deserialization":
+                        has_deserialization = True
+
             for child in n.children:
                 visit(child)
         
