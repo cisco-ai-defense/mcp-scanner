@@ -769,3 +769,209 @@ public class Calc {
     assert {c.name for c in caps} == {"Calc.add"}, [c.name for c in caps]
     cache = getattr(analyzer, "_annotation_index_cache", None)
     assert cache is not None and any(cache.values()), cache
+
+
+# ---------------------------------------------------------------------------
+# Destructured-parameter taint flows (regression for AIFW-23242):
+# TypeScript/JavaScript MCP handlers almost always receive their arguments
+# as a destructured object (``async ({ command }) => ...``). The bound
+# identifiers must be expanded so parameter -> sink taint flows are tracked;
+# otherwise a tool that pipes its argument into ``execSync``/``eval`` looks
+# SAFE while the named-parameter equivalents (Go/Rust) correctly flag.
+# ---------------------------------------------------------------------------
+
+DESTRUCTURED_SHELL_TS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Run a shell command" },
+  async ({ command }: { command: string }) => {
+    const output = execSync(command).toString();
+    return { content: [{ type: "text", text: output }] };
+  }
+);
+"""
+
+DESTRUCTURED_EVAL_JS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.tool("evaluate_expression", { expr: {} }, async ({ expr }) => {
+  const result = eval(expr);
+  return { content: [{ type: "text", text: String(result) }] };
+});
+"""
+
+RENAMED_DESTRUCTURE_TS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.tool("run", { cmd: {} }, async ({ cmd: shellCmd, ...rest }) => {
+  return { content: [{ type: "text", text: execSync(shellCmd).toString() }] };
+});
+"""
+
+
+def _flow_for(ctx, param_name):
+    for flow in ctx.parameter_flows:
+        if flow.get("parameter_name") == param_name:
+            return flow
+    return None
+
+
+def test_ts_destructured_param_taints_command_sink() -> None:
+    """A TS tool that runs a destructured ``{ command }`` arg through
+    ``execSync`` must record the parameter -> sink flow (AIFW-23242)."""
+    analyzer = NativeAnalyzer(DESTRUCTURED_SHELL_TS, "shell.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    param_names = {p.get("name") for p in ctx.parameters}
+    assert "command" in param_names, param_names
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert "execSync" in flow["reaches_calls"], flow
+    assert flow["reaches_external"] is True, flow
+
+
+def test_js_destructured_param_taints_eval_sink() -> None:
+    """A JS tool that evaluates a destructured ``{ expr }`` arg must record
+    the parameter -> eval sink flow."""
+    analyzer = NativeAnalyzer(DESTRUCTURED_EVAL_JS, "eval.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_eval_exec is True
+    param_names = {p.get("name") for p in ctx.parameters}
+    assert "expr" in param_names, param_names
+    flow = _flow_for(ctx, "expr")
+    assert flow is not None, ctx.parameter_flows
+    assert "eval" in flow["reaches_calls"], flow
+    assert flow["reaches_external"] is True, flow
+
+
+def test_ts_renamed_and_rest_destructure_binds_value_identifier() -> None:
+    """``{ cmd: shellCmd, ...rest }`` binds ``shellCmd`` (the value side) and
+    ``rest``, and the renamed binding must carry the taint flow."""
+    analyzer = NativeAnalyzer(RENAMED_DESTRUCTURE_TS, "renamed.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    param_names = {p.get("name") for p in ctx.parameters}
+    assert "shellCmd" in param_names, param_names
+    assert "rest" in param_names, param_names
+    # The property *key* ``cmd`` is not a binding and must not appear.
+    assert "cmd" not in param_names, param_names
+    flow = _flow_for(ctx, "shellCmd")
+    assert flow is not None, ctx.parameter_flows
+    assert "execSync" in flow["reaches_calls"], flow
+
+
+# ---------------------------------------------------------------------------
+# Delegated sinks + aliased sinks (regression for AIFW-23242, Example 9):
+# A handler that forwards its argument to a same-file helper which runs the
+# sink (optionally through a ``promisify(exec)`` alias) must still surface the
+# subprocess behavior on the tool, not appear SAFE.
+# ---------------------------------------------------------------------------
+
+# Mirrors the real fixture: alias ``execAsync = promisify(exec)`` invoked from
+# a static class method that the tool handler delegates to.
+DELEGATED_ALIASED_SHELL_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const execAsync = promisify(exec);
+const server = new McpServer({ name: "ex9", version: "1.0.0" });
+
+class ShellExecutor {
+  static async executeCommand(command: string) {
+    const result = await execAsync(command, { shell: true });
+    return { stdout: result.stdout };
+  }
+}
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Execute shell command with full shell capabilities." },
+  async ({ command }) => {
+    const result = await ShellExecutor.executeCommand(command);
+    return { content: [{ type: "text", text: result.stdout }] };
+  }
+);
+"""
+
+# Same shape but with a clean alias name (``run``) and helper name (``go``)
+# that share NO substring with the SDK sink, so detection cannot rely on a
+# coincidental ``"exec" in "executeCommand"`` match.
+DELEGATED_CLEAN_NAMES_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const run = promisify(exec);
+const server = new McpServer({ name: "ex9", version: "1.0.0" });
+
+class Worker {
+  static async go(input: string) {
+    const result = await run(input, { shell: true });
+    return { stdout: result.stdout };
+  }
+}
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Execute shell command." },
+  async ({ command }) => {
+    const result = await Worker.go(command);
+    return { content: [{ type: "text", text: result.stdout }] };
+  }
+);
+"""
+
+
+def test_promisify_alias_detected_as_command_sink() -> None:
+    """``const run = promisify(exec)`` must mark the helper that calls
+    ``run(...)`` as a subprocess sink, even with a clean alias name."""
+    analyzer = NativeAnalyzer(DELEGATED_CLEAN_NAMES_TS, "alias.ts")
+    analyzer.extract_mcp_capability_contexts()
+    # The helper method itself must be recognized as running a subprocess.
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    helper = funcs.get("Worker.go")
+    assert helper is not None, list(funcs)
+    assert helper.has_subprocess_calls is True
+
+
+def test_handler_inherits_delegated_aliased_shell_sink() -> None:
+    """The real Example 9 shape: handler -> static method -> ``execAsync``
+    alias. The tool must surface the subprocess behavior and the parameter
+    flow must reach an external sink."""
+    analyzer = NativeAnalyzer(DELEGATED_ALIASED_SHELL_TS, "ex9.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "executeCommand" in (ctx.reachable_functions or []), ctx.reachable_functions
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+def test_handler_inherits_delegated_sink_with_clean_names() -> None:
+    """Detection must not rely on the helper/alias names coincidentally
+    containing the SDK sink name."""
+    analyzer = NativeAnalyzer(DELEGATED_CLEAN_NAMES_TS, "clean.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True, "delegated aliased sink not propagated"
+    assert "go" in (ctx.reachable_functions or []), ctx.reachable_functions
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
