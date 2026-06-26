@@ -1019,6 +1019,29 @@ server.registerTool(
 );
 """
 
+NESTED_SCOPE_SHADOW_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const run = promisify(exec);
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Run shell command." },
+  async ({ command }) => {
+    function helper() {
+      const run = "local-only";
+      return run;
+    }
+    helper();
+    await run(command);
+    return { content: [{ type: "text", text: "done" }] };
+  }
+);
+"""
+
 AMBIGUOUS_DELEGATE_TS = """\
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
@@ -1065,6 +1088,19 @@ def test_local_sink_alias_in_handler_is_detected() -> None:
     """A sink alias declared inside the handler (``const run = promisify(exec)``
     then ``run(cmd)``) must still classify as a subprocess sink."""
     analyzer = NativeAnalyzer(LOCAL_ALIAS_IN_HANDLER_TS, "local_alias.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+def test_nested_scope_locals_do_not_shadow_outer_alias() -> None:
+    """A same-named local inside a nested helper must not suppress the module
+    alias visible to the enclosing tool handler."""
+    analyzer = NativeAnalyzer(NESTED_SCOPE_SHADOW_TS, "nested_scope.ts")
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1
     ctx = caps[0]
