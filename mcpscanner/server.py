@@ -104,7 +104,7 @@ def main():
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            stream=sys.stdout,
+            stream=sys.stderr,
         )
         # Set the mcpscanner root logger to DEBUG to ensure all future loggers inherit it
         logging.getLogger("mcpscanner").setLevel(logging.DEBUG)
@@ -115,7 +115,7 @@ def main():
         logging.basicConfig(
             level=logging.WARNING,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            stream=sys.stdout,
+            stream=sys.stderr,
         )
         # Ensure mcpscanner root logger is at WARNING level
         logging.getLogger("mcpscanner").setLevel(logging.WARNING)
