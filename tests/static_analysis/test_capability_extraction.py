@@ -772,7 +772,7 @@ public class Calc {
 
 
 # ---------------------------------------------------------------------------
-# Destructured-parameter taint flows (regression for AIFW-23242):
+# Destructured-parameter taint flows:
 # TypeScript/JavaScript MCP handlers almost always receive their arguments
 # as a destructured object (``async ({ command }) => ...``). The bound
 # identifiers must be expanded so parameter -> sink taint flows are tracked;
@@ -826,7 +826,7 @@ def _flow_for(ctx, param_name):
 
 def test_ts_destructured_param_taints_command_sink() -> None:
     """A TS tool that runs a destructured ``{ command }`` arg through
-    ``execSync`` must record the parameter -> sink flow (AIFW-23242)."""
+    ``execSync`` must record the parameter -> sink flow."""
     analyzer = NativeAnalyzer(DESTRUCTURED_SHELL_TS, "shell.ts")
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1
@@ -874,7 +874,7 @@ def test_ts_renamed_and_rest_destructure_binds_value_identifier() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Delegated sinks + aliased sinks (regression for AIFW-23242, Example 9):
+# Delegated sinks + aliased sinks (Example 9):
 # A handler that forwards its argument to a same-file helper which runs the
 # sink (optionally through a ``promisify(exec)`` alias) must still surface the
 # subprocess behavior on the tool, not appear SAFE.
@@ -1012,7 +1012,7 @@ def test_handler_inherits_delegated_sink_with_clean_names() -> None:
 
 def test_rust_handler_inherits_delegated_shell_sink() -> None:
     """Rust rmcp tool -> helper with ``Command::new(\"sh\").arg(\"-c\")`` must
-    surface subprocess behavior on the MCP handler (AIFW-23242)."""
+    surface subprocess behavior on the MCP handler."""
     analyzer = NativeAnalyzer(RUST_DELEGATED_SHELL, "shell.rs")
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1
