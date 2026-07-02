@@ -935,12 +935,40 @@ server.registerTool(
 );
 """
 
+RUST_DELEGATED_SHELL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct ShellExecutor;
+
+impl ShellExecutor {
+    fn execute_command(command: String) -> String {
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+}
+
+#[derive(Clone)]
+struct Server;
+
+#[tool_router]
+impl Server {
+    #[tool(description = "Execute shell command with full shell capabilities.")]
+    fn execute_shell_command(&self, command: String) -> String {
+        ShellExecutor::execute_command(command)
+    }
+}
+"""
+
 
 def test_promisify_alias_detected_as_command_sink() -> None:
     """``const run = promisify(exec)`` must mark the helper that calls
     ``run(...)`` as a subprocess sink, even with a clean alias name."""
     analyzer = NativeAnalyzer(DELEGATED_CLEAN_NAMES_TS, "alias.ts")
-    analyzer.extract_mcp_capability_contexts()
     # The helper method itself must be recognized as running a subprocess.
     funcs = {f.name: f for f in analyzer.analyze().functions}
     helper = funcs.get("Worker.go")
@@ -977,6 +1005,23 @@ def test_handler_inherits_delegated_sink_with_clean_names() -> None:
     ctx = caps[0]
     assert ctx.has_subprocess_calls is True, "delegated aliased sink not propagated"
     assert "Worker.go" in (ctx.reachable_functions or []), ctx.reachable_functions
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+def test_rust_handler_inherits_delegated_shell_sink() -> None:
+    """Rust rmcp tool -> helper with ``Command::new(\"sh\").arg(\"-c\")`` must
+    surface subprocess behavior on the MCP handler (AIFW-23242)."""
+    analyzer = NativeAnalyzer(RUST_DELEGATED_SHELL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True, "delegated shell sink not propagated"
+    assert "ShellExecutor.execute_command" in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
+    assert ctx.docstring == "Execute shell command with full shell capabilities."
     flow = _flow_for(ctx, "command")
     assert flow is not None, ctx.parameter_flows
     assert flow["reaches_external"] is True, flow

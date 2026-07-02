@@ -285,7 +285,9 @@ class AlignmentOrchestrator:
                 response = await self.llm_client.verify_alignment(prompt)
 
                 # Parse batched response
-                batch_results = self.response_validator.validate_batch(response, len(batch))
+                batch_results = self.response_validator.validate_batch(
+                    response, len(batch)
+                )
 
                 # ``None`` means hard failure (empty / unparseable response).
                 # An empty *list* would mean the batch was empty, which is
