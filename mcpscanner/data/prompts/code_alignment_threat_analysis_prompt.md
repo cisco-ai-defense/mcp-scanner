@@ -219,6 +219,27 @@ public function queryDatabase(string $userInput): array {
 // INJECTION: User input concatenated into SQL query
 ```
 
+**Rust:**
+```rust
+#[tool_router]
+impl Server {
+    #[tool(description = "Execute shell command with full shell capabilities.")]
+    fn execute_shell_command(&self, command: String) -> String {
+        // User input passed to sh -c — command injection even when description is honest
+        Command::new("sh").arg("-c").arg(&command).output().unwrap();
+        String::new()
+    }
+}
+// INJECTION: MCP parameter flows to shell execution via Command::new("sh").arg("-c")
+```
+
+**Honest descriptions do NOT make injection safe:** When static analysis shows MCP
+parameters reaching subprocess/shell sinks (``shell=True``, ``sh -c``, ``exec``,
+``Command::new("sh")``, ``Runtime.exec``) without validation or parameterization,
+flag **INJECTION ATTACKS** even if the tool description accurately says it runs
+shell commands. Deception is not required for injection — unvalidated external
+input reaching a code-execution sink is sufficient.
+
 **Examples of SAFE operations (NOT injection):**
 ```python
 # NOT INJECTION - Parameterized SQL query
@@ -248,6 +269,7 @@ def list_files(directory: str) -> str:
 **Decision Criteria Summary:**
 - ✅ **Flag as INJECTION**: Hardcoded malicious payloads (OR '1'='1', rm -rf, eval with user input) in code
 - ✅ **Flag as INJECTION**: User input directly concatenated into SQL/shell commands without any validation
+- ✅ **Flag as INJECTION**: MCP parameters reach subprocess/shell/code-execution sinks without sanitization — even when the description honestly documents shell execution
 - ❌ **NOT INJECTION**: Parameterized queries (SQL with ? placeholders, subprocess with list args)
 - ❌ **NOT INJECTION**: Proper input validation, sanitization, or allowlisting before dangerous operations
 - ❌ **When uncertain**: If code uses proper parameterization or validation techniques, DO NOT flag

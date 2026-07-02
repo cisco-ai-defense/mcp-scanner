@@ -2177,6 +2177,11 @@ class NativeAnalyzer:
         except Exception as e:  # pragma: no cover - defensive
             self.logger.debug(f"Callee enrichment failed for MCP handler: {e}")
 
+        if not ctx.docstring:
+            anno_desc = self._parse_description_from_annotations(handler_node)
+            if anno_desc:
+                ctx.docstring = anno_desc
+
         out.append(ctx)
 
     def _ts_find_enclosing_class_name(self, node: "Node") -> str:
@@ -3751,6 +3756,9 @@ class NativeAnalyzer:
 
         # Extract docstring/JSDoc from AST
         docstring = self._ts_extract_docstring(node)
+        anno_description = self._parse_description_from_annotations(node)
+        if anno_description:
+            docstring = anno_description if not docstring else anno_description
 
         # Extract decorators from AST (TypeScript)
         decorator_types = self._ts_extract_decorators(node)
@@ -3827,6 +3835,7 @@ class NativeAnalyzer:
             env_var_access=[],
             global_writes=[],
             attribute_access=[],
+            source=self._ts_get_node_text(node),
         )
 
     def _ts_get_node_text(self, node: "Node") -> str:
@@ -4378,6 +4387,30 @@ class NativeAnalyzer:
         
         return None
 
+    def _parse_description_from_annotations(self, node: "Node") -> Optional[str]:
+        """Extract MCP tool description from decorator/attribute text.
+
+        Supports ``@tool(description="...")``, ``#[tool(description = "...")]``,
+        and ``[Description("...")]`` patterns so behavioral alignment sees the
+        same description the MCP server registers.
+        """
+        import re
+
+        patterns = (
+            r'description\s*=\s*"([^"]*)"',
+            r"description\s*=\s*'([^']*)'",
+            r'Description\s*\(\s*"([^"]*)"\s*\)',
+            r"Description\s*\(\s*'([^']*)'\s*\)",
+        )
+        for dec in self._ts_extract_decorators(node):
+            for pattern in patterns:
+                match = re.search(pattern, dec)
+                if match:
+                    text = match.group(1).strip()
+                    if text:
+                        return text
+        return None
+
     def _ts_extract_decorators(self, node: "Node") -> List[str]:
         """Extract decorators/attributes from tree-sitter node.
         
@@ -4386,13 +4419,27 @@ class NativeAnalyzer:
         """
         decorators = []
         
-        # Check preceding siblings for decorators (TypeScript/Python style)
+        # Check preceding siblings for decorators (TypeScript/Python/Rust style)
         sib = node.prev_sibling
         while sib:
-            if sib.type in ("decorator", "attribute", "annotation"):
+            if sib.type in (
+                "decorator",
+                "attribute",
+                "annotation",
+                "attribute_item",
+                "inner_attribute_item",
+            ):
                 decorators.append(self._ts_get_node_text(sib))
             elif sib.type == "comment":
                 # Stop at comments (they're handled separately)
+                break
+            elif sib.type in (
+                "function_item",
+                "function_declaration",
+                "method_definition",
+                "function_definition",
+            ):
+                # Rust/C#: stop at the previous function's boundary
                 break
             sib = sib.prev_sibling
         
@@ -4404,6 +4451,9 @@ class NativeAnalyzer:
                         decorators.append(self._ts_get_node_text(dec))
                 else:
                     decorators.append(self._ts_get_node_text(child))
+            # Rust/Go: #[tool(...)] attributes are child attribute_item nodes
+            elif child.type in ("attribute_item", "inner_attribute_item"):
+                decorators.append(self._ts_get_node_text(child))
         
         # Reverse to get original order
         decorators.reverse()

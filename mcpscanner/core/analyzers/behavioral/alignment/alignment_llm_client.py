@@ -288,9 +288,12 @@ class AlignmentLLMClient:
             if self._api_key:
                 request_params["api_key"] = self._api_key
 
-            # Only enable JSON mode for supported models/providers
-            # Azure OpenAI with older API versions may not support this
-            if not self._model.startswith("azure/"):
+            # JSON-object response mode is only safe on providers that honour it.
+            # Bedrock via litellm returns an empty ``{}`` when this is set
+            # (observed on Claude Haiku 4.5 cross-region profiles); Azure
+            # older API versions also reject it. Rely on the prompt + validator
+            # markdown fallbacks instead.
+            if not self._model.startswith(("azure/", "bedrock/")):
                 request_params["response_format"] = {"type": "json_object"}
 
             # Add optional parameters if configured

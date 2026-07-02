@@ -468,6 +468,20 @@ Respond with ONLY a JSON object with a single `false_positives` list. Indices no
 
 If no findings are false positives, return `{{"false_positives": []}}`."""
 
+    @staticmethod
+    def _supports_temperature(model: str) -> bool:
+        """Return whether ``temperature`` may be sent for this model.
+
+        Bedrock Opus 4.7 rejects ``temperature`` with
+        ``temperature is deprecated for this model``. When meta-analysis
+        fails the analyzer fails open (keeps every finding), so omit the
+        knob for models known to reject it.
+        """
+        normalized = (model or "").lower()
+        if normalized.startswith("bedrock/") and "opus-4-7" in normalized:
+            return False
+        return True
+
     async def _make_llm_request(self, system_prompt: str, user_prompt: str) -> str:
         """Make a request to the LLM API with retry logic."""
         messages = [
@@ -478,10 +492,11 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
         api_params: Dict[str, Any] = {
             "model": self._model,
             "messages": messages,
-            "temperature": self._temperature,
             "max_tokens": self._max_tokens,
             "timeout": float(self._timeout),
         }
+        if self._supports_temperature(self._model):
+            api_params["temperature"] = self._temperature
 
         if self._api_key:
             api_params["api_key"] = self._api_key

@@ -762,9 +762,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # Fallback to individual analysis
                 for func_context in func_contexts:
                     # Check function source size (configurable via constants)
-                    func_source_size = (
-                        len(func_context.source) if hasattr(func_context, "source") else 0
-                    )
+                    func_source_size = len(getattr(func_context, "source", None) or "")
                     func_line_count = (
                         func_context.line_count
                         if hasattr(func_context, "line_count")

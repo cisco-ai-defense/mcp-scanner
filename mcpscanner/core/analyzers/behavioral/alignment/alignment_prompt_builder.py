@@ -49,6 +49,23 @@ class AlignmentPromptBuilder:
     Uses randomized delimiters to prevent prompt injection attacks.
     """
 
+    @staticmethod
+    def _flow_parameter_name(flow: Dict[str, Any]) -> str:
+        return str(flow.get("parameter_name") or flow.get("parameter") or "unknown")
+
+    @staticmethod
+    def _security_flags(func_context: FunctionContext) -> List[str]:
+        flags: List[str] = []
+        if getattr(func_context, "has_file_operations", False):
+            flags.append("FILE_OPS")
+        if getattr(func_context, "has_network_operations", False):
+            flags.append("NETWORK_OPS")
+        if getattr(func_context, "has_subprocess_calls", False):
+            flags.append("SUBPROCESS")
+        if getattr(func_context, "has_eval_exec", False):
+            flags.append("EVAL/EXEC")
+        return flags
+
     def __init__(
         self,
         max_operations: Optional[int] = None,
@@ -127,14 +144,22 @@ class AlignmentPromptBuilder:
 - Decorator: {func_context.decorator_types[0] if func_context.decorator_types else 'unknown'}
 - Line: {func_context.line_number}
 - Docstring/Description: {docstring}
-
-
-
-**FUNCTION SIGNATURE:**
 - Parameters: {json.dumps(func_context.parameters, indent=2)}
 - Return Type: {func_context.return_type or 'Not specified'}
 """
         )
+
+        security_flags = self._security_flags(func_context)
+        if security_flags:
+            content_parts.append(
+                f"\n**SECURITY FLAGS:** {', '.join(security_flags)}\n"
+            )
+
+        source = getattr(func_context, "source", "") or ""
+        if source:
+            if len(source) > 2000:
+                source = source[:2000] + "\n... (truncated)"
+            content_parts.append(f"\n**SOURCE CODE:**\n```\n{source}\n```\n")
 
         # Add imports section
         if func_context.imports:
@@ -158,7 +183,7 @@ Parameter Flow Tracking:
         if func_context.parameter_flows:
             param_parts = ["\n**PARAMETER FLOW TRACKING:**\n"]
             for flow in func_context.parameter_flows:
-                param_name = flow.get("parameter", "unknown")
+                param_name = self._flow_parameter_name(flow)
                 param_parts.append(f"\nParameter '{param_name}' flows through:\n")
 
                 if flow.get("operations"):
@@ -454,15 +479,7 @@ Parameter Flow Tracking:
                 all_content.append(f"**Function Calls:** {', '.join(calls)}\n")
 
             # Security flags
-            security_flags = []
-            if getattr(func_context, 'has_file_operations', False):
-                security_flags.append("FILE_OPS")
-            if getattr(func_context, 'has_network_operations', False):
-                security_flags.append("NETWORK_OPS")
-            if getattr(func_context, 'has_subprocess_calls', False):
-                security_flags.append("SUBPROCESS")
-            if getattr(func_context, 'has_eval_exec', False):
-                security_flags.append("EVAL/EXEC")
+            security_flags = self._security_flags(func_context)
             if security_flags:
                 all_content.append(f"**Security Flags:** {', '.join(security_flags)}\n")
 
