@@ -1027,6 +1027,48 @@ def test_rust_handler_inherits_delegated_shell_sink() -> None:
     assert flow["reaches_external"] is True, flow
 
 
+PYTHON_DELEGATED_SHELL = """\
+from mcp import FastMCP
+import subprocess
+
+app = FastMCP("unauthorized-code-execution-service-9")
+
+
+class ShellExecutor:
+    @staticmethod
+    def execute_command(command: str) -> dict:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=10
+        )
+        return {"returncode": result.returncode, "stdout": result.stdout}
+
+
+@app.tool()
+def execute_shell_command(command: str) -> str:
+    \"\"\"Execute shell command with full shell capabilities.\"\"\"
+    executor = ShellExecutor()
+    result = executor.execute_command(command)
+    return f"Command executed: return code {result.get('returncode', 'unknown')}"
+"""
+
+
+def test_python_handler_inherits_delegated_shell_sink() -> None:
+    """Python FastMCP tool -> ``ShellExecutor.execute_command`` with
+    ``subprocess.run(..., shell=True)`` must surface subprocess behavior."""
+    analyzer = NativeAnalyzer(PYTHON_DELEGATED_SHELL, "shell.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.name == "execute_shell_command"
+    assert ctx.has_subprocess_calls is True, "delegated shell sink not propagated"
+    assert "ShellExecutor.execute_command" in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
 SHADOWED_ALIAS_TS = """\
 import { exec } from "node:child_process";
 import { promisify } from "node:util";

@@ -1564,6 +1564,14 @@ class NativeAnalyzer:
                     f"{self.file_path}: {e}"
                 )
                 continue
+            try:
+                self._py_enrich_capability_with_callees(
+                    ctx, node, tree, class_methods, functions_by_name
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                self.logger.debug(
+                    f"Python callee enrichment failed for {node.name!r}: {e}"
+                )
             contexts.append(ctx)
 
         # Gap 8: programmatic registrations.
@@ -1629,6 +1637,18 @@ class NativeAnalyzer:
                 )
                 continue
             ctx.decorator_types.append(f"<registration>.{cap_kind}")
+            try:
+                self._py_enrich_capability_with_callees(
+                    ctx,
+                    handler_node,
+                    tree,
+                    class_methods,
+                    functions_by_name,
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                self.logger.debug(
+                    f"Python callee enrichment failed for {label!r}: {e}"
+                )
             contexts.append(ctx)
 
         return contexts
@@ -3633,6 +3653,215 @@ class NativeAnalyzer:
             "has_subprocess_calls": has_subprocess,
             "has_eval_exec": has_eval,
         }
+
+    def _py_build_function_index(
+        self,
+        class_methods: Dict[
+            str, Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]
+        ],
+        functions_by_name: Dict[
+            str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
+        ],
+    ) -> Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
+        """Index module functions and class methods for callee resolution."""
+        index: Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]] = {}
+        index.update(functions_by_name)
+        for cls_name, methods in class_methods.items():
+            for meth_name, meth_node in methods.items():
+                index[f"{cls_name}.{meth_name}"] = meth_node
+        return index
+
+    def _py_build_instance_class_map(
+        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]
+    ) -> Dict[str, str]:
+        """Map local instance variables to their constructor class names."""
+        mapping: Dict[str, str] = {}
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Assign):
+                continue
+            for target in child.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if not isinstance(child.value, ast.Call):
+                    continue
+                callee = child.value.func
+                if isinstance(callee, ast.Name):
+                    mapping[target.id] = callee.id
+                elif isinstance(callee, ast.Attribute) and isinstance(
+                    callee.value, ast.Name
+                ):
+                    mapping[target.id] = f"{callee.value.id}.{callee.attr}"
+        return mapping
+
+    def _py_collect_call_refs(
+        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]
+    ) -> List[str]:
+        """Collect normalized call-site names from a function body."""
+        refs: List[str] = []
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                name = self._py_get_node_name(child.func)
+                if name:
+                    refs.append(name)
+        return refs
+
+    def _py_resolve_indexed_call(
+        self,
+        ref: str,
+        index: Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]],
+        instance_map: Dict[str, str],
+    ) -> Optional["tuple[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]"]:
+        """Resolve a call reference to a same-file function/method node."""
+        if ref in index:
+            return ref, index[ref]
+        if "." in ref:
+            base, attr = ref.rsplit(".", 1)
+            if base in instance_map:
+                qualified = f"{instance_map[base]}.{attr}"
+                if qualified in index:
+                    return qualified, index[qualified]
+        return None
+
+    def _py_call_ref_matches_dangerous(
+        self,
+        call: str,
+        dangerous_refs: Set[str],
+        instance_map: Dict[str, str],
+    ) -> bool:
+        """Return whether a handler call site reaches a dangerous callee."""
+        if call in dangerous_refs:
+            return True
+        if "." in call:
+            base, attr = call.rsplit(".", 1)
+            if base in instance_map:
+                qualified = f"{instance_map[base]}.{attr}"
+                if qualified in dangerous_refs:
+                    return True
+        for dref in dangerous_refs:
+            if call.endswith("." + dref) or dref.endswith("." + call):
+                return True
+            dref_leaf = dref.rsplit(".", 1)[-1]
+            call_leaf = call.rsplit(".", 1)[-1]
+            if call_leaf == dref_leaf and call_leaf:
+                return True
+        return False
+
+    def _py_sync_param_flow_summary(self, ctx: FunctionContext) -> None:
+        """Keep ``dataflow_summary['param_flows']`` aligned with ``parameter_flows``."""
+        summary = dict(ctx.dataflow_summary or {})
+        summary["param_flows"] = {
+            flow["parameter_name"]: {
+                "reaches_calls": flow.get("reaches_calls", []),
+                "reaches_returns": flow.get("reaches_returns", False),
+                "reaches_external": flow.get("reaches_external", False),
+            }
+            for flow in ctx.parameter_flows
+            if flow.get("parameter_name")
+        }
+        ctx.dataflow_summary = summary
+
+    def _py_enrich_capability_with_callees(
+        self,
+        ctx: FunctionContext,
+        handler_node: Union[ast.FunctionDef, ast.AsyncFunctionDef],
+        tree: ast.AST,
+        class_methods: Dict[
+            str, Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]
+        ],
+        functions_by_name: Dict[
+            str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
+        ],
+    ) -> None:
+        """Fold sinks reachable through same-file Python callees into ``ctx``.
+
+        MCP tool handlers often delegate dangerous work to helpers (e.g.
+        ``execute_shell_command`` -> ``ShellExecutor.execute_command`` ->
+        ``subprocess.run(..., shell=True)``). Without callee enrichment the
+        handler misses the subprocess flag and behavioral alignment reports SAFE.
+        """
+        index = self._py_build_function_index(class_methods, functions_by_name)
+        if not index:
+            return
+
+        instance_map = self._py_build_instance_class_map(handler_node)
+        visited: Set[str] = set()
+        reachable: List[
+            Tuple[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]
+        ] = []
+        frontier: List[
+            Tuple[Union[ast.FunctionDef, ast.AsyncFunctionDef], int]
+        ] = [(handler_node, 0)]
+
+        while frontier:
+            node, depth = frontier.pop()
+            if depth >= 3:
+                continue
+            local_instances = (
+                instance_map
+                if node is handler_node
+                else self._py_build_instance_class_map(node)
+            )
+            for ref in self._py_collect_call_refs(node):
+                resolved = self._py_resolve_indexed_call(
+                    ref, index, local_instances
+                )
+                if resolved is None:
+                    continue
+                resolved_key, target = resolved
+                if resolved_key in visited:
+                    continue
+                if (
+                    isinstance(target, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and target is handler_node
+                ):
+                    continue
+                visited.add(resolved_key)
+                reachable.append((resolved_key, target))
+                frontier.append((target, depth + 1))
+
+        if not reachable:
+            return
+
+        dangerous_refs: Set[str] = set()
+        reachable_names = list(ctx.reachable_functions or [])
+        for resolved_key, target in reachable:
+            if resolved_key not in reachable_names:
+                reachable_names.append(resolved_key)
+            try:
+                ops = self._py_detect_security_ops(target)
+            except Exception as e:  # pragma: no cover - defensive
+                self.logger.debug(
+                    "Python callee security-op analysis failed for %r: %s",
+                    resolved_key,
+                    e,
+                )
+                continue
+            ctx.has_file_operations = ctx.has_file_operations or ops[
+                "has_file_operations"
+            ]
+            ctx.has_network_operations = ctx.has_network_operations or ops[
+                "has_network_operations"
+            ]
+            ctx.has_subprocess_calls = ctx.has_subprocess_calls or ops[
+                "has_subprocess_calls"
+            ]
+            ctx.has_eval_exec = ctx.has_eval_exec or ops["has_eval_exec"]
+            if any(ops.values()):
+                dangerous_refs.add(resolved_key)
+
+        ctx.reachable_functions = reachable_names
+
+        if dangerous_refs:
+            for flow in ctx.parameter_flows:
+                reaches = flow.get("reaches_calls") or []
+                for call in reaches:
+                    if self._py_call_ref_matches_dangerous(
+                        str(call), dangerous_refs, instance_map
+                    ):
+                        flow["reaches_external"] = True
+                        break
+
+        self._py_sync_param_flow_summary(ctx)
 
     # =========================================================================
     # Generic Tree-sitter Analysis - Supports all non-Python languages
