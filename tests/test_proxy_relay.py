@@ -16,14 +16,19 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from mcpscanner.utils.proxy_relay import (
+    ENV_PROXY_RELAY_URL,
     HEADER_CONNECTOR_ID,
     HEADER_DESTINATION_URL,
     HEADER_STREAMING,
     HEADER_TENANT_ID,
     NIL_CONNECTOR_ID,
+    _normalized_proxy_relay_url,
     is_hybrid_connector_id,
     prepare_mcp_dial,
+    proxy_relay_dial_url,
     proxy_relay_headers,
 )
 
@@ -102,3 +107,23 @@ class TestPrepareMcpDial:
         )
         assert dial_url == "http://proxy-relay:5600"
         assert headers[HEADER_DESTINATION_URL] == destination
+
+
+class TestNormalizedProxyRelayURL:
+    def test_missing_env_raises(self, monkeypatch):
+        monkeypatch.delenv(ENV_PROXY_RELAY_URL, raising=False)
+        with pytest.raises(RuntimeError, match=f"{ENV_PROXY_RELAY_URL} is not configured"):
+            _normalized_proxy_relay_url()
+
+    def test_scheme_less_defaults_to_http(self, monkeypatch):
+        monkeypatch.setenv(ENV_PROXY_RELAY_URL, "cloud-gateway:5600")
+        assert _normalized_proxy_relay_url() == "http://cloud-gateway:5600"
+        assert proxy_relay_dial_url() == "http://cloud-gateway:5600"
+
+    def test_explicit_http_preserved(self, monkeypatch):
+        monkeypatch.setenv(ENV_PROXY_RELAY_URL, "http://cloud-gateway:5600")
+        assert _normalized_proxy_relay_url() == "http://cloud-gateway:5600"
+
+    def test_explicit_https_preserved(self, monkeypatch):
+        monkeypatch.setenv(ENV_PROXY_RELAY_URL, "https://relay.example.com")
+        assert _normalized_proxy_relay_url() == "https://relay.example.com"

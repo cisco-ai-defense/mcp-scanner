@@ -44,6 +44,12 @@ def is_hybrid_connector_id(connector_id: Optional[str]) -> bool:
 
 
 def _normalized_proxy_relay_url() -> str:
+    """Return PROXY_RELAY_URL with an explicit scheme.
+
+    Scheme-less values default to ``http://`` to match
+    ``mcp_scan_worker/proxy_relay.py`` and in-cluster Helm config
+    (``host:port`` on the pod network, not the public internet).
+    """
     proxy_relay_url = os.environ.get(ENV_PROXY_RELAY_URL, "").strip()
     if not proxy_relay_url:
         raise RuntimeError(

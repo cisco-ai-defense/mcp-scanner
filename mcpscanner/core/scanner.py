@@ -1454,9 +1454,16 @@ class Scanner:
         httpx_client = None
         if oauth_provider:
             if "/sse" in destination_url:
-                client_context = sse_client(dial_url, auth=oauth_provider)
+                client_context = (
+                    sse_client(dial_url, headers=extra_headers, auth=oauth_provider)
+                    if extra_headers
+                    else sse_client(dial_url, auth=oauth_provider)
+                )
             else:
-                httpx_client = create_mcp_http_client(auth=oauth_provider)
+                httpx_client = create_mcp_http_client(
+                    headers=extra_headers if extra_headers else None,
+                    auth=oauth_provider,
+                )
                 client_context = streamable_http_client(dial_url, http_client=httpx_client)
         else:
             logger.debug(
