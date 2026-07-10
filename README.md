@@ -25,9 +25,8 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **Vulnerable Packages Scanning**: Scan Python dependencies for known vulnerabilities (CVE/PYSEC/GHSA) using pip-audit integration.
 - **Readiness Scanning**: Zero-dependency static analysis for production readiness issues (timeouts, retries, error handling).
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
-- **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
+- **Behavioural Code Scanning**: Scan the source code of MCP servers for threats via LLM-powered alignment analysis. Requires an LLM provider key (`MCP_SCANNER_LLM_API_KEY`, or AWS credentials for `bedrock/*` models); it does **not** need a running server. For an offline, pattern-only pass over source files (no LLM, no live server), see [Readiness Scanning](#readiness-scanning) and YARA-based [Static/Offline Scanning](#scan-staticoffline-files-cicd-mode).
 - **VirusTotal Binary Scanning**: Automatically detect malware in binary files (images, PDFs, executables, archives) bundled with MCP servers using VirusTotal hash lookups.
-- **Behavioural Code Scanning**: Scan Source code of MCP servers for detecting threats.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
@@ -449,7 +448,9 @@ mcp-scanner virustotal /path/to/file.bin --output vt_results.json --format raw
 
 #### Behavioral Code Scanning (Multi-Language)
 
-The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking.
+The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking. It scans source on disk directly — **no running server is required** — but because the alignment check is LLM-driven it **does require an LLM provider key**.
+
+> **Requirements:** Set `MCP_SCANNER_LLM_API_KEY` (or, for `bedrock/*` models, provide AWS credentials — see [LLM Configuration](#llm-configuration-for-llm-analyzer-and-code-behavioral-analyzer)). There is currently **no offline, pattern-only mode** for this subcommand. If you need to scan a feature branch with no LLM key and no live server (e.g. in CI without provider secrets), use [Readiness Scanning](#readiness-scanning) (zero-dependency static checks) or YARA-based [Static/Offline Scanning](#scan-staticoffline-files-cicd-mode) instead.
 
 **Supported Languages:** Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Rust, Ruby, PHP
 
