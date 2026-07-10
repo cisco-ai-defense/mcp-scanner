@@ -746,7 +746,12 @@ async def test_scan_remote_server_tool_with_auth(config):
         )
 
         assert result.tool_name == "auth_tool"
-        mock_get_session.assert_called_once_with("https://test.com", auth)
+        mock_get_session.assert_called_once_with(
+            "https://test.com",
+            auth,
+            connector_id=None,
+            tenant_id=None,
+        )
 
 
 @pytest.mark.asyncio
