@@ -52,6 +52,7 @@ except (
 
 from ..config.config import Config
 from ..utils.logging_config import get_logger
+from ..utils.proxy_relay import is_hybrid_connector_id, prepare_mcp_dial
 from ..utils.command_utils import (
     build_env_for_expansion,
     decide_windows_semantics,
@@ -1372,13 +1373,20 @@ class Scanner:
                     pass
 
     async def _get_mcp_session(
-        self, server_url: str, auth: Optional[Auth] = None
+        self,
+        server_url: str,
+        auth: Optional[Auth] = None,
+        *,
+        connector_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Tuple[Any, ClientSession]:
         """Create an MCP client session for the given server URL.
 
         Args:
             server_url (str): The URL of the MCP server.
             auth (Optional[Auth]): Explicit authentication configuration. If None, connects without auth.
+            connector_id (Optional[str]): Hybrid connector ID for private MCP servers.
+            tenant_id (Optional[str]): Tenant ID for hybrid proxy relay routing.
 
         Returns:
             tuple: A tuple containing (client_context, session)
@@ -1426,33 +1434,53 @@ class Scanner:
                 f'No explicit auth provided, connecting without authentication: server="{server_url}"'
             )
 
+        destination_url = server_url
+        dial_url, extra_headers = prepare_mcp_dial(
+            destination_url,
+            extra_headers,
+            connector_id,
+            tenant_id,
+            streaming=True,
+        )
+        if is_hybrid_connector_id(connector_id):
+            logger.debug(
+                f'Using hybrid proxy relay for MCP server: destination="{destination_url}"'
+            )
+
         # Create client context with or without OAuth
         # For streamable HTTP, create an explicit httpx.AsyncClient so we can
         # guarantee it gets closed even if the MCP library's internal cleanup
         # fails (e.g. session termination DELETE returns 404).
         httpx_client = None
         if oauth_provider:
-            if "/sse" in server_url:
-                client_context = sse_client(server_url, auth=oauth_provider)
+            if "/sse" in destination_url:
+                client_context = (
+                    sse_client(dial_url, headers=extra_headers, auth=oauth_provider)
+                    if extra_headers
+                    else sse_client(dial_url, auth=oauth_provider)
+                )
             else:
-                httpx_client = create_mcp_http_client(auth=oauth_provider)
-                client_context = streamable_http_client(server_url, http_client=httpx_client)
+                httpx_client = create_mcp_http_client(
+                    headers=extra_headers if extra_headers else None,
+                    auth=oauth_provider,
+                )
+                client_context = streamable_http_client(dial_url, http_client=httpx_client)
         else:
             logger.debug(
-                f'Using standard connection (no auth) for MCP server: server="{server_url}"'
+                f'Using standard connection (no auth) for MCP server: server="{destination_url}"'
             )
             # Pass bearer Authorization header when requested
-            if "/sse" in server_url:
+            if "/sse" in destination_url:
                 client_context = (
-                    sse_client(server_url, headers=extra_headers)
+                    sse_client(dial_url, headers=extra_headers)
                     if extra_headers
-                    else sse_client(server_url)
+                    else sse_client(dial_url)
                 )
             else:
                 httpx_client = create_mcp_http_client(
                     headers=extra_headers if extra_headers else None
                 )
-                client_context = streamable_http_client(server_url, http_client=httpx_client)
+                client_context = streamable_http_client(dial_url, http_client=httpx_client)
 
         # Stash the httpx client on the context so _close_mcp_session can close it
         client_context._httpx_client = httpx_client
@@ -1608,6 +1636,8 @@ class Scanner:
         auth: Optional[Auth] = None,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
+        connector_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> ToolScanResult:
         """Scan a specific tool on an MCP server.
 
@@ -1638,7 +1668,12 @@ class Scanner:
         client_context = None
         session = None
         try:
-            client_context, session = await self._get_mcp_session(server_url, auth)
+            client_context, session = await self._get_mcp_session(
+                server_url,
+                auth,
+                connector_id=connector_id,
+                tenant_id=tenant_id,
+            )
 
             # List all tools and find the target tool
             try:
@@ -1682,6 +1717,8 @@ class Scanner:
         auth: Optional[Auth] = None,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
+        connector_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[ToolScanResult]:
         """Scan all tools on an MCP server.
 
@@ -1715,7 +1752,12 @@ class Scanner:
         client_context = None
         session = None
         try:
-            client_context, session = await self._get_mcp_session(server_url, auth)
+            client_context, session = await self._get_mcp_session(
+                server_url,
+                auth,
+                connector_id=connector_id,
+                tenant_id=tenant_id,
+            )
 
             # List all tools
             try:
@@ -2265,6 +2307,8 @@ class Scanner:
         auth: Optional[Auth] = None,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
+        connector_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[PromptScanResult]:
         """Scan all prompts on an MCP server.
 
@@ -2298,7 +2342,12 @@ class Scanner:
         client_context = None
         session = None
         try:
-            client_context, session = await self._get_mcp_session(server_url, auth)
+            client_context, session = await self._get_mcp_session(
+                server_url,
+                auth,
+                connector_id=connector_id,
+                tenant_id=tenant_id,
+            )
 
             # Capability gate: see scan_remote_server_resources for rationale.
             if self._server_supports_capability(session, "prompts") is False:
@@ -2357,6 +2406,8 @@ class Scanner:
         auth: Optional[Auth] = None,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
+        connector_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> PromptScanResult:
         """Scan a specific prompt on an MCP server.
 
@@ -2388,7 +2439,12 @@ class Scanner:
         client_context = None
         session = None
         try:
-            client_context, session = await self._get_mcp_session(server_url, auth)
+            client_context, session = await self._get_mcp_session(
+                server_url,
+                auth,
+                connector_id=connector_id,
+                tenant_id=tenant_id,
+            )
 
             # Capability gate (same rationale as scan_remote_server_prompts).
             if self._server_supports_capability(session, "prompts") is False:
@@ -2438,6 +2494,8 @@ class Scanner:
         auth: Optional[Auth] = None,
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
+        connector_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> InstructionsScanResult:
         """Scan server instructions from the InitializeResult.
 
@@ -2469,7 +2527,12 @@ class Scanner:
         client_context = None
         session = None
         try:
-            client_context, session = await self._get_mcp_session(server_url, auth)
+            client_context, session = await self._get_mcp_session(
+                server_url,
+                auth,
+                connector_id=connector_id,
+                tenant_id=tenant_id,
+            )
 
             # Get the initialize result which was stored during session initialization
             init_result = getattr(session, "_init_result", None)
@@ -2852,6 +2915,8 @@ class Scanner:
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
         allowed_mime_types: Optional[List[str]] = None,
+        connector_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[ResourceScanResult]:
         """Scan all resources on an MCP server.
 
@@ -2890,7 +2955,12 @@ class Scanner:
         client_context = None
         session = None
         try:
-            client_context, session = await self._get_mcp_session(server_url, auth)
+            client_context, session = await self._get_mcp_session(
+                server_url,
+                auth,
+                connector_id=connector_id,
+                tenant_id=tenant_id,
+            )
 
             # Capability gate: if the InitializeResult didn't advertise
             # resources support, don't bother calling list_resources — many
@@ -3051,6 +3121,8 @@ class Scanner:
         analyzers: Optional[List[AnalyzerEnum]] = None,
         http_headers: Optional[dict] = None,
         allowed_mime_types: Optional[List[str]] = None,
+        connector_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> ResourceScanResult:
         """Scan a specific resource on an MCP server.
 
@@ -3095,7 +3167,12 @@ class Scanner:
         client_context = None
         session = None
         try:
-            client_context, session = await self._get_mcp_session(server_url, auth)
+            client_context, session = await self._get_mcp_session(
+                server_url,
+                auth,
+                connector_id=connector_id,
+                tenant_id=tenant_id,
+            )
 
             # Capability gate (same rationale as scan_remote_server_resources).
             if self._server_supports_capability(session, "resources") is False:
