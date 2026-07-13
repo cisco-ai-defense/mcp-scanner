@@ -38,7 +38,6 @@ import json
 import os
 import subprocess
 import sys
-from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -47,6 +46,7 @@ import httpx
 from ..config.config import Config
 from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
+from .docker_build import docker_run_hardening_flags, prepare_docker_build
 from .package_sandbox import (
     PackageDownloadError,
     PackageExtractionError,
@@ -57,6 +57,7 @@ from .package_sandbox import (
     redact_argv_for_logging,
     safe_extract_archive,
     temp_workdir,
+    validate_pypi_package_name,
 )
 
 logger = get_logger(__name__)
@@ -206,27 +207,28 @@ class PyPIPackageScanner:
 
         logger.info("Building Docker image %s ...", self._full_image)
 
-        docker_dir = resources.files("mcpscanner.docker")
-        with resources.as_file(docker_dir) as ctx_path:
-            cmd = [
-                "docker", "build",
-                "-t", self._full_image,
-                "-f", str(ctx_path / "Dockerfile"),
-                str(ctx_path),
-            ]
+        context, dockerfile, build_args = prepare_docker_build(dockerfile="Dockerfile")
+        cmd = [
+            "docker", "build",
+            "-t", self._full_image,
+            "-f", str(dockerfile),
+        ]
+        for key, value in build_args.items():
+            cmd.extend(["--build-arg", f"{key}={value}"])
+        cmd.append(str(context))
 
-            logger.debug("Running: %s", redact_argv_for_logging(cmd))
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600,
+        logger.debug("Running: %s", redact_argv_for_logging(cmd))
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+        if result.returncode != 0:
+            raise PyPIScanError(
+                f"Failed to build Docker image:\n{result.stderr.strip()}"
             )
-
-            if result.returncode != 0:
-                raise PyPIScanError(
-                    f"Failed to build Docker image:\n{result.stderr.strip()}"
-                )
 
         logger.info("Docker image %s built successfully", self._full_image)
 
@@ -258,8 +260,10 @@ class PyPIPackageScanner:
                 loop; use :meth:`scan_package_async` instead.
         """
         if self._use_docker:
+            validate_pypi_package_name(package)
             return self._scan_in_docker(package, version, verbose)
         _assert_loop_not_running("PyPIPackageScanner.scan_package")
+        validate_pypi_package_name(package)
         return asyncio.run(self._scan_locally(package, version))
 
     async def scan_package_async(
@@ -278,10 +282,12 @@ class PyPIPackageScanner:
         container scan.
         """
         if self._use_docker:
+            validate_pypi_package_name(package)
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
                 None, self._scan_in_docker, package, version, verbose
             )
+        validate_pypi_package_name(package)
         return await self._scan_locally(package, version)
 
     # ------------------------------------------------------------------
@@ -298,11 +304,14 @@ class PyPIPackageScanner:
             "docker", "run",
             "--rm",
             "--network=bridge",
+            *docker_run_hardening_flags(),
         ]
 
         env_vars = {
             "LLM_API_KEY": os.environ.get("MCP_SCANNER_LLM_API_KEY", ""),
-            "LLM_MODEL": os.environ.get("MCP_SCANNER_LLM_MODEL", "gpt-4o-mini"),
+            "LLM_MODEL": os.environ.get(
+                "MCP_SCANNER_LLM_MODEL", CONSTANTS.DEFAULT_LLM_MODEL
+            ),
             "LLM_BASE_URL": os.environ.get("MCP_SCANNER_LLM_BASE_URL", ""),
             "LLM_API_VERSION": os.environ.get("MCP_SCANNER_LLM_API_VERSION", ""),
         }
@@ -359,6 +368,15 @@ class PyPIPackageScanner:
                 raise LLMNotConfiguredError(message)
             raise PyPIScanError(f"Scan failed inside container: {message}")
 
+        if (
+            scan_results.get("scan_status") == "error"
+            and scan_results.get("is_safe") is None
+        ):
+            raise PyPIScanError(
+                "Scan could not be completed reliably: analysis infrastructure "
+                "failed for every function (zero findings is not a safe verdict)."
+            )
+
         return scan_results
 
     # ------------------------------------------------------------------
@@ -397,7 +415,7 @@ class PyPIPackageScanner:
 
         try:
             url, resolved_version, expected_digest = (
-                self._resolve_pypi_sdist_url(package, version)
+                self._resolve_pypi_archive_url(package, version)
             )
         except PackageDownloadError as e:
             raise PyPIScanError(str(e)) from e
@@ -450,14 +468,15 @@ class PyPIPackageScanner:
                 scan_status=analysis_scan_status(analyzer, findings),
             )
 
-    def _resolve_pypi_sdist_url(
+    def _resolve_pypi_archive_url(
         self, package: str, version: Optional[str]
     ) -> tuple[str, str, Optional[str]]:
-        """Look up the sdist tarball URL via the PyPI JSON API.
+        """Look up a PyPI archive URL via the JSON API.
 
-        Returns ``(url, resolved_version, expected_sha256_hex)`` where
-        the digest comes from ``digests.sha256`` in the index response
-        and is later verified during download.
+        Prefers source distributions; falls back to wheels when no sdist
+        is published (wheel-only packages). Returns
+        ``(url, resolved_version, expected_sha256_hex)`` where the digest
+        comes from ``digests.sha256`` in the index response.
         """
         meta_url = (
             f"{CONSTANTS.PYPI_INDEX_URL.rstrip('/')}/{package}/{version}/json"
@@ -490,17 +509,32 @@ class PyPIPackageScanner:
         info = meta.get("info") or {}
         resolved_version = (info.get("version") or version or "unknown")
         urls = meta.get("urls") or []
-        sdist = next(
-            (u for u in urls if u.get("packagetype") == "sdist"),
-            None,
-        )
-        if sdist is None or not sdist.get("url"):
-            raise PackageDownloadError(
-                f"no source distribution found for {package} {resolved_version}"
+
+        def _pick(packagetype: str) -> Optional[dict]:
+            return next(
+                (
+                    u
+                    for u in urls
+                    if u.get("packagetype") == packagetype and u.get("url")
+                ),
+                None,
             )
-        digests = sdist.get("digests") or {}
+
+        archive = _pick("sdist") or _pick("bdist_wheel")
+        if archive is None:
+            raise PackageDownloadError(
+                f"no source distribution or wheel found for "
+                f"{package} {resolved_version}"
+            )
+        digests = archive.get("digests") or {}
         expected = digests.get("sha256")
-        return sdist["url"], resolved_version, expected
+        return archive["url"], resolved_version, expected
+
+    def _resolve_pypi_sdist_url(
+        self, package: str, version: Optional[str]
+    ) -> tuple[str, str, Optional[str]]:
+        """Backward-compatible alias for :meth:`_resolve_pypi_archive_url`."""
+        return self._resolve_pypi_archive_url(package, version)
 
 
 # ----------------------------------------------------------------------

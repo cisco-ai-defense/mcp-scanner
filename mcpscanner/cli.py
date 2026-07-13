@@ -128,6 +128,23 @@ def _package_scan_to_tool_results(
     """Render a package scanner JSON payload into the per-tool result shape
     the report generator consumes. Shared between the ``pypi-scan`` and
     ``npm-scan`` CLI handlers so the two flows stay aligned."""
+    scan_status = scan_results.get("scan_status", "completed")
+    is_safe = scan_results.get("is_safe")
+
+    if scan_status == "error" or is_safe is None:
+        message = scan_results.get("error") or (
+            f"{ecosystem_label} package scan of {pkg_spec} could not be completed"
+        )
+        return [
+            {
+                "tool_name": pkg_spec,
+                "tool_description": message,
+                "status": "error",
+                "is_safe": None,
+                "findings": {},
+            }
+        ]
+
     out: list = []
     for finding in scan_results.get("findings", []):
         analyzer_name = (finding.get("analyzer", "unknown") or "unknown") + "_analyzer"
@@ -2270,6 +2287,16 @@ async def main():
                     ecosystem_label="PyPI",
                 )
 
+                if any(
+                    row.get("status") == "error" or row.get("is_safe") is None
+                    for row in results
+                ):
+                    print(
+                        "Scan Error: package scan could not be completed reliably",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+
                 if args.output:
                     with open(args.output, "w", encoding="utf-8") as f:
                         json.dump(results, f, indent=2)
@@ -2317,6 +2344,16 @@ async def main():
                     pkg_spec=pkg_spec,
                     ecosystem_label="npm",
                 )
+
+                if any(
+                    row.get("status") == "error" or row.get("is_safe") is None
+                    for row in results
+                ):
+                    print(
+                        "Scan Error: package scan could not be completed reliably",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
 
                 if args.output:
                     with open(args.output, "w", encoding="utf-8") as f:

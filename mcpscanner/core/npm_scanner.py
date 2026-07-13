@@ -37,7 +37,6 @@ import json
 import os
 import subprocess
 import sys
-from importlib import resources
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -46,6 +45,7 @@ import httpx
 from ..config.config import Config
 from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
+from .docker_build import docker_run_hardening_flags, prepare_docker_build
 from .package_sandbox import (
     PackageDownloadError,
     PackageExtractionError,
@@ -157,22 +157,25 @@ class NPMPackageScanner:
             )
             return
         logger.info("Building Docker image %s ...", self._full_image)
-        docker_dir = resources.files("mcpscanner.docker")
-        with resources.as_file(docker_dir) as ctx_path:
-            cmd = [
-                "docker", "build",
-                "-t", self._full_image,
-                "-f", str(ctx_path / "Dockerfile.npm"),
-                str(ctx_path),
-            ]
-            logger.debug("Running: %s", redact_argv_for_logging(cmd))
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=600
+        context, dockerfile, build_args = prepare_docker_build(
+            dockerfile="Dockerfile.npm"
+        )
+        cmd = [
+            "docker", "build",
+            "-t", self._full_image,
+            "-f", str(dockerfile),
+        ]
+        for key, value in build_args.items():
+            cmd.extend(["--build-arg", f"{key}={value}"])
+        cmd.append(str(context))
+        logger.debug("Running: %s", redact_argv_for_logging(cmd))
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600
+        )
+        if result.returncode != 0:
+            raise NPMScanError(
+                f"Failed to build npm Docker image:\n{result.stderr.strip()}"
             )
-            if result.returncode != 0:
-                raise NPMScanError(
-                    f"Failed to build npm Docker image:\n{result.stderr.strip()}"
-                )
         logger.info("Docker image %s built successfully", self._full_image)
 
     # ------------------------------------------------------------------
@@ -233,10 +236,12 @@ class NPMPackageScanner:
         self.check_docker()
         self.build_image()
 
-        cmd = ["docker", "run", "--rm", "--network=bridge"]
+        cmd = ["docker", "run", "--rm", "--network=bridge", *docker_run_hardening_flags()]
         env_vars = {
             "LLM_API_KEY": os.environ.get("MCP_SCANNER_LLM_API_KEY", ""),
-            "LLM_MODEL": os.environ.get("MCP_SCANNER_LLM_MODEL", "gpt-4o-mini"),
+            "LLM_MODEL": os.environ.get(
+                "MCP_SCANNER_LLM_MODEL", CONSTANTS.DEFAULT_LLM_MODEL
+            ),
             "LLM_BASE_URL": os.environ.get("MCP_SCANNER_LLM_BASE_URL", ""),
             "LLM_API_VERSION": os.environ.get("MCP_SCANNER_LLM_API_VERSION", ""),
             "NPM_REGISTRY_URL": self._registry_url,
@@ -290,6 +295,15 @@ class NPMPackageScanner:
             if error_code == "llm_not_configured":
                 raise LLMNotConfiguredError(message)
             raise NPMScanError(f"npm scan failed inside container: {message}")
+
+        if (
+            scan_results.get("scan_status") == "error"
+            and scan_results.get("is_safe") is None
+        ):
+            raise NPMScanError(
+                "npm scan could not be completed reliably: analysis infrastructure "
+                "failed for every function (zero findings is not a safe verdict)."
+            )
 
         return scan_results
 

@@ -14,8 +14,8 @@ The PyPI package scanner downloads Python packages from PyPI, extracts the sourc
 
 1. **Docker check** — Verifies Docker is installed and running. Exits with an error if not.
 2. **Image build** — Builds a lightweight `python:3.13-alpine` based image with `cisco-ai-mcp-scanner` pre-installed. Cached after first build.
-3. **Package download** — Inside the container, downloads the package from PyPI. Prefers source distributions; falls back to wheels if source is unavailable.
-4. **Extraction** — Extracts the archive (`.tar.gz`, `.zip`, or `.whl`) to get the Python source files.
+3. **Package download** — Inside the container, downloads the package archive from PyPI over HTTPS (prefers source distributions; falls back to wheels). The archive is fetched directly — **no ``pip download`` and no execution of ``setup.py``**.
+4. **Extraction** — Extracts the archive (``.tar.gz``, ``.zip``, or ``.whl`` for Docker mode) to get the Python source files. Local (``--no-docker``) mode also supports wheels when no sdist is published; both modes use the same safe-extraction helpers.
 5. **Behavioral analysis** — Scans all `.py` files for docstring-vs-code mismatches using LLM-based analysis. Detects hidden behaviors like data exfiltration, backdoors, and prompt injection.
 6. **Results** — JSON results are returned to the host via stdout.
 
@@ -110,7 +110,7 @@ See `examples/sdk_pypi_scanner.py` for a complete example.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MCP_SCANNER_LLM_API_KEY` | (none) | API key for LLM provider (required for behavioral analysis) |
-| `MCP_SCANNER_LLM_MODEL` | `gpt-4o-mini` | LLM model to use |
+| `MCP_SCANNER_LLM_MODEL` | `gpt-4o` | LLM model to use |
 | `MCP_SCANNER_LLM_BASE_URL` | (none) | Custom base URL for LLM API (e.g., Azure OpenAI endpoint) |
 | `MCP_SCANNER_LLM_API_VERSION` | (none) | API version for LLM provider (e.g., `2024-02-15-preview`) |
 | `MCP_SCANNER_DOCKER_IMAGE_NAME` | `mcp-scanner-pypi` | Docker image name |
@@ -119,7 +119,7 @@ See `examples/sdk_pypi_scanner.py` for a complete example.
 
 ### Docker Image
 
-The scanner uses a minimal `python:3.13-alpine` image with `cisco-ai-mcp-scanner` installed for behavioral analysis.
+The scanner uses a minimal `python:3.13-alpine` image with `cisco-ai-mcp-scanner` installed for behavioral analysis. When you run from a source checkout the image is built from that tree; when installed from PyPI the image pins the same package version you have locally.
 
 The image is built automatically on first use and cached. Use `--rebuild-image` to force a rebuild.
 
@@ -128,7 +128,8 @@ The image is built automatically on first use and cached. Use `--rebuild-image` 
 ### Docker mode (default)
 
 - **No host volume mounts** — the package is downloaded and scanned entirely inside the container. Only JSON results come back via stdout.
-- **Source preferred, wheel fallback** — prefers source distributions for full source analysis; falls back to wheels (which still contain `.py` files) if source builds fail.
+- **No package execution during download.** Docker mode fetches the sdist/wheel archive directly (same path as local mode) — it never runs ``pip download`` or the package's build backend.
+- **Source preferred, wheel fallback** — prefers source distributions for full source analysis; falls back to wheels (which still contain `.py` files) when no sdist is published.
 - **Container auto-removed** — `--rm` ensures the container is deleted after each scan.
 - **LLM keys via env vars** — credentials are passed at runtime via `-e` flags, never baked into the image.
 - **Bridge networking** — the container has network access (needed for PyPI + LLM calls) but uses the default bridge network, not host networking.
@@ -136,7 +137,7 @@ The image is built automatically on first use and cached. Use `--rebuild-image` 
 ### Local (no-Docker) mode
 
 - **No package execution.** Local mode parses sources; it never runs `setup.py`, `pip install`, or any code from the downloaded package.
-- **HTTPS-only download** to a private temp directory the scanner owns and cleans up.
+- **HTTPS-only download** with registry host allow-listing on every redirect hop, plus DNS resolution checks that reject private/link-local addresses.
 - **Archive size cap** (`MCP_SCANNER_PACKAGE_ARCHIVE_MAX_BYTES`, default 50 MB) enforced both via `Content-Length` and streaming byte count.
 - **Extraction caps**: `MCP_SCANNER_PACKAGE_EXTRACTED_MAX_BYTES` (default 200 MB) and `MCP_SCANNER_PACKAGE_EXTRACTED_MAX_FILES` (default 10 000).
 - **`tarfile.extractall(filter="data")`** (Python 3.12+) rejects symlinks, hardlinks, absolute paths, parent traversal, device files, and setuid/setgid members.

@@ -19,10 +19,16 @@
 import asyncio
 import json
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from mcpscanner.cli import _package_scan_to_tool_results
+from mcpscanner.core.package_sandbox import (
+    PackageDownloadError,
+    validate_pypi_package_name,
+)
 from mcpscanner.core.pypi_scanner import (
     DockerNotAvailableError,
     LLMNotConfiguredError,
@@ -91,9 +97,14 @@ class TestImageManagement:
             text=True,
         )
 
-    @patch("mcpscanner.core.pypi_scanner.resources")
+    @patch("mcpscanner.core.pypi_scanner.prepare_docker_build")
     @patch("mcpscanner.core.pypi_scanner.subprocess.run")
-    def test_build_image_force(self, mock_run, mock_resources):
+    def test_build_image_force(self, mock_run, mock_prepare):
+        mock_prepare.return_value = (
+            Path("/tmp/project"),
+            Path("/tmp/project/mcpscanner/docker/Dockerfile"),
+            {"INSTALL_FROM_SOURCE": "1"},
+        )
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         scanner = PyPIPackageScanner()
         scanner.build_image(force=True)
@@ -298,7 +309,7 @@ class TestConfiguration:
     @patch.object(PyPIPackageScanner, "build_image")
     @patch.object(PyPIPackageScanner, "check_docker")
     @patch("mcpscanner.core.pypi_scanner.subprocess.run")
-    def test_container_uses_rm_flag(self, mock_run, mock_check, mock_build):
+    def test_container_uses_hardening_flags(self, mock_run, mock_check, mock_build):
         scan_output = {"package": "test", "is_safe": True, "findings": []}
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -310,8 +321,8 @@ class TestConfiguration:
         scanner.scan_package("test")
 
         call_args = mock_run.call_args[0][0]
-        assert "--rm" in call_args
-        assert "--network=bridge" in call_args
+        assert "--cap-drop=ALL" in call_args
+        assert "--security-opt=no-new-privileges" in call_args
 
 
 class TestErrorCodeSurfacing:
@@ -518,3 +529,98 @@ def test_python_analyzer_extraction_crash_marks_scan_error(monkeypatch):
     assert findings == []
     assert analyzer.analysis_errors == 1
     assert analysis_scan_status(analyzer, findings) == "error"
+
+
+class TestPackageScanCliMapping:
+    """``_package_scan_to_tool_results`` must honour ``scan_status``."""
+
+    def test_degraded_scan_surfaces_error_row(self):
+        rows = _package_scan_to_tool_results(
+            scan_results={
+                "scan_status": "error",
+                "is_safe": None,
+                "findings": [],
+            },
+            pkg_spec="demo",
+            ecosystem_label="PyPI",
+        )
+        assert len(rows) == 1
+        assert rows[0]["status"] == "error"
+        assert rows[0]["is_safe"] is None
+
+    def test_completed_clean_scan_stays_safe(self):
+        rows = _package_scan_to_tool_results(
+            scan_results={
+                "scan_status": "completed",
+                "is_safe": True,
+                "findings": [],
+            },
+            pkg_spec="flask",
+            ecosystem_label="PyPI",
+        )
+        assert rows[0]["is_safe"] is True
+        assert rows[0]["status"] == "completed"
+
+
+class TestPackageNameValidation:
+    def test_rejects_flag_like_names(self):
+        with pytest.raises(PackageDownloadError, match="invalid PyPI package name"):
+            validate_pypi_package_name("-evil")
+
+    def test_accepts_normal_names(self):
+        validate_pypi_package_name("flask")
+        validate_pypi_package_name("my_pkg.name")
+
+
+class TestArchiveResolution:
+    def test_wheel_fallback_when_no_sdist(self):
+        meta = {
+            "info": {"version": "1.0.0"},
+            "urls": [
+                {
+                    "packagetype": "bdist_wheel",
+                    "url": "https://files.pythonhosted.org/demo-1.0.0-py3-none-any.whl",
+                    "digests": {"sha256": "abc"},
+                }
+            ],
+        }
+        scanner = PyPIPackageScanner(use_docker=False)
+        with patch(
+            "mcpscanner.core.pypi_scanner._https_get_json", return_value=meta
+        ):
+            url, version, digest = scanner._resolve_pypi_archive_url("demo", None)
+        assert version == "1.0.0"
+        assert url.endswith(".whl")
+        assert digest == "abc"
+
+
+class TestDegradedDockerResult:
+    @patch.object(PyPIPackageScanner, "build_image")
+    @patch.object(PyPIPackageScanner, "check_docker")
+    @patch("mcpscanner.core.pypi_scanner.subprocess.run")
+    def test_degraded_success_raises(self, mock_run, _mock_check, _mock_build):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "package": "demo",
+                    "scan_status": "error",
+                    "is_safe": None,
+                    "findings": [],
+                }
+            ),
+            stderr="",
+        )
+        scanner = PyPIPackageScanner()
+        with pytest.raises(PyPIScanError, match="could not be completed reliably"):
+            scanner.scan_package("demo")
+
+
+class TestWheelPackaging:
+    def test_docker_files_available_via_package_data(self):
+        from importlib import resources
+
+        docker = resources.files("mcpscanner.docker")
+        assert (docker / "Dockerfile").is_file()
+        assert (docker / "Dockerfile.wheel").is_file()
+        assert (docker / "entrypoint.py").is_file()

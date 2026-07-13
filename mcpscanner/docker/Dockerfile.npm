@@ -1,23 +1,33 @@
 # NPM behavioural scanner image.
 #
-# Built from a tagged python:3.13-alpine digest (same base as the PyPI
-# scanner image) so the build pins via Docker content-addressed layers. We
-# don't need Node.js inside the container at all — we never *execute* the
-# downloaded package, only parse its sources via tree-sitter-javascript /
-# tree-sitter-typescript.
+# Uses the ``python:3.13-alpine`` tag (not a digest pin). When
+# ``INSTALL_FROM_SOURCE=1`` the image is built from the checkout; otherwise
+# ``SCANNER_PACKAGE_VERSION`` pins the PyPI release. We never execute the
+# downloaded npm package — only parse its sources via tree-sitter.
 
 FROM python:3.13-alpine
 
-# Build tools required to compile tree-sitter native extensions.
-RUN apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev \
-    && pip install --no-cache-dir cisco-ai-mcp-scanner \
-    && apk del .build-deps
+ARG SCANNER_PACKAGE_VERSION=""
+ARG INSTALL_FROM_SOURCE=0
 
-COPY entrypoint_npm.py /entrypoint_npm.py
+RUN apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev
 
-# Drop to a non-root user so the analyzer can't write outside its work
-# directory even if a malicious package somehow induces an effect via the
-# Python parser (we never execute the package's JS).
+WORKDIR /build
+
+COPY pyproject.toml README.md ./
+COPY mcpscanner ./mcpscanner
+
+RUN if [ "$INSTALL_FROM_SOURCE" = "1" ]; then \
+      pip install --no-cache-dir .; \
+    elif [ -n "$SCANNER_PACKAGE_VERSION" ]; then \
+      pip install --no-cache-dir "cisco-ai-mcp-scanner==${SCANNER_PACKAGE_VERSION}"; \
+    else \
+      pip install --no-cache-dir cisco-ai-mcp-scanner; \
+    fi \
+ && apk del .build-deps
+
+COPY mcpscanner/docker/entrypoint_npm.py /entrypoint_npm.py
+
 RUN adduser -D -u 10001 scanner \
  && mkdir -p /work \
  && chown -R scanner:scanner /work /entrypoint_npm.py

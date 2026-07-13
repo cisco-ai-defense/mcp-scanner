@@ -694,6 +694,27 @@ def test_download_archive_enforces_allowed_hosts(tmp_path: Path):
 
 
 @respx.mock
+def test_download_archive_rejects_private_resolved_host(tmp_path: Path):
+    import socket
+
+    from mcpscanner.core.package_sandbox import _validate_https_url
+
+    dest = tmp_path / "dl"
+    dest.mkdir()
+    with patch(
+        "mcpscanner.core.package_sandbox.socket.getaddrinfo",
+        return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
+        ],
+    ):
+        with pytest.raises(PackageDownloadError, match="private/link-local"):
+            _validate_https_url(
+                "https://files.pythonhosted.org/a.tgz",
+                ("files.pythonhosted.org",),
+            )
+
+
+@respx.mock
 def test_download_archive_verifies_sha256_match(tmp_path: Path):
     payload = b"hello world"
     digest = hashlib.sha256(payload).hexdigest()

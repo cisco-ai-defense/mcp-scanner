@@ -1,0 +1,20 @@
+# NPM scanner image for wheel-only installs (no source checkout).
+# Installs a pinned cisco-ai-mcp-scanner release from PyPI.
+
+FROM python:3.13-alpine
+
+ARG SCANNER_PACKAGE_VERSION
+
+RUN apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev \
+ && pip install --no-cache-dir "cisco-ai-mcp-scanner==${SCANNER_PACKAGE_VERSION}" \
+ && apk del .build-deps
+
+COPY entrypoint_npm.py /entrypoint_npm.py
+
+RUN adduser -D -u 10001 scanner \
+ && mkdir -p /work \
+ && chown -R scanner:scanner /work /entrypoint_npm.py
+USER scanner
+WORKDIR /work
+
+ENTRYPOINT ["python", "/entrypoint_npm.py"]

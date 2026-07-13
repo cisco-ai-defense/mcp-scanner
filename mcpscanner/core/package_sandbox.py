@@ -46,9 +46,12 @@ explicitly opt in by passing ``use_docker=False``.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import logging
 import os
+import re
 import shutil
+import socket
 import tarfile
 import zipfile
 from contextlib import contextmanager
@@ -60,6 +63,11 @@ from urllib.parse import ParseResult, urlparse
 import httpx
 
 from ..config.constants import MCPScannerConstants
+
+# PEP 508 normalized project name (case-insensitive).
+_PYPI_PACKAGE_NAME_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
+)
 
 
 # Names of environment variables we MUST never write to logs in plaintext.
@@ -371,6 +379,57 @@ def download_archive(
 _MAX_REDIRECT_HOPS = 10
 
 
+def validate_pypi_package_name(package: str) -> None:
+    """Reject package names that are not valid PEP 508 project names.
+
+    This is not a shell-injection guard (argv is a list) but it blocks
+    confusing failures from names that start with ``-`` or embed pip
+    requirement syntax.
+    """
+    if not package or not isinstance(package, str):
+        raise PackageDownloadError("package name must be a non-empty string")
+    normalized = package.strip()
+    if not normalized:
+        raise PackageDownloadError("package name must be a non-empty string")
+    if not _PYPI_PACKAGE_NAME_RE.fullmatch(normalized):
+        raise PackageDownloadError(
+            f"invalid PyPI package name {package!r}; "
+            "expected a PEP 508 project name (letters, digits, ., -, _)"
+        )
+
+
+def _reject_private_resolved_host(hostname: str) -> None:
+    """Block hostnames that resolve to private or link-local addresses."""
+    if not hostname:
+        return
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        # DNS may be unavailable in offline/sandboxed environments. The
+        # HTTPS host allow-list still applies; skip this defense-in-depth
+        # hop when resolution is not possible.
+        return
+    for info in addr_infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        try:
+            ip = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+        ):
+            raise PackageDownloadError(
+                f"refusing private/link-local address for host "
+                f"{hostname!r}: {sockaddr[0]}"
+            )
+
+
 def _validate_https_url(url: str, allowed_hosts: Optional[Sequence[str]]) -> ParseResult:
     """Parse ``url`` and reject anything that isn't HTTPS or that points
     at a host outside ``allowed_hosts`` (when supplied)."""
@@ -392,6 +451,7 @@ def _validate_https_url(url: str, allowed_hosts: Optional[Sequence[str]]) -> Par
             raise PackageDownloadError(
                 f"refusing URL host {host!r}; not in allow-list {list(allowed_hosts)!r}"
             )
+    _reject_private_resolved_host(parsed.hostname or "")
     return parsed
 
 

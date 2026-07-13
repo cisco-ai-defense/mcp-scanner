@@ -122,7 +122,7 @@ async def main() -> None:
 
         config = Config(
             llm_provider_api_key=llm_key,
-            llm_model=os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+            llm_model=os.environ.get("LLM_MODEL", CONSTANTS.DEFAULT_LLM_MODEL),
             llm_base_url=os.environ.get("LLM_BASE_URL", ""),
             llm_api_version=os.environ.get("LLM_API_VERSION", ""),
         )

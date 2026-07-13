@@ -2,19 +2,16 @@
 """
 Entrypoint script for the MCP Scanner PyPI Docker container.
 
-Downloads a PyPI package, extracts it, and runs behavioral analysis
-and vulnerable packages audit inside an isolated container.
-
-All results are printed as JSON to stdout. Logs go to stderr.
+Downloads a PyPI package archive without executing it, extracts the
+sources safely, and runs behavioural analysis. Final results are printed
+as JSON to stdout; logs go to stderr.
 """
 
 import argparse
 import asyncio
-import glob
 import json
 import logging
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -25,53 +22,53 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pypi-scanner")
 
-DOWNLOAD_DIR = "/tmp/download"
-EXTRACT_DIR = "/tmp/package"
+DOWNLOAD_DIR = Path("/work/download")
+EXTRACT_DIR = Path("/work/package")
+
+_PYPI_TARBALL_HOSTS = (
+    "files.pythonhosted.org",
+    "pypi.org",
+)
 
 
 def download_package(package: str, version: str | None) -> Path:
-    """Download a PyPI package, preferring source dist but falling back to wheel."""
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    """Download a PyPI sdist or wheel without executing package code.
+
+  The LLM API key is temporarily removed from the environment so a
+  hostile archive cannot read it even if extraction were compromised.
+    """
+    from mcpscanner.core.package_sandbox import (
+        PackageDownloadError,
+        download_archive,
+        validate_pypi_package_name,
+    )
+    from mcpscanner.core.pypi_scanner import PyPIPackageScanner
+
+    validate_pypi_package_name(package)
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
     spec = f"{package}=={version}" if version else package
     logger.info("Downloading %s", spec)
 
-    # Try source distribution first
-    cmd_sdist = [
-        sys.executable, "-m", "pip", "download",
-        "--no-deps",
-        "--no-binary", ":all:",
-        "--dest", DOWNLOAD_DIR,
-        spec,
-    ]
-    result = subprocess.run(cmd_sdist, capture_output=True, text=True)
+    saved_llm_key = os.environ.pop("LLM_API_KEY", None)
+    try:
+        scanner = PyPIPackageScanner(use_docker=False)
+        url, _resolved_version, expected_digest = scanner._resolve_pypi_archive_url(
+            package, version
+        )
+        archive = download_archive(
+            url,
+            DOWNLOAD_DIR,
+            expected_digest=expected_digest,
+            expected_digest_algo="sha256" if expected_digest else None,
+            allowed_hosts=_PYPI_TARBALL_HOSTS,
+        )
+    except PackageDownloadError as exc:
+        raise RuntimeError(f"Failed to download {spec}: {exc}") from exc
+    finally:
+        if saved_llm_key is not None:
+            os.environ["LLM_API_KEY"] = saved_llm_key
 
-    if result.returncode != 0:
-        logger.warning("Source dist unavailable, downloading wheel instead")
-        # Clear any partial downloads
-        for f in Path(DOWNLOAD_DIR).iterdir():
-            f.unlink()
-
-        cmd_wheel = [
-            sys.executable, "-m", "pip", "download",
-            "--no-deps",
-            "--dest", DOWNLOAD_DIR,
-            spec,
-        ]
-        result = subprocess.run(cmd_wheel, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error("pip download failed:\n%s", result.stderr)
-            raise RuntimeError(f"Failed to download {spec}: {result.stderr.strip()}")
-
-    archives = (
-        glob.glob(os.path.join(DOWNLOAD_DIR, "*.tar.gz"))
-        + glob.glob(os.path.join(DOWNLOAD_DIR, "*.zip"))
-        + glob.glob(os.path.join(DOWNLOAD_DIR, "*.whl"))
-    )
-    if not archives:
-        raise RuntimeError(f"No archive found after downloading {spec}")
-
-    archive = Path(archives[0])
     logger.info("Downloaded: %s", archive.name)
     return archive
 
@@ -79,22 +76,18 @@ def download_package(package: str, version: str | None) -> Path:
 def extract_package(archive: Path) -> Path:
     """Extract the downloaded archive using the shared safe-extraction
     helpers so the byte / file-count caps and traversal protections are
-    applied here too. Docker network isolation already contains a hostile
-    payload, but using the same hardened path everywhere removes a
-    forking maintenance burden.
+    applied here too.
 
     ``only_dirs=True`` preserves the historical PyPI Docker behaviour of
     selecting the single ``<name>-<version>/`` extraction subdir even
-    when pip drops sibling files (``README``, ``LICENSE``, ``setup.cfg``)
-    at the extraction root. Without it some sdists would silently shift
-    the analyzer to scan ``EXTRACT_DIR`` instead of the package root,
-    changing the ``python_files_scanned`` count for the same input.
+    when sibling files (``README``, ``LICENSE``, ``setup.cfg``) land at
+    the extraction root.
     """
     from mcpscanner.core.package_sandbox import safe_extract_archive
 
-    os.makedirs(EXTRACT_DIR, exist_ok=True)
+    EXTRACT_DIR.mkdir(parents=True, exist_ok=True)
     extract_path = safe_extract_archive(
-        archive, Path(EXTRACT_DIR), only_dirs=True
+        archive, EXTRACT_DIR, only_dirs=True
     )
     logger.info("Extracted to %s", extract_path)
     return extract_path
@@ -145,42 +138,37 @@ async def main():
 
     try:
         from mcpscanner.config.config import Config
+        from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
         from mcpscanner.core.package_sandbox import count_source_files
         from mcpscanner.core.pypi_scanner import LLMNotConfiguredError
 
         llm_key = os.environ.get("LLM_API_KEY", "")
         if not llm_key:
-            # Refuse to declare is_safe=True for an un-analysed package.
             raise LLMNotConfiguredError(
                 "LLM_API_KEY not provided to the container; refusing to "
                 "report is_safe=True for an un-analysed package"
             )
 
+        archive = download_package(args.package, args.version)
+        source_dir = extract_package(archive)
+
         config = Config(
             llm_provider_api_key=llm_key,
-            llm_model=os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+            llm_model=os.environ.get("LLM_MODEL", CONSTANTS.DEFAULT_LLM_MODEL),
             llm_base_url=os.environ.get("LLM_BASE_URL", ""),
             llm_api_version=os.environ.get("LLM_API_VERSION", ""),
         )
-
-        archive = download_package(args.package, args.version)
-        source_dir = extract_package(archive)
 
         behavioral_findings, scan_status = await run_behavioral_analysis(
             source_dir, config
         )
 
-        # Shared counter so SDK and Docker emit the same value for the
-        # same package tree. Skip dirs mirror the behavioural analyzer's
-        # own exclusions so we never count files it never analysed.
         py_files = count_source_files(
             source_dir,
             extensions=(".py",),
             skip_dirs=("__pycache__", "node_modules"),
         )
 
-        # A degraded scan (LLM unreachable, etc.) reports no findings but
-        # must not claim the package is safe.
         is_safe = len(behavioral_findings) == 0 if scan_status == "completed" else None
 
         output = {
@@ -212,15 +200,7 @@ async def main():
 
 
 def _classify_error(exc: BaseException) -> str:
-    """Thin wrapper around :func:`mcpscanner.core.package_sandbox.classify_exception`.
-
-    Single-sourcing the vocabulary in ``package_sandbox`` keeps the
-    documented ``error_code`` strings (see ``docs/pypi-scanning.md``)
-    aligned with both Docker entrypoints. The wrapper is kept so legacy
-    references inside this file don't break, and so the lazy
-    ``mcpscanner.core`` import keeps happening inside ``main`` rather
-    than at module load.
-    """
+    """Thin wrapper around :func:`mcpscanner.core.package_sandbox.classify_exception`."""
     try:
         from mcpscanner.core.package_sandbox import classify_exception
     except Exception:  # noqa: BLE001 - never let classifier mask the real error

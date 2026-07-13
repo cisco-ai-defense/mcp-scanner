@@ -141,6 +141,14 @@ exclude = ["examples*", "evals*"]
 
 [tool.setuptools.package-data]
 "mcpscanner" = ["data/prompts/*.md", "data/yara_rules/*.yara", "data/yara_rules/*.yar"]
+"mcpscanner.docker" = [
+    "Dockerfile",
+    "Dockerfile.wheel",
+    "Dockerfile.npm",
+    "Dockerfile.npm.wheel",
+    "entrypoint.py",
+    "entrypoint_npm.py",
+]
 
 # Code formatting and linting configuration
 [tool.black]
