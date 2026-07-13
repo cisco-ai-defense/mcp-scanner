@@ -39,15 +39,26 @@ def installed_scanner_version() -> str:
     return metadata.version("cisco-ai-mcp-scanner")
 
 
-def default_scanner_image_tag() -> str:
+def default_scanner_image_tag(*, ecosystem: str) -> str:
     """Default Docker image tag keyed to the installed scanner release.
 
     Using the package version instead of a mutable ``latest`` tag avoids
     silently reusing a stale image after ``pip install --upgrade``.
+
+    Each package scanner reads only its own tag override env var so an
+    npm-only override cannot change the PyPI image tag (and vice versa).
     """
-    env_tag = os.getenv("MCP_SCANNER_DOCKER_IMAGE_TAG") or os.getenv(
-        "MCP_SCANNER_NPM_DOCKER_IMAGE_TAG"
-    )
+    env_var_by_ecosystem = {
+        "pypi": "MCP_SCANNER_DOCKER_IMAGE_TAG",
+        "npm": "MCP_SCANNER_NPM_DOCKER_IMAGE_TAG",
+    }
+    env_var = env_var_by_ecosystem.get(ecosystem)
+    if env_var is None:
+        raise ValueError(
+            f"unknown package scanner ecosystem {ecosystem!r}; "
+            f"expected one of {sorted(env_var_by_ecosystem)}"
+        )
+    env_tag = os.getenv(env_var)
     if env_tag:
         return env_tag
     try:

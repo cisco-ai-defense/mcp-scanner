@@ -167,7 +167,7 @@ class PyPIPackageScanner:
                 ``MCP_SCANNER_LLM_*`` environment variables.
         """
         self._image_name = image_name or CONSTANTS.DOCKER_IMAGE_NAME
-        self._image_tag = image_tag or default_scanner_image_tag()
+        self._image_tag = image_tag or default_scanner_image_tag(ecosystem="pypi")
         self._timeout = timeout or CONSTANTS.PYPI_SCAN_TIMEOUT
         self._full_image = f"{self._image_name}:{self._image_tag}"
         self._use_docker = use_docker

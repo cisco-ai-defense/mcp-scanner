@@ -121,7 +121,7 @@ class NPMPackageScanner:
                 env vars if omitted.
         """
         self._image_name = image_name or CONSTANTS.NPM_DOCKER_IMAGE_NAME
-        self._image_tag = image_tag or default_scanner_image_tag()
+        self._image_tag = image_tag or default_scanner_image_tag(ecosystem="npm")
         self._timeout = timeout or CONSTANTS.NPM_SCAN_TIMEOUT
         self._full_image = f"{self._image_name}:{self._image_tag}"
         self._use_docker = use_docker

@@ -815,6 +815,26 @@ class TestExtractionParity:
         assert captured.get("only_dirs") is True
 
 
+class TestDockerImageTag:
+    def test_npm_tag_override_does_not_affect_pypi(self, monkeypatch):
+        from mcpscanner.core.docker_build import default_scanner_image_tag
+
+        monkeypatch.setenv("MCP_SCANNER_NPM_DOCKER_IMAGE_TAG", "npm-only")
+        monkeypatch.delenv("MCP_SCANNER_DOCKER_IMAGE_TAG", raising=False)
+
+        assert default_scanner_image_tag(ecosystem="npm") == "npm-only"
+        assert default_scanner_image_tag(ecosystem="pypi") != "npm-only"
+
+    def test_pypi_tag_override_does_not_affect_npm(self, monkeypatch):
+        from mcpscanner.core.docker_build import default_scanner_image_tag
+
+        monkeypatch.setenv("MCP_SCANNER_DOCKER_IMAGE_TAG", "pypi-only")
+        monkeypatch.delenv("MCP_SCANNER_NPM_DOCKER_IMAGE_TAG", raising=False)
+
+        assert default_scanner_image_tag(ecosystem="pypi") == "pypi-only"
+        assert default_scanner_image_tag(ecosystem="npm") != "pypi-only"
+
+
 class TestWheelPackaging:
     def test_docker_files_available_via_package_data(self):
         from importlib import resources
