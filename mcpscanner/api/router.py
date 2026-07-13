@@ -55,6 +55,14 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 
+def _hybrid_routing_kwargs(request: APIScanRequest) -> Dict[str, Optional[str]]:
+    """Pass hybrid connector routing from API request into the scanner."""
+    return {
+        "connector_id": request.connector_id,
+        "tenant_id": request.tenant_id,
+    }
+
+
 def get_scanner() -> ScannerFactory:
     """
     Dependency injection placeholder for the ScannerFactory.
@@ -411,6 +419,7 @@ async def scan_tool_endpoint(
             auth=auth,
             analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         # Only warn if analyzers actually failed to run
         if len(result.findings) == 0 and len(result.analyzers) == 0:
@@ -501,6 +510,7 @@ async def scan_all_tools_endpoint(
             auth=auth,
             analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned {len(results)} tools")
 
@@ -598,6 +608,7 @@ async def scan_prompt_endpoint(
             auth=auth,
             analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
 
@@ -674,6 +685,7 @@ async def scan_all_prompts_endpoint(
             auth=auth,
             analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned {len(results)} prompts")
 
@@ -770,6 +782,7 @@ async def scan_resource_endpoint(
             analyzers=analyzers,
             http_headers=http_headers,
             allowed_mime_types=allowed_mime_types,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
 
@@ -856,6 +869,7 @@ async def scan_all_resources_endpoint(
             analyzers=analyzers,
             http_headers=http_headers,
             allowed_mime_types=allowed_mime_types,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned {len(results)} resources")
 
@@ -960,6 +974,7 @@ async def scan_instructions_endpoint(
             auth=auth,
             analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned instructions from server")
 
