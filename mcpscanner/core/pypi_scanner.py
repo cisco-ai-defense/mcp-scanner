@@ -703,6 +703,15 @@ def analysis_scan_status(analyzer: Any, findings: Sequence[Any]) -> str:
     return "completed"
 
 
+def _reportable_findings(findings: Sequence[Any]) -> List[Any]:
+    """Drop benign SAFE placeholders; keep UNKNOWN for inconclusive scans."""
+    return [
+        f
+        for f in findings
+        if (getattr(f, "severity", None) or "").upper() != "SAFE"
+    ]
+
+
 def _build_scan_result(
     *,
     ecosystem: str,
@@ -722,7 +731,8 @@ def _build_scan_result(
     field that doesn't apply to their language.
     """
     serialised: List[Dict[str, Any]] = []
-    for f in findings:
+    reportable = _reportable_findings(findings)
+    for f in reportable:
         serialised.append(
             {
                 "analyzer": f.analyzer.lower() if getattr(f, "analyzer", None) else "behavioral",

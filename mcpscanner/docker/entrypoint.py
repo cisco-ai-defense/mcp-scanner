@@ -27,14 +27,9 @@ EXTRACT_DIR = Path("/work/package")
 
 
 def download_package(package: str, version: str | None) -> tuple[Path, str]:
-    """Download a PyPI sdist or wheel without executing package code.
-
-    The LLM API key is temporarily removed from the environment so a
-    hostile archive cannot read it even if extraction were compromised.
-    """
+    """Download a PyPI sdist or wheel without executing package code."""
     from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
     from mcpscanner.core.package_sandbox import (
-        PackageDownloadError,
         download_archive,
         pypi_tarball_allowed_hosts,
         validate_pypi_package_name,
@@ -47,23 +42,16 @@ def download_package(package: str, version: str | None) -> tuple[Path, str]:
     spec = f"{package}=={version}" if version else package
     logger.info("Downloading %s", spec)
 
-    saved_llm_key = os.environ.pop("LLM_API_KEY", None)
-    try:
-        url, resolved_version, expected_digest = resolve_pypi_archive_url(
-            package, version
-        )
-        archive = download_archive(
-            url,
-            DOWNLOAD_DIR,
-            expected_digest=expected_digest,
-            expected_digest_algo="sha256" if expected_digest else None,
-            allowed_hosts=pypi_tarball_allowed_hosts(CONSTANTS.PYPI_INDEX_URL),
-        )
-    except PackageDownloadError:
-        raise
-    finally:
-        if saved_llm_key is not None:
-            os.environ["LLM_API_KEY"] = saved_llm_key
+    url, resolved_version, expected_digest = resolve_pypi_archive_url(
+        package, version
+    )
+    archive = download_archive(
+        url,
+        DOWNLOAD_DIR,
+        expected_digest=expected_digest,
+        expected_digest_algo="sha256" if expected_digest else None,
+        allowed_hosts=pypi_tarball_allowed_hosts(CONSTANTS.PYPI_INDEX_URL),
+    )
 
     logger.info("Downloaded: %s", archive.name)
     return archive, resolved_version
@@ -94,14 +82,17 @@ async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict],
     from mcpscanner.core.analyzers.behavioral.code_analyzer import (
         BehavioralCodeAnalyzer,
     )
-    from mcpscanner.core.pypi_scanner import analysis_scan_status
+    from mcpscanner.core.pypi_scanner import (
+        _reportable_findings,
+        analysis_scan_status,
+    )
 
     analyzer = BehavioralCodeAnalyzer(config)
     logger.info("Running behavioral analysis on %s", source_dir)
     results = await analyzer.analyze(str(source_dir), {})
 
     findings = []
-    for finding in results:
+    for finding in _reportable_findings(results):
         findings.append({
             "analyzer": "behavioral",
             "severity": finding.severity,
@@ -110,7 +101,7 @@ async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict],
             "details": finding.details if finding.details else {},
         })
     logger.info("Behavioral analysis: %d findings", len(findings))
-    return findings, analysis_scan_status(analyzer, findings)
+    return findings, analysis_scan_status(analyzer, results)
 
 
 async def main():
@@ -137,8 +128,15 @@ async def main():
                 "report is_safe=True for an un-analysed package"
             )
 
-        archive, resolved_version = download_package(args.package, args.version)
-        source_dir = extract_package(archive)
+        # Keep the LLM key out of the environment while downloading and
+        # extracting so a hostile archive cannot read it from os.environ.
+        saved_llm_key = os.environ.pop("LLM_API_KEY", None)
+        try:
+            archive, resolved_version = download_package(args.package, args.version)
+            source_dir = extract_package(archive)
+        finally:
+            if saved_llm_key is not None:
+                os.environ["LLM_API_KEY"] = saved_llm_key
 
         config = Config(
             llm_provider_api_key=llm_key,

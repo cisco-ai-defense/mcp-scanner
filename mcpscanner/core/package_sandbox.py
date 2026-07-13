@@ -478,6 +478,7 @@ def _reject_private_resolved_host(hostname: str) -> None:
             or ip.is_link_local
             or ip.is_reserved
             or ip.is_multicast
+            or ip.is_unspecified
         ):
             raise PackageDownloadError(
                 f"refusing private/link-local address for host "

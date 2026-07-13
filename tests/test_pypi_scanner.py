@@ -644,9 +644,86 @@ class TestPrivateIndexHosts:
         assert pypi_index_allowed_hosts("https://artifactory.example.com/pypi") == (
             "artifactory.example.com",
         )
-        assert "artifactory.example.com" in pypi_tarball_allowed_hosts(
-            "https://artifactory.example.com/pypi"
+        assert pypi_tarball_allowed_hosts("https://artifactory.example.com/pypi") == (
+            "artifactory.example.com",
+            "files.pythonhosted.org",
+            "pypi.org",
         )
+
+
+class TestBuildScanResult:
+    def test_safe_findings_excluded_from_counts(self):
+        from types import SimpleNamespace
+
+        from mcpscanner.core.pypi_scanner import _build_scan_result
+
+        safe = SimpleNamespace(
+            analyzer="Behavioral",
+            severity="SAFE",
+            threat_category="",
+            summary="No behavioral mismatches detected",
+            details={"no_findings": True},
+        )
+        result = _build_scan_result(
+            ecosystem="pypi",
+            package="demo",
+            resolved_version="1.0.0",
+            source_root=Path("/tmp/demo"),
+            files_scanned=2,
+            findings=[safe],
+            scan_status="completed",
+        )
+        assert result["total_findings"] == 0
+        assert result["is_safe"] is True
+        assert result["findings"] == []
+
+    def test_unknown_findings_are_kept(self):
+        from types import SimpleNamespace
+
+        from mcpscanner.core.pypi_scanner import _build_scan_result
+
+        unknown = SimpleNamespace(
+            analyzer="Behavioral",
+            severity="UNKNOWN",
+            threat_category="",
+            summary="Alignment check did not complete",
+            details={},
+        )
+        result = _build_scan_result(
+            ecosystem="pypi",
+            package="demo",
+            resolved_version="1.0.0",
+            source_root=Path("/tmp/demo"),
+            files_scanned=1,
+            findings=[unknown],
+            scan_status="completed",
+        )
+        assert result["total_findings"] == 1
+        assert result["is_safe"] is False
+        assert result["findings"][0]["severity"] == "UNKNOWN"
+
+
+class TestRejectUnspecifiedAddress:
+    def test_validate_https_url_rejects_unspecified_address(self):
+        import socket
+        from unittest.mock import patch
+
+        from mcpscanner.core.package_sandbox import (
+            PackageDownloadError,
+            _validate_https_url,
+        )
+
+        with patch(
+            "mcpscanner.core.package_sandbox.socket.getaddrinfo",
+            return_value=[
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("0.0.0.0", 443))
+            ],
+        ):
+            with pytest.raises(PackageDownloadError, match="private/link-local"):
+                _validate_https_url(
+                    "https://files.pythonhosted.org/a.tgz",
+                    ("files.pythonhosted.org",),
+                )
 
 
 class TestLocalDegradedScan:

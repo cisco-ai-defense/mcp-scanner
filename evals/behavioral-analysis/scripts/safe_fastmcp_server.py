@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Known-safe FastMCP server. Expected behavioral analyzer result: 0 findings."""
 
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("safe-demo")
 

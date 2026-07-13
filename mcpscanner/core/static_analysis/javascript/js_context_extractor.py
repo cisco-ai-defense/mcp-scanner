@@ -1065,11 +1065,8 @@ class JSContextExtractor:
 
     def _unquote_string(self, node: Node) -> str:
         """Strip the outer quote characters from a tree-sitter ``string``
-        node. The ``string_fragment`` child holds the real content with
-        escapes still in place; that's fine for our purposes."""
-        fragments = [c for c in node.named_children if c.type == "string_fragment"]
-        if fragments:
-            return self._text(fragments[0])
+        node. Use the full node text so ``escape_sequence`` children are
+        not dropped after the first ``string_fragment``."""
         text = self._text(node)
         if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"', "`"):
             return text[1:-1]

@@ -1268,6 +1268,9 @@ async def main():
         "--raw", "-r", action="store_true", help="Print raw JSON output"
     )
     p_pypi.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_pypi.add_argument(
         "--format",
         choices=[
             "raw", "summary", "detailed", "by_tool",
@@ -1313,6 +1316,9 @@ async def main():
     )
     p_npm.add_argument(
         "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_npm.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
     )
     p_npm.add_argument(
         "--format",
@@ -2271,11 +2277,18 @@ async def main():
                 if use_docker and getattr(args, "rebuild_image", False):
                     scanner.build_image(force=True)
 
-                scan_results = scanner.scan_package(
-                    package=args.package,
-                    version=getattr(args, "version", None),
-                    verbose=getattr(args, "verbose", False),
-                )
+                if use_docker:
+                    scan_results = scanner.scan_package(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+                else:
+                    scan_results = await scanner.scan_package_async(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
 
                 pkg_spec = args.package
                 if getattr(args, "version", None):
@@ -2329,11 +2342,18 @@ async def main():
                 if use_docker and getattr(args, "rebuild_image", False):
                     scanner.build_image(force=True)
 
-                scan_results = scanner.scan_package(
-                    package=args.package,
-                    version=getattr(args, "version", None),
-                    verbose=getattr(args, "verbose", False),
-                )
+                if use_docker:
+                    scan_results = scanner.scan_package(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+                else:
+                    scan_results = await scanner.scan_package_async(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
 
                 pkg_spec = args.package
                 if getattr(args, "version", None):

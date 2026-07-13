@@ -66,14 +66,17 @@ async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict],
     from mcpscanner.core.analyzers.behavioral.js_code_analyzer import (
         JSBehavioralCodeAnalyzer,
     )
-    from mcpscanner.core.pypi_scanner import analysis_scan_status
+    from mcpscanner.core.pypi_scanner import (
+        _reportable_findings,
+        analysis_scan_status,
+    )
 
     analyzer = JSBehavioralCodeAnalyzer(config)
     logger.info("Running JS behavioural analysis on %s", source_dir)
 
-    findings = []
     results = await analyzer.analyze(str(source_dir), {})
-    for f in results:
+    findings = []
+    for f in _reportable_findings(results):
         findings.append(
             {
                 "analyzer": "behavioral",
@@ -84,7 +87,7 @@ async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict],
             }
         )
     logger.info("Behavioural analysis: %d findings", len(findings))
-    return findings, analysis_scan_status(analyzer, findings)
+    return findings, analysis_scan_status(analyzer, results)
 
 
 async def main() -> None:
@@ -119,13 +122,6 @@ async def main() -> None:
                 "LLM_API_KEY not provided to the container; refusing to "
                 "report is_safe=True for an un-analysed package"
             )
-
-        config = Config(
-            llm_provider_api_key=llm_key,
-            llm_model=os.environ.get("LLM_MODEL", CONSTANTS.DEFAULT_LLM_MODEL),
-            llm_base_url=os.environ.get("LLM_BASE_URL", ""),
-            llm_api_version=os.environ.get("LLM_API_VERSION", ""),
-        )
 
         registry = os.environ.get("NPM_REGISTRY_URL", CONSTANTS.NPM_REGISTRY_URL).rstrip("/")
         encoded = (
@@ -179,14 +175,26 @@ async def main() -> None:
         DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
         EXTRACT_DIR.mkdir(parents=True, exist_ok=True)
 
-        archive = download_archive(
-            tarball,
-            DOWNLOAD_DIR,
-            expected_digest=expected_digest,
-            expected_digest_algo=digest_algo,
-            allowed_hosts=allowed_hosts or None,
+        saved_llm_key = os.environ.pop("LLM_API_KEY", None)
+        try:
+            archive = download_archive(
+                tarball,
+                DOWNLOAD_DIR,
+                expected_digest=expected_digest,
+                expected_digest_algo=digest_algo,
+                allowed_hosts=allowed_hosts or None,
+            )
+            source_root = safe_extract_archive(archive, EXTRACT_DIR)
+        finally:
+            if saved_llm_key is not None:
+                os.environ["LLM_API_KEY"] = saved_llm_key
+
+        config = Config(
+            llm_provider_api_key=llm_key,
+            llm_model=os.environ.get("LLM_MODEL", CONSTANTS.DEFAULT_LLM_MODEL),
+            llm_base_url=os.environ.get("LLM_BASE_URL", ""),
+            llm_api_version=os.environ.get("LLM_API_VERSION", ""),
         )
-        source_root = safe_extract_archive(archive, EXTRACT_DIR)
 
         findings, scan_status = await run_behavioral_analysis(source_root, config)
         js_files = count_source_files(

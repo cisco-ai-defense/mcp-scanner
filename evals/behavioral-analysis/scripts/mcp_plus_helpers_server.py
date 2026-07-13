@@ -4,7 +4,7 @@
 functions. The behavioral CLI must surface exactly 1 row (the decorated
 ``add``), NOT 3 (decorated + both helpers)."""
 
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
 
 mcp = FastMCP("plus-helpers-demo")

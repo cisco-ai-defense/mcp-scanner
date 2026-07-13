@@ -37,6 +37,7 @@ import sys
 
 from mcpscanner.core.pypi_scanner import (
     DockerNotAvailableError,
+    LLMNotConfiguredError,
     PyPIPackageScanner,
     PyPIScanError,
 )
@@ -106,6 +107,9 @@ def main():
     except DockerNotAvailableError as e:
         print(f"\nError: {e}", file=sys.stderr)
         sys.exit(1)
+    except LLMNotConfiguredError as e:
+        print(f"\nConfig Error: {e}", file=sys.stderr)
+        sys.exit(2)
     except PyPIScanError as e:
         print(f"\nScan Error: {e}", file=sys.stderr)
         sys.exit(1)
