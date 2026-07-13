@@ -2446,6 +2446,10 @@ class TestFPReasonCanonicalKey:
             "meta_analysis_prompt.md must instruct the LLM to use the "
             "canonical ``false_positive_reason`` key."
         )
+        assert "publisher usage documentation" in contents, (
+            "meta_analysis_prompt.md must document when LLM prompt-injection "
+            "on first-party usage docs may be filtered as a false positive."
+        )
 
 
 # ---------------------------------------------------------------------------
