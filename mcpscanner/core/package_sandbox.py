@@ -68,6 +68,10 @@ from ..config.constants import MCPScannerConstants
 _PYPI_PACKAGE_NAME_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
 )
+# npm: unscoped or scoped (@scope/name). See npm naming rules.
+_NPM_PACKAGE_NAME_RE = re.compile(
+    r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+)
 
 
 # Names of environment variables we MUST never write to logs in plaintext.
@@ -398,8 +402,59 @@ def validate_pypi_package_name(package: str) -> None:
         )
 
 
+def validate_npm_package_name(package: str) -> None:
+    """Reject npm package names that are clearly malformed.
+
+    Accepts scoped (``@scope/name``) and unscoped names per npm registry
+    conventions. This is not a shell-injection guard (argv is a list).
+    """
+    if not package or not isinstance(package, str):
+        raise PackageDownloadError("package name must be a non-empty string")
+    normalized = package.strip()
+    if not normalized:
+        raise PackageDownloadError("package name must be a non-empty string")
+    if not _NPM_PACKAGE_NAME_RE.fullmatch(normalized):
+        raise PackageDownloadError(
+            f"invalid npm package name {package!r}; "
+            "expected unscoped or @scope/name form (lowercase, ., -, _)"
+        )
+
+
+def pypi_index_allowed_hosts(index_url: str) -> tuple[str, ...]:
+    """Hosts permitted for PyPI JSON metadata lookups."""
+    host = (urlparse(index_url.rstrip("/")).hostname or "").lower()
+    if not host:
+        return ("pypi.org",)
+    return (host,)
+
+
+def pypi_tarball_allowed_hosts(index_url: str) -> tuple[str, ...]:
+    """Hosts permitted when downloading a PyPI archive.
+
+    Always includes the configured index host (private mirrors) and the
+    public CDN aliases used by ``pypi.org`` releases.
+    """
+    host = (urlparse(index_url.rstrip("/")).hostname or "").lower()
+    hosts: list[str] = []
+    if host:
+        hosts.append(host)
+    hosts.extend(("files.pythonhosted.org", "pypi.org"))
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in hosts:
+        if item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    return tuple(ordered)
+
+
 def _reject_private_resolved_host(hostname: str) -> None:
-    """Block hostnames that resolve to private or link-local addresses."""
+    """Block hostnames that resolve to private or link-local addresses.
+
+    Defense-in-depth only: DNS may be unavailable (check skipped) or
+    answers may change between resolution and connect (TOCTOU). The HTTPS
+    host allow-list remains the primary control.
+    """
     if not hostname:
         return
     try:

@@ -207,10 +207,17 @@ def test_local_mode_runs_full_pipeline_and_returns_finding(
     )
     fake_analyzer = MagicMock()
     fake_analyzer.analyze = AsyncMock(return_value=[fake_finding])
+    from types import SimpleNamespace
+
+    def _init_with_stats(self, config):
+        self.alignment_orchestrator = SimpleNamespace(
+            get_statistics=lambda: {"skipped_error": 0}
+        )
+
     monkeypatch.setattr(
         "mcpscanner.core.analyzers.behavioral.js_code_analyzer."
         "JSBehavioralCodeAnalyzer.__init__",
-        lambda self, config: None,
+        _init_with_stats,
     )
     monkeypatch.setattr(
         "mcpscanner.core.analyzers.behavioral.js_code_analyzer."
@@ -295,10 +302,17 @@ def test_async_scan_composes_with_existing_event_loop(
     respx.get("https://registry.npmjs.org/demo/-/demo-0.0.1.tgz").mock(
         return_value=httpx.Response(200, content=tarball_bytes)
     )
+    from types import SimpleNamespace
+
+    def _init_with_stats(self, config):
+        self.alignment_orchestrator = SimpleNamespace(
+            get_statistics=lambda: {"skipped_error": 0}
+        )
+
     monkeypatch.setattr(
         "mcpscanner.core.analyzers.behavioral.js_code_analyzer."
         "JSBehavioralCodeAnalyzer.__init__",
-        lambda self, config: None,
+        _init_with_stats,
     )
     monkeypatch.setattr(
         "mcpscanner.core.analyzers.behavioral.js_code_analyzer."
@@ -1253,15 +1267,14 @@ def test_analysis_scan_status_no_findings_no_errors_is_completed():
     assert analysis_scan_status(_analyzer_with_error_stats(0), []) == "completed"
 
 
-def test_analysis_scan_status_fails_open_when_stats_unreadable():
-    """If the analyzer doesn't expose orchestrator stats we must not
-    crash the scan — fail open to ``completed`` (any real result was
-    already surfaced through ``findings``)."""
+def test_analysis_scan_status_fails_closed_when_stats_unreadable():
+    """If the analyzer doesn't expose orchestrator stats and produced no
+    findings, downgrade to ``error`` rather than reporting safe."""
     from types import SimpleNamespace
 
     from mcpscanner.core.pypi_scanner import analysis_scan_status
 
-    assert analysis_scan_status(SimpleNamespace(), []) == "completed"
+    assert analysis_scan_status(SimpleNamespace(), []) == "error"
 
 
 @respx.mock
@@ -1314,11 +1327,8 @@ def test_local_mode_degraded_analysis_not_reported_safe(
     )
 
     scanner = NPMPackageScanner(use_docker=False, config=_FakeConfig())
-    result = scanner.scan_package("demo")
-
-    assert result["total_findings"] == 0
-    assert result["scan_status"] == "error"
-    assert result["is_safe"] is None
+    with pytest.raises(NPMScanError, match="could not be completed reliably"):
+        scanner.scan_package("demo")
 
 
 # ---------------------------------------------------------------------------
@@ -1506,3 +1516,18 @@ def test_count_source_files_ignores_hidden_ancestor_dirs(tmp_path):
 
     count = count_source_files(root, extensions=(".py",), skip_dirs=())
     assert count == 2
+
+
+def test_npm_package_name_validation_rejects_invalid():
+    from mcpscanner.core.npm_scanner import NPMPackageScanner, NPMScanError
+    from mcpscanner.core.package_sandbox import (
+        PackageDownloadError,
+        validate_npm_package_name,
+    )
+
+    with pytest.raises(PackageDownloadError, match="invalid npm package name"):
+        validate_npm_package_name("-bad")
+
+    scanner = NPMPackageScanner(use_docker=False)
+    with pytest.raises(NPMScanError, match="invalid npm package name"):
+        scanner.scan_package("-bad")

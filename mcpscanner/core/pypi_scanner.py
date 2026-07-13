@@ -46,7 +46,12 @@ import httpx
 from ..config.config import Config
 from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
-from .docker_build import docker_run_hardening_flags, prepare_docker_build
+from .docker_build import (
+    DockerBuildError,
+    default_scanner_image_tag,
+    docker_run_hardening_flags,
+    prepare_docker_build,
+)
 from .package_sandbox import (
     PackageDownloadError,
     PackageExtractionError,
@@ -54,6 +59,8 @@ from .package_sandbox import (
     _validate_https_url,
     count_source_files,
     download_archive,
+    pypi_index_allowed_hosts,
+    pypi_tarball_allowed_hosts,
     redact_argv_for_logging,
     safe_extract_archive,
     temp_workdir,
@@ -61,16 +68,6 @@ from .package_sandbox import (
 )
 
 logger = get_logger(__name__)
-
-
-# Hosts the PyPI tarball URL must resolve to. ``files.pythonhosted.org``
-# is the canonical CDN; ``pypi.org`` is for metadata only but we list it
-# defensively. SDK users on a private index can override via env if
-# needed in a future patch.
-_PYPI_TARBALL_HOSTS: tuple[str, ...] = (
-    "files.pythonhosted.org",
-    "pypi.org",
-)
 
 
 class DockerNotAvailableError(Exception):
@@ -89,6 +86,31 @@ class LLMNotConfiguredError(Exception):
     ``MCP_SCANNER_LLM_API_KEY`` (or pass a pre-built :class:`Config`) and
     retry.
     """
+
+
+def _validate_pypi_package_or_raise(package: str) -> None:
+    try:
+        validate_pypi_package_name(package)
+    except PackageDownloadError as exc:
+        raise PyPIScanError(str(exc)) from exc
+
+
+def raise_if_unreliable_package_scan(
+    result: dict,
+    error_cls: type[Exception] = PyPIScanError,
+) -> dict:
+    """Reject degraded scan payloads that must not be read as safe.
+
+    Docker and local SDK paths share this guard so callers get a
+    consistent exception when ``scan_status == "error"``.
+    """
+    if result.get("scan_status") == "error" and result.get("is_safe") is None:
+        message = result.get("error") or (
+            "package scan could not be completed reliably: analysis "
+            "infrastructure failed (zero findings is not a safe verdict)"
+        )
+        raise error_cls(message)
+    return result
 
 
 def _assert_loop_not_running(context: str) -> None:
@@ -145,7 +167,7 @@ class PyPIPackageScanner:
                 ``MCP_SCANNER_LLM_*`` environment variables.
         """
         self._image_name = image_name or CONSTANTS.DOCKER_IMAGE_NAME
-        self._image_tag = image_tag or CONSTANTS.DOCKER_IMAGE_TAG
+        self._image_tag = image_tag or default_scanner_image_tag()
         self._timeout = timeout or CONSTANTS.PYPI_SCAN_TIMEOUT
         self._full_image = f"{self._image_name}:{self._image_tag}"
         self._use_docker = use_docker
@@ -207,7 +229,13 @@ class PyPIPackageScanner:
 
         logger.info("Building Docker image %s ...", self._full_image)
 
-        context, dockerfile, build_args = prepare_docker_build(dockerfile="Dockerfile")
+        try:
+            context, dockerfile, build_args = prepare_docker_build(
+                dockerfile="Dockerfile"
+            )
+        except DockerBuildError as exc:
+            raise PyPIScanError(str(exc)) from exc
+
         cmd = [
             "docker", "build",
             "-t", self._full_image,
@@ -260,10 +288,10 @@ class PyPIPackageScanner:
                 loop; use :meth:`scan_package_async` instead.
         """
         if self._use_docker:
-            validate_pypi_package_name(package)
+            _validate_pypi_package_or_raise(package)
             return self._scan_in_docker(package, version, verbose)
         _assert_loop_not_running("PyPIPackageScanner.scan_package")
-        validate_pypi_package_name(package)
+        _validate_pypi_package_or_raise(package)
         return asyncio.run(self._scan_locally(package, version))
 
     async def scan_package_async(
@@ -282,12 +310,12 @@ class PyPIPackageScanner:
         container scan.
         """
         if self._use_docker:
-            validate_pypi_package_name(package)
+            _validate_pypi_package_or_raise(package)
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
                 None, self._scan_in_docker, package, version, verbose
             )
-        validate_pypi_package_name(package)
+        _validate_pypi_package_or_raise(package)
         return await self._scan_locally(package, version)
 
     # ------------------------------------------------------------------
@@ -373,8 +401,11 @@ class PyPIPackageScanner:
             and scan_results.get("is_safe") is None
         ):
             raise PyPIScanError(
-                "Scan could not be completed reliably: analysis infrastructure "
-                "failed for every function (zero findings is not a safe verdict)."
+                scan_results.get("error")
+                or (
+                    "Scan could not be completed reliably: analysis infrastructure "
+                    "failed for every function (zero findings is not a safe verdict)."
+                )
             )
 
         return scan_results
@@ -432,9 +463,11 @@ class PyPIPackageScanner:
                     download_dir,
                     expected_digest=expected_digest,
                     expected_digest_algo="sha256" if expected_digest else None,
-                    allowed_hosts=_PYPI_TARBALL_HOSTS,
+                    allowed_hosts=pypi_tarball_allowed_hosts(CONSTANTS.PYPI_INDEX_URL),
                 )
-                source_root = safe_extract_archive(archive, extract_dir)
+                source_root = safe_extract_archive(
+                    archive, extract_dir, only_dirs=True
+                )
             except (PackageDownloadError, PackageExtractionError) as e:
                 raise PyPIScanError(
                     f"failed to fetch/extract {spec}: {e}"
@@ -458,83 +491,95 @@ class PyPIPackageScanner:
                 skip_dirs=("__pycache__", "node_modules"),
             )
 
-            return _build_scan_result(
-                ecosystem="pypi",
-                package=package,
-                resolved_version=resolved_version,
-                source_root=source_root,
-                files_scanned=py_files,
-                findings=findings,
-                scan_status=analysis_scan_status(analyzer, findings),
+            return raise_if_unreliable_package_scan(
+                _build_scan_result(
+                    ecosystem="pypi",
+                    package=package,
+                    resolved_version=resolved_version,
+                    source_root=source_root,
+                    files_scanned=py_files,
+                    findings=findings,
+                    scan_status=analysis_scan_status(analyzer, findings),
+                )
             )
 
     def _resolve_pypi_archive_url(
         self, package: str, version: Optional[str]
     ) -> tuple[str, str, Optional[str]]:
-        """Look up a PyPI archive URL via the JSON API.
-
-        Prefers source distributions; falls back to wheels when no sdist
-        is published (wheel-only packages). Returns
-        ``(url, resolved_version, expected_sha256_hex)`` where the digest
-        comes from ``digests.sha256`` in the index response.
-        """
-        meta_url = (
-            f"{CONSTANTS.PYPI_INDEX_URL.rstrip('/')}/{package}/{version}/json"
-            if version
-            else f"{CONSTANTS.PYPI_INDEX_URL.rstrip('/')}/{package}/json"
-        )
-        if not meta_url.lower().startswith("https://"):
-            raise PackageDownloadError(
-                f"refusing PyPI index over non-TLS URL: {meta_url!r}"
-            )
-
-        try:
-            meta = _https_get_json(
-                meta_url,
-                user_agent="mcp-scanner/pypi",
-                timeout=CONSTANTS.PACKAGE_DOWNLOAD_TIMEOUT,
-                allowed_hosts=("pypi.org",),
-            )
-        except PackageDownloadError:
-            raise
-        except httpx.HTTPError as e:
-            raise PackageDownloadError(
-                f"failed to fetch PyPI metadata for {package}: {e}"
-            ) from e
-        except json.JSONDecodeError as e:
-            raise PackageDownloadError(
-                f"PyPI returned invalid JSON for {package}: {e}"
-            ) from e
-
-        info = meta.get("info") or {}
-        resolved_version = (info.get("version") or version or "unknown")
-        urls = meta.get("urls") or []
-
-        def _pick(packagetype: str) -> Optional[dict]:
-            return next(
-                (
-                    u
-                    for u in urls
-                    if u.get("packagetype") == packagetype and u.get("url")
-                ),
-                None,
-            )
-
-        archive = _pick("sdist") or _pick("bdist_wheel")
-        if archive is None:
-            raise PackageDownloadError(
-                f"no source distribution or wheel found for "
-                f"{package} {resolved_version}"
-            )
-        digests = archive.get("digests") or {}
-        expected = digests.get("sha256")
-        return archive["url"], resolved_version, expected
+        return resolve_pypi_archive_url(package, version)
 
     def _resolve_pypi_sdist_url(
         self, package: str, version: Optional[str]
     ) -> tuple[str, str, Optional[str]]:
         """Backward-compatible alias for :meth:`_resolve_pypi_archive_url`."""
         return self._resolve_pypi_archive_url(package, version)
+
+
+def resolve_pypi_archive_url(
+    package: str,
+    version: Optional[str],
+    *,
+    index_url: Optional[str] = None,
+) -> tuple[str, str, Optional[str]]:
+    """Look up a PyPI archive URL via the JSON API.
+
+    Prefers source distributions; falls back to wheels when no sdist
+    is published (wheel-only packages). Returns
+    ``(url, resolved_version, expected_sha256_hex)`` where the digest
+    comes from ``digests.sha256`` in the index response.
+    """
+    index = (index_url or CONSTANTS.PYPI_INDEX_URL).rstrip("/")
+    meta_url = (
+        f"{index}/{package}/{version}/json"
+        if version
+        else f"{index}/{package}/json"
+    )
+    if not meta_url.lower().startswith("https://"):
+        raise PackageDownloadError(
+            f"refusing PyPI index over non-TLS URL: {meta_url!r}"
+        )
+
+    try:
+        meta = _https_get_json(
+            meta_url,
+            user_agent="mcp-scanner/pypi",
+            timeout=CONSTANTS.PACKAGE_DOWNLOAD_TIMEOUT,
+            allowed_hosts=pypi_index_allowed_hosts(index),
+        )
+    except PackageDownloadError:
+        raise
+    except httpx.HTTPError as e:
+        raise PackageDownloadError(
+            f"failed to fetch PyPI metadata for {package}: {e}"
+        ) from e
+    except json.JSONDecodeError as e:
+        raise PackageDownloadError(
+            f"PyPI returned invalid JSON for {package}: {e}"
+        ) from e
+
+    info = meta.get("info") or {}
+    resolved_version = (info.get("version") or version or "unknown")
+    urls = meta.get("urls") or []
+
+    def _pick(packagetype: str) -> Optional[dict]:
+        return next(
+            (
+                u
+                for u in urls
+                if u.get("packagetype") == packagetype and u.get("url")
+            ),
+            None,
+        )
+
+    archive = _pick("sdist") or _pick("bdist_wheel")
+    if archive is None:
+        raise PackageDownloadError(
+            f"no source distribution or wheel found for "
+            f"{package} {resolved_version}"
+        )
+    digests = archive.get("digests") or {}
+    expected = digests.get("sha256")
+    return archive["url"], resolved_version, expected
 
 
 # ----------------------------------------------------------------------
@@ -640,16 +685,22 @@ def analysis_scan_status(analyzer: Any, findings: Sequence[Any]) -> str:
     if findings:
         return "completed"
     error_tally = 0
+    stats_ok = False
     try:
         stats = analyzer.alignment_orchestrator.get_statistics()
         error_tally += int(stats.get("skipped_error", 0))
+        stats_ok = True
     except Exception:  # noqa: BLE001 - never let stats bookkeeping fail a scan
         pass
     try:
         error_tally += int(getattr(analyzer, "analysis_errors", 0) or 0)
     except (TypeError, ValueError):  # pragma: no cover - defensive
         pass
-    return "error" if error_tally > 0 else "completed"
+    if error_tally > 0:
+        return "error"
+    if not stats_ok:
+        return "error"
+    return "completed"
 
 
 def _build_scan_result(

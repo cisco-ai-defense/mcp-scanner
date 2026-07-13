@@ -45,7 +45,12 @@ import httpx
 from ..config.config import Config
 from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
-from .docker_build import docker_run_hardening_flags, prepare_docker_build
+from .docker_build import (
+    DockerBuildError,
+    default_scanner_image_tag,
+    docker_run_hardening_flags,
+    prepare_docker_build,
+)
 from .package_sandbox import (
     PackageDownloadError,
     PackageExtractionError,
@@ -54,6 +59,7 @@ from .package_sandbox import (
     redact_argv_for_logging,
     safe_extract_archive,
     temp_workdir,
+    validate_npm_package_name,
 )
 from .pypi_scanner import (
     DockerNotAvailableError,
@@ -63,10 +69,18 @@ from .pypi_scanner import (
     _build_scan_result,
     _https_get_json,
     analysis_scan_status,
+    raise_if_unreliable_package_scan,
 )
 
 
 logger = get_logger(__name__)
+
+
+def _validate_npm_package_or_raise(package: str) -> None:
+    try:
+        validate_npm_package_name(package)
+    except PackageDownloadError as exc:
+        raise NPMScanError(str(exc)) from exc
 
 
 class NPMScanError(Exception):
@@ -107,7 +121,7 @@ class NPMPackageScanner:
                 env vars if omitted.
         """
         self._image_name = image_name or CONSTANTS.NPM_DOCKER_IMAGE_NAME
-        self._image_tag = image_tag or CONSTANTS.NPM_DOCKER_IMAGE_TAG
+        self._image_tag = image_tag or default_scanner_image_tag()
         self._timeout = timeout or CONSTANTS.NPM_SCAN_TIMEOUT
         self._full_image = f"{self._image_name}:{self._image_tag}"
         self._use_docker = use_docker
@@ -157,9 +171,12 @@ class NPMPackageScanner:
             )
             return
         logger.info("Building Docker image %s ...", self._full_image)
-        context, dockerfile, build_args = prepare_docker_build(
-            dockerfile="Dockerfile.npm"
-        )
+        try:
+            context, dockerfile, build_args = prepare_docker_build(
+                dockerfile="Dockerfile.npm"
+            )
+        except DockerBuildError as exc:
+            raise NPMScanError(str(exc)) from exc
         cmd = [
             "docker", "build",
             "-t", self._full_image,
@@ -207,8 +224,10 @@ class NPMPackageScanner:
                 loop; use :meth:`scan_package_async` instead.
         """
         if self._use_docker:
+            _validate_npm_package_or_raise(package)
             return self._scan_in_docker(package, version, verbose)
         _assert_loop_not_running("NPMPackageScanner.scan_package")
+        _validate_npm_package_or_raise(package)
         return asyncio.run(self._scan_locally(package, version))
 
     async def scan_package_async(
@@ -220,10 +239,12 @@ class NPMPackageScanner:
         """Async-friendly counterpart of :meth:`scan_package`. Required
         whenever the caller already lives inside an event loop."""
         if self._use_docker:
+            _validate_npm_package_or_raise(package)
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
                 None, self._scan_in_docker, package, version, verbose
             )
+        _validate_npm_package_or_raise(package)
         return await self._scan_locally(package, version)
 
     # ------------------------------------------------------------------
@@ -301,8 +322,11 @@ class NPMPackageScanner:
             and scan_results.get("is_safe") is None
         ):
             raise NPMScanError(
-                "npm scan could not be completed reliably: analysis infrastructure "
-                "failed for every function (zero findings is not a safe verdict)."
+                scan_results.get("error")
+                or (
+                    "npm scan could not be completed reliably: analysis infrastructure "
+                    "failed for every function (zero findings is not a safe verdict)."
+                )
             )
 
         return scan_results
@@ -387,14 +411,17 @@ class NPMPackageScanner:
             findings = await analyzer.analyze(str(source_root), {})
 
             js_files = self._count_js_files(source_root)
-            return _build_scan_result(
-                ecosystem="npm",
-                package=package,
-                resolved_version=resolved_version,
-                source_root=source_root,
-                files_scanned=js_files,
-                findings=findings,
-                scan_status=analysis_scan_status(analyzer, findings),
+            return raise_if_unreliable_package_scan(
+                _build_scan_result(
+                    ecosystem="npm",
+                    package=package,
+                    resolved_version=resolved_version,
+                    source_root=source_root,
+                    files_scanned=js_files,
+                    findings=findings,
+                    scan_status=analysis_scan_status(analyzer, findings),
+                ),
+                error_cls=NPMScanError,
             )
 
     # ------------------------------------------------------------------

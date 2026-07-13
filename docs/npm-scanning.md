@@ -93,7 +93,7 @@ for finding in results["findings"]:
 | `MCP_SCANNER_LLM_BASE_URL` | (none) | Custom base URL for LLM API |
 | `MCP_SCANNER_LLM_API_VERSION` | (none) | LLM API version (e.g. for Azure) |
 | `MCP_SCANNER_NPM_DOCKER_IMAGE_NAME` | `mcp-scanner-npm` | Docker image name |
-| `MCP_SCANNER_NPM_DOCKER_IMAGE_TAG` | `latest` | Docker image tag |
+| `MCP_SCANNER_NPM_DOCKER_IMAGE_TAG` | installed scanner version | Docker image tag (defaults to the installed `cisco-ai-mcp-scanner` release) |
 | `MCP_SCANNER_NPM_SCAN_TIMEOUT` | `300` | Container timeout in seconds |
 | `MCP_SCANNER_NPM_REGISTRY_URL` | `https://registry.npmjs.org` | npm registry root (HTTPS only) |
 | `MCP_SCANNER_PACKAGE_ARCHIVE_MAX_BYTES` | `52428800` (50 MB) | Local-mode max compressed archive size |

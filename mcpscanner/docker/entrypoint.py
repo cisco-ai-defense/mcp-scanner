@@ -25,24 +25,21 @@ logger = logging.getLogger("pypi-scanner")
 DOWNLOAD_DIR = Path("/work/download")
 EXTRACT_DIR = Path("/work/package")
 
-_PYPI_TARBALL_HOSTS = (
-    "files.pythonhosted.org",
-    "pypi.org",
-)
 
-
-def download_package(package: str, version: str | None) -> Path:
+def download_package(package: str, version: str | None) -> tuple[Path, str]:
     """Download a PyPI sdist or wheel without executing package code.
 
-  The LLM API key is temporarily removed from the environment so a
-  hostile archive cannot read it even if extraction were compromised.
+    The LLM API key is temporarily removed from the environment so a
+    hostile archive cannot read it even if extraction were compromised.
     """
+    from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
     from mcpscanner.core.package_sandbox import (
         PackageDownloadError,
         download_archive,
+        pypi_tarball_allowed_hosts,
         validate_pypi_package_name,
     )
-    from mcpscanner.core.pypi_scanner import PyPIPackageScanner
+    from mcpscanner.core.pypi_scanner import resolve_pypi_archive_url
 
     validate_pypi_package_name(package)
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,8 +49,7 @@ def download_package(package: str, version: str | None) -> Path:
 
     saved_llm_key = os.environ.pop("LLM_API_KEY", None)
     try:
-        scanner = PyPIPackageScanner(use_docker=False)
-        url, _resolved_version, expected_digest = scanner._resolve_pypi_archive_url(
+        url, resolved_version, expected_digest = resolve_pypi_archive_url(
             package, version
         )
         archive = download_archive(
@@ -61,16 +57,16 @@ def download_package(package: str, version: str | None) -> Path:
             DOWNLOAD_DIR,
             expected_digest=expected_digest,
             expected_digest_algo="sha256" if expected_digest else None,
-            allowed_hosts=_PYPI_TARBALL_HOSTS,
+            allowed_hosts=pypi_tarball_allowed_hosts(CONSTANTS.PYPI_INDEX_URL),
         )
-    except PackageDownloadError as exc:
-        raise RuntimeError(f"Failed to download {spec}: {exc}") from exc
+    except PackageDownloadError:
+        raise
     finally:
         if saved_llm_key is not None:
             os.environ["LLM_API_KEY"] = saved_llm_key
 
     logger.info("Downloaded: %s", archive.name)
-    return archive
+    return archive, resolved_version
 
 
 def extract_package(archive: Path) -> Path:
@@ -94,17 +90,7 @@ def extract_package(archive: Path) -> Path:
 
 
 async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict], str]:
-    """Run behavioral code analysis on extracted Python files.
-
-    The caller validates the LLM key before invoking us so we don't ever
-    return an empty list and have the wrapper mark the package as safe.
-
-    Returns ``(findings, scan_status)``. ``scan_status`` is ``"error"``
-    when the analyzer surfaced no findings *because* its alignment
-    orchestrator hit infrastructure failures (e.g. the LLM was
-    unreachable) — otherwise a degraded scan would masquerade as
-    ``is_safe=True``. See ``analysis_scan_status`` for the exact rule.
-    """
+    """Run behavioral code analysis on extracted Python files."""
     from mcpscanner.core.analyzers.behavioral.code_analyzer import (
         BehavioralCodeAnalyzer,
     )
@@ -136,6 +122,8 @@ async def main():
     parser.add_argument("--version", help="Package version")
     args = parser.parse_args()
 
+    resolved_version = args.version or "latest"
+
     try:
         from mcpscanner.config.config import Config
         from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
@@ -149,7 +137,7 @@ async def main():
                 "report is_safe=True for an un-analysed package"
             )
 
-        archive = download_package(args.package, args.version)
+        archive, resolved_version = download_package(args.package, args.version)
         source_dir = extract_package(archive)
 
         config = Config(
@@ -173,7 +161,7 @@ async def main():
 
         output = {
             "package": args.package,
-            "version": args.version or "latest",
+            "version": resolved_version,
             "source_dir": str(source_dir),
             "python_files_scanned": py_files,
             "total_findings": len(behavioral_findings),
@@ -188,7 +176,7 @@ async def main():
     except Exception as e:
         error_output = {
             "package": args.package,
-            "version": args.version or "latest",
+            "version": resolved_version,
             "error": str(e),
             "error_code": _classify_error(e),
             "is_safe": None,
@@ -200,7 +188,7 @@ async def main():
 
 
 def _classify_error(exc: BaseException) -> str:
-    """Thin wrapper around :func:`mcpscanner.core.package_sandbox.classify_exception`."""
+    """Map exceptions to stable ``error_code`` tokens for host consumers."""
     try:
         from mcpscanner.core.package_sandbox import classify_exception
     except Exception:  # noqa: BLE001 - never let classifier mask the real error

@@ -18,9 +18,42 @@
 
 from __future__ import annotations
 
+import os
 from importlib import metadata, resources
 from pathlib import Path
 from typing import Dict, Tuple
+
+# Pin the base image by digest for reproducible builds (python:3.13-alpine).
+PYTHON_ALPINE_IMAGE = (
+    "python:3.13-alpine"
+    "@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0"
+)
+
+
+class DockerBuildError(Exception):
+    """Raised when the scanner Docker image cannot be built."""
+
+
+def installed_scanner_version() -> str:
+    """Return the installed ``cisco-ai-mcp-scanner`` distribution version."""
+    return metadata.version("cisco-ai-mcp-scanner")
+
+
+def default_scanner_image_tag() -> str:
+    """Default Docker image tag keyed to the installed scanner release.
+
+    Using the package version instead of a mutable ``latest`` tag avoids
+    silently reusing a stale image after ``pip install --upgrade``.
+    """
+    env_tag = os.getenv("MCP_SCANNER_DOCKER_IMAGE_TAG") or os.getenv(
+        "MCP_SCANNER_NPM_DOCKER_IMAGE_TAG"
+    )
+    if env_tag:
+        return env_tag
+    try:
+        return installed_scanner_version()
+    except metadata.PackageNotFoundError:
+        return "latest"
 
 
 def docker_run_hardening_flags() -> list[str]:
@@ -36,8 +69,11 @@ def docker_run_hardening_flags() -> list[str]:
         "--pids-limit=256",
         "--memory=2g",
         "--cpus=2",
+        "--read-only",
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,size=512m",
+        "--tmpfs",
+        "/work:rw,noexec,nosuid,size=1g",
     ]
 
 
@@ -68,11 +104,23 @@ def prepare_docker_build(*, dockerfile: str) -> Tuple[Path, Path, Dict[str, str]
             if dockerfile == "Dockerfile"
             else "Dockerfile.npm.wheel"
         )
-        build_args: Dict[str, str] = {}
-        try:
-            build_args["SCANNER_PACKAGE_VERSION"] = metadata.version(
-                "cisco-ai-mcp-scanner"
+        wheel_path = docker_path / wheel_dockerfile
+        if not wheel_path.is_file():
+            raise DockerBuildError(
+                f"Docker assets missing from installed package "
+                f"({wheel_dockerfile!r} not found). Reinstall "
+                f"cisco-ai-mcp-scanner from a release that ships "
+                f"mcpscanner.docker package-data, or run from a source "
+                f"checkout so the image builds from the local tree."
             )
-        except metadata.PackageNotFoundError:
-            pass
-        return docker_path, docker_path / wheel_dockerfile, build_args
+
+        try:
+            version = installed_scanner_version()
+        except metadata.PackageNotFoundError as exc:
+            raise DockerBuildError(
+                "cannot determine installed scanner version for Docker "
+                "image build; install cisco-ai-mcp-scanner from PyPI or "
+                "run from a source checkout"
+            ) from exc
+
+        return docker_path, wheel_path, {"SCANNER_PACKAGE_VERSION": version}

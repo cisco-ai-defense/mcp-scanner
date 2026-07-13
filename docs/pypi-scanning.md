@@ -114,14 +114,17 @@ See `examples/sdk_pypi_scanner.py` for a complete example.
 | `MCP_SCANNER_LLM_BASE_URL` | (none) | Custom base URL for LLM API (e.g., Azure OpenAI endpoint) |
 | `MCP_SCANNER_LLM_API_VERSION` | (none) | API version for LLM provider (e.g., `2024-02-15-preview`) |
 | `MCP_SCANNER_DOCKER_IMAGE_NAME` | `mcp-scanner-pypi` | Docker image name |
-| `MCP_SCANNER_DOCKER_IMAGE_TAG` | `latest` | Docker image tag |
+| `MCP_SCANNER_DOCKER_IMAGE_TAG` | installed scanner version | Docker image tag (defaults to the installed `cisco-ai-mcp-scanner` release) |
+| `MCP_SCANNER_PYPI_INDEX_URL` | `https://pypi.org/pypi` | PyPI JSON API base URL (supports private mirrors over HTTPS) |
 | `MCP_SCANNER_PYPI_SCAN_TIMEOUT` | `300` | Container timeout in seconds |
 
 ### Docker Image
 
-The scanner uses a minimal `python:3.13-alpine` image with `cisco-ai-mcp-scanner` installed for behavioral analysis. When you run from a source checkout the image is built from that tree; when installed from PyPI the image pins the same package version you have locally.
+The scanner uses a digest-pinned `python:3.13-alpine` base image with `cisco-ai-mcp-scanner` installed for behavioral analysis. When you run from a source checkout the image is built from that tree; when installed from PyPI the image pins the same package version you have locally and tags the image with that version (so upgrades do not silently reuse a stale `latest` image).
 
-The image is built automatically on first use and cached. Use `--rebuild-image` to force a rebuild.
+**Release ordering:** Docker mode from `pip install` requires a PyPI release that ships `mcpscanner.docker` package-data and the safe-download entrypoint. Until that release is published, use a source checkout (`pip install -e .`) or pass `--rebuild-image` after upgrading.
+
+The image is built automatically on first use and cached per version tag. Use `--rebuild-image` to force a rebuild.
 
 ## Security
 
@@ -137,7 +140,7 @@ The image is built automatically on first use and cached. Use `--rebuild-image` 
 ### Local (no-Docker) mode
 
 - **No package execution.** Local mode parses sources; it never runs `setup.py`, `pip install`, or any code from the downloaded package.
-- **HTTPS-only download** with registry host allow-listing on every redirect hop, plus DNS resolution checks that reject private/link-local addresses.
+- **HTTPS-only download** with registry host allow-listing on every redirect hop, plus DNS resolution checks that reject private/link-local addresses when DNS is available (best-effort; host allow-list remains primary).
 - **Archive size cap** (`MCP_SCANNER_PACKAGE_ARCHIVE_MAX_BYTES`, default 50 MB) enforced both via `Content-Length` and streaming byte count.
 - **Extraction caps**: `MCP_SCANNER_PACKAGE_EXTRACTED_MAX_BYTES` (default 200 MB) and `MCP_SCANNER_PACKAGE_EXTRACTED_MAX_FILES` (default 10 000).
 - **`tarfile.extractall(filter="data")`** (Python 3.12+) rejects symlinks, hardlinks, absolute paths, parent traversal, device files, and setuid/setgid members.

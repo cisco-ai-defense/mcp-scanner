@@ -20,7 +20,7 @@ import asyncio
 import json
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -88,11 +88,17 @@ class TestImageManagement:
 
     @patch("mcpscanner.core.pypi_scanner.subprocess.run")
     def test_build_image_skips_if_exists(self, mock_run):
+        from importlib import metadata
+
         mock_run.return_value = MagicMock(returncode=0)
         scanner = PyPIPackageScanner()
         scanner.build_image()
+        try:
+            tag = metadata.version("cisco-ai-mcp-scanner")
+        except metadata.PackageNotFoundError:
+            tag = "latest"
         mock_run.assert_called_once_with(
-            ["docker", "image", "inspect", "mcp-scanner-pypi:latest"],
+            ["docker", "image", "inspect", f"mcp-scanner-pypi:{tag}"],
             capture_output=True,
             text=True,
         )
@@ -257,20 +263,27 @@ class TestScanPackage:
             scanner.scan_package("nonexistent-pkg")
 
     def test_docker_required_no_fallback(self):
-        """Verify there is no local/no-docker fallback."""
+        """Local mode is opt-in via ``use_docker=False`` (not automatic)."""
         scanner = PyPIPackageScanner()
-        assert not hasattr(scanner, "scan_local")
-        assert not hasattr(scanner, "scan_without_docker")
+        assert scanner._use_docker is True
+        sdk = PyPIPackageScanner(use_docker=False)
+        assert sdk._use_docker is False
 
 
 class TestConfiguration:
     """Tests for scanner configuration."""
 
     def test_default_image_name(self):
+        from importlib import metadata
+
         scanner = PyPIPackageScanner()
         assert scanner._image_name == "mcp-scanner-pypi"
-        assert scanner._image_tag == "latest"
-        assert scanner._full_image == "mcp-scanner-pypi:latest"
+        try:
+            expected_tag = metadata.version("cisco-ai-mcp-scanner")
+        except metadata.PackageNotFoundError:
+            expected_tag = "latest"
+        assert scanner._image_tag == expected_tag
+        assert scanner._full_image == f"mcp-scanner-pypi:{expected_tag}"
 
     def test_custom_image_name(self):
         scanner = PyPIPackageScanner(
@@ -567,6 +580,11 @@ class TestPackageNameValidation:
         with pytest.raises(PackageDownloadError, match="invalid PyPI package name"):
             validate_pypi_package_name("-evil")
 
+    def test_scan_package_wraps_invalid_name_as_pypi_scan_error(self):
+        scanner = PyPIPackageScanner(use_docker=False)
+        with pytest.raises(PyPIScanError, match="invalid PyPI package name"):
+            scanner.scan_package("-evil")
+
     def test_accepts_normal_names(self):
         validate_pypi_package_name("flask")
         validate_pypi_package_name("my_pkg.name")
@@ -614,6 +632,110 @@ class TestDegradedDockerResult:
         scanner = PyPIPackageScanner()
         with pytest.raises(PyPIScanError, match="could not be completed reliably"):
             scanner.scan_package("demo")
+
+
+class TestPrivateIndexHosts:
+    def test_custom_index_host_allowed_for_metadata(self):
+        from mcpscanner.core.package_sandbox import (
+            pypi_index_allowed_hosts,
+            pypi_tarball_allowed_hosts,
+        )
+
+        assert pypi_index_allowed_hosts("https://artifactory.example.com/pypi") == (
+            "artifactory.example.com",
+        )
+        assert "artifactory.example.com" in pypi_tarball_allowed_hosts(
+            "https://artifactory.example.com/pypi"
+        )
+
+
+class TestLocalDegradedScan:
+    def test_local_degraded_raises_pypi_scan_error(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from mcpscanner.config.config import Config
+
+        def fake_init(self, config):
+            self.alignment_orchestrator = SimpleNamespace(
+                get_statistics=lambda: {"skipped_error": 2}
+            )
+
+        monkeypatch.setattr(
+            "mcpscanner.core.analyzers.behavioral.code_analyzer."
+            "BehavioralCodeAnalyzer.__init__",
+            fake_init,
+        )
+        monkeypatch.setattr(
+            "mcpscanner.core.analyzers.behavioral.code_analyzer."
+            "BehavioralCodeAnalyzer.analyze",
+            AsyncMock(return_value=[]),
+        )
+        monkeypatch.setattr(
+            PyPIPackageScanner,
+            "_resolve_pypi_archive_url",
+            lambda self, pkg, ver: (
+                "https://files.pythonhosted.org/demo-1.0.0.tar.gz",
+                "1.0.0",
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            "mcpscanner.core.pypi_scanner.download_archive",
+            lambda *a, **k: Path("/tmp/demo.tar.gz"),
+        )
+        monkeypatch.setattr(
+            "mcpscanner.core.pypi_scanner.safe_extract_archive",
+            lambda archive, dest, **kwargs: dest / "pkg",
+        )
+
+        scanner = PyPIPackageScanner(
+            use_docker=False,
+            config=Config(llm_provider_api_key="test-key"),
+        )
+        with pytest.raises(PyPIScanError, match="could not be completed reliably"):
+            scanner.scan_package("demo")
+
+
+class TestExtractionParity:
+    def test_local_mode_uses_only_dirs_like_docker(self, monkeypatch):
+        from mcpscanner.core.pypi_scanner import PyPIPackageScanner
+
+        captured: dict = {}
+
+        def fake_extract(archive, dest, **kwargs):
+            captured.update(kwargs)
+            return dest / "pkg"
+
+        monkeypatch.setattr(
+            "mcpscanner.core.pypi_scanner.safe_extract_archive", fake_extract
+        )
+        monkeypatch.setattr(
+            PyPIPackageScanner,
+            "_resolve_pypi_archive_url",
+            lambda self, pkg, ver: (
+                "https://files.pythonhosted.org/x.tar.gz",
+                "1.0.0",
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            "mcpscanner.core.pypi_scanner.download_archive",
+            lambda *a, **k: Path("/tmp/x.tar.gz"),
+        )
+        monkeypatch.setattr(
+            "mcpscanner.core.analyzers.behavioral.code_analyzer."
+            "BehavioralCodeAnalyzer.analyze",
+            AsyncMock(return_value=[]),
+        )
+
+        from mcpscanner.config.config import Config
+
+        scanner = PyPIPackageScanner(
+            use_docker=False,
+            config=Config(llm_provider_api_key="key"),
+        )
+        asyncio.run(scanner._scan_locally("demo", None))
+        assert captured.get("only_dirs") is True
 
 
 class TestWheelPackaging:
