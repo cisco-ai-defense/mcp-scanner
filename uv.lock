@@ -1,10 +1,6 @@
 version = 1
 revision = 3
-requires-python = ">=3.11"
-resolution-markers = [
-    "python_full_version >= '3.14'",
-    "python_full_version < '3.14'",
-]
+requires-python = ">=3.11.4"
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -495,12 +491,12 @@ requires-dist = [
     { name = "puremagic", specifier = ">=1.28" },
     { name = "pydantic", specifier = ">=2.6.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "tree-sitter", specifier = ">=0.21.0" },
-    { name = "tree-sitter", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
+    { name = "tree-sitter", specifier = ">=0.23,<0.26" },
+    { name = "tree-sitter", marker = "extra == 'all-languages'", specifier = ">=0.23,<0.26" },
     { name = "tree-sitter", marker = "extra == 'csharp'", specifier = ">=0.21.0" },
     { name = "tree-sitter", marker = "extra == 'go'", specifier = ">=0.21.0" },
     { name = "tree-sitter", marker = "extra == 'java'", specifier = ">=0.21.0" },
-    { name = "tree-sitter", marker = "extra == 'js'", specifier = ">=0.21.0" },
+    { name = "tree-sitter", marker = "extra == 'js'", specifier = ">=0.23,<0.26" },
     { name = "tree-sitter", marker = "extra == 'kotlin'", specifier = ">=0.21.0" },
     { name = "tree-sitter", marker = "extra == 'php'", specifier = ">=0.21.0" },
     { name = "tree-sitter", marker = "extra == 'ruby'", specifier = ">=0.21.0" },
@@ -514,9 +510,9 @@ requires-dist = [
     { name = "tree-sitter-java", specifier = ">=0.21.0" },
     { name = "tree-sitter-java", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
     { name = "tree-sitter-java", marker = "extra == 'java'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-javascript", specifier = ">=0.21.0" },
-    { name = "tree-sitter-javascript", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-javascript", marker = "extra == 'js'", specifier = ">=0.21.0" },
+    { name = "tree-sitter-javascript", specifier = ">=0.23,<0.26" },
+    { name = "tree-sitter-javascript", marker = "extra == 'all-languages'", specifier = ">=0.23,<0.26" },
+    { name = "tree-sitter-javascript", marker = "extra == 'js'", specifier = ">=0.23,<0.26" },
     { name = "tree-sitter-kotlin", specifier = ">=0.21.0" },
     { name = "tree-sitter-kotlin", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
     { name = "tree-sitter-kotlin", marker = "extra == 'kotlin'", specifier = ">=0.21.0" },
@@ -530,9 +526,9 @@ requires-dist = [
     { name = "tree-sitter-rust", specifier = ">=0.21.0" },
     { name = "tree-sitter-rust", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
     { name = "tree-sitter-rust", marker = "extra == 'rust'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-typescript", specifier = ">=0.21.0" },
-    { name = "tree-sitter-typescript", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-typescript", marker = "extra == 'js'", specifier = ">=0.21.0" },
+    { name = "tree-sitter-typescript", specifier = ">=0.23,<0.26" },
+    { name = "tree-sitter-typescript", marker = "extra == 'all-languages'", specifier = ">=0.23,<0.26" },
+    { name = "tree-sitter-typescript", marker = "extra == 'js'", specifier = ">=0.23,<0.26" },
     { name = "uvicorn", specifier = ">=0.29.0" },
     { name = "yara-python", specifier = ">=4.5.4" },
 ]
@@ -657,11 +653,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/46/f4fb293e4cbe3620e3ac2a3e8fd566ed33affb5861a9b20e3dd6c1896cbc/coverage-7.13.0-cp314-cp314t-win_amd64.whl", hash = "sha256:445badb539005283825959ac9fa4a28f712c214b65af3a2c464f1adc90f5fcbc", size = 222982, upload-time = "2025-12-08T13:14:33.1Z" },
     { url = "https://files.pythonhosted.org/packages/68/62/5b3b9018215ed9733fbd1ae3b2ed75c5de62c3b55377a52cae732e1b7805/coverage-7.13.0-cp314-cp314t-win_arm64.whl", hash = "sha256:de7f6748b890708578fc4b7bb967d810aeb6fcc9bff4bb77dbca77dab2f9df6a", size = 221016, upload-time = "2025-12-08T13:14:34.601Z" },
     { url = "https://files.pythonhosted.org/packages/8d/4c/1968f32fb9a2604645827e11ff84a31e59d532e01995f904723b4f5328b3/coverage-7.13.0-py3-none-any.whl", hash = "sha256:850d2998f380b1e266459ca5b47bc9e7daf9af1d070f66317972f382d46f1904", size = 210068, upload-time = "2025-12-08T13:14:36.236Z" },
-]
-
-[package.optional-dependencies]
-toml = [
-    { name = "tomli", marker = "python_full_version <= '3.11'" },
 ]
 
 [[package]]
@@ -2184,7 +2175,7 @@ name = "pytest-cov"
 version = "7.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "coverage", extra = ["toml"] },
+    { name = "coverage" },
     { name = "pluggy" },
     { name = "pytest" },
 ]

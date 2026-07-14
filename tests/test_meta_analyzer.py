@@ -2446,6 +2446,27 @@ class TestFPReasonCanonicalKey:
             "meta_analysis_prompt.md must instruct the LLM to use the "
             "canonical ``false_positive_reason`` key."
         )
+        assert "publisher usage documentation" in contents, (
+            "meta_analysis_prompt.md must document when LLM prompt-injection "
+            "on first-party usage docs may be filtered as a false positive."
+        )
+        assert "There is **no** jailbreak or override language" in contents, (
+            "publisher-usage FP rule must require absence of jailbreak language."
+        )
+        assert (
+            "hidden context into parameters for exfiltration" in contents
+        ), (
+            "publisher-usage FP rule must require absence of context-harvesting."
+        )
+        assert "No other analyzer corroborates a distinct" in contents, (
+            "publisher-usage FP rule must keep corroborated threats."
+        )
+        assert "Examples that are **NOT** false positives" in contents, (
+            "meta_analysis_prompt.md must document threats that must not be filtered."
+        )
+        assert "context-harvesting language" in contents, (
+            "NOT-false-positive guidance must call out context-harvesting threats."
+        )
 
 
 # ---------------------------------------------------------------------------
