@@ -175,7 +175,6 @@ The contract is identical between Docker and SDK modes.
 
 ## Known Limitations
 
-- Dynamic tool names (variables, loops, tables) are not extracted in npm-scan mode — use `mcp-scanner behavioral` on source, or see [MCP Tool Detection Troubleshooting](mcp-tool-detection-troubleshooting.md) for the full gate model and workarounds.
 - Low-level handlers registered via `server.setRequestHandler(CallToolRequestSchema, …)` are not extracted per-tool — the scanner would have to follow conditional dispatch inside the handler. Refactor to the high-level SDK (`server.tool(...)`) for coverage.
 - Vendored copies of dependencies (any `node_modules/` directory inside the tarball, plus `dist/`, `build/`, `out/`, `coverage/`) are skipped.
 - Static dataflow / cross-file taint analysis is not yet implemented for JS in this release. The LLM relies on the same lexical evidence the Python pipeline collects, but without the precise per-parameter flows.
