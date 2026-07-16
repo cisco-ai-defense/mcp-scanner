@@ -87,3 +87,56 @@ server.registerTool("missing", { description: "x" }, missingHandler);
     cap = caps[0]
     tags = cap.decorator_types
     assert any("registration.unresolved" in t for t in tags), tags
+
+
+GRAPH_TOOLS_INDEX = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { api } from "./graph-endpoints.js";
+
+const server = new McpServer({ name: "graph", version: "1.0" });
+
+for (const tool of api.endpoints) {
+  server.tool(
+    tool.alias,
+    tool.description,
+    tool.schema,
+    {},
+    async (params) => ({ content: [{ type: "text", text: "ok" }] }),
+  );
+}
+"""
+
+GRAPH_ENDPOINTS_MODULE = """\
+export const api = {
+  endpoints: [
+    { alias: "list-messages", description: "List messages", schema: {} },
+    { alias: "get-user", description: "Get user", schema: {} },
+  ],
+};
+"""
+
+
+def test_crossfile_endpoint_table_expands_imported_aliases(tmp_path: Path) -> None:
+    """``import { api } from './graph-endpoints'`` + ``api.endpoints`` loop
+    must expand static aliases from the defining module."""
+    index_path = tmp_path / "graph-tools.ts"
+    endpoints_path = tmp_path / "graph-endpoints.ts"
+    index_path.write_text(GRAPH_TOOLS_INDEX)
+    endpoints_path.write_text(GRAPH_ENDPOINTS_MODULE)
+
+    cga = TreeSitterCallGraphAnalyzer("typescript")
+    cga.add_file(index_path, GRAPH_TOOLS_INDEX)
+    cga.add_file(endpoints_path, GRAPH_ENDPOINTS_MODULE)
+    cga.build_call_graph()
+
+    analyzer = NativeAnalyzer(GRAPH_TOOLS_INDEX, str(index_path))
+    caps = analyzer.extract_mcp_capability_contexts(cross_file_analyzer=cga)
+    names = {c.name for c in caps}
+    assert "list-messages" in names, names
+    assert "get-user" in names, names
+    table_caps = [
+        c
+        for c in caps
+        if any("registration.table" in t for t in c.decorator_types)
+    ]
+    assert len(table_caps) >= 2, [c.decorator_types for c in caps]

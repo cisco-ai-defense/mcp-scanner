@@ -39,7 +39,7 @@ from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.path_safety import filter_safe_paths, safe_resolve_root
-from ...static_analysis.context_extractor import ContextExtractor
+from ...static_analysis.context_extractor import ContextExtractor, FunctionContext
 from ...static_analysis.native_analyzer import NativeAnalyzer
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
 from ...static_analysis.interprocedural.treesitter_call_graph import (
@@ -47,6 +47,30 @@ from ...static_analysis.interprocedural.treesitter_call_graph import (
 )
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
+
+
+def _merge_mcp_function_contexts(
+    primary: List[FunctionContext],
+    supplemental: List[FunctionContext],
+) -> List[FunctionContext]:
+    """Merge MCP contexts from ContextExtractor and NativeAnalyzer.
+
+    NativeAnalyzer's Gap 8 pass finds programmatic registrations even when
+    the primary extractor already surfaced decorator-based tools in the
+    same file. Dedupe on (name, line_number, decorator_types).
+    """
+    seen = {
+        (ctx.name, ctx.line_number, tuple(ctx.decorator_types))
+        for ctx in primary
+    }
+    merged = list(primary)
+    for ctx in supplemental:
+        key = (ctx.name, ctx.line_number, tuple(ctx.decorator_types))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(ctx)
+    return merged
 
 
 _SEVERITY_DISPLAY_ORDER = (
@@ -700,7 +724,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         try:
             if is_python:
-                # Try primary ContextExtractor first (for MCP-decorated functions)
+                # Primary ContextExtractor for standard @mcp.tool decorators;
+                # always merge NativeAnalyzer so Gap 8 programmatic registrations
+                # in the same file are not shadowed by decorator hits.
+                func_contexts: List[FunctionContext] = []
                 try:
                     extractor = ContextExtractor(source_code, file_path)
                     func_contexts = extractor.extract_mcp_function_contexts()
@@ -712,20 +739,19 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     self.logger.debug(
                         f"ContextExtractor failed for {file_path}: {e}, using NativeAnalyzer"
                     )
-                    func_contexts = []
 
-                if not func_contexts:
+                native_analyzer = NativeAnalyzer(source_code, file_path)
+                native_contexts = native_analyzer.extract_mcp_capability_contexts(
+                    cross_file_analyzer=context.get("cross_file_analyzer")
+                )
+                if native_contexts:
                     self.logger.debug(
-                        f"No MCP functions found in {file_path}, using NativeAnalyzer fallback"
+                        f"NativeAnalyzer extracted {len(native_contexts)} MCP "
+                        f"capabilities from {file_path}"
                     )
-                    native_analyzer = NativeAnalyzer(source_code, file_path)
-                    func_contexts = native_analyzer.extract_mcp_capability_contexts(
-                        cross_file_analyzer=context.get("cross_file_analyzer")
-                    )
-                    if func_contexts:
-                        self.logger.debug(
-                            f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
-                        )
+                func_contexts = _merge_mcp_function_contexts(
+                    func_contexts, native_contexts
+                )
 
             elif is_js_ts:
                 self.logger.debug(f"Using NativeAnalyzer for JS/TS file: {file_path}")

@@ -166,6 +166,95 @@ mcp.tool()(docs.fetch_agentcore_doc)
 '''
 
 
+PYTHON_MIXED_DECORATOR_AND_PROGRAMMATIC = '''
+from fastmcp import FastMCP
+
+mcp = FastMCP("demo")
+
+@mcp.tool()
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+def sub(a: float, b: float) -> float:
+    """Subtract."""
+    return a - b
+
+mcp.add_tool(sub)
+'''
+
+
+def test_python_programmatic_not_shadowed_by_decorator_tools() -> None:
+    """Gap 8 must run even when ``@mcp.tool()`` tools exist in the file."""
+    analyzer = NativeAnalyzer(
+        PYTHON_MIXED_DECORATOR_AND_PROGRAMMATIC, "mixed.py"
+    )
+    names = {c.name for c in analyzer.extract_mcp_capability_contexts()}
+    assert names == {"add", "sub"}, names
+
+
+PYTHON_SELF_MCP_NESTED = '''
+from fastmcp import FastMCP
+
+class Server:
+    def __init__(self):
+        self.mcp = FastMCP("demo")
+
+    def setup(self):
+        @self.mcp.tool()
+        def add(a: float, b: float) -> float:
+            """Add numbers."""
+            return a + b
+'''
+
+
+def test_python_self_mcp_nested_decorator() -> None:
+    """``@self.mcp.tool()`` inside a method must be recognized."""
+    from mcpscanner.core.static_analysis.context_extractor import ContextExtractor
+
+    names = {
+        c.name
+        for c in ContextExtractor(PYTHON_SELF_MCP_NESTED, "nested.py")
+        .extract_mcp_function_contexts()
+    }
+    assert "add" in names, names
+
+
+TS_MEMBER_HANDLER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+const server = new McpServer({ name: "demo", version: "1.0" });
+const obj = { handler: (a, b) => a + b };
+server.tool("add", {}, obj.handler);
+"""
+
+
+def test_ts_member_expression_handler_emits_capability() -> None:
+    """``server.tool('add', schema, obj.handler)`` must not be dropped."""
+    analyzer = NativeAnalyzer(TS_MEMBER_HANDLER, "member.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert any(c.name == "add" for c in caps), [c.name for c in caps]
+
+
+TS_DYNAMIC_NAME = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+const server = new McpServer({ name: "demo", version: "1.0" });
+const toolName = "add";
+function handler(a, b) { return a + b; }
+server.tool(toolName, {}, handler);
+"""
+
+
+def test_ts_dynamic_tool_name_emits_unresolved_stub() -> None:
+    """``server.tool(toolName, schema, handler)`` must emit a capability."""
+    analyzer = NativeAnalyzer(TS_DYNAMIC_NAME, "dynamic.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert caps, names
+    assert any(
+        "toolName" in n or "handler" in n for n in names
+    ), names
+
+
 def test_python_crossfile_module_attr_emits_unresolved_stub() -> None:
     """``mcp.tool()(docs.search_agentcore_docs)`` references a handler
     defined in another module. Emit unresolved stubs so the
@@ -182,6 +271,68 @@ def test_python_crossfile_module_attr_emits_unresolved_stub() -> None:
             t == "<registration.unresolved>.tool"
             for t in cap.decorator_types
         ), cap.decorator_types
+
+
+# ---------------------------------------------------------------------------
+# JS/TS: Graph-style endpoint loops (``tool.alias`` + static endpoint table).
+# ---------------------------------------------------------------------------
+
+GRAPH_ENDPOINT_LOOP = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "graph", version: "1.0" });
+
+const api = {
+  endpoints: [
+    { alias: "list-messages", description: "List messages", schema: {} },
+    { alias: "get-user", description: "Get user", schema: {} },
+    { alias: "list-onenote-notebooks", description: "OneNote", schema: {} },
+  ],
+};
+
+for (const tool of api.endpoints) {
+  const toolDescription = tool.description;
+  const paramSchema = tool.schema;
+  server.tool(
+    tool.alias,
+    toolDescription,
+    paramSchema,
+    {},
+    async (params) => ({ content: [{ type: "text", text: "ok" }] }),
+  );
+}
+"""
+
+
+def test_graph_endpoint_loop_expands_literal_aliases() -> None:
+    """``for (const tool of api.endpoints)`` + ``tool.alias`` must expand
+    every static ``alias`` in the endpoint table."""
+    analyzer = NativeAnalyzer(GRAPH_ENDPOINT_LOOP, "graph-tools.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert "list-messages" in names, names
+    assert "get-user" in names, names
+    assert "list-onenote-notebooks" in names, names
+    table_caps = [
+        c
+        for c in caps
+        if any("registration.table" in t for t in c.decorator_types)
+    ]
+    assert len(table_caps) >= 3, [c.decorator_types for c in caps]
+
+
+def test_graph_loop_inline_handler_uses_alias_not_description() -> None:
+    """The shared inline handler registration must prefer ``tool.alias``."""
+    analyzer = NativeAnalyzer(GRAPH_ENDPOINT_LOOP, "graph-tools.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    reg_caps = [
+        c for c in caps if any(t == "<registration>.tool" for t in c.decorator_types)
+    ]
+    assert reg_caps, [c.decorator_types for c in caps]
+    assert any("tool.alias" in c.name for c in reg_caps), [c.name for c in reg_caps]
+    assert not any(c.name == "toolDescription" for c in reg_caps), [
+        c.name for c in reg_caps
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -206,19 +357,9 @@ tools.forEach((m) => {
 
 def test_js_loop_registration_emits_unresolved_or_inline_handlers() -> None:
     """``tools.forEach(m => server.tool(m.name, m.schema, m.fn))`` must
-    produce at least one capability — either inline handlers (if the
-    extractor is smart enough) or unresolved-handler stubs (Gap 8)."""
+    surface literal tool names from the descriptor table."""
     analyzer = NativeAnalyzer(JS_LOOP_REGISTRATION, "loop.js")
     caps = analyzer.extract_mcp_capability_contexts()
-    # The exact handler resolution depends on JS grammar interpretation.
-    # The minimum correctness requirement is: at least one tool capability
-    # is reported (either as inline arrow or unresolved stub) so the LLM
-    # has something to inspect.
-    if caps:
-        kinds = {
-            t.split(".", 2)[1]
-            for c in caps
-            for t in c.decorator_types
-            if t.startswith("<registration>") or t.startswith("<registration.")
-        }
-        assert "tool" in kinds, kinds
+    names = {c.name for c in caps}
+    assert "add" in names, names
+    assert "sub" in names, names

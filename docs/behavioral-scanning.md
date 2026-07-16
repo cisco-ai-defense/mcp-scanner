@@ -10,6 +10,8 @@ Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Rust, Ruby, PHP
 
 The Behavioral Analyzer uses advanced program analysis techniques combined with LLM intelligence to detect behavioral mismatches between what a function claims to do (via its docstring) and what it actually does (via its implementation).
 
+If the scanner finds fewer tools than you expect, see **[MCP Tool Detection Troubleshooting](mcp-tool-detection-troubleshooting.md)** for the gate model (scan path, markers, registration form, trusted receiver) and workarounds.
+
 ## Quick Start
 
 ### Basic Usage
