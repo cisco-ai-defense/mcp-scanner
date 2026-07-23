@@ -7,7 +7,7 @@ required-version = ">=0.8.17"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.8.0"
+version = "4.8.1"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
@@ -29,8 +29,7 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
-    # Pinned to 1.83.7 to include the proxy API key verification SQL injection fix while avoiding 1.82.x. BerriAI/litellm#24512.
-    "litellm==1.83.7",
+    "litellm==1.93.0",
     "expandvars>=0.12.0",
     # JS/TS parsing for npm behavioral analysis pins the shared tree-sitter
     # runtime to a tested ABI range (other language packs stay >=0.21.0,
