@@ -1191,7 +1191,7 @@ class TestEndToEndFPFiltering:
         """
         from mcpscanner.core.analyzers.meta_analyzer import MetaAnalysisResult
 
-        async def _meta(findings, analyzers_used, entity_context):
+        async def _meta(findings, analyzers_used, entity_context, **kwargs):
             return MetaAnalysisResult(
                 false_positives=[
                     {
@@ -1236,7 +1236,7 @@ class TestEndToEndFPFiltering:
         lets the exception propagate would silently start emitting 500s
         on every meta-enabled request whenever the LLM hiccups.
         """
-        async def _meta(findings, analyzers_used, entity_context):
+        async def _meta(findings, analyzers_used, entity_context, **kwargs):
             raise RuntimeError("simulated LLM transport error")
 
         scanner = _make_scanner_with_real_meta(_meta)
@@ -1268,7 +1268,7 @@ class TestEndToEndFPFiltering:
         """
         from mcpscanner.core.analyzers.meta_analyzer import MetaAnalysisResult
 
-        async def _meta(findings, analyzers_used, entity_context):
+        async def _meta(findings, analyzers_used, entity_context, **kwargs):
             return MetaAnalysisResult(false_positives=[])
 
         scanner = _make_scanner_with_real_meta(_meta)

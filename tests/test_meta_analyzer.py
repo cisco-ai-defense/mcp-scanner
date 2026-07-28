@@ -1560,7 +1560,7 @@ class TestResourceDescriptionForMeta:
 
         captured = {}
 
-        async def _capture(findings, analyzers_used, entity_context):
+        async def _capture(findings, analyzers_used, entity_context, **kwargs):
             captured["entity_context"] = entity_context
             return MetaAnalysisResult()  # empty; nothing dropped
 
@@ -1612,7 +1612,7 @@ class TestResourceDescriptionForMeta:
 
         captured = {}
 
-        async def _capture(findings, analyzers_used, entity_context):
+        async def _capture(findings, analyzers_used, entity_context, **kwargs):
             captured["entity_context"] = entity_context
             return MetaAnalysisResult()
 
@@ -1667,7 +1667,7 @@ class TestResourceDescriptionForMeta:
         scanner = Scanner.__new__(Scanner)
         scanner._meta_analyzer = MagicMock()
 
-        async def _no_op(findings, analyzers_used, entity_context):
+        async def _no_op(findings, analyzers_used, entity_context, **kwargs):
             return MetaAnalysisResult()
 
         scanner._meta_analyzer.analyze_findings = _no_op
@@ -1704,7 +1704,7 @@ class TestResourceDescriptionForMeta:
         scanner = Scanner.__new__(Scanner)
         scanner._meta_analyzer = MagicMock()
 
-        async def _drops_first(findings, analyzers_used, entity_context):
+        async def _drops_first(findings, analyzers_used, entity_context, **kwargs):
             return MetaAnalysisResult(
                 false_positives=[
                     {"_index": 0, "false_positive_reason": "benign"}
@@ -2048,7 +2048,7 @@ class TestMetaConcurrency:
 
         scanner = Scanner(_make_config())
         # Replace the LLM call with a deterministic sleep.
-        async def _slow(findings, analyzers_used, entity_context):
+        async def _slow(findings, analyzers_used, entity_context, **kwargs):
             await asyncio.sleep(0.05)
             return MetaAnalysisResult()
 
@@ -2104,7 +2104,7 @@ class TestMetaConcurrency:
         in_flight = 0
         max_in_flight = 0
 
-        async def _track(findings, analyzers_used, entity_context):
+        async def _track(findings, analyzers_used, entity_context, **kwargs):
             nonlocal in_flight, max_in_flight
             in_flight += 1
             max_in_flight = max(max_in_flight, in_flight)
@@ -2167,7 +2167,7 @@ class TestApplyMetaToResults:
 
         seen_types = []
 
-        async def _record(findings, analyzers_used, entity_context):
+        async def _record(findings, analyzers_used, entity_context, **kwargs):
             seen_types.append(entity_context["type"])
             return MetaAnalysisResult()
 
@@ -2518,7 +2518,7 @@ class TestApplyMetaToResults:
         scanner = Scanner.__new__(Scanner)
         scanner._meta_analyzer = MagicMock()
 
-        async def _explode(findings, analyzers_used, entity_context):
+        async def _explode(findings, analyzers_used, entity_context, **kwargs):
             raise RuntimeError("LLM out")
 
         scanner._meta_analyzer.analyze_findings = _explode
