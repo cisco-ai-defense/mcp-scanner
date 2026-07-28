@@ -65,6 +65,67 @@ _STRING_LITERAL_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 logger = get_logger(__name__)
 
+# When two or more of API / YARA / LLM are requested, meta reviews each
+# analyzer's findings in a separate LLM pass (local indices), then merges FP
+# back onto the combined finding list (global indices).
+_PRIMARY_PER_ANALYZER_META = frozenset({"api", "yara", "llm"})
+_PRIMARY_META_ANALYZER_ORDER = ("API", "YARA", "LLM")
+_PRIMARY_META_ANALYZER_NAMES = frozenset(_PRIMARY_META_ANALYZER_ORDER)
+
+
+def _normalize_requested_analyzer(name: Any) -> str:
+    if hasattr(name, "value"):
+        return str(name.value).lower()
+    return str(name).lower()
+
+
+def uses_per_analyzer_meta(requested_analyzers: Optional[List[Any]]) -> bool:
+    """True when two or more of API / YARA / LLM were requested for the scan."""
+    if not requested_analyzers:
+        return False
+    normalized = {_normalize_requested_analyzer(a) for a in requested_analyzers}
+    present = normalized & _PRIMARY_PER_ANALYZER_META
+    return len(present) >= 2
+
+
+def _group_findings_by_analyzer(
+    findings: List[SecurityFinding],
+) -> Dict[str, List[Tuple[int, SecurityFinding]]]:
+    groups: Dict[str, List[Tuple[int, SecurityFinding]]] = {}
+    for index, finding in enumerate(findings):
+        key = finding.analyzer.upper()
+        groups.setdefault(key, []).append((index, finding))
+    return groups
+
+
+def _build_corroboration_summary(
+    findings: List[SecurityFinding],
+    exclude_analyzer: str,
+) -> str:
+    """Summarize other analyzers' hits for per-analyzer meta review."""
+    by_analyzer: Dict[str, List[SecurityFinding]] = {}
+    exclude = exclude_analyzer.upper()
+    for finding in findings:
+        name = finding.analyzer.upper()
+        if name == exclude:
+            continue
+        by_analyzer.setdefault(name, []).append(finding)
+
+    if not by_analyzer:
+        return ""
+
+    lines: List[str] = []
+    for name in sorted(by_analyzer):
+        group = by_analyzer[name]
+        categories = sorted(
+            {f.threat_category for f in group if f.threat_category}
+        )
+        category_text = ", ".join(categories) if categories else "uncategorized"
+        lines.append(
+            f"- {name}: {len(group)} finding(s) — {category_text}"
+        )
+    return "\n".join(lines)
+
 
 @dataclass
 class MetaAnalysisResult:
@@ -275,14 +336,22 @@ class MetaAnalyzer:
         findings: List[SecurityFinding],
         analyzers_used: List[str],
         entity_context: Dict[str, Any],
+        requested_analyzers: Optional[List[Any]] = None,
     ) -> MetaAnalysisResult:
         """Perform meta-analysis on findings from other analyzers.
+
+        When two or more of API, YARA, and LLM are requested together,
+        each primary analyzer's findings are reviewed in a separate LLM
+        pass (with corroboration context from the others), then false
+        positive decisions are merged into one result.
 
         Args:
             findings: List of findings from all other analyzers.
             analyzers_used: Names of analyzers that produced the findings.
             entity_context: Context about the entity being scanned, e.g.
                 ``{"type": "tool", "name": "...", "description": "...", "parameters": {...}}``.
+            requested_analyzers: Full analyzer list requested for the scan
+                (enum values or names). Drives per-analyzer meta mode.
 
         Returns:
             MetaAnalysisResult with validated findings, false positives, and recommendations.
@@ -295,6 +364,142 @@ class MetaAnalyzer:
                 }
             )
 
+        if uses_per_analyzer_meta(requested_analyzers):
+            return await self._analyze_findings_per_primary_analyzer(
+                findings=findings,
+                entity_context=entity_context,
+            )
+
+        return await self._analyze_findings_combined(
+            findings=findings,
+            analyzers_used=analyzers_used,
+            entity_context=entity_context,
+        )
+
+    async def _analyze_findings_per_primary_analyzer(
+        self,
+        findings: List[SecurityFinding],
+        entity_context: Dict[str, Any],
+    ) -> MetaAnalysisResult:
+        """Review API / YARA / LLM findings individually; merge FP decisions.
+
+        Passes run in analyzer order (API → YARA → LLM). Corroboration for
+        each pass only includes findings other analyzers still have **after**
+        earlier passes filtered their false positives — so a YARA keyword FP
+        filtered in pass 1 cannot block LLM doc-guidance filtering in pass 2.
+        """
+        groups = _group_findings_by_analyzer(findings)
+        filtered_global_indices: set[int] = set()
+        merged_false_positives: List[Dict[str, Any]] = []
+        pass_count = 0
+
+        def kept_findings() -> List[SecurityFinding]:
+            return [
+                finding
+                for index, finding in enumerate(findings)
+                if index not in filtered_global_indices
+            ]
+
+        for analyzer_name in _PRIMARY_META_ANALYZER_ORDER:
+            indexed = groups.get(analyzer_name)
+            if not indexed:
+                continue
+            pass_count += 1
+            remapped = await self._analyze_primary_analyzer_group(
+                indexed_findings=indexed,
+                analyzer_name=analyzer_name,
+                corroboration_findings=kept_findings(),
+                entity_context=entity_context,
+            )
+            for fp in remapped:
+                filtered_global_indices.add(fp["_index"])
+            merged_false_positives.extend(remapped)
+
+        other_indexed = [
+            (index, finding)
+            for index, finding in enumerate(findings)
+            if finding.analyzer.upper() not in _PRIMARY_META_ANALYZER_NAMES
+        ]
+        if other_indexed:
+            other_analyzers = sorted({f.analyzer for _, f in other_indexed})
+            pass_count += 1
+            remapped = await self._analyze_primary_analyzer_group(
+                indexed_findings=other_indexed,
+                analyzer_name=None,
+                corroboration_findings=kept_findings(),
+                entity_context=entity_context,
+                analyzers_used=other_analyzers,
+            )
+            for fp in remapped:
+                filtered_global_indices.add(fp["_index"])
+            merged_false_positives.extend(remapped)
+
+        self._logger.info(
+            "Meta-analysis complete (per-analyzer, merged): %d false positive(s) "
+            "flagged for filtering out of %d findings across %d pass(es)",
+            len(merged_false_positives),
+            len(findings),
+            pass_count,
+        )
+        return MetaAnalysisResult(false_positives=merged_false_positives)
+
+    async def _analyze_primary_analyzer_group(
+        self,
+        indexed_findings: List[Tuple[int, SecurityFinding]],
+        analyzer_name: Optional[str],
+        entity_context: Dict[str, Any],
+        corroboration_findings: Optional[List[SecurityFinding]] = None,
+        analyzers_used: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Run one meta pass for a single analyzer group; return global FP indices."""
+        local_findings = [finding for _, finding in indexed_findings]
+        global_indices = [index for index, _ in indexed_findings]
+
+        corroboration = ""
+        scope_analyzer: Optional[str] = None
+        if analyzer_name:
+            scope_analyzer = analyzer_name
+            used = [analyzer_name]
+            corroboration = _build_corroboration_summary(
+                corroboration_findings or local_findings, analyzer_name
+            )
+        else:
+            used = analyzers_used or []
+
+        result = await self._analyze_findings_combined(
+            findings=local_findings,
+            analyzers_used=used,
+            entity_context=entity_context,
+            scope_analyzer=scope_analyzer,
+            corroboration_summary=corroboration,
+        )
+
+        remapped: List[Dict[str, Any]] = []
+        for fp in result.false_positives:
+            local_index = fp.get("_index")
+            if not isinstance(local_index, int) or isinstance(local_index, bool):
+                continue
+            if local_index < 0 or local_index >= len(global_indices):
+                continue
+            remapped.append({**fp, "_index": global_indices[local_index]})
+
+        self._logger.info(
+            "Meta-analysis pass (%s): %d false positive(s) from %d finding(s)",
+            analyzer_name or "other",
+            len(remapped),
+            len(local_findings),
+        )
+        return remapped
+
+    async def _analyze_findings_combined(
+        self,
+        findings: List[SecurityFinding],
+        analyzers_used: List[str],
+        entity_context: Dict[str, Any],
+        scope_analyzer: Optional[str] = None,
+        corroboration_summary: str = "",
+    ) -> MetaAnalysisResult:
+        """Single-pass meta-analysis over one finding batch."""
         random_id = secrets.token_hex(16)
         start_tag = f"<!---ENTITY_CONTENT_START_{random_id}--->"
         end_tag = f"<!---ENTITY_CONTENT_END_{random_id}--->"
@@ -307,22 +512,23 @@ class MetaAnalyzer:
             analyzers_used=analyzers_used,
             start_tag=start_tag,
             end_tag=end_tag,
+            scope_analyzer=scope_analyzer,
+            corroboration_summary=corroboration_summary,
         )
 
         try:
             response = await self._make_llm_request(self._system_prompt, user_prompt)
             result = self._parse_response(response, findings)
 
-            self._logger.info(
-                "Meta-analysis complete: %d false positive(s) flagged for filtering out of %d findings",
-                len(result.false_positives),
-                len(findings),
-            )
+            if scope_analyzer is None:
+                self._logger.info(
+                    "Meta-analysis complete: %d false positive(s) flagged for filtering out of %d findings",
+                    len(result.false_positives),
+                    len(findings),
+                )
             return result
 
         except Exception as e:
-            # On failure we deliberately do nothing: no FP suggestions means
-            # apply_meta_analysis will keep every analyzer finding as-is.
             self._logger.error(
                 "Meta-analysis failed (%s); keeping all original findings.", e
             )
@@ -383,6 +589,8 @@ class MetaAnalyzer:
         analyzers_used: List[str],
         start_tag: str,
         end_tag: str,
+        scope_analyzer: Optional[str] = None,
+        corroboration_summary: str = "",
     ) -> str:
         """Build the user prompt for meta-analysis.
 
@@ -418,10 +626,29 @@ class MetaAnalyzer:
             params_json = self._scrub_sentinel(json.dumps(parameters, indent=2))
             context_block += f"\n**Parameters Schema:**\n```json\n{params_json}\n```"
 
+        scope_block = ""
+        if scope_analyzer:
+            scope_block = f"""
+### Review Scope
+You are reviewing findings from **{scope_analyzer}** only ({num_findings} finding(s) in the JSON list below).
+Only mark findings in that list as false positives. Indices refer to this scoped list.
+"""
+
+        corroboration_block = ""
+        if corroboration_summary:
+            corroboration_block = f"""
+### Other Analyzer Signals (corroboration context — do not filter these)
+These are findings from other analyzers on the same entity. Use them to decide
+whether a scoped finding is truly benign (e.g., do NOT filter if another analyzer
+corroborates a real threat). Do not mark these other-analyzer findings as false positives.
+
+{corroboration_summary}
+"""
+
         return f"""## Meta-Analysis Request — False Positive Filtering Only
 
-You have {num_findings} findings from {len(analyzers_used)} analyzers. Your **only** job is to identify which of these findings are **false positives** that should be filtered out.
-
+You have {num_findings} findings from {len(analyzers_used)} analyzer(s). Your **only** job is to identify which of these findings are **false positives** that should be filtered out.
+{scope_block}{corroboration_block}
 You MUST NOT:
 - Suggest new threats the analyzers missed.
 - Re-score, prioritize, correlate, or otherwise enrich true positives.

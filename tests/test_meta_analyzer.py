@@ -27,6 +27,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from mcpscanner.config import Config
+from mcpscanner.core.models import AnalyzerEnum
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.analyzers.meta_analyzer import (
     DEFAULT_META_REASON,
@@ -34,6 +35,7 @@ from mcpscanner.core.analyzers.meta_analyzer import (
     MetaAnalyzer,
     apply_meta_analysis,
     build_meta_audit_payload,
+    uses_per_analyzer_meta,
 )
 
 
@@ -707,6 +709,188 @@ class TestAnalyzeFindings:
         assert len(result.false_positives) == 1
         assert result.false_positives[0]["_index"] == 1
         assert "Benign" in result.false_positives[0]["false_positive_reason"]
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.meta_analyzer.acompletion")
+    async def test_per_analyzer_meta_when_api_and_llm_requested(
+        self, mock_completion
+    ):
+        """API+LLM (no YARA) → one meta pass each; merged FP list."""
+        mock_completion.side_effect = [
+            _mock_llm_response(
+                {"false_positives": [{"_index": 0, "false_positive_reason": "api fp"}]}
+            ),
+            _mock_llm_response({"false_positives": []}),
+        ]
+        analyzer = MetaAnalyzer(_make_config())
+        findings = [
+            _make_finding(analyzer="API", summary="api hit"),
+            _make_finding(analyzer="LLM", summary="llm hit"),
+        ]
+        result = await analyzer.analyze_findings(
+            findings=findings,
+            analyzers_used=["API", "LLM"],
+            entity_context={"type": "tool", "name": "t"},
+            requested_analyzers=[
+                AnalyzerEnum.API,
+                AnalyzerEnum.LLM,
+                AnalyzerEnum.META,
+            ],
+        )
+        assert mock_completion.call_count == 2
+        assert len(result.false_positives) == 1
+        assert result.false_positives[0]["_index"] == 0
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.meta_analyzer.acompletion")
+    async def test_per_analyzer_corroboration_uses_kept_findings_only(
+        self, mock_completion
+    ):
+        """YARA FPs filtered in pass 1 must not appear as LLM corroboration in pass 2."""
+        prompts_seen: list[str] = []
+
+        async def _capture_completion(**kwargs):
+            prompts_seen.append(kwargs["messages"][-1]["content"])
+            # YARA pass: filter both; LLM pass: filter LLM
+            if "Review Scope" in prompts_seen[-1] and "**YARA**" in prompts_seen[-1]:
+                body = {"false_positives": [
+                    {"_index": 0, "false_positive_reason": "y1"},
+                    {"_index": 1, "false_positive_reason": "y2"},
+                ]}
+            else:
+                body = {"false_positives": [
+                    {"_index": 0, "false_positive_reason": "llm fp"},
+                ]}
+            return _mock_llm_response(body)
+
+        mock_completion.side_effect = _capture_completion
+
+        analyzer = MetaAnalyzer(_make_config())
+        findings = [
+            _make_finding(analyzer="YARA", summary="yara 1"),
+            _make_finding(analyzer="YARA", summary="yara 2"),
+            _make_finding(analyzer="LLM", summary="llm doc guidance"),
+        ]
+        result = await analyzer.analyze_findings(
+            findings=findings,
+            analyzers_used=["YARA", "LLM"],
+            entity_context={"type": "tool", "name": "t"},
+            requested_analyzers=[AnalyzerEnum.YARA, AnalyzerEnum.LLM, AnalyzerEnum.META],
+        )
+
+        assert mock_completion.call_count == 2
+        assert len(result.false_positives) == 3
+        llm_prompt = prompts_seen[1]
+        assert "Other Analyzer Signals" not in llm_prompt
+        assert "YARA: 2 finding" not in llm_prompt
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.meta_analyzer.acompletion")
+    async def test_per_analyzer_meta_when_all_primary_requested(
+        self, mock_completion
+    ):
+        """API+YARA+LLM requested → separate meta pass per analyzer; merged FP list."""
+        mock_completion.side_effect = [
+            _mock_llm_response(
+                {
+                    "false_positives": [
+                        {"_index": 0, "false_positive_reason": "api fp"},
+                    ],
+                }
+            ),
+            _mock_llm_response({"false_positives": []}),
+            _mock_llm_response(
+                {
+                    "false_positives": [
+                        {"_index": 0, "false_positive_reason": "llm fp"},
+                    ],
+                }
+            ),
+        ]
+        analyzer = MetaAnalyzer(_make_config())
+        findings = [
+            _make_finding(analyzer="API", summary="api hit"),
+            _make_finding(analyzer="YARA", summary="yara hit"),
+            _make_finding(analyzer="LLM", summary="llm hit"),
+        ]
+        result = await analyzer.analyze_findings(
+            findings=findings,
+            analyzers_used=["API", "YARA", "LLM"],
+            entity_context={"type": "tool", "name": "t"},
+            requested_analyzers=[
+                AnalyzerEnum.API,
+                AnalyzerEnum.YARA,
+                AnalyzerEnum.LLM,
+                AnalyzerEnum.META,
+            ],
+        )
+        assert mock_completion.call_count == 3
+        assert len(result.false_positives) == 2
+        assert {fp["_index"] for fp in result.false_positives} == {0, 2}
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.meta_analyzer.acompletion")
+    async def test_combined_meta_when_not_all_primary_requested(
+        self, mock_completion
+    ):
+        """LLM+meta only → single combined meta pass (legacy behavior)."""
+        mock_completion.return_value = _mock_llm_response(
+            {"false_positives": [{"_index": 0, "false_positive_reason": "fp"}]}
+        )
+        analyzer = MetaAnalyzer(_make_config())
+        findings = [
+            _make_finding(analyzer="LLM"),
+            _make_finding(analyzer="YARA"),
+        ]
+        await analyzer.analyze_findings(
+            findings=findings,
+            analyzers_used=["LLM", "YARA"],
+            entity_context={"type": "tool", "name": "t"},
+            requested_analyzers=[AnalyzerEnum.LLM, AnalyzerEnum.META],
+        )
+        assert mock_completion.call_count == 1
+
+
+class TestUsesPerAnalyzerMeta:
+    def test_requires_two_or_more_primary_analyzers(self):
+        assert uses_per_analyzer_meta(
+            [AnalyzerEnum.API, AnalyzerEnum.LLM]
+        )
+        assert uses_per_analyzer_meta(
+            [AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
+        )
+        assert uses_per_analyzer_meta(
+            [AnalyzerEnum.YARA, AnalyzerEnum.LLM, AnalyzerEnum.META]
+        )
+        assert not uses_per_analyzer_meta(
+            [AnalyzerEnum.LLM, AnalyzerEnum.META]
+        )
+        assert not uses_per_analyzer_meta(
+            [AnalyzerEnum.API, AnalyzerEnum.META]
+        )
+        assert uses_per_analyzer_meta(
+            ["api", "llm", "meta"]
+        )
+
+
+class TestBuildUserPromptPerAnalyzer:
+    def test_scope_and_corroboration_blocks(self):
+        config = _make_config()
+        analyzer = MetaAnalyzer(config)
+        prompt = analyzer._build_user_prompt(
+            entity_context={"type": "tool", "name": "x", "description": "y"},
+            findings_data=json.dumps([{"_index": 0, "analyzer": "LLM"}]),
+            num_findings=1,
+            analyzers_used=["LLM"],
+            start_tag="<S>",
+            end_tag="<E>",
+            scope_analyzer="LLM",
+            corroboration_summary="- YARA: 1 finding(s) — PROMPT INJECTION",
+        )
+        assert "Review Scope" in prompt
+        assert "**LLM**" in prompt
+        assert "corroboration" in prompt.lower()
+        assert "YARA: 1 finding(s)" in prompt
 
 
 # ---------------------------------------------------------------------------

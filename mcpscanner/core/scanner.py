@@ -405,6 +405,7 @@ class Scanner:
                     findings=result.findings,
                     analyzers_used=tool_analyzers,
                     entity_context=entity_context,
+                    requested_analyzers=result.analyzers,
                 )
                 kept, dropped = apply_meta_analysis(result.findings, meta_result)
                 enriched = ToolScanResult(
@@ -450,6 +451,7 @@ class Scanner:
                     findings=result.findings,
                     analyzers_used=prompt_analyzers,
                     entity_context=entity_context,
+                    requested_analyzers=result.analyzers,
                 )
                 kept, dropped = apply_meta_analysis(result.findings, meta_result)
                 enriched = PromptScanResult(
@@ -498,6 +500,7 @@ class Scanner:
                     findings=result.findings,
                     analyzers_used=res_analyzers,
                     entity_context=entity_context,
+                    requested_analyzers=result.analyzers,
                 )
                 kept, dropped = apply_meta_analysis(result.findings, meta_result)
                 enriched = ResourceScanResult(
@@ -727,6 +730,7 @@ class Scanner:
                 findings=result.findings,
                 analyzers_used=instr_analyzers,
                 entity_context=entity_context,
+                requested_analyzers=result.analyzers,
             )
             kept, dropped = apply_meta_analysis(result.findings, meta_result)
             enriched_result = InstructionsScanResult(
