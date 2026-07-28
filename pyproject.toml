@@ -26,7 +26,7 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
-    "litellm>=1.83.7",
+    "litellm>=1.84.0",
     "expandvars>=0.12.0",
     # JS/TS parsing for npm behavioral analysis pins the shared tree-sitter
     # runtime to a tested ABI range (other language packs stay >=0.21.0,
