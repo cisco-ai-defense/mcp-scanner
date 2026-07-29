@@ -150,8 +150,14 @@ class TestMetaAnalyzerInit:
         analyzer = MetaAnalyzer(config)
         assert analyzer.name == "META"
         assert analyzer._model == config.llm_model
-        assert analyzer._temperature == 0.1
+        assert analyzer._temperature == config.llm_temperature
         assert analyzer._max_tokens == 8192
+
+    def test_init_uses_config_llm_temperature(self):
+        """MetaAnalyzer honours Config.llm_temperature (incl. MCP_SCANNER_DEFAULT_LLM_TEMPERATURE)."""
+        config = _make_config(llm_temperature=0.5)
+        analyzer = MetaAnalyzer(config)
+        assert analyzer._temperature == 0.5
 
     def test_init_without_api_key_raises(self):
         """MetaAnalyzer raises ValueError without an API key."""
