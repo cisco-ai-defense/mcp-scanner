@@ -211,6 +211,91 @@ _TS_NON_FUNCTION_NODE_TYPES: Set[str] = {
     "impl_item",
 }
 
+# Inline handler node types accepted at MCP registration call sites (may
+# differ from named function definition types for a language).
+_INLINE_HANDLER_NODE_TYPES: Set[str] = {
+    "function_expression",
+    "arrow_function",
+    "func_literal",  # Go: func(ctx ...) { ... }
+    "lambda_literal",
+    "anonymous_function",
+    "closure_expression",
+}
+
+
+def _resolve_const_or_var_string(source: str, name: str) -> Optional[str]:
+    """Resolve a module-level const/let/var string initializer by name."""
+    if not name or not name.replace("_", "").isalnum():
+        return None
+    patterns = (
+        rf"(?ms)^\s*const\s+{_re.escape(name)}\s*=\s*`((?:\\.|[^`])*)`",
+        rf"(?ms)^\s*const\s+{_re.escape(name)}\s*:\s*&str\s*=\s*r#\"(.*?)\"#",
+        rf"(?ms)^\s*const\s+{_re.escape(name)}\s*:\s*&str\s*=\s*\"((?:\\.|[^\"])*)\"",
+        rf"(?ms)^\s*const\s+{_re.escape(name)}\s*=\s*\"((?:\\.|[^\"])*)\"",
+        rf"(?ms)^\s*const\s+{_re.escape(name)}\s*=\s*'((?:\\.|[^'])*)'",
+        rf"(?ms)^\s*const\s+{_re.escape(name)}\s*=\s*`([^`]*)`",
+    )
+    for pat in patterns:
+        m = _re.search(pat, source, _re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+def _extract_description_from_text(source: str, text: str) -> Optional[str]:
+    """Best-effort MCP tool description from decorator/registration text."""
+    if not text:
+        return None
+    candidates: List[str] = []
+    patterns = (
+        r'(?i)WithDescription\s*\(\s*"((?:\\.|[^"\\])*)"\s*\)',
+        r"(?i)WithDescription\s*\(\s*'((?:\\.|[^'\\])*)'\s*\)",
+        r'(?i)(?:description|desc)\s*[=:]\s*"((?:\\.|[^"\\])*)"',
+        r"(?i)(?:description|desc)\s*[=:]\s*'((?:\\.|[^'\\])*)'",
+        r"(?i)(?:description|desc)\s*[=:]\s*`((?:\\.|[^`\\])*)`",
+        r"(?i)WithDescription\s*\(\s*(\w+)\s*\)",
+        r"(?i)(?:description|desc)\s*[=:]\s*(\w+)",
+    )
+    for pat in patterns:
+        for m in _re.finditer(pat, text):
+            raw = m.group(1)
+            if not raw:
+                continue
+            if raw.isidentifier():
+                resolved = _resolve_const_or_var_string(source, raw)
+                if resolved:
+                    candidates.append(resolved)
+            elif len(raw.strip()) >= 8:
+                candidates.append(raw.strip())
+    if not candidates:
+        return None
+    return max(candidates, key=len)
+
+
+def _extract_list_tools_descriptions(source: str, handler_text: str) -> Dict[str, str]:
+    """Parse tool name/description pairs from a ListTools handler body."""
+    out: Dict[str, str] = {}
+    if not handler_text:
+        return out
+    # Single-tool and multi-tool object literals: name + description fields.
+    tool_blocks = _re.split(r"\}\s*,\s*\{", handler_text)
+    for block in tool_blocks:
+        name_m = _re.search(r'(?i)\bname\s*:\s*["\']([^"\']+)["\']', block)
+        if not name_m:
+            continue
+        tool_name = name_m.group(1)
+        desc_m = _re.search(r"(?i)\bdescription\s*:\s*(\w+|['\"`][^'\"`]+['\"`])", block)
+        if not desc_m:
+            continue
+        raw = desc_m.group(1).strip("'\"`")
+        if raw.isidentifier():
+            desc = _resolve_const_or_var_string(source, raw) or raw
+        else:
+            desc = raw
+        if desc:
+            out[tool_name] = desc
+    return out
+
 
 # Compiled once: matches an annotation/attribute/macro sigil followed by an
 # identifier we want to inspect. Covers:
@@ -546,6 +631,7 @@ _MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = {
     "go": (
         "modelcontextprotocol/go-sdk",
         "modelcontextprotocol/go-sdk/mcp",
+        "mark3labs/mcp-go",
     ),
     "rust": (
         "rmcp",
@@ -627,6 +713,7 @@ _MCP_PREFILTER_RE = _re.compile(
     rb"|@server\.list_prompts\b|@server\.get_prompt\b"
     rb"|@server\.list_resources\b|@server\.read_resource\b"
     rb"|@mcp\.tool\b|@mcp\.prompt\b|@mcp\.resource\b"
+    rb"|mark3labs/mcp-go"  # mark3labs Go MCP SDK
     rb"|rmcp::|use\s+rmcp"  # Rust SDK
     rb")",
     _re.IGNORECASE,
@@ -792,7 +879,7 @@ class NativeAnalyzer:
     FUNCTION_NODE_TYPES = {
         "javascript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
         "typescript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
-        "go": {"function_declaration", "method_declaration"},
+        "go": {"function_declaration", "method_declaration", "func_literal"},
         "java": {"method_declaration", "constructor_declaration"},
         "kotlin": {"function_declaration", "secondary_constructor", "primary_constructor", "lambda_literal", "anonymous_function"},
         "swift": {"function_declaration", "initializer_declaration"},
@@ -1131,6 +1218,12 @@ class NativeAnalyzer:
                 if template_subtype == "template"
                 else "registration"
             )
+            snippet_lc = (reg.get("registration_snippet") or "").lower()
+            low_level_kind: Optional[str] = None
+            if "listtoolsrequestschema" in snippet_lc:
+                low_level_kind = "list_tools"
+            elif "calltoolrequestschema" in snippet_lc:
+                low_level_kind = "call_tool"
 
             self._append_capability_context(
                 contexts,
@@ -1139,8 +1232,14 @@ class NativeAnalyzer:
                 capability=cap_kind,
                 registered_name=reg.get("name"),
                 source_kind=source_kind,
+                registration_description=reg.get("description"),
+                registration_snippet=reg.get("registration_snippet"),
+                low_level_kind=low_level_kind,
             )
 
+        contexts = self._postprocess_capability_contexts(
+            contexts, tree.root_node, registrations
+        )
         return contexts
 
     def _resolve_cross_file_handler(
@@ -2123,6 +2222,133 @@ class NativeAnalyzer:
             return f.id
         return None
 
+    def _ts_expression_list_names(self, node: "Node") -> List[str]:
+        """Return identifier names from a Go ``expression_list`` / left side."""
+        if node.type == "identifier":
+            return [self._ts_get_node_text(node)]
+        names: List[str] = []
+        for child in node.children:
+            if child.type == "identifier":
+                names.append(self._ts_get_node_text(child))
+        return names
+
+    def _ts_enrich_registration_metadata(
+        self, reg: Dict[str, Any], root: "Node"
+    ) -> None:
+        """Fill registered name/description from Go ``NewTool`` variables etc."""
+        source_text = self.source_bytes.decode("utf-8", errors="replace")
+        snippet = reg.get("registration_snippet") or ""
+        if not reg.get("description"):
+            reg["description"] = _extract_description_from_text(source_text, snippet)
+
+        tool_var = reg.get("tool_var")
+        if tool_var:
+            meta = self._ts_resolve_tool_variable_metadata(tool_var, root)
+            if meta.get("name") and not reg.get("name"):
+                reg["name"] = meta["name"]
+            if meta.get("description") and not reg.get("description"):
+                reg["description"] = meta["description"]
+
+    def _ts_resolve_tool_variable_metadata(
+        self, var_name: str, root: "Node"
+    ) -> Dict[str, Optional[str]]:
+        """Resolve ``tool := mcp.NewTool("name", WithDescription(...))`` metadata."""
+        out: Dict[str, Optional[str]] = {"name": None, "description": None}
+        source_text = self.source_bytes.decode("utf-8", errors="replace")
+
+        def visit(node: "Node") -> None:
+            if out["name"] and out["description"]:
+                return
+            if node.type in ("short_var_declaration", "var_declaration", "assignment_statement"):
+                left = node.child_by_field_name("left") or node.child_by_field_name("name")
+                right = node.child_by_field_name("right") or node.child_by_field_name("value")
+                if left is None or right is None:
+                    expr_lists = [
+                        c for c in node.children if c.type == "expression_list"
+                    ]
+                    if len(expr_lists) >= 2:
+                        left, right = expr_lists[0], expr_lists[1]
+                if left is not None and right is not None:
+                    for lhs_name in self._ts_expression_list_names(left):
+                        if lhs_name != var_name:
+                            continue
+                        call_text = self._ts_get_node_text(right)
+                        call_node = right
+                        if right.type == "expression_list":
+                            for ch in right.children:
+                                if ch.type == "call_expression":
+                                    call_node = ch
+                                    call_text = self._ts_get_node_text(ch)
+                                    break
+                        name = self._ts_first_string_literal_in_args(
+                            call_node.child_by_field_name("arguments")
+                            if call_node.type == "call_expression"
+                            else None
+                        )
+                        if name:
+                            out["name"] = name
+                        desc = _extract_description_from_text(source_text, call_text)
+                        if desc:
+                            out["description"] = desc
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return out
+
+    def _postprocess_capability_contexts(
+        self,
+        contexts: List[FunctionContext],
+        root: "Node",
+        registrations: List[Dict[str, Any]],
+    ) -> List[FunctionContext]:
+        """Merge ListTools metadata into CallTool handlers; normalize flows."""
+        source_text = self.source_bytes.decode("utf-8", errors="replace")
+        list_tool_descs: Dict[str, str] = {}
+
+        for reg in registrations:
+            snippet = (reg.get("registration_snippet") or "").lower()
+            handler = reg.get("handler_node")
+            if handler is None:
+                continue
+            if "listtoolsrequestschema" in snippet:
+                handler_text = self._ts_get_node_text(handler)
+                list_tool_descs.update(
+                    _extract_list_tools_descriptions(source_text, handler_text)
+                )
+
+        has_call_tool_handler = any(
+            "<low_level>.call_tool" in (c.decorator_types or [])
+            for c in contexts
+        )
+
+        filtered: List[FunctionContext] = []
+        for ctx in contexts:
+            if has_call_tool_handler and "<low_level>.list_tools" in (
+                ctx.decorator_types or []
+            ):
+                # Drop anonymous ListTools metadata handlers only; keep
+                # named handlers like ``listToolsHandler`` for tests and
+                # servers that split list/call across symbols.
+                if ctx.name in ("<anonymous>", "<unresolved>") or (
+                    ctx.name.startswith("<") and "Handler" not in ctx.name
+                ):
+                    continue
+
+            if not ctx.docstring:
+                if ctx.name in list_tool_descs:
+                    ctx.docstring = list_tool_descs[ctx.name]
+                elif len(list_tool_descs) == 1:
+                    ctx.docstring = next(iter(list_tool_descs.values()))
+
+            for flow in ctx.parameter_flows or []:
+                if "parameter_name" in flow and "parameter" not in flow:
+                    flow["parameter"] = flow["parameter_name"]
+
+            filtered.append(ctx)
+
+        return filtered
+
     def _append_capability_context(
         self,
         out: List[FunctionContext],
@@ -2132,6 +2358,9 @@ class NativeAnalyzer:
         capability: str,
         registered_name: Optional[str],
         source_kind: str,
+        registration_description: Optional[str] = None,
+        registration_snippet: Optional[str] = None,
+        low_level_kind: Optional[str] = None,
     ) -> None:
         """Extract a FunctionContext for ``handler_node`` and tag it.
 
@@ -2169,6 +2398,29 @@ class NativeAnalyzer:
         cap_tag = f"<{source_kind}>.{capability}"
         if cap_tag not in ctx.decorator_types:
             ctx.decorator_types.append(cap_tag)
+        if low_level_kind:
+            ctx.decorator_types.append(f"<low_level>.{low_level_kind}")
+
+        # Wire registration-site descriptions into the docstring field the
+        # alignment LLM reads (Go ``WithDescription``, TS config objects,
+        # Rust ``#[tool(description = ...)]``, low-level ListTools metadata).
+        if not ctx.docstring:
+            source_text = self.source_bytes.decode("utf-8", errors="replace")
+            desc = registration_description
+            if not desc and registration_snippet:
+                desc = _extract_description_from_text(source_text, registration_snippet)
+            if not desc and ctx.decorator_types:
+                desc = _extract_description_from_text(
+                    source_text, " ".join(ctx.decorator_types)
+                )
+            # Rust/Java/C# attributes live on preceding siblings, not in
+            # ``decorator_types`` alone — re-collect annotation text.
+            if not desc:
+                anns = self._ts_collect_function_annotations(handler_node)
+                if anns:
+                    desc = _extract_description_from_text(source_text, " ".join(anns))
+            if desc:
+                ctx.docstring = desc
 
         out.append(ctx)
 
@@ -2440,6 +2692,10 @@ class NativeAnalyzer:
                             args_node
                         )
 
+                    reg["registration_snippet"] = self._ts_get_node_text(node)
+                    reg["call_node"] = node
+                    self._ts_enrich_registration_metadata(reg, root)
+
                     if (
                         reg.get("handler_node") is not None
                         or reg.get("handler_name") is not None
@@ -2604,11 +2860,20 @@ class NativeAnalyzer:
             # → expose alias ``mcp``; allow ``import alias "..."`` form too.
             if self.language == "go":
                 m = _re.search(
-                    r'^\s*(?:import\s+)?(?:([\w]+)\s+)?"[^"]*modelcontextprotocol[^"]*"',
+                    r'^\s*(?:import\s+)?(?:([\w]+)\s+)?"[^"]*(?:modelcontextprotocol|mark3labs/mcp-go)[^"]*"',
                     stmt,
                 )
                 if m:
-                    sdk_aliases.add(m.group(1) or "mcp")
+                    alias = m.group(1)
+                    if alias:
+                        sdk_aliases.add(alias)
+                    else:
+                        # ``import "github.com/mark3labs/mcp-go/server"`` → ``server``
+                        pkg = _re.search(r"/(\w+)\"?\s*$", stmt.strip())
+                        if pkg:
+                            sdk_aliases.add(pkg.group(1))
+                        else:
+                            sdk_aliases.add("mcp")
             elif self.language == "python":
                 # ``from fastmcp import FastMCP`` or
                 # ``from mcp.server import Server``
@@ -2640,13 +2905,21 @@ class NativeAnalyzer:
 
             # Go: ``server := mcp.NewServer(...)`` parses as
             # ``short_var_declaration`` with ``left`` (identifier) and
-            # ``right`` (call_expression).
+            # ``right`` (call_expression). Some grammars use paired
+            # ``expression_list`` nodes instead of named fields.
             if node.type == "short_var_declaration":
                 left = node.child_by_field_name("left")
                 right = node.child_by_field_name("right")
+                if left is None or right is None:
+                    expr_lists = [
+                        c for c in node.children if c.type == "expression_list"
+                    ]
+                    if len(expr_lists) >= 2:
+                        left, right = expr_lists[0], expr_lists[1]
                 if left is not None and right is not None:
                     if self._ts_is_mcp_factory_call(right, sdk_aliases):
-                        trusted.add(self._ts_get_node_text(left))
+                        for name in self._ts_expression_list_names(left):
+                            trusted.add(name)
 
             # Python/Kotlin function/method parameters declared with an
             # MCP server type annotation (``server: Server`` /
@@ -2720,6 +2993,11 @@ class NativeAnalyzer:
         """Recognize ``mcp.NewServer(...)`` Go-style factory calls."""
         if not sdk_aliases:
             return False
+        if expr_node.type == "expression_list":
+            for child in expr_node.children:
+                if child.type == "call_expression":
+                    return self._ts_is_mcp_factory_call(child, sdk_aliases)
+            return False
         if expr_node.type != "call_expression":
             return False
         callee = expr_node.child_by_field_name("function")
@@ -2736,7 +3014,11 @@ class NativeAnalyzer:
         receiver, _, method = text.partition(".")
         return (
             receiver in sdk_aliases
-            and ("server" in method.lower() or "newserver" in method.lower())
+            and (
+                "server" in method.lower()
+                or "newserver" in method.lower()
+                or "newmcpserver" in method.lower()
+            )
         )
 
     def _ts_call_method_name(self, call_node: "Node") -> Optional[str]:
@@ -2875,6 +3157,8 @@ class NativeAnalyzer:
         ``value_argument`` wrappers, or grammars that expose argument lists
         without the field shapes we expect).
         """
+        if args_node is None:
+            return None
         for child in args_node.children:
             stripped = self._ts_extract_string_literal_text(child)
             if stripped is not None:
@@ -2936,6 +3220,7 @@ class NativeAnalyzer:
             return None
 
         func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        inline_types = func_types | _INLINE_HANDLER_NODE_TYPES
         string_node_types = {
             "string",
             "string_literal",
@@ -2946,19 +3231,23 @@ class NativeAnalyzer:
         name: Optional[str] = None
         inline_handler: Optional["Node"] = None
         identifier_refs: List[str] = []
+        tool_var: Optional[str] = None
 
         for child in args_node.children:
             if child.type in ("(", ")", ",", "comment"):
                 continue
 
-            # Inline function expression / arrow function / lambda.
-            if inline_handler is None and child.type in func_types:
+            # Inline function expression / arrow function / lambda / Go func literal.
+            if inline_handler is None and child.type in inline_types:
                 inline_handler = child
                 continue
 
             # Bare identifier reference (resolved later against in-file defs).
             if child.type == "identifier":
-                identifier_refs.append(self._ts_get_node_text(child))
+                ident = self._ts_get_node_text(child)
+                identifier_refs.append(ident)
+                if tool_var is None:
+                    tool_var = ident
                 continue
 
             # First string literal we see is conventionally the MCP name
@@ -3001,21 +3290,23 @@ class NativeAnalyzer:
         handler_name: Optional[str] = None
 
         if handler_node is None and identifier_refs:
-            # Prefer the LAST identifier: in ``mcp.AddTool(server, ..., add)``
-            # ``server`` is the receiver, ``add`` is the handler. The
-            # inline-function check above already covers the JS/TS case
-            # where the handler is the first inline argument.
+            # Prefer the LAST identifier when an inline handler wasn't found.
+            # For ``AddTool(tool, handlerFn)`` the last ref is the handler;
+            # when the handler IS inline, ``tool_var`` captures the first.
             handler_name = identifier_refs[-1]
 
         if handler_node is None and handler_name is None:
             return None
 
-        return {
+        result: Dict[str, Any] = {
             "capability": override_capability or _normalize_capability(capability_method),
             "name": name,
             "handler_node": handler_node,
             "handler_name": handler_name,
         }
+        if tool_var and inline_handler is not None:
+            result["tool_var"] = tool_var
+        return result
 
     def _ts_extract_handler_from_object(
         self, obj_node: "Node", func_types: Set[str]
@@ -3666,6 +3957,12 @@ class NativeAnalyzer:
             # ES6 imports
             if node.type == "import_statement":
                 imports.append(self._ts_get_node_text(node))
+            # Go import blocks / specs
+            elif node.type in ("import_declaration", "import_spec"):
+                imports.append(self._ts_get_node_text(node))
+            # Rust use declarations
+            elif node.type == "use_declaration":
+                imports.append(self._ts_get_node_text(node))
             # CommonJS require
             elif node.type == "call_expression":
                 func = node.child_by_field_name("function")
@@ -3760,6 +4057,9 @@ class NativeAnalyzer:
         
         # Perform full CFG-based dataflow analysis
         parameter_flows = self._ts_analyze_dataflow_full(node, param_names)
+        for flow in parameter_flows:
+            if "parameter_name" in flow and "parameter" not in flow:
+                flow["parameter"] = flow["parameter_name"]
         
         # Detect security operations
         security_ops = self._ts_detect_security_ops(node)
@@ -3934,7 +4234,12 @@ class NativeAnalyzer:
         # Check preceding siblings for decorators (TypeScript/Python style)
         sib = node.prev_sibling
         while sib:
-            if sib.type in ("decorator", "attribute", "annotation"):
+            if sib.type in (
+                "decorator",
+                "attribute",
+                "annotation",
+                "attribute_item",
+            ):
                 decorators.append(self._ts_get_node_text(sib))
             elif sib.type == "comment":
                 # Stop at comments (they're handled separately)

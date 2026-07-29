@@ -116,7 +116,9 @@ class AlignmentPromptBuilder:
         end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
 
         docstring = func_context.docstring or "No docstring provided"
-
+        raw_ctx = ""
+        if func_context.dataflow_summary:
+            raw_ctx = func_context.dataflow_summary.get("raw_decorator_context") or ""
         # Build the analysis content using list accumulation for efficiency
         content_parts = []
 
@@ -127,9 +129,15 @@ class AlignmentPromptBuilder:
 - Decorator: {func_context.decorator_types[0] if func_context.decorator_types else 'unknown'}
 - Line: {func_context.line_number}
 - Docstring/Description: {docstring}
+"""
+        )
+        if raw_ctx.strip():
+            content_parts.append(
+                f"\n**REGISTRATION / DECORATOR CONTEXT:**\n{raw_ctx}\n"
+            )
 
-
-
+        content_parts.append(
+            f"""
 **FUNCTION SIGNATURE:**
 - Parameters: {json.dumps(func_context.parameters, indent=2)}
 - Return Type: {func_context.return_type or 'Not specified'}
@@ -158,7 +166,7 @@ Parameter Flow Tracking:
         if func_context.parameter_flows:
             param_parts = ["\n**PARAMETER FLOW TRACKING:**\n"]
             for flow in func_context.parameter_flows:
-                param_name = flow.get("parameter", "unknown")
+                param_name = flow.get("parameter") or flow.get("parameter_name", "unknown")
                 param_parts.append(f"\nParameter '{param_name}' flows through:\n")
 
                 if flow.get("operations"):
@@ -195,6 +203,21 @@ Parameter Flow Tracking:
                     param_parts.append(f"  Returns to caller\n")
 
             content_parts.append("".join(param_parts))
+
+        # Static security indicators from AST analysis
+        security_flags = []
+        if getattr(func_context, "has_file_operations", False):
+            security_flags.append("FILE_OPS")
+        if getattr(func_context, "has_network_operations", False):
+            security_flags.append("NETWORK_OPS")
+        if getattr(func_context, "has_subprocess_calls", False):
+            security_flags.append("SUBPROCESS")
+        if getattr(func_context, "has_eval_exec", False):
+            security_flags.append("EVAL/EXEC")
+        if security_flags:
+            content_parts.append(
+                f"\n**STATIC SECURITY INDICATORS:** {', '.join(security_flags)}\n"
+            )
 
         # Add variable dependencies
         if func_context.variable_dependencies:
