@@ -28,10 +28,10 @@ Usage:
 The server will start on http://127.0.0.1:8001/mcp
 """
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # Create MCP server with instructions
-mcp = FastMCP(
+mcp = MCPServer(
     "test-instructions-server",
     instructions="""This is a test MCP server for scanning instructions.
 

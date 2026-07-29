@@ -118,7 +118,7 @@ uv run mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/
 ```
 
 ### 7. Server Instructions
-Scan server instructions from InitializeResult for prompt injection and misleading guidance:
+Scan server instructions from the MCP connect handshake (`DiscoverResult` on modern servers, `InitializeResult` on legacy servers) for prompt injection and misleading guidance:
 ```bash
 uv run mcp-scanner instructions --server-url http://127.0.0.1:8000/mcp
 

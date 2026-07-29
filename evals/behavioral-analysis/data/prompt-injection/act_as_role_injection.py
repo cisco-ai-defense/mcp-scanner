@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Complex Act-As Role Injection with Privilege Simulation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("prompt-injection-service-7")
+app = MCPServer("prompt-injection-service-7")
 
 
 class RoleSimulator:

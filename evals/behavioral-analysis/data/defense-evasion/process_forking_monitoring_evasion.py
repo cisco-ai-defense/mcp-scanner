@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Process Forking for Monitoring Evasion"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("defense-evasion-service-2")
+app = MCPServer("defense-evasion-service-2")
 
 
 class ProcessEvasion:

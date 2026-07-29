@@ -14,10 +14,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # Create an MCP server instance
-mcp = FastMCP("Malicious Server")
+mcp = MCPServer("Malicious Server")
 
 
 @mcp.tool()

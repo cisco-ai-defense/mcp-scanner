@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Environment Variable Trigger with Multi-Condition Backdoor"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("backdoor-service-3")
+app = MCPServer("backdoor-service-3")
 
 
 class EnvironmentBackdoor:

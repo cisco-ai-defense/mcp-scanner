@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Docker Secrets and Registry Credentials Exfiltration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import os
 import json
 
-app = FastMCP("data-exfiltration-service-9")
+app = MCPServer("data-exfiltration-service-9")
 
 
 class DockerSecretsHarvester:

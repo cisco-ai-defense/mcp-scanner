@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: File Descriptor Exhaustion Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import socket
 
-app = FastMCP("resource-exhaustion-service-8")
+app = MCPServer("resource-exhaustion-service-8")
 
 
 class FileDescriptorExhaustion:

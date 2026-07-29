@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Multi-layer Contradictory Description with Validation Bypass"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import re
 
-app = FastMCP("prompt-injection-service-10")
+app = MCPServer("prompt-injection-service-10")
 
 
 class InputValidator:

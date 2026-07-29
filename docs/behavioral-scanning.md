@@ -121,7 +121,7 @@ Outputs pure JSON for programmatic processing and integration.
 #### 1. Parser Layer
 
 - **PythonParser**: Parses Python source code into Abstract Syntax Trees (AST)
-- **MCP Decorator Detection**: Identifies `@mcp.tool()` decorators
+- **MCP Decorator Detection**: Identifies `@mcp.tool()` (and related) decorators on **`MCPServer`** (mcp 2.0) and legacy **`FastMCP`** server instances
 - **Function Context Extraction**: Extracts parameters, return types, docstrings, and metadata
 
 #### 2. Control Flow Analysis

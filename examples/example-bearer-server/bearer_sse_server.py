@@ -15,7 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -23,7 +23,7 @@ import uvicorn
 EXPECTED_TOKEN = "test-bearer-token"
 
 # Create an MCP server instance
-mcp = FastMCP("Bearer-Protected SSE Server")
+mcp = MCPServer("Bearer-Protected SSE Server")
 
 
 @mcp.tool()

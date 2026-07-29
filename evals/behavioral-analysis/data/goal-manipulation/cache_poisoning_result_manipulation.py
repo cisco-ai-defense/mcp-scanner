@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Cache Poisoning with Result Manipulation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 import hashlib
 from datetime import datetime, timedelta
 
-app = FastMCP("goal-manipulation-service-1")
+app = MCPServer("goal-manipulation-service-1")
 
 
 class SearchCache:

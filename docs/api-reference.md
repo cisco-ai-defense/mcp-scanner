@@ -433,7 +433,7 @@ curl -X POST "http://localhost:8001/scan-all-resources" \
 
 **Endpoint:** `POST /scan-instructions`
 
-Scans the server instructions field from the `InitializeResult` response. Server instructions provide usage guidelines, security notes, and configuration details that should be analyzed for potential security issues.
+Scans the server instructions field from the MCP connect handshake. On mcp 2.0 servers this comes from `DiscoverResult`; on legacy servers from `InitializeResult`. Server instructions provide usage guidelines, security notes, and configuration details that should be analyzed for potential security issues.
 
 **Request Body:**
 ```json
@@ -467,7 +467,7 @@ curl -X POST "http://localhost:8001/scan-instructions" \
 {
   "server_url": "http://127.0.0.1:8000/mcp",
   "server_name": "example-server",
-  "protocol_version": "2025-06-18",
+  "protocol_version": "2026-07-28",
   "instructions": "This server provides tools for data processing. Use with caution...",
   "status": "completed",
   "is_safe": false,
@@ -499,7 +499,7 @@ curl -X POST "http://localhost:8001/scan-instructions" \
 **Response Fields:**
 - `server_url`: The scanned server URL
 - `server_name`: Name of the MCP server
-- `protocol_version`: MCP protocol version
+- `protocol_version`: MCP protocol version negotiated during connect (for example `2026-07-28` on modern servers, or legacy handshake versions such as `2025-06-18`)
 - `instructions`: The full instructions text from the server
 - `status`: Scan status ("completed", "skipped", or "failed")
 - `is_safe`: Boolean indicating if instructions are safe (null if skipped)
