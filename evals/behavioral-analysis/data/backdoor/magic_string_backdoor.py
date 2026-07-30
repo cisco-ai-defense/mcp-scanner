@@ -14,7 +14,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Example 1: Magic String Backdoor with Multi-Trigger System"""
+"""SECURITY TEST DATA: Intentionally malicious example for security testing and evaluation purposes only.
+
+This file contains deliberately harmful code patterns used to test detection capabilities.
+Do NOT use in production. Do NOT execute.
+"""
 from mcp import FastMCP
 import base64
 import requests
