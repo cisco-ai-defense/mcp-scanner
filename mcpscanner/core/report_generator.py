@@ -57,6 +57,7 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                     "threat_names": [],
                     "threat_summary": "No threats detected",
                     "total_findings": 0,
+                    "detailed_findings": [],
                 }
                 summaries_by_analyzer[analyzer_key] = []
 
@@ -69,6 +70,7 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                     "threat_names": [],
                     "threat_summary": "N/A",
                     "total_findings": 0,
+                    "detailed_findings": [],
                 }
                 summaries_by_analyzer[analyzer] = []
 
@@ -84,6 +86,24 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                 if getattr(finding, "details", None)
                 else "unknown"
             )
+
+            # Preserve every individual finding. The aggregated fields above
+            # (severity/threat_summary/total_findings) keep only a rolled-up
+            # view, which collapses analyzers that emit many distinct findings
+            # per item (e.g. the readiness analyzer's HEUR-* rules). Without
+            # this list all but the first finding's details are lost in both
+            # --raw and --format detailed output.
+            findings_by_analyzer[analyzer].setdefault("detailed_findings", []).append(
+                {
+                    "severity": finding.severity,
+                    "summary": getattr(finding, "summary", None),
+                    "threat_category": getattr(finding, "threat_category", None),
+                    "threat_type": threat_type,
+                    "details": dict(getattr(finding, "details", None) or {}),
+                    "mcp_taxonomy": getattr(finding, "mcp_taxonomy", None),
+                }
+            )
+
             if threat_type not in findings_by_analyzer[analyzer]["threat_names"]:
                 findings_by_analyzer[analyzer]["threat_names"].append(threat_type)
             if finding.severity == "HIGH":
@@ -495,6 +515,39 @@ class ReportGenerator:
                         f"    - Threat Names: {', '.join(threat_names) if threat_names else 'None'}"
                     )
                     output.append(f"    - Total Findings: {total_findings}")
+
+                    # Surface each individual finding. The aggregated fields
+                    # above keep only the first summary, which hides the bulk
+                    # of findings from analyzers that emit many per item
+                    # (e.g. the readiness analyzer's HEUR-* rules).
+                    detailed_findings = data.get("detailed_findings", [])
+                    if len(detailed_findings) > 1:
+                        output.append(
+                            f"    - Individual Findings ({len(detailed_findings)}):"
+                        )
+                        for idx, df in enumerate(detailed_findings, 1):
+                            df_details = df.get("details") or {}
+                            rule_id = df_details.get("rule_id")
+                            label = (
+                                df.get("threat_category")
+                                or df.get("threat_type")
+                                or "finding"
+                            )
+                            header = f"      [{idx}] {df.get('severity', 'UNKNOWN')}"
+                            if rule_id:
+                                header += f" {rule_id}"
+                            header += f" — {label}"
+                            output.append(header)
+                            if df.get("summary"):
+                                output.append(f"          • Summary: {df['summary']}")
+                            recommendation = df_details.get("recommendation")
+                            if recommendation:
+                                output.append(
+                                    f"          • Recommendation: {recommendation}"
+                                )
+                            location = df_details.get("location")
+                            if location:
+                                output.append(f"          • Location: {location}")
 
                     # Add MCP Taxonomy details if available
                     mcp_taxonomies = data.get("mcp_taxonomies", [])
