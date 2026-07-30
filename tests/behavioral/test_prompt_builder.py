@@ -177,3 +177,43 @@ class TestPromptBuilder:
             1 for kw in example_keywords if kw.lower() in content.lower()
         )
         assert found_examples >= 2, "Prompt should contain example cases"
+
+
+class TestAlignmentPromptBuilderContent:
+    """Unit tests for single-function prompt content."""
+
+    def test_build_prompt_uses_parameter_name_and_security_flags(self) -> None:
+        from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
+            AlignmentPromptBuilder,
+        )
+        from mcpscanner.core.static_analysis.context_extractor import FunctionContext
+
+        ctx = FunctionContext(
+            name="execute_shell_command",
+            decorator_types=["<annotation>.tool"],
+            imports=[],
+            function_calls=[],
+            assignments=[],
+            control_flow={},
+            parameter_flows=[
+                {
+                    "parameter_name": "command",
+                    "reaches_external": True,
+                    "reaches_calls": ["ShellExecutor.execute_command"],
+                }
+            ],
+            constants={},
+            variable_dependencies={},
+            has_file_operations=False,
+            has_network_operations=False,
+            has_subprocess_calls=True,
+            has_eval_exec=False,
+            has_dangerous_imports=False,
+            docstring="Execute shell command with full shell capabilities.",
+            source='fn execute_shell_command(command: String) { ShellExecutor::execute_command(command) }',
+        )
+        prompt = AlignmentPromptBuilder().build_prompt(ctx)
+        assert "Parameter 'command'" in prompt
+        assert "SECURITY FLAGS" in prompt
+        assert "SUBPROCESS" in prompt
+        assert "execute_shell_command(command: String)" in prompt
