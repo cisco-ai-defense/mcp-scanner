@@ -70,7 +70,7 @@ class ThreatMapping:
             "severity": "HIGH",
             "aitech": "AITech-12.1",
             "aitech_name": "Tool Exploitation",
-            "aisubtech": "AISubtech-12.1.5",
+            "aisubtech": "AISubtech-12.1.4",
             "aisubtech_name": "Tool Shadowing",
             "description": "Disguising, substituting or duplicating legitimate tools within an agent or MCP server or tool registry, enabling malicious tools with identical or similar identifiers to intercept or replace trusted tool calls, leading to unauthorized actions, data exfiltration, or redirection of legitimate operations.",
         },
