@@ -4,6 +4,7 @@
 import time
 import secrets
 from typing import Dict
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -14,10 +15,18 @@ import uvicorn
 # ---- Simple In-Memory OAuth Provider (Authorization Code Grant) ----
 EXPECTED_CLIENT_ID = "test-client"
 EXPECTED_CLIENT_SECRET = "test-secret"
+OAUTH_BASE = "http://127.0.0.1:9001"
+EXPECTED_REDIRECT_URI = f"{OAUTH_BASE}/callback"
 TOKEN_TTL_SECONDS = 3600
 
 AUTH_CODES: Dict[str, Dict] = {}
 TOKENS: Dict[str, Dict] = {}
+
+
+def resolve_redirect_uri(redirect_uri: str) -> str:
+    if redirect_uri != EXPECTED_REDIRECT_URI:
+        raise HTTPException(status_code=400, detail="invalid_redirect_uri")
+    return EXPECTED_REDIRECT_URI
 
 
 def issue_code(client_id: str, redirect_uri: str, state: str | None):
@@ -35,11 +44,12 @@ def exchange_code(code: str, client_id: str, client_secret: str, redirect_uri: s
     data = AUTH_CODES.get(code)
     if not data:
         raise HTTPException(status_code=400, detail="invalid_grant")
+    safe_redirect_uri = resolve_redirect_uri(redirect_uri)
     if data["client_id"] != client_id or client_id != EXPECTED_CLIENT_ID:
         raise HTTPException(status_code=400, detail="invalid_client")
     if client_secret != EXPECTED_CLIENT_SECRET:
         raise HTTPException(status_code=400, detail="invalid_client")
-    if data["redirect_uri"] != redirect_uri:
+    if data["redirect_uri"] != safe_redirect_uri:
         raise HTTPException(status_code=400, detail="invalid_grant")
 
     # Issue access token
@@ -96,14 +106,10 @@ app: FastAPI = FastAPI(title="OAuth + MCP SSE")
 @app.get("/.well-known/oauth-authorization-server")
 async def oauth_discovery():
     return {
-        "issuer": (
-            OAUTH_BASE
-            if (OAUTH_BASE := "http://127.0.0.1:9001")
-            else "http://127.0.0.1:9001"
-        ),
-        "authorization_endpoint": "http://127.0.0.1:9001/oauth/authorize",
-        "token_endpoint": "http://127.0.0.1:9001/oauth/token",
-        "registration_endpoint": "http://127.0.0.1:9001/oauth/register",
+        "issuer": OAUTH_BASE,
+        "authorization_endpoint": f"{OAUTH_BASE}/oauth/authorize",
+        "token_endpoint": f"{OAUTH_BASE}/oauth/token",
+        "registration_endpoint": f"{OAUTH_BASE}/oauth/register",
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
@@ -118,10 +124,12 @@ async def oauth_register(request: Request):
     redirect_uris = body.get("redirect_uris") or []
     if not redirect_uris:
         return JSONResponse({"error": "invalid_client_metadata"}, status_code=400)
+    if any(uri != EXPECTED_REDIRECT_URI for uri in redirect_uris):
+        return JSONResponse({"error": "invalid_redirect_uri"}, status_code=400)
     return {
         "client_id": EXPECTED_CLIENT_ID,
         "client_secret": EXPECTED_CLIENT_SECRET,
-        "redirect_uris": redirect_uris,
+        "redirect_uris": [EXPECTED_REDIRECT_URI],
         "token_endpoint_auth_method": "client_secret_post",
     }
 
@@ -139,10 +147,12 @@ async def oauth_authorize(
     if client_id != EXPECTED_CLIENT_ID:
         raise HTTPException(status_code=400, detail="unauthorized_client")
 
-    code = issue_code(client_id, redirect_uri, state)
-    redirect_to = f"{redirect_uri}?code={code}"
+    safe_redirect_uri = resolve_redirect_uri(redirect_uri)
+    code = issue_code(client_id, safe_redirect_uri, state)
+    redirect_params = {"code": code}
     if state:
-        redirect_to += f"&state={state}"
+        redirect_params["state"] = state
+    redirect_to = f"{safe_redirect_uri}?{urlencode(redirect_params)}"
     return RedirectResponse(url=redirect_to, status_code=302)
 
 

@@ -390,8 +390,15 @@ Parameter Flow Tracking:
 
         # Security validation: Check that the untrusted input doesn't contain our delimiter tags
         if start_tag in analysis_content or end_tag in analysis_content:
+            # WARNING with structured fields so SIEM rules can match on
+            # ``prompt_injection_detected`` consistently across releases.
+            # ``func`` is included so operators can pivot to the offending
+            # source file without grepping the prompt body (which we
+            # deliberately don't log).
             self.logger.warning(
-                f"Potential prompt injection detected in function {func_context.name}: Input contains delimiter tags"
+                "prompt_injection_detected function=%s detail=%s",
+                func_context.name,
+                "untrusted_input_contains_delimiter_tag",
             )
 
         # Wrap the untrusted content with randomized delimiters
@@ -401,8 +408,14 @@ Parameter Flow Tracking:
 {analysis_content}
 {end_tag}
 """
-
-        return prompt.strip()
+        prompt = prompt.strip()
+        self.logger.debug(
+            "prompt built function=%s prompt_length=%d analysis_content_length=%d",
+            func_context.name,
+            len(prompt),
+            len(analysis_content),
+        )
+        return prompt
 
     def build_batch_prompt(self, func_contexts: List[FunctionContext]) -> str:
         """Build a batched prompt for analyzing multiple functions in one LLM call.
@@ -489,7 +502,14 @@ For functions with no issues, just include function_index, function_name, and mi
 {analysis_content}
 {end_tag}
 """
-        return prompt.strip()
+        prompt = prompt.strip()
+        self.logger.debug(
+            "prompt batch built functions=%d prompt_length=%d analysis_content_length=%d",
+            len(func_contexts),
+            len(prompt),
+            len(analysis_content),
+        )
+        return prompt
 
     def _format_call_chain(self, chain: List[Dict[str, Any]], indent: int = 0) -> str:
         """Format call chain recursively for display.

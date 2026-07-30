@@ -138,6 +138,15 @@ class MCPScannerConstants:
     LLM_RETRY_BASE_DELAY: float = float(
         os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0")
     )
+    # Above this duration a single LLM round-trip is logged at WARNING so
+    # operators can spot regional / quota / model-warming issues without
+    # bumping every behavioral log to DEBUG. 15s is roomy for a long
+    # alignment-verification prompt on Bedrock but aggressive enough to
+    # catch genuinely slow paths (e.g. cold-start Bedrock, cross-region
+    # OpenAI hops). Tune via env var when needed.
+    LLM_SLOW_REQUEST_THRESHOLD_MS: int = int(
+        os.getenv("MCP_SCANNER_LLM_SLOW_REQUEST_THRESHOLD_MS", "15000")
+    )
 
     # Behavioral Analyzer File Size Limits
     MAX_FILE_SIZE_BYTES: int = int(
@@ -241,6 +250,53 @@ class MCPScannerConstants:
         ext.strip()
         for ext in os.getenv("MCP_SCANNER_VT_EXCLUSION_EXTENSIONS", "").split(",")
         if ext.strip()
+    )
+
+    # PyPI Docker Scanner Configuration
+    DOCKER_IMAGE_NAME: str = os.getenv(
+        "MCP_SCANNER_DOCKER_IMAGE_NAME", "mcp-scanner-pypi"
+    )
+    DOCKER_IMAGE_TAG: str = os.getenv(
+        "MCP_SCANNER_DOCKER_IMAGE_TAG", "latest"
+    )
+    PYPI_SCAN_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_PYPI_SCAN_TIMEOUT", "300")
+    )
+
+    # npm Docker Scanner Configuration. Image is built from
+    # mcpscanner/docker/Dockerfile.npm and entrypoint_npm.py.
+    NPM_DOCKER_IMAGE_NAME: str = os.getenv(
+        "MCP_SCANNER_NPM_DOCKER_IMAGE_NAME", "mcp-scanner-npm"
+    )
+    NPM_DOCKER_IMAGE_TAG: str = os.getenv(
+        "MCP_SCANNER_NPM_DOCKER_IMAGE_TAG", "latest"
+    )
+    NPM_SCAN_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_NPM_SCAN_TIMEOUT", "300")
+    )
+    NPM_REGISTRY_URL: str = os.getenv(
+        "MCP_SCANNER_NPM_REGISTRY_URL", "https://registry.npmjs.org"
+    )
+    PYPI_INDEX_URL: str = os.getenv(
+        "MCP_SCANNER_PYPI_INDEX_URL", "https://pypi.org/pypi"
+    )
+
+    # Local (no-Docker) package-archive safety limits. Used by
+    # mcpscanner.core.package_sandbox to bound zip-bomb / traversal /
+    # symlink attacks when SDK users opt out of Docker isolation. Raise
+    # via env if you legitimately need to scan very large packages, but
+    # understand that local mode is *not* a strong sandbox.
+    PACKAGE_ARCHIVE_MAX_BYTES: int = int(
+        os.getenv("MCP_SCANNER_PACKAGE_ARCHIVE_MAX_BYTES", str(50 * 1024 * 1024))
+    )
+    PACKAGE_EXTRACTED_MAX_BYTES: int = int(
+        os.getenv("MCP_SCANNER_PACKAGE_EXTRACTED_MAX_BYTES", str(200 * 1024 * 1024))
+    )
+    PACKAGE_EXTRACTED_MAX_FILES: int = int(
+        os.getenv("MCP_SCANNER_PACKAGE_EXTRACTED_MAX_FILES", "10000")
+    )
+    PACKAGE_DOWNLOAD_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_PACKAGE_DOWNLOAD_TIMEOUT", "60")
     )
 
     # Vulnerable Package Configuration
