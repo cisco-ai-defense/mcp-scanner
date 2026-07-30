@@ -150,8 +150,14 @@ class TestMetaAnalyzerInit:
         analyzer = MetaAnalyzer(config)
         assert analyzer.name == "META"
         assert analyzer._model == config.llm_model
-        assert analyzer._temperature == 0.1
+        assert analyzer._temperature == config.llm_temperature
         assert analyzer._max_tokens == 8192
+
+    def test_init_uses_config_llm_temperature(self):
+        """MetaAnalyzer honours Config.llm_temperature (incl. MCP_SCANNER_DEFAULT_LLM_TEMPERATURE)."""
+        config = _make_config(llm_temperature=0.5)
+        analyzer = MetaAnalyzer(config)
+        assert analyzer._temperature == 0.5
 
     def test_init_without_api_key_raises(self):
         """MetaAnalyzer raises ValueError without an API key."""
@@ -2445,6 +2451,27 @@ class TestFPReasonCanonicalKey:
         assert "false_positive_reason" in contents, (
             "meta_analysis_prompt.md must instruct the LLM to use the "
             "canonical ``false_positive_reason`` key."
+        )
+        assert "publisher usage documentation" in contents, (
+            "meta_analysis_prompt.md must document when LLM prompt-injection "
+            "on first-party usage docs may be filtered as a false positive."
+        )
+        assert "There is **no** jailbreak or override language" in contents, (
+            "publisher-usage FP rule must require absence of jailbreak language."
+        )
+        assert (
+            "hidden context into parameters for exfiltration" in contents
+        ), (
+            "publisher-usage FP rule must require absence of context-harvesting."
+        )
+        assert "No other analyzer corroborates a distinct" in contents, (
+            "publisher-usage FP rule must keep corroborated threats."
+        )
+        assert "Examples that are **NOT** false positives" in contents, (
+            "meta_analysis_prompt.md must document threats that must not be filtered."
+        )
+        assert "context-harvesting language" in contents, (
+            "NOT-false-positive guidance must call out context-harvesting threats."
         )
 
 

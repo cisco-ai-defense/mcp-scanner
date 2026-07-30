@@ -337,6 +337,18 @@ class APIScanRequest(BaseModel):
     show_stats: bool = False
     rules_path: Optional[str] = None
     auth: Optional[APIAuthConfig] = None
+    connector_id: Optional[str] = Field(
+        None,
+        description=(
+            "Hybrid connector ID for private MCP servers. When set, the scanner "
+            "dials PROXY_RELAY_URL and forwards the real server_url via "
+            "x-aid-destination-url."
+        ),
+    )
+    tenant_id: Optional[str] = Field(
+        None,
+        description="Tenant ID for hybrid proxy relay routing (x-aid-tenant-id).",
+    )
 
     @field_validator("analyzers")
     @classmethod
