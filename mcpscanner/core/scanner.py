@@ -912,10 +912,12 @@ class Scanner:
 
             # Run YARA analysis on the tool parameters
             try:
-                # Remove description from the JSON as it is already analyzed
-                if "description" in tool_data:
-                    del tool_data["description"]
-                tool_json_str = json.dumps(tool_data)
+                # Remove description from a copy of tool_data, since it is
+                # already analyzed above. tool_data itself must stay intact
+                # for later analyzers (e.g. READINESS) that reuse it.
+                yara_tool_data = dict(tool_data)
+                yara_tool_data.pop("description", None)
+                tool_json_str = json.dumps(yara_tool_data)
                 yara_params_context = {"tool_name": name, "content_type": "parameters"}
                 yara_params_findings = await self._yara_analyzer.analyze(
                     tool_json_str, yara_params_context

@@ -440,6 +440,33 @@ async def test_analyze_tool_with_yara_analyzer(config):
 
 
 @pytest.mark.asyncio
+async def test_analyze_tool_yara_does_not_blank_description_for_readiness(config):
+    """Regression test: YARA's parameter scan used to delete 'description'
+    from the tool_data dict shared with READINESS, so every tool looked
+    description-less to READINESS (HEUR-009 false positive) regardless of
+    combined analyzer order. YARA must scan a copy, leaving tool_data intact
+    for analyzers that run after it."""
+    long_description = (
+        "Fetches the current weather forecast for a given city and date range."
+    )
+    mock_tool = MCPTool(name="test_tool", description=long_description)
+
+    with patch.object(YaraAnalyzer, "analyze", return_value=[]):
+        scanner = Scanner(config)
+        result = await scanner._analyze_tool(
+            mock_tool, [AnalyzerEnum.YARA, AnalyzerEnum.READINESS]
+        )
+
+    assert result.tool_name == "test_tool"
+    heur_009_findings = [
+        f
+        for f in result.findings
+        if f.analyzer == "READINESS" and f.details.get("rule_id") == "HEUR-009"
+    ]
+    assert heur_009_findings == []
+
+
+@pytest.mark.asyncio
 async def test_analyze_tool_with_custom_analyzer(config):
     """Test _analyze_tool method with custom analyzer."""
     mock_tool = MCPTool(name="test_tool", description="malicious content")
