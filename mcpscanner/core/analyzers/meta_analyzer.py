@@ -171,6 +171,7 @@ class MetaAnalyzer:
         """Initialize the Meta Analyzer.
 
         Uses the same LLM configuration as the LLM analyzer (from Config),
+        including ``llm_temperature`` (``MCP_SCANNER_DEFAULT_LLM_TEMPERATURE``),
         with higher max_tokens and timeout for the larger meta-analysis payloads.
 
         Args:
@@ -226,7 +227,7 @@ class MetaAnalyzer:
         # schema is small), but it's exposed for tests / future config
         # wiring rather than living as a magic number.
         self._max_tokens = 8192
-        self._temperature = 0.1
+        self._temperature = config.llm_temperature
         self._max_retries = config.llm_max_retries
         configured_timeout = float(config.llm_timeout or 0.0)
         recommended_floor = 60.0
