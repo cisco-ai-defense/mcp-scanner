@@ -49,6 +49,20 @@ from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 
 
+def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
+    """Dedupe key for merged MCP contexts.
+
+    Decorator hits from ContextExtractor and NativeAnalyzer can disagree on
+    ``name`` when ``@mcp.tool(name="custom")`` overrides the function name.
+    For decorated functions at a real source line, dedupe on line + decorators
+    only. Unresolved stubs (``line_number == 0``) still include ``name``.
+    """
+    decs = tuple(ctx.decorator_types)
+    if decs and ctx.line_number > 0:
+        return ("decorator", ctx.line_number, decs)
+    return ("full", ctx.name, ctx.line_number, decs)
+
+
 def _merge_mcp_function_contexts(
     primary: List[FunctionContext],
     supplemental: List[FunctionContext],
@@ -57,15 +71,12 @@ def _merge_mcp_function_contexts(
 
     NativeAnalyzer's Gap 8 pass finds programmatic registrations even when
     the primary extractor already surfaced decorator-based tools in the
-    same file. Dedupe on (name, line_number, decorator_types).
+    same file.
     """
-    seen = {
-        (ctx.name, ctx.line_number, tuple(ctx.decorator_types))
-        for ctx in primary
-    }
+    seen = {_context_dedupe_key(ctx) for ctx in primary}
     merged = list(primary)
     for ctx in supplemental:
-        key = (ctx.name, ctx.line_number, tuple(ctx.decorator_types))
+        key = _context_dedupe_key(ctx)
         if key in seen:
             continue
         seen.add(key)

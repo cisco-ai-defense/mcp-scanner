@@ -769,3 +769,46 @@ public class Calc {
     assert {c.name for c in caps} == {"Calc.add"}, [c.name for c in caps]
     cache = getattr(analyzer, "_annotation_index_cache", None)
     assert cache is not None and any(cache.values()), cache
+
+
+DESCRIPTOR_OBJECT_TOOL = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.addTool({
+  name: "descriptor-tool",
+  execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+});
+"""
+
+
+def test_descriptor_object_with_name_and_execute_handler() -> None:
+    """Object-literal registrations with both ``name`` and ``execute`` must
+    retain the inline handler, not just the name string."""
+    analyzer = NativeAnalyzer(DESCRIPTOR_OBJECT_TOOL, "descriptor.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert caps, "expected a capability from descriptor object registration"
+    assert any("descriptor-tool" in c.name for c in caps), [c.name for c in caps]
+    assert any(
+        t.startswith("<registration>.") and "tool" in t for c in caps for t in c.decorator_types
+    ), [c.decorator_types for c in caps]
+
+
+PYTHON_CUSTOM_TOOL_NAME = """\
+from fastmcp import FastMCP
+
+mcp = FastMCP("demo")
+
+@mcp.tool(name="custom")
+def add(a: int, b: int) -> int:
+    \"\"\"Add numbers.\"\"\"
+    return a + b
+"""
+
+
+def test_python_decorator_name_override_matches_context_extractor() -> None:
+    """NativeAnalyzer must honor decorator ``name=`` overrides like ContextExtractor."""
+    analyzer = NativeAnalyzer(PYTHON_CUSTOM_TOOL_NAME, "custom_name.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert {c.name for c in caps} == {"custom"}, [c.name for c in caps]

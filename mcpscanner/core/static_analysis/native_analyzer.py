@@ -3009,9 +3009,9 @@ class NativeAnalyzer:
                 )
                 if obj_name:
                     positional.append(("string", obj_name))
-                elif obj_handler is not None:
+                if obj_handler is not None:
                     positional.append(("inline", obj_handler))
-                else:
+                if not obj_name and obj_handler is None:
                     positional.append(("schema", None))
                 continue
 
@@ -3023,9 +3023,9 @@ class NativeAnalyzer:
                         )
                         if obj_name:
                             positional.append(("string", obj_name))
-                        elif obj_handler is not None:
+                        if obj_handler is not None:
                             positional.append(("inline", obj_handler))
-                        else:
+                        if not obj_name and obj_handler is None:
                             positional.append(("schema", None))
                         break
 
@@ -3136,8 +3136,8 @@ class NativeAnalyzer:
             if child.type not in ("object", "object_expression"):
                 continue
             tool_name: Optional[str] = None
-            for field in self._TS_ENDPOINT_NAME_FIELDS:
-                tool_name = self._ts_object_string_field(child, field)
+            for name_field in self._TS_ENDPOINT_NAME_FIELDS:
+                tool_name = self._ts_object_string_field(child, name_field)
                 if tool_name:
                     break
             if not tool_name:
@@ -3636,6 +3636,26 @@ class NativeAnalyzer:
                 dec_params = self._py_extract_call_kwargs(dec)
                 if dec_params:
                     decorator_params[dec_name] = dec_params
+
+        for _dec_name, params in decorator_params.items():
+            if "name" in params:
+                raw_name = params["name"]
+                if isinstance(raw_name, str):
+                    try:
+                        name = ast.literal_eval(raw_name)
+                    except (ValueError, SyntaxError):
+                        name = raw_name
+                else:
+                    name = raw_name
+            if "description" in params and not docstring:
+                raw_desc = params["description"]
+                if isinstance(raw_desc, str):
+                    try:
+                        docstring = ast.literal_eval(raw_desc)
+                    except (ValueError, SyntaxError):
+                        docstring = raw_desc
+                else:
+                    docstring = raw_desc
 
         # Extract parameters from AST
         parameters = []

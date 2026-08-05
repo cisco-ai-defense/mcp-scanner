@@ -52,6 +52,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
+          enable-cache: ${{ github.event_name != 'pull_request' }}
 
       - name: Install dependencies
         run: uv sync --group dev
@@ -389,6 +390,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_DEFAULT_VERSION }}
+          enable-cache: ${{ github.event_name != 'pull_request' }}
 
       - name: Install dependencies
         run: uv sync --group dev
