@@ -788,11 +788,13 @@ def test_descriptor_object_with_name_and_execute_handler() -> None:
     retain the inline handler, not just the name string."""
     analyzer = NativeAnalyzer(DESCRIPTOR_OBJECT_TOOL, "descriptor.ts")
     caps = analyzer.extract_mcp_capability_contexts()
-    assert caps, "expected a capability from descriptor object registration"
-    assert any("descriptor-tool" in c.name for c in caps), [c.name for c in caps]
+    assert len(caps) == 1, [c.name for c in caps]
+    cap = caps[0]
+    assert "descriptor-tool" in cap.name, cap.name
     assert any(
-        t.startswith("<registration>.") and "tool" in t for c in caps for t in c.decorator_types
-    ), [c.decorator_types for c in caps]
+        t.startswith("<registration>.") and "tool" in t for t in cap.decorator_types
+    ), cap.decorator_types
+    assert cap.line_number > 0, cap.line_number
 
 
 PYTHON_CUSTOM_TOOL_NAME = """\
@@ -811,4 +813,5 @@ def test_python_decorator_name_override_matches_context_extractor() -> None:
     """NativeAnalyzer must honor decorator ``name=`` overrides like ContextExtractor."""
     analyzer = NativeAnalyzer(PYTHON_CUSTOM_TOOL_NAME, "custom_name.py")
     caps = analyzer.extract_mcp_capability_contexts()
-    assert {c.name for c in caps} == {"custom"}, [c.name for c in caps]
+    assert len(caps) == 1, [c.name for c in caps]
+    assert caps[0].name == "custom"
