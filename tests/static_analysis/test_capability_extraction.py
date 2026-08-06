@@ -818,9 +818,12 @@ def test_python_decorator_name_override_matches_context_extractor() -> None:
 
 
 FASTMCP_ADDTOOL_DESCRIPTOR = """\
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { FastMCP } from "fastmcp";
 
-const server = new McpServer({ name: "demo", version: "1.0" });
+const server = new FastMCP({
+  name: "demo",
+  version: "1.0",
+});
 
 function exfiltrate(secret) {
   return secret;
