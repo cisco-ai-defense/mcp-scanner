@@ -82,6 +82,7 @@ class _AcceptedFile:
     path: str
     source_bytes: bytes
     source_text: str
+    tool_handler_module: bool = False
 
 
 class BehavioralCodeAnalyzer(BaseAnalyzer):
@@ -263,9 +264,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 capability_files = self._prefilter_capability_files(source_files)
                 self.logger.info(
-                    "behavioral prefilter scanned=%d kept=%d",
+                    "behavioral prefilter scanned=%d kept=%d tool_handler_modules=%d",
                     len(source_files),
                     len(capability_files),
+                    sum(1 for f in capability_files if f.tool_handler_module),
                 )
 
                 if source_files and not capability_files:
@@ -383,9 +385,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         file_cga = None
 
                     file_start = time.perf_counter()
+                    file_context = {
+                        **context,
+                        "tool_handler_module": accepted.tool_handler_module,
+                    }
                     file_findings = await self._analyze_file(
                         accepted.path,
-                        context,
+                        file_context,
                         file_cga,
                         cached_source=accepted.source_text or None,
                     )
@@ -583,7 +589,78 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         source_text=source_code,
                     )
                 )
-        return accepted
+        expanded = self._expand_tool_handler_modules(accepted, source_files)
+        if len(expanded) != len(accepted):
+            self.logger.info(
+                "behavioral prefilter expanded tool-handler modules: +%d files",
+                len(expanded) - len(accepted),
+            )
+        return expanded
+
+    def _expand_tool_handler_modules(
+        self,
+        accepted: List[_AcceptedFile],
+        source_files: List[str],
+    ) -> List[_AcceptedFile]:
+        """Include plain tool-implementation modules referenced by MCP servers.
+
+        Servers like PagerDuty's ``pagerduty_mcp/server.py`` register tools
+        imported from a sibling ``tools/`` package. Those implementation files
+        carry no MCP SDK markers and are silently skipped by the byte prefilter.
+        """
+        import re
+
+        by_path = {item.path: item for item in accepted}
+        source_set = set(source_files)
+
+        def add_handler_module(path: str, *, source_text: str, source_bytes: bytes) -> None:
+            if path in by_path:
+                return
+            by_path[path] = _AcceptedFile(
+                path=path,
+                source_bytes=source_bytes,
+                source_text=source_text,
+                tool_handler_module=True,
+            )
+
+        tools_dir_pattern = re.compile(
+            r"from\s+(?:\.\.|\.)?[\w.]+\.tools\s+import|"
+            r"from\s+\.tools\s+import|"
+            r"\bread_tools\b|\bwrite_tools\b"
+        )
+
+        for item in list(accepted):
+            if not item.path.endswith(".py"):
+                continue
+            text = item.source_text or ""
+            if not tools_dir_pattern.search(text):
+                continue
+            tools_dir = Path(item.path).parent / "tools"
+            if not tools_dir.is_dir():
+                continue
+            for py_path in sorted(tools_dir.rglob("*.py")):
+                py_str = str(py_path)
+                if py_str not in source_set or py_str in by_path:
+                    continue
+                rel_parts = py_path.parts
+                if "__pycache__" in rel_parts or any(
+                    part.startswith(".") for part in rel_parts
+                ):
+                    continue
+                try:
+                    file_size = os.path.getsize(py_str)
+                    if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
+                        continue
+                    with open(py_str, "rb") as f:
+                        source_bytes = f.read()
+                    source_code = source_bytes.decode("utf-8", errors="replace")
+                except OSError:
+                    continue
+                add_handler_module(
+                    py_str, source_text=source_code, source_bytes=source_bytes
+                )
+
+        return list(by_path.values())
 
     def _find_python_files(self, directory: str) -> List[str]:
         """Find all Python files in a directory (legacy method).
@@ -690,6 +767,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             List of security findings.
         """
         file_path = context.get("file_path", "unknown")
+        tool_handler_module = bool(context.get("tool_handler_module"))
         findings = []
         func_contexts = []
 
@@ -700,32 +778,39 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         try:
             if is_python:
-                # Try primary ContextExtractor first (for MCP-decorated functions)
-                try:
-                    extractor = ContextExtractor(source_code, file_path)
-                    func_contexts = extractor.extract_mcp_function_contexts()
-                    if func_contexts:
-                        self.logger.debug(
-                            f"Found {len(func_contexts)} MCP functions in {file_path}"
-                        )
-                except Exception as e:
-                    self.logger.debug(
-                        f"ContextExtractor failed for {file_path}: {e}, using NativeAnalyzer"
-                    )
-                    func_contexts = []
-
-                if not func_contexts:
-                    self.logger.debug(
-                        f"No MCP functions found in {file_path}, using NativeAnalyzer fallback"
-                    )
+                if tool_handler_module:
                     native_analyzer = NativeAnalyzer(source_code, file_path)
                     func_contexts = native_analyzer.extract_mcp_capability_contexts(
-                        cross_file_analyzer=context.get("cross_file_analyzer")
+                        cross_file_analyzer=context.get("cross_file_analyzer"),
+                        tool_handler_module=True,
                     )
-                    if func_contexts:
+                else:
+                    # Try primary ContextExtractor first (for MCP-decorated functions)
+                    try:
+                        extractor = ContextExtractor(source_code, file_path)
+                        func_contexts = extractor.extract_mcp_function_contexts()
+                        if func_contexts:
+                            self.logger.debug(
+                                f"Found {len(func_contexts)} MCP functions in {file_path}"
+                            )
+                    except Exception as e:
                         self.logger.debug(
-                            f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
+                            f"ContextExtractor failed for {file_path}: {e}, using NativeAnalyzer"
                         )
+                        func_contexts = []
+
+                    if not func_contexts:
+                        self.logger.debug(
+                            f"No MCP functions found in {file_path}, using NativeAnalyzer fallback"
+                        )
+                        native_analyzer = NativeAnalyzer(source_code, file_path)
+                        func_contexts = native_analyzer.extract_mcp_capability_contexts(
+                            cross_file_analyzer=context.get("cross_file_analyzer")
+                        )
+                        if func_contexts:
+                            self.logger.debug(
+                                f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
+                            )
 
             elif is_js_ts:
                 self.logger.debug(f"Using NativeAnalyzer for JS/TS file: {file_path}")

@@ -132,6 +132,12 @@ _MCP_REGISTRATION_METHODS: Set[str] = {
     "tool",
     "registertool",
     "addtool",
+    # mark3labs/mcp-go tool factories (grafana/mcp-grafana, etc.)
+    "musttool",
+    "newtool",
+    # Playwright-style declarative tool wrappers
+    "definetool",
+    "definetabtool",
     # prompts
     "prompt",
     "registerprompt",
@@ -157,6 +163,35 @@ _MCP_REGISTRATION_METHODS: Set[str] = {
 # method name. See ``_LOW_LEVEL_SCHEMA_TO_CAPABILITY`` below.
 _MCP_LOW_LEVEL_REGISTRATION_METHODS: Set[str] = {
     "setrequesthandler",
+}
+
+# Single-word SDK method names that collide with ordinary domain APIs
+# (``client.resource``, ``router.prompt``, …). These require a trusted
+# MCP receiver when provenance is available; in loose mode they are
+# rejected when called on a non-empty receiver.
+_AMBIGUOUS_REGISTRATION_METHODS: Set[str] = {
+    "resource",
+    "tool",
+    "prompt",
+}
+
+# Receivers that commonly expose non-MCP ``.resource()`` / ``.tool()``
+# methods. Used in loose provenance mode to suppress HTTP/DB false positives
+# without blocking ``server.tool(...)`` on conventional MCP variable names.
+_NON_MCP_RECEIVER_NAMES: Set[str] = {
+    "client",
+    "c",
+    "ctx",
+    "context",
+    "db",
+    "conn",
+    "http",
+    "req",
+    "res",
+    "request",
+    "response",
+    "router",
+    "api",
 }
 
 
@@ -546,6 +581,8 @@ _MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = {
     "go": (
         "modelcontextprotocol/go-sdk",
         "modelcontextprotocol/go-sdk/mcp",
+        "mark3labs/mcp-go",
+        "mark3labs/mcp-go/mcp",
     ),
     "rust": (
         "rmcp",
@@ -601,6 +638,9 @@ _MCP_PREFILTER_RE = _re.compile(
     rb"(?:"
     rb"@modelcontextprotocol/sdk"  # JS/TS module specifier
     rb"|modelcontextprotocol/go-sdk"  # Go module path
+    rb"|mark3labs/mcp-go"  # mark3labs Go MCP SDK (grafana/mcp-grafana)
+    rb"|MustTool\b|NewTool\b"  # mark3labs/mcp-go tool factories
+    rb"|defineTool\b|defineTabTool\b"  # Playwright-style declarative tools
     rb"|modelcontextprotocol\.kotlin"  # Kotlin SDK
     rb"|io\.modelcontextprotocol"  # Java/Kotlin SDK
     rb"|org\.springframework\.ai"  # Spring AI MCP
@@ -882,6 +922,8 @@ class NativeAnalyzer:
     def extract_mcp_capability_contexts(
         self,
         cross_file_analyzer: Optional[Any] = None,
+        *,
+        tool_handler_module: bool = False,
     ) -> List[FunctionContext]:
         """Extract contexts ONLY for functions exposed as MCP capabilities.
 
@@ -929,12 +971,13 @@ class NativeAnalyzer:
         """
         if self.language == "python":
             return self._py_extract_capability_contexts(
-                cross_file_analyzer=cross_file_analyzer
+                cross_file_analyzer=cross_file_analyzer,
+                tool_handler_module=tool_handler_module,
             )
 
         # Gap 12: byte-level prefilter — skip the whole tree-sitter
         # parse for files that contain none of the MCP marker tokens.
-        if not self._has_mcp_markers():
+        if not tool_handler_module and not self._has_mcp_markers():
             return []
 
         if self.language not in self.FUNCTION_NODE_TYPES:
@@ -1457,6 +1500,7 @@ class NativeAnalyzer:
         self,
         *,
         cross_file_analyzer: Any = None,
+        tool_handler_module: bool = False,
     ) -> List[FunctionContext]:
         """Lazy Python capability extraction (Gap 5 + Gap 8).
 
@@ -1503,12 +1547,18 @@ class NativeAnalyzer:
         the helper-bloat regression this method was written to fix
         (every plain helper would be sent to dataflow analysis).
         """
-        if not self._has_mcp_markers():
+        if not tool_handler_module and not self._has_mcp_markers():
             return []
         try:
             tree = ast.parse(self.source_code, filename=str(self.file_path))
         except SyntaxError:
             return []
+
+        if tool_handler_module:
+            module_imports = self._py_extract_imports(tree)
+            return self._py_extract_tool_handler_module_functions(
+                tree, module_imports
+            )
 
         module_imports = self._py_extract_imports(tree)
         wrapper_decorators = self._py_collect_wrapper_decorators(tree)
@@ -1631,6 +1681,34 @@ class NativeAnalyzer:
             ctx.decorator_types.append(f"<registration>.{cap_kind}")
             contexts.append(ctx)
 
+        return contexts
+
+    def _py_extract_tool_handler_module_functions(
+        self,
+        tree: ast.AST,
+        module_imports: List[str],
+    ) -> List[FunctionContext]:
+        """Extract public module-level functions from a tool implementation file.
+
+        Used for split registration patterns (PagerDuty-style) where plain
+        tool handlers live under ``tools/`` without MCP SDK imports.
+        """
+        contexts: List[FunctionContext] = []
+        for node in tree.body if isinstance(tree, ast.Module) else []:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name.startswith("_"):
+                continue
+            try:
+                ctx = self._py_extract_function(node, module_imports)
+            except Exception as e:
+                self.logger.debug(
+                    f"Failed to extract tool handler {node.name!r} from "
+                    f"{self.file_path}: {e}"
+                )
+                continue
+            ctx.decorator_types.append("<tool_module>.tool")
+            contexts.append(ctx)
         return contexts
 
     def _py_collect_wrapper_decorators(self, tree: ast.AST) -> Dict[str, str]:
@@ -2476,9 +2554,18 @@ class NativeAnalyzer:
             # Loose mode preserves backward compatibility when imports
             # are missing or the file uses unconventional aliasing.
             # Provenance is best-effort, not authoritative.
+            receiver = self._ts_call_receiver_name(call_node) or ""
+            if method_lc in _AMBIGUOUS_REGISTRATION_METHODS and receiver:
+                recv_base = receiver.lower().split(".")[0]
+                if recv_base in _NON_MCP_RECEIVER_NAMES:
+                    return False
             return True
 
         receiver = self._ts_call_receiver_name(call_node) or ""
+        if method_lc in _AMBIGUOUS_REGISTRATION_METHODS and receiver:
+            recv_base = receiver.lower().split(".")[0]
+            if receiver not in trusted_receivers and recv_base in _NON_MCP_RECEIVER_NAMES:
+                return False
         if not receiver:
             # Bare ``tool(...)`` calls without a receiver are treated as
             # trusted because they can only have come from a direct
@@ -2604,7 +2691,7 @@ class NativeAnalyzer:
             # → expose alias ``mcp``; allow ``import alias "..."`` form too.
             if self.language == "go":
                 m = _re.search(
-                    r'^\s*(?:import\s+)?(?:([\w]+)\s+)?"[^"]*modelcontextprotocol[^"]*"',
+                    r'^\s*(?:import\s+)?(?:([\w]+)\s+)?"[^"]*(?:modelcontextprotocol|mark3labs/mcp-go)[^"]*"',
                     stmt,
                 )
                 if m:
@@ -2795,6 +2882,13 @@ class NativeAnalyzer:
                     "property_identifier",
                 ):
                     return self._ts_get_node_text(child)
+        if func.type in (
+            "identifier",
+            "simple_identifier",
+            "field_identifier",
+            "property_identifier",
+        ):
+            return self._ts_get_node_text(func)
         return None
 
     def _ts_call_arguments_node(self, call_node: "Node") -> Optional["Node"]:
@@ -3001,11 +3095,17 @@ class NativeAnalyzer:
         handler_name: Optional[str] = None
 
         if handler_node is None and identifier_refs:
-            # Prefer the LAST identifier: in ``mcp.AddTool(server, ..., add)``
-            # ``server`` is the receiver, ``add`` is the handler. The
-            # inline-function check above already covers the JS/TS case
-            # where the handler is the first inline argument.
-            handler_name = identifier_refs[-1]
+            method_lc = capability_method.lower()
+            if method_lc in ("musttool", "newtool"):
+                handler_name = self._ts_pick_go_tool_factory_handler(
+                    identifier_refs
+                )
+            else:
+                # Prefer the LAST identifier: in ``mcp.AddTool(server, ..., add)``
+                # ``server`` is the receiver, ``add`` is the handler. The
+                # inline-function check above already covers the JS/TS case
+                # where the handler is the first inline argument.
+                handler_name = identifier_refs[-1]
 
         if handler_node is None and handler_name is None:
             return None
@@ -3056,12 +3156,36 @@ class NativeAnalyzer:
             ):
                 obj_name = _strip_string_quotes(self._ts_get_node_text(value_node))
             elif (
-                key in ("handler", "execute", "fn", "callback", "run")
+                key in ("handler", "handle", "execute", "fn", "callback", "run")
                 and value_node.type in func_types
             ):
                 obj_handler = value_node
+            elif key == "schema" and value_node.type in (
+                "object",
+                "object_expression",
+            ):
+                nested_name, _ = self._ts_extract_handler_from_object(
+                    value_node, func_types
+                )
+                if nested_name and obj_name is None:
+                    obj_name = nested_name
 
         return obj_name, obj_handler
+
+    @staticmethod
+    def _ts_pick_go_tool_factory_handler(identifier_refs: List[str]) -> Optional[str]:
+        """Pick the handler fn from ``MustTool(name, desc, HANDLER, ...)`` args.
+
+        Trailing ``mcp.With*`` annotation helpers are skipped.
+        """
+        for ref in identifier_refs:
+            if ref.startswith("mcp."):
+                continue
+            base = ref.rsplit(".", 1)[-1]
+            if base.startswith("With"):
+                continue
+            return ref
+        return None
 
     def _ts_find_function_def_by_name(
         self, root: "Node", target_name: str, func_types: Set[str]
