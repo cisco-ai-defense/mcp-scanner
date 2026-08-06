@@ -87,6 +87,372 @@ func (c *client) resource(ctx context.Context, path string) ([]byte, error) {
 }
 """
 
+FASTAPI_MCP_APP = """\
+from fastapi import FastAPI
+from fastapi_mcp import FastApiMCP
+
+app = FastAPI()
+
+@app.get("/items", operation_id="list_items")
+def list_items():
+    return []
+
+@app.post("/items", operation_id="create_item")
+async def create_item():
+    return {}
+
+mcp = FastApiMCP(app)
+mcp.mount_http()
+"""
+
+FASTMCP_DECORATOR = """\
+from fastmcp import FastMCP
+
+mcp = FastMCP("demo")
+
+@mcp.tool
+def add(a: int, b: int) -> int:
+    return a + b
+"""
+
+MCPSERVER_V2 = """\
+from mcp.server.mcpserver import MCPServer
+
+app = MCPServer("demo")
+
+@app.tool
+def greet(name: str) -> str:
+    return f"hello {name}"
+"""
+
+PAGERDUTY_REGISTRATION = """\
+from mcp.server.fastmcp import FastMCP
+
+def add_read_only_tool(mcp_instance: FastMCP, tool):
+    mcp_instance.add_tool(tool)
+
+def list_incidents():
+    return []
+
+mcp = FastMCP("demo")
+add_read_only_tool(mcp, list_incidents)
+"""
+
+FASTAPI_MCP_ROUTER = """\
+from fastapi import APIRouter
+from fastapi_mcp import FastApiMCP
+
+router = APIRouter()
+
+@router.get("/health", operation_id="health_check")
+def health():
+    return {"ok": True}
+
+mcp = FastApiMCP(router)
+"""
+
+OFFICIAL_SDK_FASTMCP = """\
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("demo")
+
+@mcp.tool
+def ping() -> str:
+    return "pong"
+"""
+
+PROGRAMMATIC_ADD_TOOL = """\
+from fastmcp import FastMCP
+
+def multiply(a: int, b: int) -> int:
+    return a * b
+
+mcp = FastMCP("demo")
+mcp.add_tool(multiply)
+"""
+
+VANILLA_FASTAPI_MCP_MOUNT = """\
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from mcp.server import MCPServer
+
+mcp = MCPServer("Notes")
+
+
+@mcp.tool()
+def add_note(text: str) -> str:
+    return f"Saved: {text}"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with mcp.session_manager.run():
+        yield
+
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/mcp-server", mcp.streamable_http_app())
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+"""
+
+VANILLA_FASTAPI_REST_ONLY = """\
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/items")
+def list_items():
+    return []
+
+
+@app.post("/items")
+def create_item():
+    return {}
+"""
+
+FLASK_MCP_SERVER = """\
+from flask import Flask
+from flask_mcp_server import Mcp, mount_mcp
+
+app = Flask(__name__)
+
+
+@Mcp.tool(name="sum")
+def sum_numbers(a: int, b: int) -> int:
+    return a + b
+
+
+@app.route("/health")
+def health():
+    return {"status": "ok"}
+
+
+mount_mcp(app, url_prefix="/mcp")
+"""
+
+FLASK_REST_ONLY = """\
+from flask import Flask
+
+app = Flask(__name__)
+
+
+@app.route("/items")
+def list_items():
+    return []
+
+
+def helper():
+    return None
+"""
+
+PLAIN_FLASK_HAND_ROLLED_MCP = """\
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+
+
+def add_numbers(a: int, b: int) -> int:
+    return a + b
+
+
+def search_items(query: str):
+    return []
+
+
+TOOLS = {
+    "add": add_numbers,
+    "search": search_items,
+}
+
+
+@app.route("/mcp", methods=["POST"])
+def mcp_endpoint():
+    data = request.get_json(force=True)
+    method = data.get("method")
+    if method == "tools/list":
+        return jsonify({"jsonrpc": "2.0", "result": {"tools": []}, "id": data.get("id")})
+    if method == "tools/call":
+        name = data.get("params", {}).get("name")
+        handler = TOOLS[name]
+        return jsonify({"jsonrpc": "2.0", "result": handler(**{}), "id": data.get("id")})
+    return jsonify({"jsonrpc": "2.0", "error": {"code": -32601}, "id": data.get("id")})
+"""
+
+PLAIN_FLASK_MCP_HELPER_MODULE = """\
+TOOLS = {
+    "add": add_numbers,
+}
+
+
+def add_numbers(a: int, b: int) -> int:
+    return a + b
+
+
+def handle_request(method, params):
+    if method == "tools/call":
+        name = params.get("name")
+        return TOOLS[name](**params.get("arguments", {}))
+    if method == "tools/list":
+        return {"tools": [{"name": n} for n in TOOLS]}
+    return {}
+"""
+
+PLAIN_FLASK_HAND_ROLLED_REGISTER = """\
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+tool_registry = {}
+
+
+def register_tool(name, handler):
+    tool_registry[name] = handler
+
+
+def multiply(a: int, b: int) -> int:
+    return a * b
+
+
+register_tool("multiply", multiply)
+
+
+@app.route("/mcp", methods=["POST"])
+def mcp_endpoint():
+    data = request.get_json(force=True)
+    if data.get("method") == "tools/call":
+        name = data["params"]["name"]
+        return jsonify({"result": tool_registry[name]()})
+    return jsonify({})
+"""
+
+PLAIN_FASTAPI_HAND_ROLLED_MCP = """\
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+
+async def add_numbers(a: int, b: int) -> int:
+    return a + b
+
+
+async def list_items():
+    return []
+
+
+TOOLS = {
+    "add": add_numbers,
+    "list_items": list_items,
+}
+
+
+@app.post("/mcp")
+async def mcp_endpoint(request: Request):
+    body = await request.json()
+    method = body.get("method")
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "result": {"tools": []}, "id": body.get("id")}
+    if method == "tools/call":
+        name = body.get("params", {}).get("name")
+        handler = TOOLS[name]
+        result = await handler(**body.get("params", {}).get("arguments", {}))
+        return {"jsonrpc": "2.0", "result": result, "id": body.get("id")}
+    return {"jsonrpc": "2.0", "error": {"code": -32601}, "id": body.get("id")}
+
+
+@app.get("/health")
+async def health():
+    return {"ok": True}
+"""
+
+PLAIN_FASTAPI_HAND_ROLLED_ROUTER = """\
+from fastapi import APIRouter, Request
+
+router = APIRouter()
+
+
+def echo(message: str) -> str:
+    return message
+
+
+tool_handlers = {
+    "echo": echo,
+}
+
+
+@router.post("/mcp")
+async def mcp_endpoint(request: Request):
+    body = await request.json()
+    match body.get("method"):
+        case "tools/list":
+            return {"tools": []}
+        case "tools/call":
+            name = body["params"]["name"]
+            return tool_handlers[name](**body["params"].get("arguments", {}))
+    return {}
+"""
+
+PLAIN_FASTAPI_HAND_ROLLED_DISPATCH_TABLE = """\
+from fastapi import FastAPI, Request
+
+app = FastAPI()
+
+
+def multiply(a: int, b: int) -> int:
+    return a * b
+
+
+MCP_METHODS = {
+    "tools/list": lambda params: {"tools": [{"name": "multiply"}]},
+    "tools/call": lambda params: multiply(**params.get("arguments", {})),
+}
+
+
+@app.post("/mcp")
+async def mcp_rpc(request: Request):
+    body = await request.json()
+    handler = MCP_METHODS.get(body.get("method"))
+    if handler is None:
+        return {"error": {"code": -32601}}
+    return {"result": handler(body.get("params", {}))}
+"""
+
+FASTMCP_HTTP_APP_MOUNT = """\
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastmcp import FastMCP
+
+mcp = FastMCP("demo")
+
+
+@mcp.tool
+def greet(name: str) -> str:
+    return f"hello {name}"
+
+
+mcp_app = mcp.http_app(path="/mcp")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with mcp_app.lifespan(app):
+        yield
+
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/mcp-server", mcp_app)
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+"""
+
 
 def test_mark3labs_musttool_extracts_named_handler() -> None:
     analyzer = NativeAnalyzer(GRAFANA_MUST_TOOL, "datasources.go")
@@ -147,3 +513,148 @@ def test_expand_tool_handler_modules_includes_sibling_tools_dir(tmp_path) -> Non
     handler_paths = {item.path for item in expanded if item.tool_handler_module}
     assert str(tools / "incidents.py") in handler_paths
     assert str(tools / "alerts.py") in handler_paths
+
+
+def test_fastapi_mcp_extracts_route_handlers() -> None:
+    analyzer = NativeAnalyzer(FASTAPI_MCP_APP, "main.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"list_items", "create_item"}, names
+    assert all(
+        any("fastapi_mcp" in t for t in c.decorator_types) for c in caps
+    )
+
+
+def test_fastmcp_decorator_tool() -> None:
+    analyzer = NativeAnalyzer(FASTMCP_DECORATOR, "server.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "add"
+
+
+def test_mcpserver_v2_decorator_tool() -> None:
+    analyzer = NativeAnalyzer(MCPSERVER_V2, "server.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "greet"
+
+
+def test_add_read_only_tool_wrapper_registers_handler() -> None:
+    analyzer = NativeAnalyzer(PAGERDUTY_REGISTRATION, "server.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "list_incidents"
+    assert "<registration>.tool" in caps[0].decorator_types
+
+
+def test_fastapi_mcp_extracts_apirouter_routes() -> None:
+    analyzer = NativeAnalyzer(FASTAPI_MCP_ROUTER, "routes.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "health_check"
+
+
+def test_official_sdk_fastmcp_import_path() -> None:
+    analyzer = NativeAnalyzer(OFFICIAL_SDK_FASTMCP, "server.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "ping"
+
+
+def test_programmatic_add_tool() -> None:
+    analyzer = NativeAnalyzer(PROGRAMMATIC_ADD_TOOL, "server.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "multiply"
+    assert "<registration>.tool" in caps[0].decorator_types
+
+
+def test_vanilla_fastapi_mcp_mount_extracts_decorated_tools_only() -> None:
+    analyzer = NativeAnalyzer(VANILLA_FASTAPI_MCP_MOUNT, "main.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"add_note"}, names
+    assert any("web_transport" in t for c in caps for t in c.decorator_types)
+
+
+def test_vanilla_fastapi_rest_routes_are_not_mcp_tools() -> None:
+    analyzer = NativeAnalyzer(VANILLA_FASTAPI_REST_ONLY, "main.py")
+    assert not analyzer._has_mcp_markers()
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert caps == []
+
+
+def test_flask_mcp_server_extracts_mcp_tool_not_rest_routes() -> None:
+    analyzer = NativeAnalyzer(FLASK_MCP_SERVER, "app.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"sum_numbers"}, names
+    assert "health" not in names
+
+
+def test_flask_rest_only_has_no_capabilities() -> None:
+    analyzer = NativeAnalyzer(FLASK_REST_ONLY, "app.py")
+    assert not analyzer._has_mcp_markers()
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert caps == []
+
+
+def test_fastmcp_http_app_mount_on_fastapi() -> None:
+    analyzer = NativeAnalyzer(FASTMCP_HTTP_APP_MOUNT, "main.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"greet"}, names
+    assert "health" not in names
+
+
+def test_plain_flask_hand_rolled_mcp_registry() -> None:
+    analyzer = NativeAnalyzer(PLAIN_FLASK_HAND_ROLLED_MCP, "app.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"add", "search"}, names
+    assert "mcp_endpoint" not in names
+    assert all(
+        any("hand_rolled_mcp" in t for t in c.decorator_types) for c in caps
+    )
+
+
+def test_plain_flask_mcp_helper_module_registry() -> None:
+    analyzer = NativeAnalyzer(PLAIN_FLASK_MCP_HELPER_MODULE, "mcp_helper.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "add"
+
+
+def test_plain_flask_hand_rolled_register_tool_call() -> None:
+    analyzer = NativeAnalyzer(PLAIN_FLASK_HAND_ROLLED_REGISTER, "app.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "multiply"
+    assert "mcp_endpoint" not in {c.name for c in caps}
+
+
+def test_plain_fastapi_hand_rolled_mcp_registry() -> None:
+    analyzer = NativeAnalyzer(PLAIN_FASTAPI_HAND_ROLLED_MCP, "main.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"add", "list_items"}, names
+    assert "mcp_endpoint" not in names
+    assert "health" not in names
+    assert all(
+        any("hand_rolled_mcp" in t for t in c.decorator_types) for c in caps
+    )
+
+
+def test_plain_fastapi_hand_rolled_apirouter_match_dispatch() -> None:
+    analyzer = NativeAnalyzer(PLAIN_FASTAPI_HAND_ROLLED_ROUTER, "routes.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "echo"
+    assert "mcp_endpoint" not in {c.name for c in caps}
+
+
+def test_plain_fastapi_hand_rolled_dispatch_table_does_not_extract_lambdas() -> None:
+    """Dispatch tables that wrap handlers in lambdas stay conservative (no FP)."""
+    analyzer = NativeAnalyzer(PLAIN_FASTAPI_HAND_ROLLED_DISPATCH_TABLE, "main.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert caps == []

@@ -574,7 +574,10 @@ _MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = {
     ),
     "python": (
         "fastmcp",
+        "fastapi_mcp",
+        "flask_mcp_server",
         "mcp.server",
+        "mcp.server.mcpserver",
         "mcp.types",
         "modelcontextprotocol",
     ),
@@ -618,6 +621,8 @@ _MCP_KNOWN_SERVER_CLASSES: Set[str] = {
     "FastMCP",
     # Python
     "Server",
+    "MCPServer",
+    "FastApiMCP",
     # Kotlin
     "Server",
     # .NET (uncommon — usually attribute-driven, not instance-bound)
@@ -645,7 +650,15 @@ _MCP_PREFILTER_RE = _re.compile(
     rb"|io\.modelcontextprotocol"  # Java/Kotlin SDK
     rb"|org\.springframework\.ai"  # Spring AI MCP
     rb"|ModelContextProtocol"  # .NET SDK
-    rb"|fastmcp"  # Python FastMCP
+    rb"|fastmcp"  # Python FastMCP (standalone + official SDK high-level)
+    rb"|fastapi_mcp"  # Tadata FastAPI-MCP bridge
+    rb"|FastApiMCP"  # fastapi_mcp server class
+    rb"|flask_mcp_server"  # Flask MCP HTTP transport
+    rb"|mount_mcp\b"  # flask-mcp-server mount helper
+    rb"|streamable_http_app"  # MCP SDK / FastMCP HTTP ASGI app
+    rb"|sse_app\b"  # MCP SDK legacy SSE ASGI app
+    rb"|\.http_app\b"  # FastMCP ASGI mount helper
+    rb"|MCPServer\("  # Official Python SDK v2 server class
     rb"|mcp\.server"  # Python low-level Server
     rb"|McpServer"  # JS/TS / .NET class
     rb"|FastMCP\("  # Python instantiation
@@ -667,6 +680,7 @@ _MCP_PREFILTER_RE = _re.compile(
     rb"|@server\.list_prompts\b|@server\.get_prompt\b"
     rb"|@server\.list_resources\b|@server\.read_resource\b"
     rb"|@mcp\.tool\b|@mcp\.prompt\b|@mcp\.resource\b"
+    rb"|tools/call|tools/list"  # hand-rolled JSON-RPC MCP dispatch
     rb"|rmcp::|use\s+rmcp"  # Rust SDK
     rb")",
     _re.IGNORECASE,
@@ -1562,10 +1576,12 @@ class NativeAnalyzer:
 
         module_imports = self._py_extract_imports(tree)
         wrapper_decorators = self._py_collect_wrapper_decorators(tree)
+        sdk_ctx = self._py_collect_mcp_sdk_import_context(module_imports)
         # Identify trusted MCP server-instance names so
         # ``@<receiver>.tool`` only classifies when ``<receiver>``
         # actually binds to an MCP SDK instance.
         mcp_instances = self._py_collect_mcp_instances(tree, module_imports)
+        mcp_instances.update(sdk_ctx.get("facade_receivers") or set())
 
         # Build the import-target map once per call so the cross-file
         # resolver can disambiguate same-named functions via the
@@ -1599,6 +1615,10 @@ class NativeAnalyzer:
                 decorator_names,
                 wrapper_decorators,
                 trusted_receivers=mcp_instances,
+                imported_bare_decorators=sdk_ctx.get("bare_decorators"),
+                web_framework_without_mcp=sdk_ctx.get(
+                    "web_framework_without_mcp", False
+                ),
             )
             if cap_kind is None:
                 continue
@@ -1681,7 +1701,117 @@ class NativeAnalyzer:
             ctx.decorator_types.append(f"<registration>.{cap_kind}")
             contexts.append(ctx)
 
+        if self._py_file_uses_fastapi_mcp(tree):
+            for ctx in self._py_extract_fastapi_mcp_route_tools(
+                tree, module_imports, seen
+            ):
+                contexts.append(ctx)
+
+        self._py_tag_web_transport_capabilities(contexts, tree)
+
+        if self._py_is_hand_rolled_mcp_module(tree, module_imports, sdk_ctx):
+            for ctx in self._py_extract_hand_rolled_mcp_tools(
+                tree,
+                module_imports,
+                functions_by_name,
+                seen,
+            ):
+                contexts.append(ctx)
+
         return contexts
+
+    _FASTAPI_MCP_CLASS_NAMES: Set[str] = {"FastApiMCP", "fastapi_mcp.FastApiMCP"}
+
+    def _py_file_uses_fastapi_mcp(self, tree: ast.AST) -> bool:
+        """Return True if the module constructs a ``FastApiMCP`` server."""
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = self._py_get_node_name(node.func)
+            if name in self._FASTAPI_MCP_CLASS_NAMES:
+                return True
+        return False
+
+    def _py_collect_fastapi_app_names(self, tree: ast.AST) -> Set[str]:
+        """Collect FastAPI app/router names passed to ``FastApiMCP(...)``."""
+        names: Set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if self._py_get_node_name(node.func) not in self._FASTAPI_MCP_CLASS_NAMES:
+                continue
+            if node.args and isinstance(node.args[0], ast.Name):
+                names.add(node.args[0].id)
+            for kw in node.keywords:
+                if kw.arg in ("fastapi", "app") and isinstance(kw.value, ast.Name):
+                    names.add(kw.value.id)
+        return names
+
+    @staticmethod
+    def _py_operation_id_from_decorator(dec: ast.expr) -> Optional[str]:
+        if not isinstance(dec, ast.Call):
+            return None
+        for kw in dec.keywords:
+            if kw.arg != "operation_id":
+                continue
+            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                return kw.value.value
+        return None
+
+    def _py_is_fastapi_route_decorator(
+        self, decorator_name: str, app_names: Set[str]
+    ) -> bool:
+        if "." not in decorator_name:
+            return False
+        receiver, method = decorator_name.rsplit(".", 1)
+        receiver_root = receiver.split(".", 1)[0].split("(", 1)[0]
+        return (
+            receiver_root in app_names
+            and method.split("(", 1)[0].lower() in self._FASTAPI_HTTP_METHODS
+        )
+
+    def _py_extract_fastapi_mcp_route_tools(
+        self,
+        tree: ast.AST,
+        module_imports: List[str],
+        seen: Set["tuple[Any, str]"],
+    ) -> List[FunctionContext]:
+        """Extract FastAPI route handlers published via ``FastApiMCP``."""
+        app_names = self._py_collect_fastapi_app_names(tree)
+        if not app_names:
+            return []
+
+        out: List[FunctionContext] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            route_dec: Optional[ast.expr] = None
+            dec_name: Optional[str] = None
+            for dec in node.decorator_list or []:
+                name = self._py_get_node_name(dec)
+                if self._py_is_fastapi_route_decorator(name, app_names):
+                    route_dec = dec
+                    dec_name = name
+                    break
+            if route_dec is None or dec_name is None:
+                continue
+            cap_key = (node.lineno, "tool")
+            if cap_key in seen:
+                continue
+            seen.add(cap_key)
+            try:
+                ctx = self._py_extract_function(node, module_imports)
+            except Exception as e:
+                self.logger.debug(
+                    f"Failed to extract FastAPI-MCP route {node.name!r}: {e}"
+                )
+                continue
+            op_id = self._py_operation_id_from_decorator(route_dec)
+            if op_id:
+                ctx.name = op_id
+            ctx.decorator_types.append(f"<fastapi_mcp>.{dec_name}")
+            out.append(ctx)
+        return out
 
     def _py_extract_tool_handler_module_functions(
         self,
@@ -1769,6 +1899,8 @@ class NativeAnalyzer:
         wrapper_decorators: Dict[str, str],
         *,
         trusted_receivers: Optional[Set[str]] = None,
+        imported_bare_decorators: Optional[Set[str]] = None,
+        web_framework_without_mcp: bool = False,
     ) -> Optional[str]:
         """Return the canonical capability kind for ``decorator_names``.
 
@@ -1780,15 +1912,27 @@ class NativeAnalyzer:
         when ``trusted_receivers`` is non-empty, decorators of the form
         ``@<receiver>.<method>`` only classify as MCP if ``<receiver>``
         is a known MCP server instance bound in this file. Bare
-        decorators (``@tool``, no dot) are always accepted because they
-        can only have come from a direct symbol import. When the
-        receiver set is empty (provenance pass found nothing) we apply
-        the same "loose if empty" tradeoff as TS so unusual import
-        patterns still work.
+        decorators (``@tool``, no dot) are accepted when imported from
+        an MCP package, or when the file is not a plain Flask/FastAPI
+        REST module without MCP SDK imports.
+
+        Plain Flask/FastAPI route handlers (``@app.get``, ``@app.route``)
+        are never classified here — only MCP SDK decorators and explicit
+        bridge helpers (``FastApiMCP``) surface tools.
         """
         for name in decorator_names or []:
             kind = _python_decorator_capability(name)
             if kind is not None:
+                bare_leaf = name.rsplit(".", 1)[-1].split("(", 1)[0].strip()
+                if "." not in name:
+                    if web_framework_without_mcp:
+                        continue
+                    if (
+                        imported_bare_decorators is not None
+                        and imported_bare_decorators
+                        and bare_leaf not in imported_bare_decorators
+                    ):
+                        continue
                 if trusted_receivers and "." in name:
                     receiver = name.rsplit(".", 1)[0].strip()
                     # Strip any call-args so ``foo(args).tool`` reduces
@@ -1963,6 +2107,18 @@ class NativeAnalyzer:
         "read_resource": "resource",
     }
 
+    # HTTP verbs exposed by FastAPI / APIRouter route decorators. Used when
+    # ``FastApiMCP`` wraps a FastAPI app and auto-publishes endpoints as tools.
+    _FASTAPI_HTTP_METHODS: Set[str] = {
+        "get",
+        "post",
+        "put",
+        "delete",
+        "patch",
+        "head",
+        "options",
+    }
+
     def _py_build_class_method_index(
         self, tree: ast.AST
     ) -> Dict[str, Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]]:
@@ -1985,24 +2141,333 @@ class NativeAnalyzer:
                 out.setdefault(cls.name, methods)
         return out
 
+    _PY_TOOL_WRAPPER_HELPERS: Set[str] = {"add_read_only_tool", "add_write_tool"}
+
+    _PY_WEB_FRAMEWORK_MODULES: Set[str] = {"flask", "fastapi", "starlette"}
+
+    _PY_FLASK_MCP_BARE_DECORATORS: Set[str] = {
+        "tool",
+        "resource",
+        "prompt",
+        "completion_provider",
+    }
+
+    _PY_MCP_FACADE_CLASSES: Set[str] = {"Mcp"}
+
+    _PY_MCP_JSONRPC_TOOL_METHODS: Set[str] = {"tools/list", "tools/call"}
+
+    _PY_HAND_ROLLED_REGISTRY_NAMES: Set[str] = {
+        "tools",
+        "TOOLS",
+        "tool_registry",
+        "TOOL_REGISTRY",
+        "tool_handlers",
+        "TOOL_HANDLERS",
+        "registered_tools",
+        "REGISTERED_TOOLS",
+    }
+
+    _PY_HAND_ROLLED_REGISTER_FUNCTIONS: Set[str] = {
+        "register_tool",
+        "register_tools",
+        "register_mcp_tool",
+        "add_mcp_tool",
+    }
+
+    def _py_imports_web_framework(self, module_imports: List[str]) -> bool:
+        for stmt in module_imports or []:
+            stmt_lc = stmt.lower()
+            if any(
+                _re.search(rf"\b(?:from|import)\s+{mod}\b", stmt_lc)
+                for mod in self._PY_WEB_FRAMEWORK_MODULES
+            ):
+                return True
+        return False
+
+    def _py_collect_mcp_protocol_literals(self, tree: ast.AST) -> Set[str]:
+        """Collect MCP JSON-RPC method strings referenced in code."""
+        found: Set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node.value in self._PY_MCP_JSONRPC_TOOL_METHODS:
+                    found.add(node.value)
+            elif isinstance(node, ast.Compare):
+                for comparator in node.comparators:
+                    if (
+                        isinstance(comparator, ast.Constant)
+                        and isinstance(comparator.value, str)
+                        and comparator.value in self._PY_MCP_JSONRPC_TOOL_METHODS
+                    ):
+                        found.add(comparator.value)
+            elif isinstance(node, ast.Match):
+                for case in node.cases:
+                    pat = case.pattern
+                    if (
+                        isinstance(pat, ast.Constant)
+                        and isinstance(pat.value, str)
+                        and pat.value in self._PY_MCP_JSONRPC_TOOL_METHODS
+                    ):
+                        found.add(pat.value)
+        return found
+
+    def _py_is_hand_rolled_mcp_module(
+        self,
+        tree: ast.AST,
+        module_imports: List[str],
+        sdk_ctx: Dict[str, Any],
+    ) -> bool:
+        """True for DIY MCP servers without an MCP SDK (plain Flask/FastAPI)."""
+        if sdk_ctx.get("has_mcp_sdk"):
+            return False
+        protocol = self._py_collect_mcp_protocol_literals(tree)
+        if not (protocol & self._PY_MCP_JSONRPC_TOOL_METHODS):
+            return False
+        if self._py_imports_web_framework(module_imports):
+            return True
+        return self._py_has_hand_rolled_tool_registry(tree)
+
+    def _py_registry_name_matches(self, name: str) -> bool:
+        lowered = name.lower()
+        return lowered in {n.lower() for n in self._PY_HAND_ROLLED_REGISTRY_NAMES}
+
+    def _py_has_hand_rolled_tool_registry(self, tree: ast.AST) -> bool:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and self._py_registry_name_matches(
+                        target.id
+                    ):
+                        if isinstance(node.value, ast.Dict):
+                            return True
+            if isinstance(node, ast.Call):
+                fn = self._py_get_node_name(node.func)
+                bare = fn.rsplit(".", 1)[-1]
+                if bare in self._PY_HAND_ROLLED_REGISTER_FUNCTIONS:
+                    return True
+        return False
+
+    def _py_resolve_hand_rolled_handler(
+        self,
+        expr: ast.expr,
+        functions_by_name: Dict[
+            str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
+        ],
+    ) -> Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
+        if isinstance(expr, ast.Name):
+            return functions_by_name.get(expr.id)
+        if isinstance(expr, ast.Dict):
+            for key, val in zip(expr.keys, expr.values):
+                if key is None or val is None:
+                    continue
+                if isinstance(key, ast.Constant) and key.value == "handler":
+                    return self._py_resolve_hand_rolled_handler(
+                        val, functions_by_name
+                    )
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and key.value in ("fn", "func", "callable", "function")
+                ):
+                    return self._py_resolve_hand_rolled_handler(
+                        val, functions_by_name
+                    )
+        return None
+
+    def _py_extract_hand_rolled_mcp_tools(
+        self,
+        tree: ast.AST,
+        module_imports: List[str],
+        functions_by_name: Dict[
+            str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
+        ],
+        seen: Set["tuple[Any, str]"],
+    ) -> List[FunctionContext]:
+        """Extract tools from hand-rolled MCP registries (plain Flask/FastAPI)."""
+        out: List[FunctionContext] = []
+        emitted: Set["tuple[int, str]"] = set()
+
+        def emit_handler(
+            handler_node: Union[ast.FunctionDef, ast.AsyncFunctionDef],
+            registered_name: Optional[str],
+        ) -> None:
+            cap_key = (handler_node.lineno, "tool")
+            if cap_key in seen or cap_key in emitted:
+                return
+            seen.add(cap_key)
+            emitted.add(cap_key)
+            try:
+                ctx = self._py_extract_function(handler_node, module_imports)
+            except Exception as e:
+                self.logger.debug(
+                    f"Failed to extract hand-rolled MCP tool "
+                    f"{handler_node.name!r}: {e}"
+                )
+                return
+            if registered_name:
+                ctx.name = registered_name
+            ctx.decorator_types.append("<hand_rolled_mcp>.tool")
+            out.append(ctx)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if not self._py_registry_name_matches(target.id):
+                    continue
+                if not isinstance(node.value, ast.Dict):
+                    continue
+                for key, val in zip(node.value.keys, node.value.values):
+                    if key is None or val is None:
+                        continue
+                    tool_name: Optional[str] = None
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        tool_name = key.value
+                    handler_node = self._py_resolve_hand_rolled_handler(
+                        val, functions_by_name
+                    )
+                    if handler_node is not None:
+                        emit_handler(handler_node, tool_name)
+
+        for call, _cls, enclosing_func in self._py_walk_calls_with_class_context(
+            tree, []
+        ):
+            if enclosing_func in self._PY_HAND_ROLLED_REGISTER_FUNCTIONS:
+                continue
+            bare = self._py_get_node_name(call.func).rsplit(".", 1)[-1]
+            if bare not in self._PY_HAND_ROLLED_REGISTER_FUNCTIONS:
+                continue
+            if len(call.args) < 2:
+                continue
+            tool_name: Optional[str] = None
+            if isinstance(call.args[0], ast.Constant) and isinstance(
+                call.args[0].value, str
+            ):
+                tool_name = call.args[0].value
+            handler_node = self._py_resolve_hand_rolled_handler(
+                call.args[1], functions_by_name
+            )
+            if handler_node is not None:
+                emit_handler(handler_node, tool_name)
+
+        return out
+
+    def _py_collect_mcp_sdk_import_context(
+        self, module_imports: List[str]
+    ) -> Dict[str, Any]:
+        """Summarize MCP SDK imports for decorator provenance checks.
+
+        Used to (a) trust ``@Mcp.tool`` receivers from ``flask_mcp_server``,
+        (b) accept bare ``@tool`` only when imported from an MCP package, and
+        (c) reject bare MCP-ish decorators on plain Flask/FastAPI REST apps.
+        """
+        prefixes = _MCP_SDK_MODULE_PREFIXES.get("python", ())
+        has_mcp_sdk = False
+        has_web_framework = False
+        facade_receivers: Set[str] = set()
+        bare_decorators: Set[str] = set()
+
+        for stmt in module_imports or []:
+            stmt_lc = stmt.lower()
+            if any(
+                _re.search(rf"\b(?:from|import)\s+{mod}\b", stmt_lc)
+                for mod in self._PY_WEB_FRAMEWORK_MODULES
+            ):
+                has_web_framework = True
+            if not any(p in stmt_lc for p in prefixes):
+                continue
+            has_mcp_sdk = True
+            m_from = _re.match(r"^\s*from\s+([\w\.]+)\s+import\s+(.+)$", stmt)
+            if not m_from:
+                continue
+            module = m_from.group(1).lower()
+            is_flask_mcp = "flask_mcp_server" in module
+            for sym in m_from.group(2).split(","):
+                sym = sym.strip()
+                if not sym:
+                    continue
+                parts = _re.split(r"\s+as\s+", sym, maxsplit=1)
+                imported = parts[0].strip()
+                bound = parts[1].strip() if len(parts) > 1 else imported
+                if is_flask_mcp and imported in self._PY_MCP_FACADE_CLASSES:
+                    facade_receivers.add(bound)
+                if imported in self._PY_FLASK_MCP_BARE_DECORATORS:
+                    bare_decorators.add(bound)
+
+        return {
+            "has_mcp_sdk": has_mcp_sdk,
+            "web_framework_without_mcp": has_web_framework and not has_mcp_sdk,
+            "facade_receivers": facade_receivers,
+            "bare_decorators": bare_decorators,
+        }
+
+    def _py_tag_web_transport_capabilities(
+        self,
+        contexts: List[FunctionContext],
+        tree: ast.AST,
+    ) -> None:
+        """Tag capabilities when the module mounts MCP over Flask/FastAPI HTTP."""
+        if not self._py_file_uses_web_mcp_transport(tree):
+            return
+        transport = "web_transport"
+        if self._py_file_uses_fastapi_mcp(tree):
+            transport = "fastapi_mcp"
+        for ctx in contexts:
+            if not any(t.startswith("<") for t in (ctx.decorator_types or [])):
+                ctx.decorator_types.append(f"<{transport}>.tool")
+
+    def _py_file_uses_web_mcp_transport(self, tree: ast.AST) -> bool:
+        """Return True when MCP is exposed via HTTP mount/ASGI app factories."""
+        transport_methods = {
+            "streamable_http_app",
+            "sse_app",
+            "http_app",
+            "mount_mcp",
+        }
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            method = self._py_call_method_name(node)
+            if method in transport_methods:
+                return True
+            name = self._py_get_node_name(node.func)
+            if name.endswith(".mount_mcp") or name == "mount_mcp":
+                return True
+        return False
+
     def _py_walk_calls_with_class_context(
-        self, node: ast.AST, class_stack: List[str]
-    ) -> Iterator["tuple[ast.Call, Optional[str]]"]:
-        """Yield ``(Call, enclosing_class_name)`` for every ``ast.Call``.
+        self,
+        node: ast.AST,
+        class_stack: List[str],
+        func_stack: Optional[List[str]] = None,
+    ) -> Iterator["tuple[ast.Call, Optional[str], Optional[str]]"]:
+        """Yield ``(Call, enclosing_class_name, enclosing_function_name)``.
 
         Tracks the innermost enclosing ``ClassDef`` so callers can resolve
-        ``self.<method>`` handler references against the correct class.
-        Nested classes push onto the stack; the current class is the top
-        of the stack.
+        ``self.<method>`` handler references against the correct class, and
+        the innermost ``FunctionDef`` so wrapper-helper bodies can be
+        excluded from programmatic registration scans.
         """
+        func_stack = func_stack or []
         if isinstance(node, ast.Call):
-            yield node, (class_stack[-1] if class_stack else None)
+            yield (
+                node,
+                (class_stack[-1] if class_stack else None),
+                (func_stack[-1] if func_stack else None),
+            )
         if isinstance(node, ast.ClassDef):
             new_stack = class_stack + [node.name]
         else:
             new_stack = class_stack
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            new_func_stack = func_stack + [node.name]
+        else:
+            new_func_stack = func_stack
         for child in ast.iter_child_nodes(node):
-            yield from self._py_walk_calls_with_class_context(child, new_stack)
+            yield from self._py_walk_calls_with_class_context(
+                child, new_stack, new_func_stack
+            )
 
     def _py_resolve_handler_expr(
         self,
@@ -2149,7 +2614,7 @@ class NativeAnalyzer:
             "tuple[Optional[Union[ast.FunctionDef, ast.AsyncFunctionDef]], str, str, Optional[str]]"
         ] = []
 
-        for call, enclosing_cls in self._py_walk_calls_with_class_context(
+        for call, enclosing_cls, enclosing_func in self._py_walk_calls_with_class_context(
             tree, []
         ):
             kind: Optional[str] = None
@@ -2161,6 +2626,13 @@ class NativeAnalyzer:
                 and method in self._PY_PROGRAMMATIC_METHOD_TO_KIND
                 and call.args
             ):
+                if enclosing_func in self._PY_TOOL_WRAPPER_HELPERS:
+                    continue
+                if (
+                    isinstance(call.func, ast.Name)
+                    and call.func.id in self._PY_HAND_ROLLED_REGISTER_FUNCTIONS
+                ):
+                    continue
                 kind = self._PY_PROGRAMMATIC_METHOD_TO_KIND[method]
                 handler_expr = call.args[0]
             elif isinstance(call.func, ast.Call):
@@ -2176,6 +2648,13 @@ class NativeAnalyzer:
                         inner_method
                     ]
                     handler_expr = call.args[0]
+            elif (
+                isinstance(call.func, ast.Name)
+                and call.func.id in self._PY_TOOL_WRAPPER_HELPERS
+                and len(call.args) >= 2
+            ):
+                kind = "tool"
+                handler_expr = call.args[1]
 
             if kind is None or handler_expr is None:
                 continue
