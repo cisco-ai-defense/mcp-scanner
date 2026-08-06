@@ -739,6 +739,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # always merge NativeAnalyzer so Gap 8 programmatic registrations
                 # in the same file are not shadowed by decorator hits.
                 func_contexts: List[FunctionContext] = []
+                extractor_failed = False
                 try:
                     extractor = ContextExtractor(source_code, file_path)
                     func_contexts = extractor.extract_mcp_function_contexts()
@@ -747,11 +748,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                             f"Found {len(func_contexts)} MCP functions in {file_path}"
                         )
                 except Exception as e:
+                    extractor_failed = True
                     self.logger.debug(
                         f"ContextExtractor failed for {file_path}: {e}, using NativeAnalyzer"
                     )
 
                 native_contexts: List[FunctionContext] = []
+                native_failed = False
                 try:
                     native_analyzer = NativeAnalyzer(source_code, file_path)
                     native_contexts = native_analyzer.extract_mcp_capability_contexts(
@@ -763,9 +766,12 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                             f"capabilities from {file_path}"
                         )
                 except Exception as e:
+                    native_failed = True
                     self.logger.debug(
                         f"NativeAnalyzer failed for {file_path}: {e}"
                     )
+                if extractor_failed and native_failed:
+                    self.analysis_errors += 1
                 func_contexts = _merge_mcp_function_contexts(
                     func_contexts, native_contexts
                 )
