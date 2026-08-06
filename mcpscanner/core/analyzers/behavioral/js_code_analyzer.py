@@ -203,18 +203,25 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
 
         try:
             analyzer = NativeAnalyzer(source_code, file_path)
+        except Exception as e:  # noqa: BLE001
+            # Parser / language-detection crash. Record as an analysis error
+            # rather than letting a zero-finding result look "safe".
+            self.analysis_errors += 1
+            self.logger.error(
+                "js behavioural native_analyzer_init_failed file=%s error=%s",
+                file_path,
+                e,
+            )
+            return []
+
+        try:
             contexts = analyzer.extract_mcp_capability_contexts(
                 cross_file_analyzer=context.get("cross_file_analyzer")
             )
-        except ValueError as e:
-            self.logger.debug(
-                "js behavioural unsupported_extension file=%s error=%s", file_path, e
-            )
-            return []
         except Exception as e:  # noqa: BLE001
             self.analysis_errors += 1
             self.logger.error(
-                "js behavioural native_analyzer_failed file=%s error=%s",
+                "js behavioural extract_failed file=%s error=%s",
                 file_path,
                 e,
             )

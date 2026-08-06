@@ -46,7 +46,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Union
+from typing import Any, ClassVar, Dict, Iterator, List, Optional, Set, Union
 
 from .context_extractor import FunctionContext
 from .parser.python_parser import PythonParser
@@ -3067,17 +3067,15 @@ class NativeAnalyzer:
         "tool",
         "toolName",
     )
-    _TS_ENDPOINT_DESCRIPTOR_FIELDS: Set[str] = {
+    _TS_ENDPOINT_ROUTE_FIELDS: ClassVar[Set[str]] = {"path", "method", "route", "url"}
+    _TS_ENDPOINT_DESCRIPTOR_FIELDS: ClassVar[Set[str]] = {
         "fn",
         "handler",
         "execute",
         "callback",
         "description",
         "schema",
-        "inputschema",
         "inputSchema",
-        "path",
-        "method",
         "parameters",
     }
 
@@ -3090,12 +3088,10 @@ class NativeAnalyzer:
     ) -> List[str]:
         """Collect static MCP tool names from descriptor arrays.
 
-        Covers:
-
-        * Inline tables — ``[{ name: "add", fn: ... }, ...]``
-        * Graph-style endpoints — ``[{ alias: "list-messages", ... }, ...]``
-        * Arrays reached through ``for (const tool of api.endpoints)``
-          including when ``api`` is imported from another module.
+        Only arrays reached through ``for (const tool of api.endpoints)``-style
+        loops are considered (in-file and cross-file). A blanket walk of every
+        array literal would mis-tag HTTP route tables and model catalogues as
+        MCP tools.
         """
         names: List[str] = []
         seen: Set[str] = set()
@@ -3107,9 +3103,6 @@ class NativeAnalyzer:
                 names.append(value)
 
         def visit(node: "Node") -> None:
-            if node.type in ("array", "array_expression"):
-                for tool_name in self._ts_endpoint_names_in_array(node):
-                    add_name(tool_name)
             if node.type in ("for_in_statement", "for_of_statement"):
                 src = self._ts_for_in_source_node(node)
                 if src is not None:
@@ -3141,6 +3134,8 @@ class NativeAnalyzer:
                 if tool_name:
                     break
             if not tool_name:
+                continue
+            if self._ts_object_has_any_field(child, self._TS_ENDPOINT_ROUTE_FIELDS):
                 continue
             if not self._ts_object_has_any_field(
                 child, self._TS_ENDPOINT_DESCRIPTOR_FIELDS
@@ -3363,10 +3358,6 @@ class NativeAnalyzer:
 
         visit(root)
         return found
-
-    def _ts_collect_literal_tool_table_names(self, root: "Node") -> List[str]:
-        """Backward-compatible alias for static endpoint table collection."""
-        return self._ts_collect_static_endpoint_tool_names(root)
 
     def _ts_object_string_field(
         self, obj_node: "Node", field: str

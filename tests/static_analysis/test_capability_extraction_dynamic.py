@@ -356,10 +356,15 @@ tools.forEach((m) => {
 
 
 def test_js_loop_registration_emits_unresolved_or_inline_handlers() -> None:
-    """``tools.forEach(m => server.tool(m.name, m.schema, m.fn))`` must
-    surface literal tool names from the descriptor table."""
+    """``tools.forEach(m => server.tool(m.name, m.schema, m.fn))`` is dynamic.
+
+    Static names from the ``tools`` table are not promoted to capabilities
+    unless that array is reached through an explicit ``for...of`` iteration.
+    """
     analyzer = NativeAnalyzer(JS_LOOP_REGISTRATION, "loop.js")
     caps = analyzer.extract_mcp_capability_contexts()
     names = {c.name for c in caps}
-    assert "add" in names, names
-    assert "sub" in names, names
+    assert names == {"m.name"}, names
+    assert any(
+        any("registration.unresolved" in t for t in c.decorator_types) for c in caps
+    ), [c.decorator_types for c in caps]

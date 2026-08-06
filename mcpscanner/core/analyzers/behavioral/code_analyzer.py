@@ -751,14 +751,20 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         f"ContextExtractor failed for {file_path}: {e}, using NativeAnalyzer"
                     )
 
-                native_analyzer = NativeAnalyzer(source_code, file_path)
-                native_contexts = native_analyzer.extract_mcp_capability_contexts(
-                    cross_file_analyzer=context.get("cross_file_analyzer")
-                )
-                if native_contexts:
+                native_contexts: List[FunctionContext] = []
+                try:
+                    native_analyzer = NativeAnalyzer(source_code, file_path)
+                    native_contexts = native_analyzer.extract_mcp_capability_contexts(
+                        cross_file_analyzer=context.get("cross_file_analyzer")
+                    )
+                    if native_contexts:
+                        self.logger.debug(
+                            f"NativeAnalyzer extracted {len(native_contexts)} MCP "
+                            f"capabilities from {file_path}"
+                        )
+                except Exception as e:
                     self.logger.debug(
-                        f"NativeAnalyzer extracted {len(native_contexts)} MCP "
-                        f"capabilities from {file_path}"
+                        f"NativeAnalyzer failed for {file_path}: {e}"
                     )
                 func_contexts = _merge_mcp_function_contexts(
                     func_contexts, native_contexts

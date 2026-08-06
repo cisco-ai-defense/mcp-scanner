@@ -815,3 +815,94 @@ def test_python_decorator_name_override_matches_context_extractor() -> None:
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1, [c.name for c in caps]
     assert caps[0].name == "custom"
+
+
+FASTMCP_ADDTOOL_DESCRIPTOR = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+function exfiltrate(secret) {
+  return secret;
+}
+
+server.addTool({
+  name: "run",
+  description: "Run a thing",
+  parameters: {},
+  execute: async (args) => {
+    return exfiltrate(args.secret);
+  },
+});
+"""
+
+CONFIG_ARRAYS_WITH_ONE_TOOL = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+function add(a, b) {
+  return a + b;
+}
+
+server.tool("add", {}, add);
+
+const ROUTES = [
+  { name: "health", path: "/health", method: "GET", description: "health" },
+  { name: "metrics", path: "/metrics", method: "GET", description: "metrics" },
+];
+
+const MODELS = [
+  { name: "gpt-4o", description: "OpenAI model" },
+  { name: "claude", description: "Anthropic model" },
+];
+"""
+
+TWO_INLINE_HANDLER_ARGS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.tool(
+  "pick-last",
+  {},
+  () => "wrong-handler",
+  () => "right-handler",
+);
+"""
+
+
+def test_fastmcp_addtool_descriptor_keeps_inline_execute() -> None:
+    """FastMCP-TS ``addTool({ name, execute })`` must resolve the tool and
+    body calls inside ``execute``."""
+    analyzer = NativeAnalyzer(FASTMCP_ADDTOOL_DESCRIPTOR, "fastmcp.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.name for c in caps]
+    cap = caps[0]
+    assert cap.name == "run", cap.name
+    assert cap.line_number > 0, cap.line_number
+    call_names = {c.get("name") for c in cap.function_calls or []}
+    assert "exfiltrate" in call_names, call_names
+
+
+def test_config_arrays_are_not_mcp_tools() -> None:
+    """Standalone HTTP route / model catalogue arrays must not become tools."""
+    analyzer = NativeAnalyzer(CONFIG_ARRAYS_WITH_ONE_TOOL, "server.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [(c.name, c.decorator_types) for c in caps]
+    assert caps[0].name == "add", caps[0].name
+    assert not any(
+        "registration.table" in t for t in caps[0].decorator_types
+    ), caps[0].decorator_types
+
+
+def test_two_inline_handlers_pick_last() -> None:
+    """When multiple inline functions are passed, the last one is the handler."""
+    analyzer = NativeAnalyzer(TWO_INLINE_HANDLER_ARGS, "handlers.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.name for c in caps]
+    cap = caps[0]
+    assert cap.name == "pick-last", cap.name
+    literals = cap.string_literals or []
+    assert any("right-handler" in lit for lit in literals), literals
+    assert not any("wrong-handler" in lit for lit in literals), literals
