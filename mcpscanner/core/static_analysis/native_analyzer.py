@@ -2230,15 +2230,31 @@ class NativeAnalyzer:
         lowered = name.lower()
         return lowered in {n.lower() for n in self._PY_HAND_ROLLED_REGISTRY_NAMES}
 
-    def _py_has_hand_rolled_tool_registry(self, tree: ast.AST) -> bool:
+    def _py_iter_hand_rolled_registry_dicts(
+        self, tree: ast.AST
+    ) -> "Iterator[ast.Dict]":
+        """Yield dict literals bound to hand-rolled tool registry names."""
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
+                if not isinstance(node.value, ast.Dict):
+                    continue
                 for target in node.targets:
                     if isinstance(target, ast.Name) and self._py_registry_name_matches(
                         target.id
                     ):
-                        if isinstance(node.value, ast.Dict):
-                            return True
+                        yield node.value
+            elif isinstance(node, ast.AnnAssign):
+                if not isinstance(node.target, ast.Name):
+                    continue
+                if not self._py_registry_name_matches(node.target.id):
+                    continue
+                if node.value is not None and isinstance(node.value, ast.Dict):
+                    yield node.value
+
+    def _py_has_hand_rolled_tool_registry(self, tree: ast.AST) -> bool:
+        for _ in self._py_iter_hand_rolled_registry_dicts(tree):
+            return True
+        for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 fn = self._py_get_node_name(node.func)
                 bare = fn.rsplit(".", 1)[-1]
@@ -2308,27 +2324,18 @@ class NativeAnalyzer:
             ctx.decorator_types.append("<hand_rolled_mcp>.tool")
             out.append(ctx)
 
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign):
-                continue
-            for target in node.targets:
-                if not isinstance(target, ast.Name):
+        for registry_dict in self._py_iter_hand_rolled_registry_dicts(tree):
+            for key, val in zip(registry_dict.keys, registry_dict.values):
+                if key is None or val is None:
                     continue
-                if not self._py_registry_name_matches(target.id):
-                    continue
-                if not isinstance(node.value, ast.Dict):
-                    continue
-                for key, val in zip(node.value.keys, node.value.values):
-                    if key is None or val is None:
-                        continue
-                    tool_name: Optional[str] = None
-                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                        tool_name = key.value
-                    handler_node = self._py_resolve_hand_rolled_handler(
-                        val, functions_by_name
-                    )
-                    if handler_node is not None:
-                        emit_handler(handler_node, tool_name)
+                tool_name: Optional[str] = None
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    tool_name = key.value
+                handler_node = self._py_resolve_hand_rolled_handler(
+                    val, functions_by_name
+                )
+                if handler_node is not None:
+                    emit_handler(handler_node, tool_name)
 
         for call, _cls, enclosing_func in self._py_walk_calls_with_class_context(
             tree, []

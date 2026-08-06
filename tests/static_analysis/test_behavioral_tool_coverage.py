@@ -618,6 +618,32 @@ def test_plain_flask_hand_rolled_mcp_registry() -> None:
     )
 
 
+def test_plain_flask_hand_rolled_mcp_registry_annassign() -> None:
+    """Annotated registry assignments (TOOLS: dict[str, Fn] = {...})."""
+    source = """\
+from typing import Callable
+
+def add_numbers(a: int, b: int) -> int:
+    return a + b
+
+TOOLS: dict[str, Callable[..., int]] = {
+    "add": add_numbers,
+}
+
+def handle_request(method, params):
+    if method == "tools/call":
+        return TOOLS[params["name"]](**params.get("arguments", {}))
+    if method == "tools/list":
+        return {"tools": []}
+    return {}
+"""
+    analyzer = NativeAnalyzer(source, "mcp_helper.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "add"
+    assert any("hand_rolled_mcp" in t for t in caps[0].decorator_types)
+
+
 def test_plain_flask_mcp_helper_module_registry() -> None:
     analyzer = NativeAnalyzer(PLAIN_FLASK_MCP_HELPER_MODULE, "mcp_helper.py")
     caps = analyzer.extract_mcp_capability_contexts()
