@@ -1112,7 +1112,7 @@ class NativeAnalyzer:
             # ``<registration>.unresolved.<kind>`` so consumers can
             # distinguish them from analyzed handlers.
             if handler_node is None and cross_file_match is None:
-                if not (handler_name or reg.get("name")):
+                if not (handler_name or self._ts_registration_display_name(reg)):
                     continue
                 template_subtype = reg.get("template_subtype")
                 source_kind = (
@@ -1130,7 +1130,7 @@ class NativeAnalyzer:
                 self._append_unresolved_capability(
                     contexts,
                     capability=cap_kind,
-                    registered_name=reg.get("name") or handler_name,
+                    registered_name=self._ts_registration_display_name(reg),
                     source_kind=source_kind,
                     handler_name_hint=handler_name,
                 )
@@ -1156,7 +1156,7 @@ class NativeAnalyzer:
                 self._append_unresolved_capability(
                     contexts,
                     capability=cap_kind,
-                    registered_name=reg.get("name") or handler_name,
+                    registered_name=self._ts_registration_display_name(reg),
                     source_kind=source_kind,
                     handler_name_hint=handler_name,
                     source_file=cross_file_path,
@@ -1182,7 +1182,7 @@ class NativeAnalyzer:
                 handler_node,
                 imports,
                 capability=cap_kind,
-                registered_name=reg.get("name"),
+                registered_name=self._ts_registration_display_name(reg),
                 source_kind=source_kind,
             )
 
@@ -3138,15 +3138,24 @@ class NativeAnalyzer:
             if candidate not in param_names and "." not in candidate:
                 name = candidate
 
+        name_ref: Optional[str] = None
+        if name is None and refs and "." in refs[0]:
+            name_ref = refs[0]
+
         if handler_node is None and handler_name is None:
             return None
 
         return {
             "capability": override_capability or _normalize_capability(capability_method),
             "name": name,
+            "name_ref": name_ref,
             "handler_node": handler_node,
             "handler_name": handler_name,
         }
+
+    def _ts_registration_display_name(self, reg: Dict[str, Any]) -> Optional[str]:
+        """Prefer literal MCP name, then member-expression ref, then handler."""
+        return reg.get("name") or reg.get("name_ref") or reg.get("handler_name")
 
     def _ts_parse_bind_handler_name(self, call_node: "Node") -> Optional[str]:
         """Return a method name from ``this.method.bind(...)`` call expressions."""

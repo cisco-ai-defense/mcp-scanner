@@ -449,15 +449,19 @@ def test_table_loop_suppression_does_not_drop_unrelated_dynamic_registration() -
     """A static forEach table must not suppress unrelated ``config.name`` calls."""
     analyzer = NativeAnalyzer(JS_LOOP_PLUS_INDEPENDENT_DYNAMIC, "mixed.js")
     caps = analyzer.extract_mcp_capability_contexts()
-    names = {c.name for c in caps}
-    assert "add" in names, names
-    assert len(caps) == 2, names
-    reg_caps = [
+    table_caps = [
+        c
+        for c in caps
+        if any("registration.table" in t for t in c.decorator_types)
+    ]
+    dynamic_caps = [
         c
         for c in caps
         if any(t == "<registration>.tool" for t in c.decorator_types)
     ]
-    assert reg_caps, [c.decorator_types for c in caps]
+    assert [c.name for c in table_caps] == ["add"], [c.name for c in caps]
+    assert len(dynamic_caps) == 1, [c.name for c in caps]
+    assert "config.name" in dynamic_caps[0].name, dynamic_caps[0].name
 
 
 TS_PROMPT_WRAPPER = """\
