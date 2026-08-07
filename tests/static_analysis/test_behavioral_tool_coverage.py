@@ -68,6 +68,62 @@ const goBack = defineTabTool({
 export default [navigate, goBack];
 """
 
+PUNKPEYE_FASTMCP_ADDTOOL = """\
+import { FastMCP } from "fastmcp";
+import { z } from "zod";
+
+const server = new FastMCP({ name: "demo", version: "1.0.0" });
+
+async function addNumbers(args: { a: number; b: number }) {
+  return String(args.a + args.b);
+}
+
+server.addTool({
+  name: "add",
+  description: "Add two numbers",
+  parameters: z.object({ a: z.number(), b: z.number() }),
+  execute: addNumbers,
+});
+
+server.addTool({
+  name: "multiply",
+  description: "Multiply two numbers",
+  parameters: z.object({ a: z.number(), b: z.number() }),
+  execute: async (args) => String(args.a * args.b),
+});
+"""
+
+MCP_FRAMEWORK_MCPTOOL = """\
+import { MCPTool } from "mcp-framework";
+import { z } from "zod";
+
+const AddSchema = z.object({
+  a: z.number(),
+  b: z.number(),
+});
+
+class AddTool extends MCPTool {
+  name = "add";
+  description = "Add two numbers";
+  schema = AddSchema;
+
+  async execute(input: { a: number; b: number }) {
+    return String(input.a + input.b);
+  }
+}
+
+class GreetTool extends MCPTool<typeof AddSchema> {
+  name = "greet";
+  description = "Greet someone";
+
+  async execute(input: { a: number; b: number }) {
+    return `hello ${input.a}`;
+  }
+}
+
+export default AddTool;
+"""
+
 PAGERDUTY_TOOL_MODULE = """\
 def list_incidents():
     \"\"\"List incidents.\"\"\"
@@ -470,6 +526,28 @@ def test_define_tool_extracts_schema_name_and_handle() -> None:
     names = {c.name for c in caps}
     assert names == {"browser_navigate", "browser_navigate_back"}, names
     assert all(c.line_number > 0 for c in caps)
+
+
+def test_punkpeye_fastmcp_addtool_object_literal() -> None:
+    """punkpeye/fastmcp: server.addTool({ name, execute: fn })."""
+    analyzer = NativeAnalyzer(PUNKPEYE_FASTMCP_ADDTOOL, "server.ts")
+    assert analyzer._has_mcp_markers()
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"add", "multiply"}, names
+    assert all(any("registration" in t for t in c.decorator_types) for c in caps)
+
+
+def test_mcp_framework_mcptool_class_execute() -> None:
+    """QuantGeekDev/mcp-framework: class extends MCPTool with execute()."""
+    analyzer = NativeAnalyzer(MCP_FRAMEWORK_MCPTOOL, "AddTool.ts")
+    assert analyzer._has_mcp_markers()
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"add", "greet"}, names
+    assert all(
+        any("mcp_framework.class" in t for t in c.decorator_types) for c in caps
+    )
 
 
 def test_tool_handler_module_extracts_public_functions() -> None:

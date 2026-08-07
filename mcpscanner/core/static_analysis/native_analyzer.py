@@ -567,10 +567,14 @@ _MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = {
     "javascript": (
         "@modelcontextprotocol/sdk",
         "@modelcontextprotocol/typescript-sdk",
+        "fastmcp",
+        "mcp-framework",
     ),
     "typescript": (
         "@modelcontextprotocol/sdk",
         "@modelcontextprotocol/typescript-sdk",
+        "fastmcp",  # punkpeye/fastmcp (npm) — distinct from Prefect Python FastMCP
+        "mcp-framework",  # QuantGeekDev/mcp-framework class-based tools
     ),
     "python": (
         "fastmcp",
@@ -629,6 +633,9 @@ _MCP_KNOWN_SERVER_CLASSES: Set[str] = {
     "McpServer",
 }
 
+# TypeScript mcp-framework tool classes extend these bases.
+_TS_MCP_TOOL_BASE_CLASSES: Set[str] = {"MCPTool", "McpTool"}
+
 
 # Byte-level prefilter (Gap 12). A single compiled regex matched against
 # the file's raw bytes; any hit means the file is *worth* parsing. The
@@ -681,6 +688,8 @@ _MCP_PREFILTER_RE = _re.compile(
     rb"|@server\.list_resources\b|@server\.read_resource\b"
     rb"|@mcp\.tool\b|@mcp\.prompt\b|@mcp\.resource\b"
     rb"|tools/call|tools/list"  # hand-rolled JSON-RPC MCP dispatch
+    rb"|mcp-framework"  # QuantGeekDev/mcp-framework npm package
+    rb"|MCPTool\b"  # mcp-framework base tool class
     rb"|rmcp::|use\s+rmcp"  # Rust SDK
     rb")",
     _re.IGNORECASE,
@@ -1196,6 +1205,19 @@ class NativeAnalyzer:
                 capability=cap_kind,
                 registered_name=reg.get("name"),
                 source_kind=source_kind,
+            )
+
+        # -----------------------------------------------------------------
+        # Pass 3: mcp-framework MCPTool class declarations
+        # -----------------------------------------------------------------
+        if self.language in ("typescript", "javascript") and self._ts_file_uses_mcp_framework(
+            imports
+        ):
+            self._ts_extract_mcp_framework_class_tools(
+                tree.root_node,
+                imports,
+                contexts,
+                seen_handlers,
             )
 
         return contexts
@@ -2720,12 +2742,25 @@ class NativeAnalyzer:
         if ctx is None:
             return
 
-        # When an inline (anonymous) handler is registered as
-        # ``server.tool('add', ...)``, prefer the registered MCP name in
-        # CLI/SDK output. For named functions we keep the symbol name
-        # because that's also useful context; combine when both exist.
+        # Prefer the MCP-registered name for call-site registrations
+        # (``server.addTool({ name: 'add', execute: fn })``). The handler
+        # symbol (``addNumbers``) is kept only as supplementary context when
+        # it doesn't subsume the registered name (``add`` ⊂ ``addNumbers``).
         if registered_name:
-            if not ctx.name or ctx.name == "<anonymous>":
+            if source_kind.startswith("registration") or source_kind.startswith(
+                "mcp_framework"
+            ):
+                if (
+                    source_kind.startswith("registration")
+                    and ctx.name
+                    and ctx.name != "<anonymous>"
+                    and ctx.name != registered_name
+                    and registered_name not in ctx.name
+                ):
+                    ctx.name = f"{registered_name} ({ctx.name})"
+                else:
+                    ctx.name = registered_name
+            elif not ctx.name or ctx.name == "<anonymous>":
                 ctx.name = registered_name
             elif registered_name != ctx.name and registered_name not in ctx.name:
                 ctx.name = f"{registered_name} ({ctx.name})"
@@ -3526,6 +3561,7 @@ class NativeAnalyzer:
         name: Optional[str] = None
         inline_handler: Optional["Node"] = None
         identifier_refs: List[str] = []
+        named_handler_from_object: Optional[str] = None
 
         for child in args_node.children:
             if child.type in ("(", ")", ",", "comment"):
@@ -3556,13 +3592,15 @@ class NativeAnalyzer:
                 "literal_value",
                 "composite_literal",
             ):
-                obj_name, obj_handler = self._ts_extract_handler_from_object(
-                    child, func_types
+                obj_name, obj_handler, obj_handler_name = (
+                    self._ts_extract_handler_from_object(child, func_types)
                 )
                 if name is None and obj_name:
                     name = obj_name
                 if inline_handler is None and obj_handler is not None:
                     inline_handler = obj_handler
+                if named_handler_from_object is None and obj_handler_name:
+                    named_handler_from_object = obj_handler_name
                 continue
 
             # Unary/pointer wrapper around an object literal (Go
@@ -3570,7 +3608,7 @@ class NativeAnalyzer:
             if child.type == "unary_expression":
                 for sub in child.children:
                     if sub.type in ("composite_literal", "literal_value"):
-                        obj_name, _ = self._ts_extract_handler_from_object(
+                        obj_name, _, _ = self._ts_extract_handler_from_object(
                             sub, func_types
                         )
                         if name is None and obj_name:
@@ -3593,6 +3631,9 @@ class NativeAnalyzer:
                 # where the handler is the first inline argument.
                 handler_name = identifier_refs[-1]
 
+        if handler_node is None and handler_name is None and named_handler_from_object:
+            handler_name = named_handler_from_object
+
         if handler_node is None and handler_name is None:
             return None
 
@@ -3605,10 +3646,11 @@ class NativeAnalyzer:
 
     def _ts_extract_handler_from_object(
         self, obj_node: "Node", func_types: Set[str]
-    ) -> "tuple[Optional[str], Optional[Node]]":
-        """Pull ``name`` + handler out of an object literal argument."""
+    ) -> "tuple[Optional[str], Optional[Node], Optional[str]]":
+        """Pull ``name``, inline handler, and named handler ref from an object arg."""
         obj_name: Optional[str] = None
         obj_handler: Optional["Node"] = None
+        obj_handler_name: Optional[str] = None
 
         # ``pair`` (JS), ``field_initialization`` (TS), ``key_value`` (Go),
         # ``element`` (Ruby) — try them all.
@@ -3641,22 +3683,140 @@ class NativeAnalyzer:
                 )
             ):
                 obj_name = _strip_string_quotes(self._ts_get_node_text(value_node))
-            elif (
-                key in ("handler", "handle", "execute", "fn", "callback", "run")
-                and value_node.type in func_types
-            ):
-                obj_handler = value_node
+            elif key in ("handler", "handle", "execute", "fn", "callback", "run"):
+                if value_node.type in func_types:
+                    obj_handler = value_node
+                elif value_node.type == "identifier":
+                    obj_handler_name = self._ts_get_node_text(value_node)
             elif key == "schema" and value_node.type in (
                 "object",
                 "object_expression",
             ):
-                nested_name, _ = self._ts_extract_handler_from_object(
+                nested_name, _, _ = self._ts_extract_handler_from_object(
                     value_node, func_types
                 )
                 if nested_name and obj_name is None:
                     obj_name = nested_name
 
-        return obj_name, obj_handler
+        return obj_name, obj_handler, obj_handler_name
+
+    def _ts_file_uses_mcp_framework(self, imports: List[str]) -> bool:
+        for stmt in imports or []:
+            if "mcp-framework" in stmt.lower():
+                return True
+        return False
+
+    def _ts_class_extends_mcp_tool_base(self, class_node: "Node") -> bool:
+        for child in class_node.children:
+            if child.type not in ("extends_clause", "class_heritage", "heritage"):
+                continue
+            heritage = self._ts_get_node_text(child)
+            for base in _TS_MCP_TOOL_BASE_CLASSES:
+                if base in heritage:
+                    return True
+        return False
+
+    def _ts_extract_class_string_property(
+        self, class_node: "Node", prop_name: str
+    ) -> Optional[str]:
+        body = class_node.child_by_field_name("body")
+        if body is None:
+            return None
+        string_node_types = {
+            "string",
+            "string_literal",
+            "template_string",
+            "raw_string_literal",
+            "interpreted_string_literal",
+        }
+        for member in body.children:
+            if member.type not in (
+                "public_field_definition",
+                "field_definition",
+                "property_signature",
+            ):
+                continue
+            key_node = member.child_by_field_name("name")
+            value_node = member.child_by_field_name("value")
+            if key_node is None:
+                for sub in member.children:
+                    if sub.type == "property_identifier":
+                        key_node = sub
+                        break
+            if key_node is None or self._ts_get_node_text(key_node) != prop_name:
+                continue
+            if value_node is None:
+                continue
+            if value_node.type in string_node_types:
+                return _strip_string_quotes(self._ts_get_node_text(value_node))
+            for sub in value_node.children:
+                if sub.type in string_node_types:
+                    return _strip_string_quotes(self._ts_get_node_text(sub))
+        return None
+
+    def _ts_find_class_method(self, class_node: "Node", method_name: str) -> Optional["Node"]:
+        body = class_node.child_by_field_name("body")
+        if body is None:
+            return None
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        for member in body.children:
+            if member.type not in ("method_definition", "method_signature"):
+                continue
+            name_node = member.child_by_field_name("name")
+            if name_node is None:
+                for sub in member.children:
+                    if sub.type == "property_identifier":
+                        name_node = sub
+                        break
+            if name_node is None:
+                continue
+            if self._ts_get_node_text(name_node) != method_name:
+                continue
+            if member.type in func_types or any(
+                c.type in func_types for c in member.children
+            ):
+                return member
+            return member
+        return None
+
+    def _ts_extract_mcp_framework_class_tools(
+        self,
+        root: "Node",
+        imports: List[str],
+        contexts: List[FunctionContext],
+        seen_handlers: Set["tuple[int, str]"],
+    ) -> None:
+        """Extract tools from ``class X extends MCPTool { name = '...'; execute() }``."""
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+
+        def visit(node: "Node") -> None:
+            if node.type == "class_declaration" and self._ts_class_extends_mcp_tool_base(
+                node
+            ):
+                tool_name = self._ts_extract_class_string_property(node, "name")
+                execute_node = self._ts_find_class_method(node, "execute")
+                if execute_node is None:
+                    for child in node.children:
+                        visit(child)
+                    return
+                cap_key = (execute_node.start_byte, "tool")
+                if cap_key in seen_handlers:
+                    for child in node.children:
+                        visit(child)
+                    return
+                seen_handlers.add(cap_key)
+                self._append_capability_context(
+                    contexts,
+                    execute_node,
+                    imports,
+                    capability="tool",
+                    registered_name=tool_name,
+                    source_kind="mcp_framework.class",
+                )
+            for child in node.children:
+                visit(child)
+
+        visit(root)
 
     @staticmethod
     def _ts_pick_go_tool_factory_handler(identifier_refs: List[str]) -> Optional[str]:
