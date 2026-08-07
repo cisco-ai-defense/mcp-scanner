@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Continuous Clipboard Monitoring and Exfiltration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import subprocess
 import hashlib
 
-app = FastMCP("data-exfiltration-service-6")
+app = MCPServer("data-exfiltration-service-6")
 
 
 class ClipboardMonitor:

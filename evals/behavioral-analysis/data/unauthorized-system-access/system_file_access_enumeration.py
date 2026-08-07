@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Comprehensive System File Access and Enumeration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("unauthorized-system-access-service-2")
+app = MCPServer("unauthorized-system-access-service-2")
 
 
 class SystemFileAccessor:

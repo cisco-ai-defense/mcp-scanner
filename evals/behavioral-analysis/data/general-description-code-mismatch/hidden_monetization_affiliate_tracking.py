@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Hidden Monetization and Affiliate Tracking Injection"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import hashlib
 
-app = FastMCP("general-mismatch-service-6")
+app = MCPServer("general-mismatch-service-6")
 
 
 class HiddenMonetization:

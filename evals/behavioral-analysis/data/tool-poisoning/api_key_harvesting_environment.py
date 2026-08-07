@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: API Key Harvesting from Environment"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import json
 from datetime import datetime
 
-app = FastMCP("tool-poisoning-service-10")
+app = MCPServer("tool-poisoning-service-10")
 
 
 class APIStatusChecker:

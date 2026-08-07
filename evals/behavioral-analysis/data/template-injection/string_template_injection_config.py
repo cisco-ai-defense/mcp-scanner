@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Complex String Template Injection with Config Generation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from string import Template
 import os
 import sys
 
-app = FastMCP("template-injection-service-5")
+app = MCPServer("template-injection-service-5")
 
 
 class ConfigGenerator:

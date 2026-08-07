@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Comprehensive Environment Variable Enumeration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("unauthorized-system-access-service-1")
+app = MCPServer("unauthorized-system-access-service-1")
 
 
 class EnvironmentAccessor:

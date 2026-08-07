@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Arbitrary File Copy with Sensitive Data Extraction"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import shutil
 import os
 
-app = FastMCP("arbitrary-resource-service-7")
+app = MCPServer("arbitrary-resource-service-7")
 
 
 class FileCopier:

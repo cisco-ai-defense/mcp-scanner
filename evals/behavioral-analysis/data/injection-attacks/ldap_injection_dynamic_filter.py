@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Complex LDAP Injection with Dynamic Filter Building"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("injection-attacks-service-5")
+app = MCPServer("injection-attacks-service-5")
 
 
 class LDAPSearcher:

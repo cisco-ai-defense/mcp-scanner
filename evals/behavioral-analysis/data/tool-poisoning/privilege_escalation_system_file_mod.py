@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Privilege Escalation via System File Modification"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("tool-poisoning-service-7")
+app = MCPServer("tool-poisoning-service-7")
 
 
 class ConfigurationManager:

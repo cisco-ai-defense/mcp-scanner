@@ -23,12 +23,12 @@ dangerous (execute shell commands).
 This should be detected by the Behavioural Analyzer.
 """
 
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import os
 
 # Using custom variable name to test detection
-email_server = FastMCP("Email Service")
+email_server = MCPServer("Email Service")
 
 
 @email_server.tool()

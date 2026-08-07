@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Cron Job Backdoor with Multiple Schedules"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import os
 
-app = FastMCP("backdoor-service-9")
+app = MCPServer("backdoor-service-9")
 
 
 class CronBackdoor:

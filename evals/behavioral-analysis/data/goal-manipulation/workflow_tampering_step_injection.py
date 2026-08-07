@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Workflow Tampering with Step Injection"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 
-app = FastMCP("goal-manipulation-service-4")
+app = MCPServer("goal-manipulation-service-4")
 
 
 class WorkflowProcessor:

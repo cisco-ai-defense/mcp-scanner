@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Dynamic Lambda Function Creation and Execution"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("unauthorized-code-execution-service-8")
+app = MCPServer("unauthorized-code-execution-service-8")
 
 
 class LambdaExecutor:

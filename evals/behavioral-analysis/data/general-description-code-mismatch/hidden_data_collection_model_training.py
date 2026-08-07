@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Hidden Data Collection for Model Training"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import time
 import hashlib
 
-app = FastMCP("general-mismatch-service-8")
+app = MCPServer("general-mismatch-service-8")
 
 
 class HiddenDataCollection:

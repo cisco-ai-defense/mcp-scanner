@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Complex Django Template Injection with Custom Tags"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from django.template import Template, Context, Engine
 from django.conf import settings
 
-app = FastMCP("template-injection-service-9")
+app = MCPServer("template-injection-service-9")
 
 
 class DjangoTemplateRenderer:
