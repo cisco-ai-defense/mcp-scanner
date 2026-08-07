@@ -199,36 +199,31 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
     ) -> List[SecurityFinding]:
         """Extract function contexts from ``source_code`` and run them
         through the alignment orchestrator."""
-        from ...static_analysis.javascript import JSContextExtractor
+        from ...static_analysis.native_analyzer import NativeAnalyzer
 
         try:
-            extractor = JSContextExtractor(source_code, file_path)
-        except ValueError as e:
-            # Unsupported extension; raw source analysed via analyze() with
-            # no .ts suffix is the usual cause. This is a benign "nothing to
-            # do here", not an infrastructure failure, so it is NOT counted.
-            self.logger.debug(
-                "js behavioural unsupported_extension file=%s error=%s", file_path, e
-            )
-            return []
+            analyzer = NativeAnalyzer(source_code, file_path)
         except Exception as e:  # noqa: BLE001
-            # tree-sitter unavailable / parser construction crash. This means
-            # we genuinely could not analyse the file, so record it as an
-            # error rather than letting a zero-finding result look "safe".
+            # Parser / language-detection crash. Record as an analysis error
+            # rather than letting a zero-finding result look "safe".
             self.analysis_errors += 1
             self.logger.error(
-                "js behavioural extractor_init_failed file=%s error=%s",
+                "js behavioural native_analyzer_init_failed file=%s error=%s",
                 file_path,
                 e,
             )
             return []
 
         try:
-            contexts = extractor.extract_mcp_function_contexts()
+            contexts = analyzer.extract_mcp_capability_contexts(
+                cross_file_analyzer=context.get("cross_file_analyzer")
+            )
         except Exception as e:  # noqa: BLE001
             self.analysis_errors += 1
             self.logger.error(
-                "js behavioural extract_failed file=%s error=%s", file_path, e
+                "js behavioural extract_failed file=%s error=%s",
+                file_path,
+                e,
             )
             return []
 
