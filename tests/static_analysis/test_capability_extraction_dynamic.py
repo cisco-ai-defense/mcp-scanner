@@ -322,17 +322,14 @@ def test_graph_endpoint_loop_expands_literal_aliases() -> None:
 
 
 def test_graph_loop_inline_handler_uses_alias_not_description() -> None:
-    """The shared inline handler registration must prefer ``tool.alias``."""
+    """Loop registrations with shared inline handlers are covered by table
+    expansion — no duplicate ``tool.alias`` stub."""
     analyzer = NativeAnalyzer(GRAPH_ENDPOINT_LOOP, "graph-tools.ts")
     caps = analyzer.extract_mcp_capability_contexts()
-    reg_caps = [
-        c for c in caps if any(t == "<registration>.tool" for t in c.decorator_types)
-    ]
-    assert reg_caps, [c.decorator_types for c in caps]
-    assert any("tool.alias" in c.name for c in reg_caps), [c.name for c in reg_caps]
-    assert not any(c.name == "toolDescription" for c in reg_caps), [
-        c.name for c in reg_caps
-    ]
+    names = {c.name for c in caps}
+    assert "list-messages" in names, names
+    assert not any("tool.alias" in n for n in names), names
+    assert not any(n == "toolDescription" for n in names), names
 
 
 # ---------------------------------------------------------------------------
@@ -355,16 +352,135 @@ tools.forEach((m) => {
 """
 
 
-def test_js_loop_registration_emits_unresolved_or_inline_handlers() -> None:
-    """``tools.forEach(m => server.tool(m.name, m.schema, m.fn))`` is dynamic.
-
-    Static names from the ``tools`` table are not promoted to capabilities
-    unless that array is reached through an explicit ``for...of`` iteration.
-    """
+def test_js_loop_registration_expands_static_forEach_names() -> None:
+    """``tools.forEach(m => server.tool(m.name, ...))`` must expand literal
+    tool names from the static ``tools`` table."""
     analyzer = NativeAnalyzer(JS_LOOP_REGISTRATION, "loop.js")
     caps = analyzer.extract_mcp_capability_contexts()
     names = {c.name for c in caps}
-    assert names == {"m.name"}, names
-    assert any(
-        any("registration.unresolved" in t for t in c.decorator_types) for c in caps
-    ), [c.decorator_types for c in caps]
+    assert names == {"add", "sub"}, names
+    table_caps = [
+        c
+        for c in caps
+        if any("registration.table" in t for t in c.decorator_types)
+    ]
+    assert len(table_caps) == 2, [c.decorator_types for c in caps]
+
+
+TS_CUSTOM_WRAPPER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+function safeTool(
+  name: string,
+  schema: Record<string, z.ZodTypeAny>,
+  handler: (args: any) => Promise<{ content: Array<{ type: "text"; text: string }> }>,
+) {
+  return server.tool(name, schema, handler);
+}
+
+safeTool(
+  "greet",
+  { name: z.string() },
+  async ({ name }) => ({ content: [{ type: "text", text: `hello ${name}` }] }),
+);
+"""
+
+
+def test_ts_custom_wrapper_uses_literal_tool_name() -> None:
+    """``safeTool('greet', schema, handler)`` must not pick schema key ``name``."""
+    analyzer = NativeAnalyzer(TS_CUSTOM_WRAPPER, "wrapper.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"greet"}, names
+
+
+TS_BOUND_METHOD_REGISTRATION = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+class ControlPlaneTools {
+  async memoryCreate(args: { name: string }) {
+    return { content: [{ type: "text", text: args.name }] };
+  }
+
+  async memoryGet(args: { name: string }) {
+    return { content: [{ type: "text", text: args.name }] };
+  }
+
+  register(mcp: McpServer) {
+    mcp.tool("memory_create", { name: z.string() }, this.memoryCreate.bind(this));
+    mcp.tool("memory_get", { name: z.string() }, this.memoryGet.bind(this));
+  }
+}
+"""
+
+
+def test_ts_bound_method_registration_resolves_bind_handlers() -> None:
+    """``mcp.tool('memory_create', schema, this.method.bind(this))`` must classify."""
+    analyzer = NativeAnalyzer(TS_BOUND_METHOD_REGISTRATION, "controlplane.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert any("memory_create" in n for n in names), names
+    assert any("memory_get" in n for n in names), names
+
+
+JS_LOOP_PLUS_INDEPENDENT_DYNAMIC = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+const tools = [
+  { name: "add", schema: {}, fn: (a, b) => a + b },
+];
+
+tools.forEach((m) => {
+  server.tool(m.name, m.schema, m.fn);
+});
+
+const config = { name: "dynamic-tool" };
+server.tool(config.name, {}, () => ({ content: [{ type: "text", text: "ok" }] }));
+"""
+
+
+def test_table_loop_suppression_does_not_drop_unrelated_dynamic_registration() -> None:
+    """A static forEach table must not suppress unrelated ``config.name`` calls."""
+    analyzer = NativeAnalyzer(JS_LOOP_PLUS_INDEPENDENT_DYNAMIC, "mixed.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    table_caps = [
+        c
+        for c in caps
+        if any("registration.table" in t for t in c.decorator_types)
+    ]
+    dynamic_caps = [
+        c
+        for c in caps
+        if any(t == "<registration>.tool" for t in c.decorator_types)
+    ]
+    assert [c.name for c in table_caps] == ["add"], [c.name for c in caps]
+    assert len(dynamic_caps) == 1, [c.name for c in caps]
+    assert "config.name" in dynamic_caps[0].name, dynamic_caps[0].name
+
+
+TS_PROMPT_WRAPPER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+function safePrompt(name, schema, handler) {
+  return server.prompt(name, schema, handler);
+}
+
+safePrompt("greet", {}, async () => ({ messages: [] }));
+"""
+
+
+def test_ts_prompt_wrapper_preserves_prompt_capability_kind() -> None:
+    """Wrappers that delegate to ``server.prompt`` must not be tagged as tools."""
+    analyzer = NativeAnalyzer(TS_PROMPT_WRAPPER, "prompt-wrapper.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.decorator_types for c in caps]
+    assert any("<registration>.prompt" in t for t in caps[0].decorator_types)
+    assert not any("<registration>.tool" in t for t in caps[0].decorator_types)

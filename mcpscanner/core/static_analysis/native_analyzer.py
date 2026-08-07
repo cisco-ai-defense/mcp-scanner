@@ -1029,10 +1029,6 @@ class NativeAnalyzer:
         # from false-positive-classifying as MCP registrations.
         mcp_instances = self._collect_mcp_instances(tree.root_node, imports)
 
-        registrations = self._ts_find_mcp_registrations(
-            tree.root_node, trusted_receivers=mcp_instances
-        )
-
         # Build an import-target map once per extract call: cross-file
         # resolution prefers entries whose defining file path matches
         # one of the calling file's import targets, killing the
@@ -1041,7 +1037,46 @@ class NativeAnalyzer:
             imports, current_file=str(self.file_path) if self.file_path else None
         )
 
+        # Static endpoint tables (``for...of`` / ``forEach`` loops) are
+        # resolved before call-site registrations so loop-variable member
+        # accesses like ``tool.alias`` / ``m.name`` do not duplicate or
+        # shadow the expanded literal tool names.
+        table_names, table_loop_ranges = self._ts_collect_static_endpoint_tool_names(
+            tree.root_node,
+            import_target_map=import_target_map,
+            cross_file_analyzer=cross_file_analyzer,
+        )
+
+        wrapper_functions = self._ts_collect_tool_wrapper_functions(
+            tree.root_node, mcp_instances
+        )
+        registrations = self._ts_find_mcp_registrations(
+            tree.root_node,
+            trusted_receivers=mcp_instances,
+            wrapper_functions=set(wrapper_functions),
+        )
+        registrations.extend(
+            self._ts_find_wrapper_tool_registrations(
+                tree.root_node, wrapper_functions
+            )
+        )
+
         for reg in registrations:
+            call_node = reg.get("call_node")
+            in_table_loop = self._ts_node_in_table_loop_scope(
+                call_node, table_loop_ranges
+            )
+            if in_table_loop:
+                reg_name = reg.get("name") or ""
+                handler_name = reg.get("handler_name") or ""
+                dynamic_name = reg_name or handler_name
+                if dynamic_name and "." in dynamic_name:
+                    continue
+                if (
+                    reg.get("handler_node") is not None
+                    and not reg_name
+                ):
+                    continue
             handler_node = reg.get("handler_node")
             handler_name = reg.get("handler_name")
             handler_origin: str = "inline"
@@ -1077,7 +1112,7 @@ class NativeAnalyzer:
             # ``<registration>.unresolved.<kind>`` so consumers can
             # distinguish them from analyzed handlers.
             if handler_node is None and cross_file_match is None:
-                if not (handler_name or reg.get("name")):
+                if not (handler_name or self._ts_registration_display_name(reg)):
                     continue
                 template_subtype = reg.get("template_subtype")
                 source_kind = (
@@ -1095,7 +1130,7 @@ class NativeAnalyzer:
                 self._append_unresolved_capability(
                     contexts,
                     capability=cap_kind,
-                    registered_name=reg.get("name") or handler_name,
+                    registered_name=self._ts_registration_display_name(reg),
                     source_kind=source_kind,
                     handler_name_hint=handler_name,
                 )
@@ -1121,7 +1156,7 @@ class NativeAnalyzer:
                 self._append_unresolved_capability(
                     contexts,
                     capability=cap_kind,
-                    registered_name=reg.get("name") or handler_name,
+                    registered_name=self._ts_registration_display_name(reg),
                     source_kind=source_kind,
                     handler_name_hint=handler_name,
                     source_file=cross_file_path,
@@ -1147,18 +1182,10 @@ class NativeAnalyzer:
                 handler_node,
                 imports,
                 capability=cap_kind,
-                registered_name=reg.get("name"),
+                registered_name=self._ts_registration_display_name(reg),
                 source_kind=source_kind,
             )
 
-        # Gap 8 extension: static endpoint tables (literal ``name`` /
-        # ``alias`` fields) including arrays reached via ``for (const tool
-        # of api.endpoints)`` loops (in-file and cross-file).
-        table_names = self._ts_collect_static_endpoint_tool_names(
-            tree.root_node,
-            import_target_map=import_target_map,
-            cross_file_analyzer=cross_file_analyzer,
-        )
         for tool_name in table_names:
             cap_key = (f"table:{tool_name}", "tool")
             if cap_key in seen_handlers:
@@ -2336,6 +2363,7 @@ class NativeAnalyzer:
         self,
         root: "Node",
         trusted_receivers: Optional[Set[str]] = None,
+        wrapper_functions: Optional[Set[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Find call expressions that look like MCP capability registrations.
 
@@ -2368,6 +2396,7 @@ class NativeAnalyzer:
         """
         registrations: List[Dict[str, Any]] = []
         trusted_receivers = trusted_receivers or set()
+        wrapper_functions = wrapper_functions or set()
 
         def visit(node: "Node", parent: Optional["Node"]):
             if node.type == "call_expression":
@@ -2380,6 +2409,12 @@ class NativeAnalyzer:
                 )
 
                 if is_registration_method:
+                    if wrapper_functions and self._ts_is_inside_named_function(
+                        node, wrapper_functions
+                    ):
+                        for child in node.children:
+                            visit(child, node)
+                        return
                     # Receiver verification: drop unrelated DSLs that
                     # happen to expose ``.tool(...)`` etc.
                     if not self._ts_receiver_is_trusted(
@@ -2401,7 +2436,7 @@ class NativeAnalyzer:
                                 visit(child, node)
                             return
                         reg = self._ts_parse_registration_args(
-                            args_node, method_lc, override_capability=ll_cap
+                            args_node, method_lc, override_capability=ll_cap, call_node=node
                         )
                         if reg is None:
                             reg = {
@@ -2412,7 +2447,9 @@ class NativeAnalyzer:
                             }
                         reg["template_subtype"] = None
                     else:
-                        reg = self._ts_parse_registration_args(args_node, method_lc)
+                        reg = self._ts_parse_registration_args(
+                            args_node, method_lc, call_node=node
+                        )
                         if reg is None:
                             reg = {
                                 "capability": _normalize_capability(method_lc),
@@ -2470,6 +2507,7 @@ class NativeAnalyzer:
                         reg.get("handler_node") is not None
                         or reg.get("handler_name") is not None
                     ):
+                        reg["call_node"] = node
                         registrations.append(reg)
             for child in node.children:
                 visit(child, node)
@@ -2510,7 +2548,13 @@ class NativeAnalyzer:
             # trusted because they can only have come from a direct
             # import of the SDK function.
             return True
-        return receiver in trusted_receivers
+        if receiver in trusted_receivers:
+            return True
+        # ``this.server.tool(...)`` when ``server`` is a trusted field.
+        for part in receiver.split("."):
+            if part in trusted_receivers:
+                return True
+        return False
 
     def _ts_call_receiver_name(self, call_node: "Node") -> Optional[str]:
         """Return the receiver expression of a ``X.method(...)`` call.
@@ -2545,7 +2589,7 @@ class NativeAnalyzer:
         for field in ("object", "operand", "expression"):
             recv = func.child_by_field_name(field)
             if recv is not None:
-                return self._ts_get_node_text(recv).strip().split(".")[0]
+                return self._ts_get_node_text(recv).strip()
         for child in func.children:
             if child.is_named:
                 return self._ts_get_node_text(child).strip().split(".")[0]
@@ -2664,6 +2708,17 @@ class NativeAnalyzer:
                     if self._ts_is_mcp_instantiation(value_node, sdk_classes):
                         trusted.add(self._ts_get_node_text(name_node))
 
+            if node.type in (
+                "public_field_definition",
+                "field_definition",
+                "property_declaration",
+            ):
+                name_node = node.child_by_field_name("name")
+                value_node = node.child_by_field_name("value")
+                if name_node is not None and value_node is not None:
+                    if self._ts_is_mcp_instantiation(value_node, sdk_classes):
+                        trusted.add(self._ts_get_node_text(name_node))
+
             # Go: ``server := mcp.NewServer(...)`` parses as
             # ``short_var_declaration`` with ``left`` (identifier) and
             # ``right`` (call_expression).
@@ -2683,11 +2738,25 @@ class NativeAnalyzer:
                 "typed_parameter",
                 "function_parameter",
                 "value_parameter",
+                "required_parameter",
+                "optional_parameter",
             ):
                 pname = node.child_by_field_name("name")
+                if pname is None:
+                    for child in node.children:
+                        if child.type == "identifier":
+                            pname = child
+                            break
                 ptype = node.child_by_field_name("type")
+                if ptype is None:
+                    for child in node.children:
+                        if child.type == "type_annotation":
+                            ptype = child
+                            break
                 if pname is not None and ptype is not None:
                     type_text = self._ts_get_node_text(ptype).strip()
+                    if type_text.startswith(":"):
+                        type_text = type_text[1:].strip()
                     if (
                         type_text in sdk_classes
                         or type_text.split(".")[-1] in sdk_classes
@@ -2939,6 +3008,8 @@ class NativeAnalyzer:
         args_node: Optional["Node"],
         capability_method: str,
         override_capability: Optional[str] = None,
+        *,
+        call_node: Optional["Node"] = None,
     ) -> Optional[Dict[str, Any]]:
         """Pull the registered name + handler out of a registration call.
 
@@ -2992,6 +3063,12 @@ class NativeAnalyzer:
                 positional.append(("ref", self._ts_get_node_text(child)))
                 continue
 
+            if child.type == "call_expression":
+                bind_method = self._ts_parse_bind_handler_name(child)
+                if bind_method:
+                    positional.append(("bind_ref", bind_method))
+                    continue
+
             if child.type in string_node_types:
                 positional.append(
                     ("string", _strip_string_quotes(self._ts_get_node_text(child)))
@@ -3036,11 +3113,14 @@ class NativeAnalyzer:
 
         inline_handlers = [val for kind, val in positional if kind == "inline"]
         refs = [val for kind, val in positional if kind == "ref"]
+        bind_refs = [val for kind, val in positional if kind == "bind_ref"]
 
         handler_node = inline_handlers[-1] if inline_handlers else None
         handler_name: Optional[str] = None
 
-        if handler_node is None and refs:
+        if handler_node is None and bind_refs:
+            handler_name = bind_refs[-1]
+        elif handler_node is None and refs:
             handler_name = refs[-1]
 
         if (
@@ -3049,7 +3129,18 @@ class NativeAnalyzer:
             and self.language in ("javascript", "typescript")
             and capability_method.lower() not in _MCP_LOW_LEVEL_REGISTRATION_METHODS
         ):
-            name = refs[0]
+            candidate = refs[0]
+            param_names = (
+                self._ts_enclosing_function_param_names(call_node)
+                if call_node is not None
+                else set()
+            )
+            if candidate not in param_names and "." not in candidate:
+                name = candidate
+
+        name_ref: Optional[str] = None
+        if name is None and refs and "." in refs[0]:
+            name_ref = refs[0]
 
         if handler_node is None and handler_name is None:
             return None
@@ -3057,7 +3148,222 @@ class NativeAnalyzer:
         return {
             "capability": override_capability or _normalize_capability(capability_method),
             "name": name,
+            "name_ref": name_ref,
             "handler_node": handler_node,
+            "handler_name": handler_name,
+        }
+
+    def _ts_registration_display_name(self, reg: Dict[str, Any]) -> Optional[str]:
+        """Prefer literal MCP name, then member-expression ref, then handler."""
+        return reg.get("name") or reg.get("name_ref") or reg.get("handler_name")
+
+    def _ts_parse_bind_handler_name(self, call_node: "Node") -> Optional[str]:
+        """Return a method name from ``this.method.bind(...)`` call expressions."""
+        if call_node.type != "call_expression":
+            return None
+        func = call_node.child_by_field_name("function")
+        if func is None or func.type not in _TS_MEMBER_EXPR_TYPES:
+            return None
+        bind_prop = func.child_by_field_name("property")
+        if bind_prop is None or self._ts_get_node_text(bind_prop) != "bind":
+            return None
+        target = func.child_by_field_name("object")
+        if target is None:
+            return None
+        if target.type in _TS_MEMBER_EXPR_TYPES:
+            method_prop = target.child_by_field_name("property")
+            if method_prop is not None:
+                return self._ts_get_node_text(method_prop)
+        if target.type == "identifier":
+            return self._ts_get_node_text(target)
+        return None
+
+    def _ts_enclosing_function_param_names(self, node: "Node") -> Set[str]:
+        """Parameter names declared on the nearest enclosing function."""
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set()) | {
+            "function_declaration",
+            "method_definition",
+            "arrow_function",
+            "function_expression",
+        }
+        cur = node.parent
+        while cur is not None:
+            if cur.type in func_types:
+                names: Set[str] = set()
+                for param in self._ts_extract_parameters(cur):
+                    pname = param.get("name")
+                    if pname:
+                        names.add(pname)
+                return names
+            cur = cur.parent
+        return set()
+
+    def _ts_node_in_table_loop_scope(
+        self,
+        node: Optional["Node"],
+        table_loop_ranges: List[tuple[int, int]],
+    ) -> bool:
+        """Return True when ``node`` sits inside a table-expanding loop."""
+        if node is None or not table_loop_ranges:
+            return False
+        pos = node.start_byte
+        return any(start <= pos < end for start, end in table_loop_ranges)
+
+    def _ts_is_inside_named_function(
+        self, node: "Node", function_names: Set[str]
+    ) -> bool:
+        """Return True when ``node`` sits inside one of ``function_names``."""
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set()) | {
+            "function_declaration",
+            "method_definition",
+        }
+        cur = node.parent
+        while cur is not None:
+            if cur.type in func_types:
+                name_node = cur.child_by_field_name("name")
+                if name_node is not None:
+                    return self._ts_get_node_text(name_node) in function_names
+                return False
+            cur = cur.parent
+        return False
+
+    def _ts_collect_tool_wrapper_functions(
+        self, root: "Node", trusted_receivers: Set[str]
+    ) -> Dict[str, str]:
+        """Functions whose body delegates to ``server.tool(...)`` etc.
+
+        Returns ``{wrapper_name: capability_kind}``.
+        """
+        wrappers: Dict[str, str] = {}
+
+        def body_returns_mcp_registration(fn_node: "Node") -> Optional[str]:
+            found_cap: Optional[str] = None
+
+            def walk(node: "Node") -> None:
+                nonlocal found_cap
+                if found_cap:
+                    return
+                if node.type == "return_statement":
+                    for child in node.children:
+                        if child.type != "call_expression":
+                            continue
+                        method = self._ts_call_method_name(child)
+                        method_lc = method.lower() if method else ""
+                        if method_lc in _MCP_REGISTRATION_METHODS:
+                            if self._ts_receiver_is_trusted(
+                                child, method_lc, trusted_receivers
+                            ):
+                                found_cap = _normalize_capability(method_lc)
+                                return
+                for child in node.children:
+                    walk(child)
+
+            walk(fn_node)
+            return found_cap
+
+        def visit(node: "Node") -> None:
+            if node.type == "function_declaration":
+                name_node = node.child_by_field_name("name")
+                cap_kind = body_returns_mcp_registration(node)
+                if name_node is not None and cap_kind is not None:
+                    wrappers[self._ts_get_node_text(name_node)] = cap_kind
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return wrappers
+
+    def _ts_find_wrapper_tool_registrations(
+        self, root: "Node", wrapper_functions: Dict[str, str]
+    ) -> List[Dict[str, Any]]:
+        """Registrations made via custom wrappers like ``safeTool('x', ...)``."""
+        if not wrapper_functions:
+            return []
+
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        registrations: List[Dict[str, Any]] = []
+
+        def visit(node: "Node") -> None:
+            if node.type == "call_expression":
+                callee = self._ts_call_callee_identifier(node)
+                cap_kind = wrapper_functions.get(callee) if callee else None
+                if cap_kind is not None:
+                    args_node = self._ts_call_arguments_node(node)
+                    reg = self._ts_parse_wrapper_registration_args(
+                        args_node, func_types, capability=cap_kind
+                    )
+                    if reg is not None:
+                        reg["call_node"] = node
+                        registrations.append(reg)
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return registrations
+
+    def _ts_call_callee_identifier(self, call_node: "Node") -> Optional[str]:
+        """Return the bare identifier for ``fn(...)`` calls."""
+        func = call_node.child_by_field_name("function")
+        if func is None:
+            for child in call_node.children:
+                if child.type == "identifier":
+                    return self._ts_get_node_text(child)
+            return None
+        if func.type == "identifier":
+            return self._ts_get_node_text(func)
+        return None
+
+    def _ts_parse_wrapper_registration_args(
+        self,
+        args_node: Optional["Node"],
+        func_types: Set[str],
+        *,
+        capability: str = "tool",
+    ) -> Optional[Dict[str, Any]]:
+        """Parse ``wrapper('tool-name', schema, handler)`` call sites."""
+        if args_node is None:
+            return None
+
+        string_node_types = {
+            "string",
+            "string_literal",
+            "template_string",
+            "raw_string_literal",
+            "interpreted_string_literal",
+        }
+        name: Optional[str] = None
+        inline_handler: Optional["Node"] = None
+        handler_name: Optional[str] = None
+        refs: List[str] = []
+
+        for child in args_node.children:
+            if child.type in ("(", ")", ",", "comment"):
+                continue
+            if child.type in string_node_types:
+                if name is None:
+                    name = _strip_string_quotes(self._ts_get_node_text(child))
+                continue
+            if child.type in func_types:
+                inline_handler = child
+                continue
+            if child.type == "identifier":
+                refs.append(self._ts_get_node_text(child))
+                continue
+            if child.type in _TS_MEMBER_EXPR_TYPES:
+                refs.append(self._ts_get_node_text(child))
+                continue
+            if child.type in ("object", "object_expression"):
+                continue
+
+        if inline_handler is None and refs:
+            handler_name = refs[-1]
+        if name is None or (inline_handler is None and handler_name is None):
+            return None
+
+        return {
+            "capability": capability,
+            "name": name,
+            "handler_node": inline_handler,
             "handler_name": handler_name,
         }
 
@@ -3085,22 +3391,30 @@ class NativeAnalyzer:
         *,
         import_target_map: Optional[Dict[str, List[str]]] = None,
         cross_file_analyzer: Optional[Any] = None,
-    ) -> List[str]:
+    ) -> tuple[List[str], List[tuple[int, int]]]:
         """Collect static MCP tool names from descriptor arrays.
 
         Only arrays reached through ``for (const tool of api.endpoints)``-style
         loops are considered (in-file and cross-file). A blanket walk of every
         array literal would mis-tag HTTP route tables and model catalogues as
         MCP tools.
+
+        Returns ``(tool_names, loop_byte_ranges)`` where each range covers a
+        ``for...of`` / ``forEach`` site that expanded a static table.
         """
         names: List[str] = []
         seen: Set[str] = set()
+        table_loop_ranges: List[tuple[int, int]] = []
         bindings = self._ts_build_simple_value_bindings(root)
 
         def add_name(value: Optional[str]) -> None:
             if value and value not in seen:
                 seen.add(value)
                 names.append(value)
+
+        def record_loop_scope(loop_node: "Node", expanded: List[str]) -> None:
+            if expanded:
+                table_loop_ranges.append((loop_node.start_byte, loop_node.end_byte))
 
         def visit(node: "Node") -> None:
             if node.type in ("for_in_statement", "for_of_statement"):
@@ -3114,13 +3428,23 @@ class NativeAnalyzer:
                             cross_file_analyzer=cross_file_analyzer,
                         )
                     if array_node is not None:
-                        for tool_name in self._ts_endpoint_names_in_array(array_node):
+                        expanded = self._ts_endpoint_names_in_array(array_node)
+                        for tool_name in expanded:
                             add_name(tool_name)
+                        record_loop_scope(node, expanded)
+            if node.type == "call_expression":
+                if self._ts_call_method_name(node) == "forEach":
+                    array_node = self._ts_forEach_source_array(node, bindings, root)
+                    if array_node is not None:
+                        expanded = self._ts_endpoint_names_in_array(array_node)
+                        for tool_name in expanded:
+                            add_name(tool_name)
+                        record_loop_scope(node, expanded)
             for child in node.children:
                 visit(child)
 
         visit(root)
-        return names
+        return names, table_loop_ranges
 
     def _ts_endpoint_names_in_array(self, array_node: "Node") -> List[str]:
         """Return string tool names from object elements in an array literal."""
@@ -3197,6 +3521,24 @@ class NativeAnalyzer:
             if seen_of and child.type not in skip_types:
                 return child
         return None
+
+    def _ts_forEach_source_array(
+        self,
+        call_node: "Node",
+        bindings: Dict[str, "Node"],
+        root: "Node",
+    ) -> Optional["Node"]:
+        """Resolve ``tools.forEach(...)`` to its array literal node."""
+        func = call_node.child_by_field_name("function")
+        if func is None or func.type not in _TS_MEMBER_EXPR_TYPES:
+            return None
+        prop = func.child_by_field_name("property")
+        if prop is None or self._ts_get_node_text(prop) != "forEach":
+            return None
+        obj = func.child_by_field_name("object")
+        if obj is None:
+            return None
+        return self._ts_resolve_to_array_node(obj, bindings, root)
 
     def _ts_resolve_to_array_node(
         self,
