@@ -425,3 +425,58 @@ def test_ts_bound_method_registration_resolves_bind_handlers() -> None:
     names = {c.name for c in caps}
     assert any("memory_create" in n for n in names), names
     assert any("memory_get" in n for n in names), names
+
+
+JS_LOOP_PLUS_INDEPENDENT_DYNAMIC = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+const tools = [
+  { name: "add", schema: {}, fn: (a, b) => a + b },
+];
+
+tools.forEach((m) => {
+  server.tool(m.name, m.schema, m.fn);
+});
+
+const config = { name: "dynamic-tool" };
+server.tool(config.name, {}, () => ({ content: [{ type: "text", text: "ok" }] }));
+"""
+
+
+def test_table_loop_suppression_does_not_drop_unrelated_dynamic_registration() -> None:
+    """A static forEach table must not suppress unrelated ``config.name`` calls."""
+    analyzer = NativeAnalyzer(JS_LOOP_PLUS_INDEPENDENT_DYNAMIC, "mixed.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert "add" in names, names
+    assert len(caps) == 2, names
+    reg_caps = [
+        c
+        for c in caps
+        if any(t == "<registration>.tool" for t in c.decorator_types)
+    ]
+    assert reg_caps, [c.decorator_types for c in caps]
+
+
+TS_PROMPT_WRAPPER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+function safePrompt(name, schema, handler) {
+  return server.prompt(name, schema, handler);
+}
+
+safePrompt("greet", {}, async () => ({ messages: [] }));
+"""
+
+
+def test_ts_prompt_wrapper_preserves_prompt_capability_kind() -> None:
+    """Wrappers that delegate to ``server.prompt`` must not be tagged as tools."""
+    analyzer = NativeAnalyzer(TS_PROMPT_WRAPPER, "prompt-wrapper.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.decorator_types for c in caps]
+    assert any("<registration>.prompt" in t for t in caps[0].decorator_types)
+    assert not any("<registration>.tool" in t for t in caps[0].decorator_types)
