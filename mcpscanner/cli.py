@@ -1064,6 +1064,10 @@ async def main():
   %(prog)s static --prompts prompts.json --analyzers llm                     # Scan prompts file
   %(prog)s static --resources resources.json --analyzers yara                # Scan resources file
   %(prog)s static --tools t.json --prompts p.json --analyzers yara,llm,api   # Scan all three types
+
+  # Source code scanning with no LLM key and no running server:
+  %(prog)s static-source /path/to/src                                        # YARA rules over a source tree
+  %(prog)s static-source /path/to/server.py --format raw -o findings.json    # Machine-readable output for CI
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1206,6 +1210,47 @@ async def main():
         choices=[
             "raw", "summary", "detailed", "by_tool",
             "by_analyzer", "by_severity", "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+
+    # static-source subcommand - YARA over raw source, no LLM key required
+    p_static_source = subparsers.add_parser(
+        "static-source",
+        help=(
+            "Scan MCP server source code with YARA rules only "
+            "(no LLM key or running server required)"
+        ),
+    )
+    p_static_source.add_argument(
+        "source_path",
+        help="Path to MCP server source code file or directory",
+    )
+    p_static_source.add_argument(
+        "--output",
+        "-o",
+        help="Save scan results to a file",
+    )
+    p_static_source.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_static_source.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_static_source.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_static_source.add_argument(
+        "--format",
+        choices=[
+            "raw",
+            "summary",
+            "detailed",
+            "by_tool",
+            "by_analyzer",
+            "by_severity",
+            "table",
         ],
         default="summary",
         help="Output format (default: %(default)s)",
@@ -2263,6 +2308,27 @@ async def main():
                 if args.verbose:
                     print(f"Results saved to {args.output}")
 
+        elif args.cmd == "static-source":
+            # YARA-only scan over raw source. Deliberately does NOT construct
+            # a Config or any LLM-backed analyzer: this path must work with no
+            # LLM provider key and no running MCP server.
+            from mcpscanner.core.source_scan import scan_source_with_yara
+
+            try:
+                results = await scan_source_with_yara(
+                    args.source_path,
+                    rules_dir=args.rules_path,
+                )
+            except FileNotFoundError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2)
+                if args.verbose:
+                    print(f"Results saved to {args.output}")
+
         elif args.cmd == "pypi-scan":
             from mcpscanner.core.pypi_scanner import (
                 DockerNotAvailableError,
@@ -2627,6 +2693,8 @@ async def main():
             server_label = f"vulnerable-package:{args.scan_path}"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "static-source":
+            server_label = f"static-source:{args.source_path}"
         elif hasattr(args, "cmd") and args.cmd == "pypi-scan":
             pkg_spec = args.package
             if getattr(args, "version", None):
@@ -2758,6 +2826,8 @@ async def main():
             server_label = "well-known-configs"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "static-source":
+            server_label = f"static-source:{args.source_path}"
         elif hasattr(args, "cmd") and args.cmd == "pypi-scan":
             pkg_spec = args.package
             if getattr(args, "version", None):
