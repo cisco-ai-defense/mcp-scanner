@@ -480,7 +480,39 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 ```
 
 
+> **Note:** `behavioral` always performs LLM-powered alignment checking, so it
+> requires an LLM provider key. For pattern detection over source code with no
+> LLM provider and no running server, use `static-source` below.
+
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
+
+#### Source Code Scanning Without an LLM (`static-source`)
+
+`static-source` runs the YARA rules directly over a source file or directory.
+It needs no LLM provider key and no running MCP server, which makes it usable
+in CI on a feature branch without per-pull-request LLM spend.
+
+Unlike `static`, which reads pre-captured `tools/list` JSON, this scans raw
+source. Unlike `behavioral`, it performs no alignment checking — it is pattern
+detection only, so it will not catch docstring/behavior mismatches.
+
+```bash
+# Scan a directory of source
+mcp-scanner static-source /path/to/mcp_server_src/
+
+# Scan a single file
+mcp-scanner static-source /path/to/server.py
+
+# Custom YARA rules
+mcp-scanner static-source /path/to/src --rules-path /path/to/rules/
+
+# CI-friendly: machine-readable output
+mcp-scanner static-source /path/to/src --output findings.json --format raw
+```
+
+Every scanned file appears in the output, including clean ones (`"is_safe":
+true`), so a report distinguishes "examined and clean" from "never examined". A
+file whose scan fails is reported with status `error` rather than as clean.
 
 #### PyPI Package Scanning
 

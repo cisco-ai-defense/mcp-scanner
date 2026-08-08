@@ -39,6 +39,11 @@ from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.path_safety import filter_safe_paths, safe_resolve_root
+from ...source_discovery import (
+    EXT_TO_TS_LANGUAGE,
+    PYTHON_EXTENSIONS,
+    find_source_files,
+)
 from ...static_analysis.context_extractor import ContextExtractor, FunctionContext
 from ...static_analysis.native_analyzer import NativeAnalyzer
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
@@ -526,25 +531,18 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             )
             return []
 
-    _EXT_TO_TS_LANGUAGE = {
-        ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
-        ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
-        ".go": "go",
-        ".java": "java",
-        ".kt": "kotlin", ".kts": "kotlin",
-        ".cs": "c_sharp",
-        ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
-        ".rs": "rust",
-        ".php": "php", ".phtml": "php",
-    }
+    # Sourced from ``core.source_discovery`` so this analyzer and the no-LLM
+    # YARA source scan cannot drift on which extensions count as source.
+    _EXT_TO_TS_LANGUAGE = EXT_TO_TS_LANGUAGE
 
-    _PYTHON_EXTENSIONS = {".py", ".pyw"}
+    _PYTHON_EXTENSIONS = PYTHON_EXTENSIONS
 
     def _find_source_files(self, directory: str) -> List[str]:
         """Find all supported source files in a directory.
 
-        Supports Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby,
-        Rust, and PHP files.
+        Delegates to :func:`mcpscanner.core.source_discovery.find_source_files`
+        so this path and the no-LLM YARA source scan agree on which files
+        count as source and on symlink-escape filtering.
 
         Args:
             directory: Directory path to search
@@ -552,34 +550,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         Returns:
             List of source file paths
         """
-        source_files = []
-        path = Path(directory)
-        resolved_root = safe_resolve_root(directory)
-
-        extensions = self._PYTHON_EXTENSIONS | set(self._EXT_TO_TS_LANGUAGE.keys())
-
-        candidates: List[Path] = []
-        for ext in extensions:
-            for source_file in path.rglob(f"*{ext}"):
-                # Inspect only components below the scan root; an absolute
-                # ``parts`` would treat a hidden ancestor dir (e.g. a dotted
-                # TMPDIR) as reason to skip every file, silently emptying
-                # the scan.
-                rel_parts = _relative_parts(source_file, path)
-                if (
-                    "__pycache__" not in rel_parts
-                    and "node_modules" not in rel_parts
-                    and not any(part.startswith(".") for part in rel_parts)
-                ):
-                    candidates.append(source_file)
-
-        safe_candidates, _skipped = filter_safe_paths(
-            candidates, resolved_root, audit_label="behavioral"
-        )
-        for source_file in safe_candidates:
-            source_files.append(str(source_file))
-
-        return sorted(source_files)
+        return find_source_files(directory, audit_label="behavioral")
 
     def _prefilter_capability_files(
         self, source_files: List[str]
