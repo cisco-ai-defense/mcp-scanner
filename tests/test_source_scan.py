@@ -77,6 +77,28 @@ def source_tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def rules_dir(tmp_path_factory) -> Path:
+    """A custom YARA rules directory whose single rule matches ``server.py``.
+
+    Naming the rule lets a test assert that custom rules were actually
+    loaded, rather than that the command merely exited zero.
+    """
+    d = tmp_path_factory.mktemp("rules")
+    (d / "custom.yar").write_text(
+        "rule custom_marker_rule {\n"
+        "  meta:\n"
+        '    description = "matches the fixture source tree"\n'
+        '    threat_type = "custom_marker"\n'
+        "  strings:\n"
+        '    $a = "def handler"\n'
+        "  condition:\n"
+        "    $a\n"
+        "}\n"
+    )
+    return d
+
+
 def _rows_by_name(results: list[dict]) -> dict[str, dict]:
     return {row["tool_name"]: row for row in results}
 
@@ -239,13 +261,71 @@ async def test_scan_surfaces_analyzer_failure_instead_of_passing(source_tree: Pa
     failed = rows["server.py"]
     assert failed["status"] == "error"
     assert failed["is_safe"] is False
-    assert failed["findings"]["yara_analyzer"]["severity"] == "ERROR"
+    assert failed["findings"]["yara_analyzer"]["severity"] == "UNKNOWN"
     assert (
         "rule matching blew up" in failed["findings"]["yara_analyzer"]["threat_summary"]
     )
 
     # One bad file must not abort the rest of the scan.
     assert rows[os.path.join("sub", "clean.py")]["is_safe"] is True
+
+
+@pytest.mark.asyncio
+async def test_scan_surfaces_unreadable_file_instead_of_omitting(source_tree: Path):
+    """A file that cannot be read is reported, not silently dropped.
+
+    Omitting it would let a permission-denied tree scan as clean.
+    """
+    target = str(source_tree / "server.py")
+
+    real_open = open
+
+    def deny(path, *args, **kwargs):
+        if str(path) == target:
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, *args, **kwargs)
+
+    with patch("builtins.open", side_effect=deny):
+        results = await scan_source_with_yara(str(source_tree))
+
+    rows = _rows_by_name(results)
+    failed = rows["server.py"]
+    assert failed["status"] == "error"
+    assert failed["is_safe"] is False
+    assert failed["findings"]["yara_analyzer"]["severity"] == "UNKNOWN"
+    assert "could not be read" in failed["findings"]["yara_analyzer"]["threat_summary"]
+
+    # Readable siblings are still scanned.
+    assert rows[os.path.join("sub", "clean.py")]["is_safe"] is True
+
+
+@pytest.mark.asyncio
+async def test_unexaminable_severity_is_renderable(source_tree: Path):
+    """Error rows use a severity every formatter already knows how to render.
+
+    ``by_severity`` iterates a fixed ordering, so a bespoke severity would
+    drop the row and hide the very failure the error row exists to report.
+    """
+    from mcpscanner.core.report_generator import ReportGenerator
+    from mcpscanner.core.models import OutputFormat, SeverityFilter
+
+    async def boom(content, context=None):
+        raise RuntimeError("nope")
+
+    with patch(
+        "mcpscanner.core.analyzers.yara_analyzer.YaraAnalyzer.analyze",
+        side_effect=boom,
+    ):
+        results = await scan_source_with_yara(str(source_tree))
+
+    rendered = ReportGenerator(
+        {"server_url": "t", "scan_results": results}
+    ).format_output(
+        format_type=OutputFormat.BY_SEVERITY,
+        severity_filter=SeverityFilter.ALL,
+    )
+
+    assert "server.py" in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -292,3 +372,66 @@ async def test_scan_skips_oversized_files(source_tree: Path):
 
     assert len(results) == 1
     assert results[0]["tool_name"] == "No source files found"
+
+
+# ---------------------------------------------------------------------------
+# CLI wiring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "argv_tail",
+    [
+        ["static-source", "SRC", "--rules-path", "RULES"],
+        ["--rules-path", "RULES", "static-source", "SRC"],
+    ],
+    ids=["after-subcommand", "before-subcommand"],
+)
+async def test_cli_accepts_rules_path_either_side(
+    source_tree: Path, rules_dir: Path, argv_tail, capsys
+):
+    """``--rules-path`` works on both sides of the subcommand.
+
+    It is registered globally *and* on the subparser; the subparser uses
+    ``SUPPRESS`` so it cannot clobber a value given before the subcommand.
+    """
+    from mcpscanner.cli import main
+
+    argv = ["mcp-scanner"] + [
+        str(source_tree) if a == "SRC" else str(rules_dir) if a == "RULES" else a
+        for a in argv_tail
+    ]
+    # Raw output carries the matched rule name, so this asserts the custom
+    # rules were actually compiled rather than that the command merely exited.
+    argv += ["--format", "raw"]
+
+    with patch("sys.argv", argv):
+        await main()
+
+    assert "custom marker rule" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_cli_credits_only_yara_in_table(source_tree: Path, capsys):
+    """``--format table`` must not report API/LLM as SAFE for this mode.
+
+    Neither analyzer runs here, so claiming a verdict for them would assert
+    a clean result from a check that never executed.
+    """
+    from mcpscanner.cli import main
+
+    argv = ["mcp-scanner", "static-source", str(source_tree), "--format", "table"]
+    with patch("sys.argv", argv):
+        await main()
+
+    rows = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if "server.py" in line or "clean.py" in line
+    ]
+    assert rows, "expected at least one rendered result row"
+    # YARA ran, so it reports SAFE; API and LLM did not, so they must be N/A.
+    for row in rows:
+        assert "SAFE" in row
+        assert row.count("N/A") == 2

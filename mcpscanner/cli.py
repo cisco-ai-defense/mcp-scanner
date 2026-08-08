@@ -1255,6 +1255,14 @@ async def main():
         default="summary",
         help="Output format (default: %(default)s)",
     )
+    # Also accepted after the subcommand, since that is the natural order for
+    # `static-source SRC --rules-path RULES`. SUPPRESS keeps the subparser from
+    # overwriting a value already given before the subcommand.
+    p_static_source.add_argument(
+        "--rules-path",
+        default=argparse.SUPPRESS,
+        help="Path to directory containing custom YARA rules",
+    )
 
     # Behavioral subcommand - scan local source code
     p_behavioral = subparsers.add_parser(
@@ -2313,6 +2321,11 @@ async def main():
             # a Config or any LLM-backed analyzer: this path must work with no
             # LLM provider key and no running MCP server.
             from mcpscanner.core.source_scan import scan_source_with_yara
+
+            # YARA is the only analyzer that runs here, so the report must not
+            # credit the default api,yara,llm set — otherwise `--format table`
+            # renders API and LLM as SAFE for analyzers that never ran.
+            selected_analyzers = [AnalyzerEnum.YARA]
 
             try:
                 results = await scan_source_with_yara(
