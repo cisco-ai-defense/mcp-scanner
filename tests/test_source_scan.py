@@ -30,6 +30,7 @@ contract of the pattern-only path:
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -299,6 +300,65 @@ async def test_scan_surfaces_unreadable_file_instead_of_omitting(source_tree: Pa
     assert rows[os.path.join("sub", "clean.py")]["is_safe"] is True
 
 
+# Whitespace, ``=`` and quotes would let a crafted filename or rule name forge
+# extra fields in the structured ``key=value`` operator log.
+_LOG_INJECTION = 'boom=1 "q"'
+_LOG_INJECTION_SANITIZED = "boom_1__q_"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["read", "analyze"])
+async def test_failure_logs_sanitize_exception_text(
+    source_tree: Path, caplog, failure: str
+):
+    """Exception text reaches the log sanitized, not raw.
+
+    Both failure paths interpolate the exception into an operator log line.
+    The text is derived from the scanned tree (filenames, rule names), so it
+    is attacker-controlled and must not be able to inject log fields.
+    """
+    target = str(source_tree / "server.py")
+    real_open = open
+
+    def deny(path, *args, **kwargs):
+        if str(path) == target:
+            raise PermissionError(13, _LOG_INJECTION)
+        return real_open(path, *args, **kwargs)
+
+    async def boom(content, context=None):
+        if context and context.get("tool_name") == "server.py":
+            raise RuntimeError(_LOG_INJECTION)
+        return []
+
+    if failure == "read":
+        ctx = patch("builtins.open", side_effect=deny)
+    else:
+        ctx = patch(
+            "mcpscanner.core.analyzers.yara_analyzer.YaraAnalyzer.analyze",
+            side_effect=boom,
+        )
+
+    with caplog.at_level(logging.WARNING, logger="mcpscanner.core.source_scan"):
+        with ctx:
+            results = await scan_source_with_yara(str(source_tree))
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "mcpscanner.core.source_scan"
+    ]
+    injected = [m for m in messages if _LOG_INJECTION_SANITIZED in m]
+    assert injected, f"expected a sanitized failure log, got {messages}"
+    for message in injected:
+        assert _LOG_INJECTION not in message
+
+    # Sanitizing the log must not blank the machine-readable report field.
+    summary = _rows_by_name(results)["server.py"]["findings"]["yara_analyzer"][
+        "threat_summary"
+    ]
+    assert _LOG_INJECTION in summary
+
+
 @pytest.mark.asyncio
 async def test_unexaminable_severity_is_renderable(source_tree: Path):
     """Error rows use a severity every formatter already knows how to render.
@@ -417,7 +477,9 @@ async def test_cli_credits_only_yara_in_table(source_tree: Path, capsys):
     """``--format table`` must not report API/LLM as SAFE for this mode.
 
     Neither analyzer runs here, so claiming a verdict for them would assert
-    a clean result from a check that never executed.
+    a clean result from a check that never executed. Checked per column: a
+    row-wide substring check would also pass if API reported ``SAFE`` while
+    YARA reported ``N/A`` (and ``"SAFE" in row`` is even true of ``UNSAFE``).
     """
     from mcpscanner.cli import main
 
@@ -425,13 +487,19 @@ async def test_cli_credits_only_yara_in_table(source_tree: Path, capsys):
     with patch("sys.argv", argv):
         await main()
 
+    # Columns are whitespace-padded and no cell here contains a space, so
+    # positional split gives target, tool, status, API, YARA, LLM, severity.
     rows = [
-        line
+        line.split()
         for line in capsys.readouterr().out.splitlines()
-        if "server.py" in line or "clean.py" in line
+        if line.startswith("static-source:")
     ]
-    assert rows, "expected at least one rendered result row"
-    # YARA ran, so it reports SAFE; API and LLM did not, so they must be N/A.
+    assert {row[1] for row in rows} == {
+        "server.py",
+        "handler.ts",
+        os.path.join("sub", "clean.py"),
+    }
     for row in rows:
-        assert "SAFE" in row
-        assert row.count("N/A") == 2
+        api, yara, llm = row[3], row[4], row[5]
+        # YARA ran and found nothing; the two that never ran must say N/A.
+        assert (api, yara, llm) == ("N/A", "SAFE", "N/A"), row

@@ -74,8 +74,13 @@ def _read_source_text(path: str) -> Tuple[Optional[str], Optional[str]]:
         with open(path, "rb") as handle:
             return handle.read().decode("utf-8", errors="replace"), None
     except OSError as exc:
+        # ``exc`` embeds the offending filename, which is attacker-controlled
+        # for a scanned tree; sanitizing keeps a crafted name from forging
+        # fields in the structured ``key=value`` log line.
         logger.warning(
-            "source scan could not read %s: %s", sanitize_log_value(path), exc
+            "source scan could not read %s: %s",
+            sanitize_log_value(path),
+            sanitize_log_value(exc),
         )
         return None, str(exc)
 
@@ -209,9 +214,13 @@ async def scan_source_with_yara(
             )
         except Exception as exc:
             # Failure to gather evidence must not look like evidence of
-            # compliance, so the file is surfaced instead of dropped.
+            # compliance, so the file is surfaced instead of dropped. The
+            # exception text is sanitized because it can carry rule or file
+            # names from the scanned tree.
             logger.error(
-                "YARA scan failed for %s: %s", sanitize_log_value(source_file), exc
+                "YARA scan failed for %s: %s",
+                sanitize_log_value(source_file),
+                sanitize_log_value(exc),
             )
             results.append(
                 _row(
