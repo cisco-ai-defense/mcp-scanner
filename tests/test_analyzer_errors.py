@@ -75,9 +75,10 @@ class TestClassifyAnalyzerError:
         )
 
     def test_false_positive_status_substring_in_token_count(self):
+        """``1403`` embeds ``403`` but must not be treated as HTTP 403."""
         assert (
             classify_analyzer_error(
-                RuntimeError("prompt tokens=15000 duration_ms=5040"),
+                RuntimeError("prompt tokens=1403"),
                 context="llm",
             )
             is ErrorKind.TRANSIENT
