@@ -25,6 +25,7 @@ without amplifying load against an endpoint that cannot succeed.
 from __future__ import annotations
 
 import asyncio
+import re
 from enum import Enum
 from typing import Awaitable, Callable, Optional, TypeVar
 
@@ -43,9 +44,10 @@ ERROR_KIND_TRANSIENT = ErrorKind.TRANSIENT.value
 ERROR_KIND_FINAL = ErrorKind.FINAL.value
 
 
+_FINAL_STATUS_CODES = frozenset({401, 403})
+_TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+
 _FINAL_KEYWORDS = (
-    "401",
-    "403",
     "unauthorized",
     "forbidden",
     "access denied",
@@ -90,11 +92,6 @@ _TRANSIENT_KEYWORDS = (
     "throttl",
     "quota",
     "too many requests",
-    "429",
-    "502",
-    "503",
-    "504",
-    "408",
     "service unavailable",
     "bad gateway",
     "gateway timeout",
@@ -104,8 +101,22 @@ _TRANSIENT_KEYWORDS = (
     "bedrockexception",
     "throttlingexception",
     "internal server error",
-    "500",
 )
+
+
+def _exception_status_code(exc: BaseException) -> Optional[int]:
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        return None
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return None
+
+
+def _message_contains_status_code(message: str, code: int) -> bool:
+    """Match HTTP status codes without hitting unrelated digit sequences."""
+    return re.search(rf"(?<!\d){code}(?!\d)", message) is not None
 
 
 def _exception_message(exc: BaseException) -> str:
@@ -182,9 +193,19 @@ def classify_analyzer_error(
             return ErrorKind.FINAL
         return ErrorKind.FINAL
 
+    status_code = _exception_status_code(exc)
+    if status_code in _FINAL_STATUS_CODES:
+        return ErrorKind.FINAL
+    if status_code in _TRANSIENT_STATUS_CODES:
+        return ErrorKind.TRANSIENT
+
     msg = _exception_message(exc)
 
     if any(kw in msg for kw in _FINAL_KEYWORDS):
+        return ErrorKind.FINAL
+    if any(
+        _message_contains_status_code(msg, code) for code in _FINAL_STATUS_CODES
+    ):
         return ErrorKind.FINAL
 
     if context == "parse":
@@ -192,6 +213,11 @@ def classify_analyzer_error(
         return ErrorKind.TRANSIENT
 
     if any(kw in msg for kw in _TRANSIENT_KEYWORDS):
+        return ErrorKind.TRANSIENT
+    if any(
+        _message_contains_status_code(msg, code)
+        for code in _TRANSIENT_STATUS_CODES
+    ):
         return ErrorKind.TRANSIENT
 
     # Unknown LLM/API failures: prefer retry (conservative for availability).

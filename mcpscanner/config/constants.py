@@ -138,6 +138,11 @@ class MCPScannerConstants:
     LLM_RETRY_BASE_DELAY: float = float(
         os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0")
     )
+    # Batch alignment parse retries are separate from API retries so a single
+    # unparseable batch cannot multiply into LLM_MAX_RETRIES² provider calls.
+    LLM_BATCH_PARSE_MAX_ATTEMPTS: int = int(
+        os.getenv("MCP_SCANNER_LLM_BATCH_PARSE_MAX_ATTEMPTS", "2")
+    )
     # Above this duration a single LLM round-trip is logged at WARNING so
     # operators can spot regional / quota / model-warming issues without
     # bumping every behavioral log to DEBUG. 15s is roomy for a long

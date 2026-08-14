@@ -303,7 +303,9 @@ class AlignmentOrchestrator:
 
             try:
                 batch_results = None
-                parse_attempts = max(1, MCPScannerConstants.LLM_MAX_RETRIES)
+                parse_attempts = max(
+                    1, MCPScannerConstants.LLM_BATCH_PARSE_MAX_ATTEMPTS
+                )
                 base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
 
                 for parse_attempt in range(parse_attempts):

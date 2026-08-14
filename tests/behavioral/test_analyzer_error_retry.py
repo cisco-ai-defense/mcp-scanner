@@ -174,6 +174,11 @@ class TestBatchParseFailureRetry:
             "alignment_orchestrator.asyncio.sleep",
             AsyncMock(return_value=None),
         )
+        monkeypatch.setattr(
+            MCPScannerConstants,
+            "LLM_BATCH_PARSE_MAX_ATTEMPTS",
+            2,
+        )
 
         results = await orch.check_alignment_batch([_ctx("x")], batch_size=1)
 

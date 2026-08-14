@@ -54,6 +54,35 @@ class TestClassifyAnalyzerError:
             is ErrorKind.TRANSIENT
         )
 
+    def test_status_code_attribute_final(self):
+        exc = RuntimeError("provider error")
+        exc.status_code = 403  # type: ignore[attr-defined]
+        assert classify_analyzer_error(exc, context="llm") is ErrorKind.FINAL
+
+    def test_status_code_attribute_transient(self):
+        exc = RuntimeError("provider error")
+        exc.status_code = 503  # type: ignore[attr-defined]
+        assert classify_analyzer_error(exc, context="llm") is ErrorKind.TRANSIENT
+
+    def test_false_positive_status_substring_in_request_id(self):
+        """Digits embedded in ids must not match HTTP status codes."""
+        assert (
+            classify_analyzer_error(
+                RuntimeError("request req_1403abc failed"),
+                context="llm",
+            )
+            is ErrorKind.TRANSIENT
+        )
+
+    def test_false_positive_status_substring_in_token_count(self):
+        assert (
+            classify_analyzer_error(
+                RuntimeError("prompt tokens=15000 duration_ms=5040"),
+                context="llm",
+            )
+            is ErrorKind.TRANSIENT
+        )
+
 
 class TestComputeBackoffDelay:
     def test_exponential_growth(self):
