@@ -49,6 +49,11 @@ from litellm import acompletion
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
+from ...utils.analyzer_errors import (
+    ErrorKind,
+    classify_analyzer_error,
+    compute_backoff_delay,
+)
 from ...utils.logging_config import get_logger
 from .base import SecurityFinding
 
@@ -505,14 +510,21 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
                 return content
             except Exception as e:
                 last_exception = e
-                error_msg = str(e).lower()
-                is_retryable = any(
-                    kw in error_msg
-                    for kw in ["timeout", "tls", "connection", "network", "rate limit", "throttle", "429", "503", "504"]
-                )
-                if attempt < self._max_retries and is_retryable:
-                    delay = (2 ** attempt) * self._rate_limit_delay
-                    self._logger.warning("Meta-analysis LLM request failed (attempt %d): %s", attempt + 1, e)
+                kind = classify_analyzer_error(e, context="llm")
+                if kind is ErrorKind.FINAL:
+                    self._logger.error(
+                        "Meta-analysis LLM request failed (final error): %s", e
+                    )
+                    break
+                if attempt < self._max_retries:
+                    delay = compute_backoff_delay(attempt, self._rate_limit_delay)
+                    self._logger.warning(
+                        "Meta-analysis LLM request failed (transient, attempt %d): %s; "
+                        "retrying in %.1fs",
+                        attempt + 1,
+                        e,
+                        delay,
+                    )
                     await asyncio.sleep(delay)
                 else:
                     break

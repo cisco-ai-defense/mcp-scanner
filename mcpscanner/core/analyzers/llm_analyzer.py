@@ -29,6 +29,11 @@ from litellm import acompletion
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
 from ...threats.threats import LLM_THREAT_MAPPING
+from ...utils.analyzer_errors import (
+    ErrorKind,
+    classify_analyzer_error,
+    compute_backoff_delay,
+)
 from .base import BaseAnalyzer, SecurityFinding
 
 
@@ -526,54 +531,31 @@ class LLMAnalyzer(BaseAnalyzer):
 
             except Exception as e:
                 last_exception = e
-                error_msg = str(e).lower()
-
-                # Check for AWS/Bedrock specific errors (only for Bedrock models)
-                is_bedrock_model = self._model and "bedrock/" in self._model
-                if is_bedrock_model and any(
-                    keyword in error_msg
-                    for keyword in [
-                        "bedrockexception",
-                        "throttlingexception",
-                    ]
-                ):
+                kind = classify_analyzer_error(e, context="llm")
+                if kind is ErrorKind.FINAL:
                     self.logger.error(
-                        f"AWS Bedrock error for {context}: {e}. "
-                        "Check AWS credentials, region, and Bedrock model access."
+                        "LLM API final error for %s: %s", context, e
                     )
-                    if attempt < self._max_retries:
-                        delay = (2**attempt) * self._rate_limit_delay
-                        self.logger.warning(
-                            f"Retrying AWS Bedrock request in {delay}s "
-                            f"(attempt {attempt + 1}/{self._max_retries + 1})"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        break
-
-                # Check if it's a rate limiting error
-                if any(
-                    keyword in error_msg
-                    for keyword in ["rate limit", "quota", "too many requests", "429"]
-                ):
-                    if attempt < self._max_retries:
-                        # Exponential backoff: 2^attempt * base_delay
-                        delay = (2**attempt) * self._rate_limit_delay
-                        self.logger.warning(
-                            f"Rate limit hit for {context}, retrying in {delay}s (attempt {attempt + 1}/{self._max_retries + 1})"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        self.logger.error(
-                            f"Rate limit exceeded for {context}, no more retries"
-                        )
-                        break
-                else:
-                    # For non-rate-limit errors, don't retry
-                    self.logger.error(f"LLM API error for {context}: {e}")
                     break
+                if attempt < self._max_retries:
+                    delay = compute_backoff_delay(attempt, self._rate_limit_delay)
+                    self.logger.warning(
+                        "LLM API transient error for %s, retrying in %.1fs "
+                        "(attempt %d/%d): %s",
+                        context,
+                        delay,
+                        attempt + 1,
+                        self._max_retries + 1,
+                        e,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                self.logger.error(
+                    "LLM API transient error for %s, retries exhausted: %s",
+                    context,
+                    e,
+                )
+                break
 
         # If we get here, all retries failed
         raise last_exception

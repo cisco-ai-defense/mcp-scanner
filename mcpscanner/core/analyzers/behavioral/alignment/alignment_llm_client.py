@@ -35,6 +35,13 @@ from litellm import acompletion
 
 from .....config.config import Config
 from .....config.constants import MCPScannerConstants
+from .....utils.analyzer_errors import (
+    ERROR_KIND_FINAL,
+    ERROR_KIND_TRANSIENT,
+    ErrorKind,
+    classify_analyzer_error,
+    compute_backoff_delay,
+)
 from .....utils.log_format import ERROR_TRUNCATE, RESPONSE_DEBUG_MAX, truncate
 
 
@@ -218,14 +225,31 @@ class AlignmentLLMClient:
                 )
                 return response
             except Exception as e:
+                kind = classify_analyzer_error(e, context="llm")
+                if kind is ErrorKind.FINAL:
+                    total_ms = int((time.perf_counter() - verify_start) * 1000)
+                    self.logger.error(
+                        "LLM request_id=%d failed_final attempts=%d duration_ms=%d "
+                        "error_kind=%s error_type=%s error=%s model=%s",
+                        request_id,
+                        attempt + 1,
+                        total_ms,
+                        ERROR_KIND_FINAL,
+                        type(e).__name__,
+                        truncate(e, ERROR_TRUNCATE),
+                        self._model,
+                    )
+                    raise
+
                 if attempt < max_retries - 1:
-                    delay = base_delay * (2**attempt)
+                    delay = compute_backoff_delay(attempt, base_delay)
                     self.logger.warning(
-                        "LLM request_id=%d retry attempt=%d/%d error_type=%s "
-                        "error=%s backoff_s=%.1f model=%s",
+                        "LLM request_id=%d retry attempt=%d/%d error_kind=%s "
+                        "error_type=%s error=%s backoff_s=%.1f model=%s",
                         request_id,
                         attempt + 1,
                         max_retries,
+                        ERROR_KIND_TRANSIENT,
                         type(e).__name__,
                         truncate(e, ERROR_TRUNCATE),
                         delay,
@@ -236,10 +260,11 @@ class AlignmentLLMClient:
                     total_ms = int((time.perf_counter() - verify_start) * 1000)
                     self.logger.error(
                         "LLM request_id=%d failed attempts=%d duration_ms=%d "
-                        "error_type=%s error=%s model=%s",
+                        "error_kind=%s error_type=%s error=%s model=%s",
                         request_id,
                         max_retries,
                         total_ms,
+                        ERROR_KIND_TRANSIENT,
                         type(e).__name__,
                         truncate(e, ERROR_TRUNCATE),
                         self._model,

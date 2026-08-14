@@ -26,12 +26,20 @@ It coordinates the alignment verification process by:
 This is the entry point for all alignment verification operations.
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .....config.config import Config
+from .....config.constants import MCPScannerConstants
 from .....threats.threats import ThreatMapping
+from .....utils.analyzer_errors import (
+    ERROR_KIND_TRANSIENT,
+    ErrorKind,
+    classify_analyzer_error,
+    compute_backoff_delay,
+)
 from .....utils.log_format import sanitize_log_value, truncate
 from ....static_analysis.context_extractor import FunctionContext
 from .alignment_prompt_builder import AlignmentPromptBuilder
@@ -78,6 +86,18 @@ class AlignmentOrchestrator:
 
         self.logger.debug("AlignmentOrchestrator initialized")
 
+    def _record_skipped_error(
+        self, exc: BaseException, *, context: str = "llm"
+    ) -> ErrorKind:
+        """Increment error counters and return the error disposition."""
+        kind = classify_analyzer_error(exc, context=context)
+        self.stats["skipped_error"] += 1
+        if kind is ErrorKind.TRANSIENT:
+            self.stats["skipped_error_transient"] += 1
+        else:
+            self.stats["skipped_error_final"] += 1
+        return kind
+
     @staticmethod
     def _fresh_stats() -> Dict[str, int]:
         """Return a fresh, zeroed stats dict."""
@@ -87,6 +107,8 @@ class AlignmentOrchestrator:
             "no_mismatch": 0,
             "skipped_invalid_response": 0,
             "skipped_error": 0,
+            "skipped_error_transient": 0,
+            "skipped_error_final": 0,
         }
 
     def reset_stats(self) -> None:
@@ -229,14 +251,16 @@ class AlignmentOrchestrator:
 
         except Exception as e:
             check_ms = int((time.perf_counter() - check_start) * 1000)
+            kind = self._record_skipped_error(e, context="llm")
             self.logger.error(
-                "alignment check failed function=%s duration_ms=%d error_type=%s error=%s",
+                "alignment check failed function=%s duration_ms=%d error_kind=%s "
+                "error_type=%s error=%s",
                 func_context.name,
                 check_ms,
+                kind.value,
                 type(e).__name__,
                 truncate(e),
             )
-            self.stats["skipped_error"] += 1
             name = getattr(func_context, "name", None)
             if name:
                 self.errored_function_names.add(name)
@@ -278,14 +302,31 @@ class AlignmentOrchestrator:
             )
 
             try:
-                # Build batched prompt
-                prompt = self.prompt_builder.build_batch_prompt(batch)
+                batch_results = None
+                parse_attempts = max(1, MCPScannerConstants.LLM_MAX_RETRIES)
+                base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
 
-                # Query LLM
-                response = await self.llm_client.verify_alignment(prompt)
-
-                # Parse batched response
-                batch_results = self.response_validator.validate_batch(response, len(batch))
+                for parse_attempt in range(parse_attempts):
+                    prompt = self.prompt_builder.build_batch_prompt(batch)
+                    response = await self.llm_client.verify_alignment(prompt)
+                    batch_results = self.response_validator.validate_batch(
+                        response, len(batch)
+                    )
+                    if batch_results is not None:
+                        break
+                    if parse_attempt < parse_attempts - 1:
+                        delay = compute_backoff_delay(parse_attempt, base_delay)
+                        self.logger.warning(
+                            "batch %d/%d invalid_response error_kind=%s "
+                            "attempt=%d/%d backoff_s=%.1f fallback=retry_batch",
+                            batch_idx,
+                            total_batches,
+                            ERROR_KIND_TRANSIENT,
+                            parse_attempt + 1,
+                            parse_attempts,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
 
                 # ``None`` means hard failure (empty / unparseable response).
                 # An empty *list* would mean the batch was empty, which is
@@ -383,13 +424,15 @@ class AlignmentOrchestrator:
 
             except Exception as e:
                 batch_ms = int((time.perf_counter() - batch_start) * 1000)
+                kind = classify_analyzer_error(e, context="llm")
                 self.logger.error(
-                    "batch %d/%d failed size=%d duration_ms=%d error_type=%s "
-                    "error=%s fallback=individual_analysis",
+                    "batch %d/%d failed size=%d duration_ms=%d error_kind=%s "
+                    "error_type=%s error=%s fallback=individual_analysis",
                     batch_idx,
                     total_batches,
                     len(batch),
                     batch_ms,
+                    kind.value,
                     type(e).__name__,
                     truncate(e),
                 )
@@ -467,11 +510,14 @@ class AlignmentOrchestrator:
         safe_scope = sanitize_log_value(scope)
         self.logger.info(
             "alignment summary scope=%s total=%d mismatches=%d clean=%d "
-            "skipped_invalid_response=%d skipped_error=%d",
+            "skipped_invalid_response=%d skipped_error=%d "
+            "skipped_error_transient=%d skipped_error_final=%d",
             safe_scope,
             s["total_analyzed"],
             s["mismatches_detected"],
             s["no_mismatch"],
             s["skipped_invalid_response"],
             s["skipped_error"],
+            s.get("skipped_error_transient", 0),
+            s.get("skipped_error_final", 0),
         )
