@@ -215,19 +215,18 @@ class TestBedrockErrorHandling:
             llm_provider_api_key="bedrock-api-key-invalid",
             llm_model="bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0",
             aws_region_name="us-east-1",
-            llm_max_retries=2,  # Reduce retries for faster test
+            llm_max_retries=2,
         )
 
         analyzer = LLMAnalyzer(config)
         content = "Test content"
         context = {"tool_name": "test_tool"}
 
-        # Should return empty list on error after retries
+        # Auth errors are final — no retry amplification
         findings = await analyzer.analyze(content, context)
         assert len(findings) == 0
 
-        # Verify retries occurred (initial + max_retries)
-        assert mock_completion.call_count == 3
+        assert mock_completion.call_count == 1
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
