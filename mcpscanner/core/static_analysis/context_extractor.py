@@ -247,13 +247,25 @@ class ContextExtractor:
         if isinstance(decorator, ast.Call):
             decorator = decorator.func
 
-        if isinstance(decorator, ast.Attribute):
-            if isinstance(decorator.value, ast.Name):
-                return f"{decorator.value.id}.{decorator.attr}"
-        elif isinstance(decorator, ast.Name):
+        chain = self._attribute_chain(decorator)
+        if chain:
+            return ".".join(chain)
+        if isinstance(decorator, ast.Name):
             return decorator.id
 
         return ""
+
+    def _attribute_chain(self, node: ast.expr) -> list[str]:
+        """Flatten ``self.mcp.tool`` / ``mcp.tool`` attribute chains."""
+        parts: list[str] = []
+        cur: ast.expr = node
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            parts.append(cur.id)
+        parts.reverse()
+        return parts
 
     def _extract_decorator_params(self, decorator: ast.expr) -> dict[str, any]:
         """Extract parameters from decorator call.

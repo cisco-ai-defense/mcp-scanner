@@ -2,9 +2,12 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.uv]
+required-version = ">=0.8.17"
+
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.8.2"
+version = "4.8.3"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},

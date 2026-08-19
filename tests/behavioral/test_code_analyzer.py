@@ -30,7 +30,10 @@ from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.analyzers.behavioral.code_analyzer import (
     BehavioralCodeAnalyzer,
     _AcceptedFile,
+    _merge_mcp_function_contexts,
 )
+from mcpscanner.core.static_analysis.context_extractor import ContextExtractor
+from mcpscanner.core.static_analysis.native_analyzer import NativeAnalyzer
 
 
 class TestBehavioralCodeAnalyzerBasics:
@@ -591,3 +594,29 @@ class TestBehavioralAlignmentOrchestrator:
         )
 
         assert AlignmentOrchestrator is not None
+
+
+class TestMergeMcpFunctionContexts:
+    """Tests for ContextExtractor + NativeAnalyzer merge deduplication."""
+
+    _CUSTOM_NAME_SOURCE = """\
+from fastmcp import FastMCP
+
+mcp = FastMCP("demo")
+
+@mcp.tool(name="custom")
+def add(a: int, b: int) -> int:
+    \"\"\"Add numbers.\"\"\"
+    return a + b
+"""
+
+    def test_merge_dedupes_decorator_name_override(self) -> None:
+        primary = ContextExtractor(
+            self._CUSTOM_NAME_SOURCE, "custom_name.py"
+        ).extract_mcp_function_contexts()
+        supplemental = NativeAnalyzer(
+            self._CUSTOM_NAME_SOURCE, "custom_name.py"
+        ).extract_mcp_capability_contexts()
+        merged = _merge_mcp_function_contexts(primary, supplemental)
+        assert len(merged) == 1
+        assert merged[0].name == "custom"
