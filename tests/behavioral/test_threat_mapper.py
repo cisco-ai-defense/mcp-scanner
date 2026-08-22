@@ -244,3 +244,28 @@ class TestThreatMapper:
         assert threat["severity"] == "HIGH"
         assert threat["aitech"] == "AITech-9.1"
         assert len(threat["description"]) > 50, "Description should be detailed"
+
+    def test_tool_shadowing_subtech_id(self):
+        """Pin TOOL SHADOWING to AITech-12.1 / AISubtech-12.1.4.
+
+        The MCP taxonomy slot for Tool Shadowing under AITech-12.1 Tool
+        Exploitation is AISubtech-12.1.4 (sibling of 12.1.2 Tool
+        Poisoning and 12.1.3 Unsafe System / Browser / File Exec). The
+        entry previously sat at 12.1.5, which collides with another
+        subtech in the taxonomy and is therefore rejected by external
+        consumers that validate against the canonical IDs. Lock the
+        correct ID and the human-readable name so it can't drift back.
+        """
+        from mcpscanner.threats.threats import ThreatMapping
+
+        threat = ThreatMapping.LLM_THREATS["TOOL SHADOWING"]
+
+        assert threat["aitech"] == "AITech-12.1"
+        assert threat["aitech_name"] == "Tool Exploitation"
+        assert threat["aisubtech"] == "AISubtech-12.1.4", (
+            "TOOL SHADOWING must use AISubtech-12.1.4 per the canonical "
+            f"MCP taxonomy; got {threat['aisubtech']}"
+        )
+        assert threat["aisubtech_name"] == "Tool Shadowing"
+        assert threat["severity"] == "HIGH"
+        assert threat["scanner_category"] == "SECURITY VIOLATION"
