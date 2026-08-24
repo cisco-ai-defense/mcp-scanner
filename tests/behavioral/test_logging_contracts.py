@@ -536,7 +536,7 @@ class TestBehavioralScanDoneSeverityRollup:
 
     @pytest.mark.asyncio
     async def test_scan_done_uses_keyed_severity_fields(
-        self, caplog, tmp_path, monkeypatch
+        self, caplog, tmp_path, monkeypatch, mcpscanner_logging_isolated
     ):
         from mcpscanner.core.analyzers.behavioral.code_analyzer import (
             BehavioralCodeAnalyzer,
