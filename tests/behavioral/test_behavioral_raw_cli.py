@@ -4,17 +4,17 @@
 """Integration tests: behavioral CLI --raw must surface findings."""
 
 import json
+import logging
 import os
 import tempfile
-from io import StringIO
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from mcpscanner.cli import _build_behavioral_results, main
-from mcpscanner.config import Config
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+from mcpscanner.utils.logging_config import set_log_level
 
 
 @pytest.mark.asyncio
@@ -73,8 +73,13 @@ def leaky(path: str) -> str:
                 temp_path,
                 "--raw",
             ]
-            with patch("sys.argv", test_args):
-                await main()
+            try:
+                with patch("sys.argv", test_args):
+                    await main()
+            finally:
+                # ``main()`` defaults to WARNING for all mcpscanner loggers; reset
+                # so later tests that assert on INFO lines are not polluted.
+                set_log_level(logging.INFO)
 
         captured = capsys.readouterr()
         assert captured.out.strip(), "expected JSON on stdout"

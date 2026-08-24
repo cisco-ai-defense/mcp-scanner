@@ -541,8 +541,9 @@ class TestBehavioralScanDoneSeverityRollup:
         from mcpscanner.core.analyzers.behavioral.code_analyzer import (
             BehavioralCodeAnalyzer,
         )
-        from mcpscanner.utils.logging_config import get_logger
+        from mcpscanner.utils.logging_config import get_logger, set_log_level
 
+        set_log_level(logging.INFO)
         behavioral_logger = get_logger(
             "mcpscanner.core.analyzers.base.Behavioural"
         )
