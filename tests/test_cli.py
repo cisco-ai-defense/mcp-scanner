@@ -69,6 +69,44 @@ class TestCliHelperFunctions:
         assert behavioral["severity"] == "HIGH"
         assert behavioral.get("threat_vulnerability_classification") == "THREAT"
 
+    def test_infer_classification_prefers_threat_over_vulnerability(self):
+        """Non-raw THREAT filter must not drop a tool that has both classes."""
+        vuln = SecurityFinding(
+            severity="MEDIUM",
+            summary="Vulnerability finding",
+            threat_category="",
+            analyzer="Behavioral",
+            details={
+                "function_name": "mixed_tool",
+                "source_file": "/repo/tools.py",
+                "threat_vulnerability_classification": "VULNERABILITY",
+            },
+        )
+        threat = SecurityFinding(
+            severity="HIGH",
+            summary="Threat finding",
+            threat_category="DATA EXFILTRATION",
+            analyzer="Behavioral",
+            details={
+                "function_name": "mixed_tool",
+                "source_file": "/repo/tools.py",
+                "threat_vulnerability_classification": "THREAT",
+            },
+        )
+        analyzer = MagicMock()
+        analyzer.analyzed_functions = []
+
+        results = _build_behavioral_results(
+            analyzer, [vuln, threat], source_path="/repo"
+        )
+        assert len(results) == 1
+        assert (
+            results[0]["findings"]["behavioral_analyzer"][
+                "threat_vulnerability_classification"
+            ]
+            == "THREAT"
+        )
+
     def test_get_endpoint_from_env_with_value(self):
         """Test _get_endpoint_from_env with environment variable set."""
         with patch.dict(

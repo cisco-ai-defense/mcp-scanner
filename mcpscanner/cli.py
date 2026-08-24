@@ -241,12 +241,24 @@ def _build_config(
 def _infer_behavioral_threat_classification(
     func_findings: List[Any], max_severity: str
 ) -> Optional[str]:
-    """Return THREAT/VULNERABILITY classification for CLI filtering."""
+    """Return THREAT/VULNERABILITY classification for CLI filtering.
+
+    When a tool has multiple findings, prefer ``THREAT`` if any row is
+    classified as a threat so VULNERABILITY rows do not hide real threats
+    in the non-raw CLI filter.
+    """
+    classifications: List[str] = []
     for finding in func_findings:
         details = finding.details or {}
         classification = details.get("threat_vulnerability_classification")
         if classification:
-            return str(classification)
+            classifications.append(str(classification).upper())
+
+    if any(c == "THREAT" for c in classifications):
+        return "THREAT"
+    if classifications:
+        return classifications[0]
+
     if max_severity in {"HIGH", "MEDIUM", "LOW"} and any(
         getattr(f, "threat_category", "") for f in func_findings
     ):
@@ -2182,26 +2194,25 @@ async def main():
             results = _build_behavioral_results(analyzer, findings, source_path)
 
             # Filter out VULNERABILITY findings — only surface THREATS — while
-            # always keeping safe results so every analyzed tool remains
-            # visible in the output. ``--raw`` keeps the full result set.
-            if not args.raw:
-                filtered_results = []
-                for result in results:
-                    if result.get("is_safe", False):
-                        filtered_results.append(result)
-                        continue
+            # always keeping safe results so every analyzed tool remains visible.
+            # Applies to both formatted and ``--raw`` JSON output.
+            filtered_results = []
+            for result in results:
+                if result.get("is_safe", False):
+                    filtered_results.append(result)
+                    continue
 
-                    analyzer_data = result.get("findings", {}).get(
-                        "behavioral_analyzer", {}
-                    )
-                    classification = (
-                        analyzer_data.get("threat_vulnerability_classification") or ""
-                    ).upper()
+                analyzer_data = result.get("findings", {}).get(
+                    "behavioral_analyzer", {}
+                )
+                classification = (
+                    analyzer_data.get("threat_vulnerability_classification") or ""
+                ).upper()
 
-                    if classification == "THREAT":
-                        filtered_results.append(result)
+                if classification == "THREAT":
+                    filtered_results.append(result)
 
-                results = filtered_results
+            results = filtered_results
 
             # Save output if requested
             if args.output:

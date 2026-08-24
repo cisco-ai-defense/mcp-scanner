@@ -95,6 +95,54 @@ def leaky(path: str) -> str:
         os.unlink(temp_path)
 
 
+@pytest.mark.asyncio
+async def test_raw_cli_excludes_vulnerability_only_tools(capsys):
+    """``--raw`` JSON must not include VULNERABILITY-only tools."""
+    mcp_code = "pass\n"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(mcp_code)
+        f.flush()
+        temp_path = f.name
+
+    try:
+        async def fake_analyze(self, content, context):
+            self.analyzed_functions = []
+            return [
+                SecurityFinding(
+                    severity="MEDIUM",
+                    summary="Vulnerability only",
+                    threat_category="",
+                    analyzer="Behavioral",
+                    details={
+                        "function_name": "vuln_tool",
+                        "source_file": temp_path,
+                        "threat_vulnerability_classification": "VULNERABILITY",
+                    },
+                )
+            ]
+
+        with patch.object(
+            BehavioralCodeAnalyzer, "analyze", fake_analyze
+        ), patch.dict(
+            os.environ,
+            {"MCP_SCANNER_LLM_API_KEY": "test-key", "MCP_SCANNER_LLM_PROVIDER": "openai"},
+            clear=False,
+        ):
+            test_args = ["mcp-scanner", "behavioral", temp_path, "--raw"]
+            try:
+                with patch("sys.argv", test_args):
+                    await main()
+            finally:
+                set_log_level(logging.INFO)
+
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        tool_names = {row.get("tool_name") for row in payload}
+        assert "vuln_tool" not in tool_names
+    finally:
+        os.unlink(temp_path)
+
+
 def test_build_and_threat_filter_non_raw_when_analyzed_functions_empty():
     """Non-raw output must keep THREAT rows even without analyzed_functions."""
     finding = SecurityFinding(
