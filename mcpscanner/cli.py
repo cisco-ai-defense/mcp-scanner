@@ -363,11 +363,11 @@ def _build_behavioral_results(
 
             analyzer_finding: Dict[str, Any] = {
                 "severity": max_severity,
-                "threat_summary": func_findings[0].summary,
+                "threat_summary": cli_findings[0].summary,
                 "threat_names": sorted(
-                    {f.threat_category for f in func_findings if f.threat_category}
+                    {f.threat_category for f in cli_findings if f.threat_category}
                 ),
-                "total_findings": len(func_findings),
+                "total_findings": len(cli_findings),
                 "source_file": source_file,
                 "mcp_taxonomies": mcp_taxonomies,
             }
