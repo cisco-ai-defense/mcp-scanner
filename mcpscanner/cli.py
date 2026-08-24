@@ -238,6 +238,29 @@ def _build_config(
     return Config(**config_params)
 
 
+def _finding_threat_vuln_classification(finding: Any) -> Optional[str]:
+    """Per-finding THREAT/VULNERABILITY label used for CLI output filtering."""
+    details = finding.details or {}
+    classification = details.get("threat_vulnerability_classification")
+    if classification:
+        return str(classification).upper()
+    if getattr(finding, "severity", "") in {"HIGH", "MEDIUM", "LOW"} and getattr(
+        finding, "threat_category", ""
+    ):
+        return "THREAT"
+    return None
+
+
+def _behavioral_findings_for_cli(func_findings: List[Any]) -> List[Any]:
+    """When a tool has both THREAT and VULNERABILITY rows, keep THREAT rows only."""
+    threat_rows = [
+        f for f in func_findings if _finding_threat_vuln_classification(f) == "THREAT"
+    ]
+    if threat_rows:
+        return threat_rows
+    return func_findings
+
+
 def _infer_behavioral_threat_classification(
     func_findings: List[Any], max_severity: str
 ) -> Optional[str]:
@@ -247,12 +270,12 @@ def _infer_behavioral_threat_classification(
     classified as a threat so VULNERABILITY rows do not hide real threats
     in the non-raw CLI filter.
     """
+    cli_findings = _behavioral_findings_for_cli(func_findings)
     classifications: List[str] = []
-    for finding in func_findings:
-        details = finding.details or {}
-        classification = details.get("threat_vulnerability_classification")
+    for finding in cli_findings:
+        classification = _finding_threat_vuln_classification(finding)
         if classification:
-            classifications.append(str(classification).upper())
+            classifications.append(classification)
 
     if any(c == "THREAT" for c in classifications):
         return "THREAT"
@@ -260,7 +283,7 @@ def _infer_behavioral_threat_classification(
         return classifications[0]
 
     if max_severity in {"HIGH", "MEDIUM", "LOW"} and any(
-        getattr(f, "threat_category", "") for f in func_findings
+        getattr(f, "threat_category", "") for f in cli_findings
     ):
         return "THREAT"
     return None
@@ -312,13 +335,14 @@ def _build_behavioral_results(
         func_findings = findings_by_key.get((source_file, func_name), [])
 
         if func_findings:
+            cli_findings = _behavioral_findings_for_cli(func_findings)
             max_severity = max(
-                (f.severity for f in func_findings),
+                (f.severity for f in cli_findings),
                 key=lambda s: severity_order.get(s, 0),
             )
 
             mcp_taxonomies: List[Dict[str, Any]] = []
-            for finding in func_findings:
+            for finding in cli_findings:
                 taxonomy = getattr(finding, "mcp_taxonomy", None)
                 if not taxonomy:
                     continue

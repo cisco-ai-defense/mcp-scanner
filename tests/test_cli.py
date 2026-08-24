@@ -100,12 +100,11 @@ class TestCliHelperFunctions:
             analyzer, [vuln, threat], source_path="/repo"
         )
         assert len(results) == 1
-        assert (
-            results[0]["findings"]["behavioral_analyzer"][
-                "threat_vulnerability_classification"
-            ]
-            == "THREAT"
-        )
+        behavioral = results[0]["findings"]["behavioral_analyzer"]
+        assert behavioral["threat_vulnerability_classification"] == "THREAT"
+        assert behavioral["total_findings"] == 1
+        assert behavioral["threat_summary"] == "Threat finding"
+        assert behavioral["severity"] == "HIGH"
 
     def test_get_endpoint_from_env_with_value(self):
         """Test _get_endpoint_from_env with environment variable set."""
