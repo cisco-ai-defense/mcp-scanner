@@ -82,6 +82,27 @@ class TestAlignmentLLMFailurePaths:
         assert ERROR_KIND_TRANSIENT in retry_lines[0].getMessage()
 
     @pytest.mark.asyncio
+    async def test_unknown_error_does_not_retry(self, caplog):
+        client = AlignmentLLMClient(_cfg())
+        mock = AsyncMock(side_effect=RuntimeError("novel provider failure xyz"))
+        with patch(
+            "mcpscanner.core.analyzers.behavioral.alignment."
+            "alignment_llm_client.acompletion",
+            new=mock,
+        ):
+            with caplog.at_level(logging.WARNING):
+                with pytest.raises(RuntimeError):
+                    await client.verify_alignment("hello")
+
+        assert mock.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_max_retries_zero_raises(self):
+        client = AlignmentLLMClient(_cfg())
+        with pytest.raises(ValueError, match="max_retries must be >= 1"):
+            await client.verify_alignment("hello", max_retries=0)
+
+    @pytest.mark.asyncio
     async def test_transient_exhausted_logs_final_failure_kind(self, caplog):
         client = AlignmentLLMClient(_cfg())
         with patch.object(MCPScannerConstants, "LLM_MAX_RETRIES", 2):
@@ -107,6 +128,24 @@ class TestAlignmentLLMFailurePaths:
 
 
 class TestOrchestratorFailureClassification:
+    @pytest.mark.asyncio
+    async def test_prompt_build_failure_increments_final_counter(self):
+        orch = AlignmentOrchestrator(_cfg())
+        orch.prompt_builder = SimpleNamespace(
+            build_prompt=lambda _c: (_ for _ in ()).throw(
+                AttributeError("bad context")
+            )
+        )
+        orch.llm_client = SimpleNamespace(
+            verify_alignment=AsyncMock(return_value='{"mismatch_detected": false}')
+        )
+
+        await orch.check_alignment(_ctx("local_bug"))
+
+        assert orch.stats["skipped_error"] == 1
+        assert orch.stats["skipped_error_final"] == 1
+        assert orch.stats["skipped_error_transient"] == 0
+
     @pytest.mark.asyncio
     async def test_transient_llm_failure_increments_transient_counter(self):
         orch = AlignmentOrchestrator(_cfg())
@@ -145,12 +184,13 @@ class TestBatchParseFailureRetry:
     async def test_unparseable_batch_retries_before_fallback(self, monkeypatch):
         orch = AlignmentOrchestrator(_cfg())
         orch.prompt_builder = SimpleNamespace(
-            build_batch_prompt=lambda batch: f"batch:{len(batch)}"
+            build_batch_analysis_content=lambda batch: f"batch:{len(batch)}",
+            wrap_batch_prompt=lambda batch, body: body,
         )
 
         calls = {"n": 0}
 
-        async def _verify(_prompt):
+        async def _verify(_prompt, **kwargs):
             calls["n"] += 1
             return "{}"
 

@@ -169,11 +169,16 @@ class AlignmentLLMClient:
                 self._llm_timeout,
             )
 
-    async def verify_alignment(self, prompt: str) -> str:
+    async def verify_alignment(
+        self, prompt: str, *, max_retries: int | None = None
+    ) -> str:
         """Send alignment verification prompt to LLM with retry logic.
 
         Args:
             prompt: Comprehensive prompt with alignment verification evidence
+            max_retries: Override ``LLM_MAX_RETRIES`` (minimum 1). Use ``1`` for
+                parse re-prompts so batch parse retries do not multiply API
+                retry budgets.
 
         Returns:
             LLM response (JSON string)
@@ -203,14 +208,20 @@ class AlignmentLLMClient:
                 self._model,
             )
 
-        # Retry logic with exponential backoff (configurable via constants)
-        max_retries = MCPScannerConstants.LLM_MAX_RETRIES
+        configured = MCPScannerConstants.LLM_MAX_RETRIES
+        if max_retries is None:
+            max_retries = configured
+        if max_retries < 1:
+            raise ValueError("max_retries must be >= 1")
+
         base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
         verify_start = time.perf_counter()
 
         for attempt in range(max_retries):
             try:
-                response = await self._make_llm_request(prompt, request_id, attempt + 1)
+                response = await self._make_llm_request(
+                    prompt, request_id, attempt + 1
+                )
                 total_ms = int((time.perf_counter() - verify_start) * 1000)
                 self.logger.info(
                     "LLM request_id=%d ok provider=%s model=%s attempts=%d duration_ms=%d "
@@ -225,7 +236,9 @@ class AlignmentLLMClient:
                 )
                 return response
             except Exception as e:
-                kind = classify_analyzer_error(e, context="llm")
+                kind = classify_analyzer_error(
+                    e, context="llm", model=self._model
+                )
                 if kind is ErrorKind.FINAL:
                     total_ms = int((time.perf_counter() - verify_start) * 1000)
                     self.logger.error(
@@ -309,6 +322,9 @@ class AlignmentLLMClient:
                 "temperature": self._temperature,
                 "timeout": self._llm_timeout,
             }
+            from mcpscanner.utils.llm_request_params import apply_model_constraints
+
+            apply_model_constraints(self._model, request_params)
 
             if self._api_key:
                 request_params["api_key"] = self._api_key

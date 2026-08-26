@@ -54,6 +54,41 @@ class TestClassifyAnalyzerError:
             is ErrorKind.TRANSIENT
         )
 
+    def test_unknown_llm_error_defaults_final(self):
+        """Unrecognized LLM failures fail fast instead of retrying."""
+        assert (
+            classify_analyzer_error(RuntimeError("weird provider glitch"), context="llm")
+            is ErrorKind.FINAL
+        )
+
+    def test_coincidental_status_with_timeout_is_transient(self):
+        assert (
+            classify_analyzer_error(
+                RuntimeError("dropped 403 connections due to timeout"),
+                context="llm",
+            )
+            is ErrorKind.TRANSIENT
+        )
+
+    def test_temporarily_blocked_rate_limit_is_transient(self):
+        assert (
+            classify_analyzer_error(
+                RuntimeError(
+                    "request temporarily blocked due to rate limiting, retry later"
+                ),
+                context="llm",
+            )
+            is ErrorKind.TRANSIENT
+        )
+
+    def test_local_attribute_error_is_final(self):
+        assert (
+            classify_analyzer_error(
+                AttributeError("missing field"), context="local"
+            )
+            is ErrorKind.FINAL
+        )
+
     def test_status_code_attribute_final(self):
         exc = RuntimeError("provider error")
         exc.status_code = 403  # type: ignore[attr-defined]
@@ -65,23 +100,23 @@ class TestClassifyAnalyzerError:
         assert classify_analyzer_error(exc, context="llm") is ErrorKind.TRANSIENT
 
     def test_false_positive_status_substring_in_request_id(self):
-        """Digits embedded in ids must not match HTTP status codes."""
+        """Digits embedded in ids without transient signals are final (fail-fast)."""
         assert (
             classify_analyzer_error(
                 RuntimeError("request req_1403abc failed"),
                 context="llm",
             )
-            is ErrorKind.TRANSIENT
+            is ErrorKind.FINAL
         )
 
     def test_false_positive_status_substring_in_token_count(self):
-        """``1403`` embeds ``403`` but must not be treated as HTTP 403."""
+        """``1403`` embeds ``403`` but without signals is fail-fast final."""
         assert (
             classify_analyzer_error(
                 RuntimeError("prompt tokens=1403"),
                 context="llm",
             )
-            is ErrorKind.TRANSIENT
+            is ErrorKind.FINAL
         )
 
 

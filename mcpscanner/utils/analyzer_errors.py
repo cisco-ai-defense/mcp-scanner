@@ -69,7 +69,9 @@ _FINAL_KEYWORDS = (
     "content_filter",
     "content filter",
     "safety",
-    "blocked",
+    "content blocked",
+    "blocked by policy",
+    "blocked by guardrail",
 )
 
 _TRANSIENT_KEYWORDS = (
@@ -98,10 +100,21 @@ _TRANSIENT_KEYWORDS = (
     "overloaded",
     "capacity",
     "temporarily unavailable",
-    "bedrockexception",
-    "throttlingexception",
+    "temporarily blocked",
     "internal server error",
 )
+
+_BEDROCK_TRANSIENT_KEYWORDS = (
+    "bedrockexception",
+    "throttlingexception",
+)
+
+_LITELLM_TRANSIENT_TYPES: tuple[type[BaseException], ...] | None = None
+_LITELLM_FINAL_TYPES: tuple[type[BaseException], ...] | None = None
+
+
+def _is_bedrock_model(model: str | None) -> bool:
+    return bool(model and "bedrock/" in model.lower())
 
 
 def _exception_status_code(exc: BaseException) -> Optional[int]:
@@ -131,15 +144,22 @@ def _exception_message(exc: BaseException) -> str:
     return " ".join(parts)
 
 
-def _litellm_error_kind(exc: BaseException) -> Optional[ErrorKind]:
-    """Map litellm exception types when available."""
+def _get_litellm_type_tuples() -> tuple[
+    tuple[type[BaseException], ...], tuple[type[BaseException], ...]
+]:
+    global _LITELLM_TRANSIENT_TYPES, _LITELLM_FINAL_TYPES
+    if _LITELLM_TRANSIENT_TYPES is not None and _LITELLM_FINAL_TYPES is not None:
+        return _LITELLM_TRANSIENT_TYPES, _LITELLM_FINAL_TYPES
+
+    transient_types: list[type[BaseException]] = []
+    final_types: list[type[BaseException]] = []
     try:
         import litellm
     except ImportError:
-        return None
+        _LITELLM_TRANSIENT_TYPES = tuple()
+        _LITELLM_FINAL_TYPES = tuple()
+        return _LITELLM_TRANSIENT_TYPES, _LITELLM_FINAL_TYPES
 
-    transient_types = []
-    final_types = []
     for name in (
         "Timeout",
         "TimeoutError",
@@ -162,17 +182,34 @@ def _litellm_error_kind(exc: BaseException) -> Optional[ErrorKind]:
         if cls is not None:
             final_types.append(cls)
 
-    if transient_types and isinstance(exc, tuple(transient_types)):
+    _LITELLM_TRANSIENT_TYPES = tuple(transient_types)
+    _LITELLM_FINAL_TYPES = tuple(final_types)
+    return _LITELLM_TRANSIENT_TYPES, _LITELLM_FINAL_TYPES
+
+
+def _litellm_error_kind(exc: BaseException) -> Optional[ErrorKind]:
+    """Map litellm exception types when available."""
+    transient_types, final_types = _get_litellm_type_tuples()
+    if transient_types and isinstance(exc, transient_types):
         return ErrorKind.TRANSIENT
-    if final_types and isinstance(exc, tuple(final_types)):
+    if final_types and isinstance(exc, final_types):
         return ErrorKind.FINAL
     return None
+
+
+def _message_has_transient_keyword(message: str, *, model: str | None) -> bool:
+    if any(kw in message for kw in _TRANSIENT_KEYWORDS):
+        return True
+    if _is_bedrock_model(model):
+        return any(kw in message for kw in _BEDROCK_TRANSIENT_KEYWORDS)
+    return False
 
 
 def classify_analyzer_error(
     exc: BaseException,
     *,
     context: str = "llm",
+    model: str | None = None,
 ) -> ErrorKind:
     """Return whether ``exc`` should be retried (TRANSIENT) or not (FINAL).
 
@@ -181,16 +218,10 @@ def classify_analyzer_error(
         context: Where the failure occurred — ``llm`` (remote API),
             ``local`` (filesystem / AST / prompt build), or ``parse``
             (response validation). Defaults to ``llm``.
+        model: Optional litellm model id (``bedrock/...`` gates Bedrock-only
+            transient keyword matches).
     """
-    litellm_kind = _litellm_error_kind(exc)
-    if litellm_kind is not None:
-        return litellm_kind
-
     if context == "local":
-        if isinstance(exc, (FileNotFoundError, PermissionError, SyntaxError, UnicodeDecodeError)):
-            return ErrorKind.FINAL
-        if isinstance(exc, (ValueError, TypeError, KeyError, AttributeError)):
-            return ErrorKind.FINAL
         return ErrorKind.FINAL
 
     status_code = _exception_status_code(exc)
@@ -199,7 +230,21 @@ def classify_analyzer_error(
     if status_code in _TRANSIENT_STATUS_CODES:
         return ErrorKind.TRANSIENT
 
+    litellm_kind = _litellm_error_kind(exc)
+    if litellm_kind is not None:
+        return litellm_kind
+
     msg = _exception_message(exc)
+
+    # Transient signals before final keyword / status heuristics so genuine
+    # overload/timeout messages win over coincidental digit runs ("403 connections").
+    if _message_has_transient_keyword(msg, model=model):
+        return ErrorKind.TRANSIENT
+    if any(
+        _message_contains_status_code(msg, code)
+        for code in _TRANSIENT_STATUS_CODES
+    ):
+        return ErrorKind.TRANSIENT
 
     if any(kw in msg for kw in _FINAL_KEYWORDS):
         return ErrorKind.FINAL
@@ -212,18 +257,7 @@ def classify_analyzer_error(
         # Malformed model output is often recoverable on re-prompt.
         return ErrorKind.TRANSIENT
 
-    if any(kw in msg for kw in _TRANSIENT_KEYWORDS):
-        return ErrorKind.TRANSIENT
-    if any(
-        _message_contains_status_code(msg, code)
-        for code in _TRANSIENT_STATUS_CODES
-    ):
-        return ErrorKind.TRANSIENT
-
-    # Unknown LLM/API failures: prefer retry (conservative for availability).
-    if context == "llm":
-        return ErrorKind.TRANSIENT
-
+    # Unknown LLM/API failures: fail fast — do not retry unrecognized errors.
     return ErrorKind.FINAL
 
 
@@ -239,6 +273,7 @@ async def retry_transient_async(
     max_attempts: int,
     base_delay: float,
     context: str = "llm",
+    model: str | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> T:
     """Run ``operation`` until success or a final error / exhausted retries."""
@@ -251,7 +286,7 @@ async def retry_transient_async(
             return await operation()
         except Exception as exc:
             last_exc = exc
-            kind = classify_analyzer_error(exc, context=context)
+            kind = classify_analyzer_error(exc, context=context, model=model)
             if kind is ErrorKind.FINAL or attempt >= max_attempts - 1:
                 raise
             await sleep(compute_backoff_delay(attempt, base_delay))

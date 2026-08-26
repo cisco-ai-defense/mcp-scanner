@@ -510,7 +510,9 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
                 return content
             except Exception as e:
                 last_exception = e
-                kind = classify_analyzer_error(e, context="llm")
+                kind = classify_analyzer_error(
+                    e, context="llm", model=self._model
+                )
                 if kind is ErrorKind.FINAL:
                     self._logger.error(
                         "Meta-analysis LLM request failed (final error): %s", e

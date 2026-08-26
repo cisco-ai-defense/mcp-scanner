@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from mcpscanner.config.config import Config
+from mcpscanner.config.constants import MCPScannerConstants
 from mcpscanner.core.analyzers.behavioral.alignment.alignment_llm_client import (
     AlignmentLLMClient,
     _PROCESS_REQUEST_IDS,
@@ -273,17 +274,25 @@ class TestRequestIdCorrelation:
         cfg = _non_bedrock_config()
         client = AlignmentLLMClient(cfg)
 
-        with patch(
-            "mcpscanner.core.analyzers.behavioral.alignment."
-            "alignment_llm_client.acompletion",
-            new=AsyncMock(side_effect=RuntimeError("nope")),
-        ):
-            with caplog.at_level(
-                logging.WARNING,
-                logger="mcpscanner.core.analyzers.behavioral.alignment.alignment_llm_client",
+        with patch.object(MCPScannerConstants, "LLM_MAX_RETRIES", 2):
+            with patch(
+                "mcpscanner.core.analyzers.behavioral.alignment."
+                "alignment_llm_client.acompletion",
+                new=AsyncMock(
+                    side_effect=RuntimeError("503 service unavailable")
+                ),
             ):
-                with pytest.raises(RuntimeError):
-                    await client.verify_alignment("hello")
+                with patch(
+                    "mcpscanner.core.analyzers.behavioral.alignment."
+                    "alignment_llm_client.asyncio.sleep",
+                    new=AsyncMock(return_value=None),
+                ):
+                    with caplog.at_level(
+                        logging.WARNING,
+                        logger="mcpscanner.core.analyzers.behavioral.alignment.alignment_llm_client",
+                    ):
+                        with pytest.raises(RuntimeError):
+                            await client.verify_alignment("hello")
 
         pattern = re.compile(r"request_id=(\d+)")
         retry_ids: list[str] = []
@@ -536,13 +545,14 @@ class TestBehavioralScanDoneSeverityRollup:
 
     @pytest.mark.asyncio
     async def test_scan_done_uses_keyed_severity_fields(
-        self, caplog, tmp_path, monkeypatch
+        self, caplog, tmp_path, monkeypatch, mcpscanner_logging_isolated
     ):
         from mcpscanner.core.analyzers.behavioral.code_analyzer import (
             BehavioralCodeAnalyzer,
         )
-        from mcpscanner.utils.logging_config import get_logger
+        from mcpscanner.utils.logging_config import get_logger, set_log_level
 
+        set_log_level(logging.INFO)
         behavioral_logger = get_logger(
             "mcpscanner.core.analyzers.base.Behavioural"
         )

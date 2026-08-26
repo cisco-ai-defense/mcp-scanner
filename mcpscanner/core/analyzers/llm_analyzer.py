@@ -499,6 +499,9 @@ class LLMAnalyzer(BaseAnalyzer):
                     "temperature": self._temperature,
                     "timeout": self._llm_timeout,
                 }
+                from mcpscanner.utils.llm_request_params import apply_model_constraints
+
+                apply_model_constraints(self._model, request_params)
 
                 # Add API key if set (works for OpenAI, Anthropic, and Bedrock API keys)
                 # For Bedrock: api_key can be a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK)
@@ -531,7 +534,9 @@ class LLMAnalyzer(BaseAnalyzer):
 
             except Exception as e:
                 last_exception = e
-                kind = classify_analyzer_error(e, context="llm")
+                kind = classify_analyzer_error(
+                    e, context="llm", model=self._model
+                )
                 if kind is ErrorKind.FINAL:
                     self.logger.error(
                         "LLM API final error for %s: %s", context, e
