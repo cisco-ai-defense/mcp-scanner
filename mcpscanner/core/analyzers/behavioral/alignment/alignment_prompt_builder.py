@@ -34,6 +34,17 @@ from typing import Any, Dict, List, Optional
 from .....config.constants import MCPScannerConstants
 from ....static_analysis.context_extractor import FunctionContext
 
+# Worst-case suffixes reserved when budgeting total prompt size.
+_ANALYSIS_TRUNCATION_SUFFIX = (
+    "\n\n... (analysis evidence truncated to fit model context budget)\n"
+)
+_TEMPLATE_TRUNCATION_SUFFIX = (
+    "\n\n... (alignment instructions truncated to fit model context budget)\n"
+)
+_MIN_ANALYSIS_CHARS = 500
+# Newlines joining template, prefix, delimiter tags, and analysis body.
+_PROMPT_FRAME_CHARS = 5
+
 
 class AlignmentPromptBuilder:
     """Builds comprehensive prompts for semantic alignment verification.
@@ -534,13 +545,34 @@ For functions with no issues, just include function_index, function_name, and mi
         prefix: str = "",
     ) -> str:
         """Build the final prompt and enforce the alignment context budget."""
-        # The markdown template alone is ~72 KiB. Budget against the *total*
-        # prompt we send to the model, not an abstract analysis-only cap.
-        max_total = MCPScannerConstants.PROMPT_LENGTH_THRESHOLD
-        fixed_overhead = (
-            len(template) + len(prefix) + len(start_tag) + len(end_tag) + 16
+        # Budget the *total* prompt against ALIGNMENT_MAX_PROMPT_CHARS (hard cap
+        # for Bedrock/Haiku), not the softer PROMPT_LENGTH_THRESHOLD warning.
+        # The markdown template alone is ~72 KiB, so it may need truncation too.
+        max_total = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        frame_overhead = (
+            len(prefix) + len(start_tag) + len(end_tag) + _PROMPT_FRAME_CHARS
         )
-        max_analysis = max(500, max_total - fixed_overhead)
+        reserved_for_analysis = _MIN_ANALYSIS_CHARS + len(_ANALYSIS_TRUNCATION_SUFFIX)
+        max_template_len = max(0, max_total - frame_overhead - reserved_for_analysis)
+
+        template_used = template
+        if len(template) > max_template_len:
+            allow = max(0, max_template_len - len(_TEMPLATE_TRUNCATION_SUFFIX))
+            template_used = template[:allow] + _TEMPLATE_TRUNCATION_SUFFIX
+            self.logger.warning(
+                "prompt template truncated label=%s template_length=%d "
+                "max_template=%d budget=%d",
+                log_label,
+                len(template),
+                max_template_len,
+                max_total,
+            )
+
+        fixed_overhead = len(template_used) + frame_overhead
+        max_analysis = max(
+            _MIN_ANALYSIS_CHARS,
+            max_total - fixed_overhead - len(_ANALYSIS_TRUNCATION_SUFFIX),
+        )
         original_analysis_len = len(analysis_content)
         if original_analysis_len > max_analysis:
             self.logger.warning(
@@ -549,20 +581,27 @@ For functions with no issues, just include function_index, function_name, and mi
                 log_label,
                 original_analysis_len,
                 max_analysis,
-                MCPScannerConstants.PROMPT_LENGTH_THRESHOLD,
+                max_total,
             )
-            analysis_content = (
-                analysis_content[:max_analysis]
-                + "\n\n... (analysis evidence truncated to fit model context budget)\n"
-            )
+            analysis_content = analysis_content[:max_analysis] + _ANALYSIS_TRUNCATION_SUFFIX
 
-        prompt = f"""{template}
+        prompt = f"""{template_used}
 
 {prefix}{start_tag}
 {analysis_content}
 {end_tag}
 """
         prompt = prompt.strip()
+        if len(prompt) > max_total:
+            self.logger.warning(
+                "prompt exceeds alignment cap after assembly label=%s "
+                "prompt_length=%d budget=%d -- hard truncating",
+                log_label,
+                len(prompt),
+                max_total,
+            )
+            prompt = prompt[:max_total]
+
         self.logger.debug(
             "prompt built label=%s prompt_length=%d analysis_content_length=%d",
             log_label,

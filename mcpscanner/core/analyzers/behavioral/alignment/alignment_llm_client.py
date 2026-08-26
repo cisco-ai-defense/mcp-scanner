@@ -197,14 +197,16 @@ class AlignmentLLMClient:
             self._model,
         )
 
-        # Check against configurable threshold
-        if prompt_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
+        # Alignment prompts are hard-capped by the prompt builder; warn if we
+        # still exceed the alignment budget (builder bug or manual prompt).
+        alignment_cap = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        if prompt_length > alignment_cap:
             self.logger.warning(
                 "LLM request_id=%d large_prompt prompt_length=%d threshold=%d model=%s "
                 "-- may be truncated by the model",
                 request_id,
                 prompt_length,
-                MCPScannerConstants.PROMPT_LENGTH_THRESHOLD,
+                alignment_cap,
                 self._model,
             )
 

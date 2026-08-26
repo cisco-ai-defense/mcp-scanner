@@ -19,6 +19,86 @@
 import pytest
 from pathlib import Path
 
+from mcpscanner.config.constants import MCPScannerConstants
+from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
+    AlignmentPromptBuilder,
+    _ANALYSIS_TRUNCATION_SUFFIX,
+    _TEMPLATE_TRUNCATION_SUFFIX,
+)
+from mcpscanner.core.static_analysis.context_extractor import FunctionContext
+
+
+def _minimal_function_context(**overrides):
+    base = dict(
+        name="test_tool",
+        decorator_types=["@mcp.tool"],
+        imports=[],
+        function_calls=[],
+        assignments=[],
+        control_flow={},
+        parameter_flows=[],
+        constants={},
+        variable_dependencies={},
+        has_file_operations=False,
+        has_network_operations=False,
+        has_subprocess_calls=False,
+        has_eval_exec=False,
+        has_dangerous_imports=False,
+        docstring="Returns the input unchanged.",
+    )
+    base.update(overrides)
+    return FunctionContext(**base)
+
+
+class TestAlignmentPromptBudget:
+    """Alignment prompts must honor ALIGNMENT_MAX_PROMPT_CHARS end-to-end."""
+
+    def test_assembled_prompt_respects_default_alignment_cap(self):
+        builder = AlignmentPromptBuilder()
+        cap = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        huge_analysis = "X" * (cap + 10_000)
+        prompt = builder._assemble_prompt(
+            template=builder._template,
+            analysis_content=huge_analysis,
+            start_tag="<!---UNTRUSTED_INPUT_START_test--->",
+            end_tag="<!---UNTRUSTED_INPUT_END_test--->",
+            log_label="test=huge_analysis",
+        )
+        assert len(prompt) <= cap
+
+    def test_template_truncated_when_fixed_overhead_exceeds_cap(self, monkeypatch):
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 8000)
+        builder = AlignmentPromptBuilder()
+        prompt = builder._assemble_prompt(
+            template=builder._template,
+            analysis_content="short body",
+            start_tag="<!---UNTRUSTED_INPUT_START_test--->",
+            end_tag="<!---UNTRUSTED_INPUT_END_test--->",
+            log_label="test=template_cap",
+        )
+        assert _TEMPLATE_TRUNCATION_SUFFIX in prompt
+        assert len(prompt) <= 8000
+
+    def test_build_prompt_respects_alignment_cap(self):
+        builder = AlignmentPromptBuilder()
+        cap = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        ctx = _minimal_function_context(docstring="D" * 50_000)
+        prompt = builder.build_prompt(ctx)
+        assert len(prompt) <= cap
+
+    def test_analysis_truncation_includes_reserved_suffix(self):
+        builder = AlignmentPromptBuilder()
+        cap = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        prompt = builder._assemble_prompt(
+            template="T" * 1000,
+            analysis_content="A" * cap,
+            start_tag="<!---UNTRUSTED_INPUT_START_test--->",
+            end_tag="<!---UNTRUSTED_INPUT_END_test--->",
+            log_label="test=analysis_suffix",
+        )
+        assert _ANALYSIS_TRUNCATION_SUFFIX in prompt
+        assert len(prompt) <= cap
+
 
 class TestPromptBuilder:
     """Test prompt building functionality."""
