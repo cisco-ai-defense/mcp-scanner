@@ -103,12 +103,13 @@ rule credential_harvesting{
         // Generic configuration operation patterns
         $generic_config_ops = /(get_env|set_env|read_config|write_config|config_file|settings_file|env_file)/
         $template_indicators = /(\bYOUR_API_KEY|\bREPLACE_WITH|\bINSERT_KEY|\.example|\.sample|\.template)/
-        // Negated disclosure - a description that promises NOT to expose
-        // sensitive data (e.g. "secret-free", "no credentials", "read-only").
-        // These were false-flagged by $leak_param's unbounded verb...object
-        // gap, which let "export"/"dump" pair with a distant object across a
-        // single-line description.
-        $negated_disclosure = /\b(no\s+(secrets?|credentials?|tokens?|keys?|passwords?)|without\s+(secrets?|credentials?|tokens?|keys?|passwords?)|(secrets?|credentials?|tokens?|keys?|passwords?)-free)\b/i
+        // Scoped negated disclosure — only suppresses $leak_param when the
+        // negation ("no secrets", "secret-free", "without credentials")
+        // appears NEAR the leak/exfiltrate/export/dump verb, not anywhere in
+        // the full input. Prevents false negatives where a real credential-leak
+        // goes undetected because an unrelated "secret-free" phrase exists
+        // elsewhere in the description.
+        $scoped_negation = /\b(leak|exfiltrate|export|dump) [^\n]{0,80}\b(no\s+(secrets?|credentials?|tokens?|keys?|passwords?)|without\s+(secrets?|credentials?|tokens?|keys?|passwords?)|(secrets?|credentials?|tokens?|keys?|passwords?)-free)\b/i
 
     condition:
 
@@ -125,7 +126,7 @@ rule credential_harvesting{
         (($sensitive_file_patterns or $env_exfil or $source_exfil) and ($transfer_actions or $file_system_operations or $access_actions_words) and not $generic_config_ops) or
 
         // Exfiltration attempts
-        ($leak_param and not $generic_config_ops and not $negated_disclosure) or
+        ($leak_param and not $generic_config_ops and not $scoped_negation) or
 
         // Base64 credential encoding
         $base64_credential_encoding or
