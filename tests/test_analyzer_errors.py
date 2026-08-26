@@ -89,6 +89,16 @@ class TestClassifyAnalyzerError:
             is ErrorKind.FINAL
         )
 
+    def test_bedrock_access_denied_is_final(self):
+        assert (
+            classify_analyzer_error(
+                RuntimeError("BedrockException: AccessDenied"),
+                context="llm",
+                model="bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0",
+            )
+            is ErrorKind.FINAL
+        )
+
     def test_status_code_attribute_final(self):
         exc = RuntimeError("provider error")
         exc.status_code = 403  # type: ignore[attr-defined]

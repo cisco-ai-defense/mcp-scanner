@@ -105,7 +105,6 @@ _TRANSIENT_KEYWORDS = (
 )
 
 _BEDROCK_TRANSIENT_KEYWORDS = (
-    "bedrockexception",
     "throttlingexception",
 )
 
