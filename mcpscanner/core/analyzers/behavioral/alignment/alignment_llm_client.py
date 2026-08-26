@@ -358,7 +358,7 @@ class AlignmentLLMClient:
                 self._temperature,
                 self._max_tokens,
             )
-            response = await acompletion(**request_params)
+            response = await acompletion(**request_params, drop_params=True)
 
             # Extract content from response
             content = response.choices[0].message.content

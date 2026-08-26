@@ -292,3 +292,40 @@ async def retry_transient_async(
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("retry_transient_async exhausted without exception")
+
+
+def build_infrastructure_error_finding(
+    *,
+    analyzer_name: str,
+    subject: str,
+    error: BaseException,
+    context: str = "llm",
+    model: str | None = None,
+):
+    """Return a visible finding when an analyzer stage fails entirely.
+
+    Callers should emit this instead of returning an empty findings list so
+    scan output cannot be mistaken for a clean LLM pass.
+    """
+    from ..core.analyzers.base import SecurityFinding
+    from .log_format import ERROR_TRUNCATE, truncate
+
+    kind = classify_analyzer_error(error, context=context, model=model)
+    message = truncate(str(error), ERROR_TRUNCATE)
+    details: dict[str, str] = {
+        "subject": subject,
+        "error": message,
+        "error_kind": kind.value,
+        "error_type": type(error).__name__,
+    }
+    if model:
+        details["model"] = model
+    return SecurityFinding(
+        severity="INFO",
+        summary=(
+            f"{analyzer_name} analysis did not complete for {subject}: {message}"
+        ),
+        analyzer=analyzer_name,
+        threat_category="ANALYZER INFRASTRUCTURE",
+        details=details,
+    )

@@ -31,6 +31,7 @@ from ...config.constants import MCPScannerConstants
 from ...threats.threats import LLM_THREAT_MAPPING
 from ...utils.analyzer_errors import (
     ErrorKind,
+    build_infrastructure_error_finding,
     classify_analyzer_error,
     compute_backoff_delay,
 )
@@ -422,9 +423,14 @@ class LLMAnalyzer(BaseAnalyzer):
         except Exception as e:
             self.logger.error(f"LLM analysis failed for {tool_name}: {str(e)}")
             self.logger.error(f"Full traceback for {tool_name}:", exc_info=True)
-            # Return empty findings list - don't pollute results with error states
-            # The error is logged above for debugging purposes
-            return []
+            return [
+                build_infrastructure_error_finding(
+                    analyzer_name="LLM",
+                    subject=tool_name,
+                    error=e,
+                    model=self._model,
+                )
+            ]
 
     def _parse_tool_content(
         self, content: str, context: Optional[Dict[str, Any]] = None
@@ -529,7 +535,7 @@ class LLMAnalyzer(BaseAnalyzer):
                 if self._aws_profile_name:
                     request_params["aws_profile_name"] = self._aws_profile_name
 
-                response = await acompletion(**request_params)
+                response = await acompletion(**request_params, drop_params=True)
                 return response
 
             except Exception as e:

@@ -222,9 +222,11 @@ class TestBedrockErrorHandling:
         content = "Test content"
         context = {"tool_name": "test_tool"}
 
-        # Auth errors are final — no retry amplification
+        # Auth errors are final — no retry amplification; surface infra finding.
         findings = await analyzer.analyze(content, context)
-        assert len(findings) == 0
+        assert len(findings) == 1
+        assert findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+        assert findings[0].details["error_kind"] == "final"
 
         assert mock_completion.call_count == 1
 
@@ -247,7 +249,9 @@ class TestBedrockErrorHandling:
         context = {"tool_name": "test_tool"}
 
         findings = await analyzer.analyze(content, context)
-        assert len(findings) == 0
+        assert len(findings) == 1
+        assert findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+        assert findings[0].details["error_kind"] == "transient"
 
         # Verify retries with exponential backoff
         assert mock_completion.call_count == 3
