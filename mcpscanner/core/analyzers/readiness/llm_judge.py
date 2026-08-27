@@ -260,6 +260,10 @@ class ReadinessLLMJudge:
         if self.api_base:
             request_params["api_base"] = self.api_base
 
+        from mcpscanner.utils.llm_request_params import apply_model_constraints
+
+        apply_model_constraints(self.model, request_params)
+
         response = await acompletion(**request_params, drop_params=True)
 
         # Parse response

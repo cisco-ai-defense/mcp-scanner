@@ -26,7 +26,6 @@ The client manages:
 - Response retrieval
 """
 
-import asyncio
 import itertools
 import logging
 import time
@@ -40,7 +39,7 @@ from .....utils.analyzer_errors import (
     ERROR_KIND_TRANSIENT,
     ErrorKind,
     classify_analyzer_error,
-    compute_backoff_delay,
+    retry_transient_async,
 )
 from .....utils.log_format import ERROR_TRUNCATE, RESPONSE_DEBUG_MAX, truncate
 
@@ -218,73 +217,67 @@ class AlignmentLLMClient:
 
         base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
         verify_start = time.perf_counter()
+        attempts_used = 0
 
-        for attempt in range(max_retries):
-            try:
-                response = await self._make_llm_request(
-                    prompt, request_id, attempt + 1
-                )
-                total_ms = int((time.perf_counter() - verify_start) * 1000)
-                self.logger.info(
-                    "LLM request_id=%d ok provider=%s model=%s attempts=%d duration_ms=%d "
-                    "prompt_length=%d response_length=%d",
-                    request_id,
-                    self._provider,
-                    self._model,
-                    attempt + 1,
-                    total_ms,
-                    prompt_length,
-                    len(response) if response else 0,
-                )
-                return response
-            except Exception as e:
-                kind = classify_analyzer_error(
-                    e, context="llm", model=self._model
-                )
-                if kind is ErrorKind.FINAL:
-                    total_ms = int((time.perf_counter() - verify_start) * 1000)
-                    self.logger.error(
-                        "LLM request_id=%d failed_final attempts=%d duration_ms=%d "
-                        "error_kind=%s error_type=%s error=%s model=%s",
-                        request_id,
-                        attempt + 1,
-                        total_ms,
-                        ERROR_KIND_FINAL,
-                        type(e).__name__,
-                        truncate(e, ERROR_TRUNCATE),
-                        self._model,
-                    )
-                    raise
+        async def operation() -> str:
+            nonlocal attempts_used
+            attempts_used += 1
+            return await self._make_llm_request(prompt, request_id, attempts_used)
 
-                if attempt < max_retries - 1:
-                    delay = compute_backoff_delay(attempt, base_delay)
-                    self.logger.warning(
-                        "LLM request_id=%d retry attempt=%d/%d error_kind=%s "
-                        "error_type=%s error=%s backoff_s=%.1f model=%s",
-                        request_id,
-                        attempt + 1,
-                        max_retries,
-                        ERROR_KIND_TRANSIENT,
-                        type(e).__name__,
-                        truncate(e, ERROR_TRUNCATE),
-                        delay,
-                        self._model,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    total_ms = int((time.perf_counter() - verify_start) * 1000)
-                    self.logger.error(
-                        "LLM request_id=%d failed attempts=%d duration_ms=%d "
-                        "error_kind=%s error_type=%s error=%s model=%s",
-                        request_id,
-                        max_retries,
-                        total_ms,
-                        ERROR_KIND_TRANSIENT,
-                        type(e).__name__,
-                        truncate(e, ERROR_TRUNCATE),
-                        self._model,
-                    )
-                    raise
+        async def on_retry(
+            exc: BaseException, attempt: int, delay: float
+        ) -> None:
+            self.logger.warning(
+                "LLM request_id=%d retry attempt=%d/%d error_kind=%s "
+                "error_type=%s error=%s backoff_s=%.1f model=%s",
+                request_id,
+                attempt,
+                max_retries,
+                ERROR_KIND_TRANSIENT,
+                type(exc).__name__,
+                truncate(exc, ERROR_TRUNCATE),
+                delay,
+                self._model,
+            )
+
+        try:
+            response = await retry_transient_async(
+                operation,
+                max_attempts=max_retries,
+                base_delay=base_delay,
+                model=self._model,
+                on_retry=on_retry,
+            )
+            total_ms = int((time.perf_counter() - verify_start) * 1000)
+            self.logger.info(
+                "LLM request_id=%d ok provider=%s model=%s attempts=%d duration_ms=%d "
+                "prompt_length=%d response_length=%d",
+                request_id,
+                self._provider,
+                self._model,
+                attempts_used,
+                total_ms,
+                prompt_length,
+                len(response) if response else 0,
+            )
+            return response
+        except Exception as e:
+            kind = classify_analyzer_error(e, context="llm", model=self._model)
+            total_ms = int((time.perf_counter() - verify_start) * 1000)
+            error_kind = ERROR_KIND_FINAL if kind is ErrorKind.FINAL else ERROR_KIND_TRANSIENT
+            self.logger.error(
+                "LLM request_id=%d failed%s attempts=%d duration_ms=%d "
+                "error_kind=%s error_type=%s error=%s model=%s",
+                request_id,
+                "_final" if kind is ErrorKind.FINAL else "",
+                attempts_used or 1,
+                total_ms,
+                error_kind,
+                type(e).__name__,
+                truncate(e, ERROR_TRUNCATE),
+                self._model,
+            )
+            raise
 
     async def _make_llm_request(
         self, prompt: str, request_id: int = 0, attempt: int = 1

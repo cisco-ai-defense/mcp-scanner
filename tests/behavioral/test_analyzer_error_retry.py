@@ -68,8 +68,7 @@ class TestAlignmentLLMFailurePaths:
             new=mock,
         ):
             with patch(
-                "mcpscanner.core.analyzers.behavioral.alignment."
-                "alignment_llm_client.asyncio.sleep",
+                "mcpscanner.utils.analyzer_errors.asyncio.sleep",
                 new=AsyncMock(return_value=None),
             ):
                 with caplog.at_level(logging.WARNING):
@@ -113,8 +112,7 @@ class TestAlignmentLLMFailurePaths:
                 new=mock,
             ):
                 with patch(
-                    "mcpscanner.core.analyzers.behavioral.alignment."
-                    "alignment_llm_client.asyncio.sleep",
+                    "mcpscanner.utils.analyzer_errors.asyncio.sleep",
                     new=AsyncMock(return_value=None),
                 ):
                     with caplog.at_level(logging.ERROR):

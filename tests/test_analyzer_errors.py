@@ -176,3 +176,53 @@ class TestRetryTransientAsync:
                 sleep=AsyncMock(return_value=None),
             )
         assert calls["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_on_retry_callback_invoked_before_sleep(self):
+        retries: list[tuple[int, float]] = []
+
+        async def on_retry(_exc: BaseException, attempt: int, delay: float) -> None:
+            retries.append((attempt, delay))
+
+        calls = {"n": 0}
+
+        async def op():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("503 service unavailable")
+            return "ok"
+
+        result = await retry_transient_async(
+            op,
+            max_attempts=3,
+            base_delay=0.0,
+            sleep=AsyncMock(return_value=None),
+            on_retry=on_retry,
+        )
+        assert result == "ok"
+        assert retries == [(1, 0.0)]
+
+    @pytest.mark.asyncio
+    async def test_on_retry_callback_invoked_before_sleep(self):
+        retries: list[tuple[int, float]] = []
+
+        async def on_retry(_exc: BaseException, attempt: int, delay: float) -> None:
+            retries.append((attempt, delay))
+
+        calls = {"n": 0}
+
+        async def op():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("503 service unavailable")
+            return "ok"
+
+        result = await retry_transient_async(
+            op,
+            max_attempts=3,
+            base_delay=0.0,
+            sleep=AsyncMock(return_value=None),
+            on_retry=on_retry,
+        )
+        assert result == "ok"
+        assert retries == [(1, 0.0)]

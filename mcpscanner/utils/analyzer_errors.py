@@ -27,9 +27,10 @@ from __future__ import annotations
 import asyncio
 import re
 from enum import Enum
-from typing import Awaitable, Callable, Optional, TypeVar
+from typing import Awaitable, Callable, Optional, TypeVar, Union
 
 T = TypeVar("T")
+OnRetryCallback = Callable[[BaseException, int, float], Union[None, Awaitable[None]]]
 
 
 class ErrorKind(str, Enum):
@@ -274,6 +275,7 @@ async def retry_transient_async(
     context: str = "llm",
     model: str | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    on_retry: OnRetryCallback | None = None,
 ) -> T:
     """Run ``operation`` until success or a final error / exhausted retries."""
     if max_attempts < 1:
@@ -288,7 +290,12 @@ async def retry_transient_async(
             kind = classify_analyzer_error(exc, context=context, model=model)
             if kind is ErrorKind.FINAL or attempt >= max_attempts - 1:
                 raise
-            await sleep(compute_backoff_delay(attempt, base_delay))
+            delay = compute_backoff_delay(attempt, base_delay)
+            if on_retry is not None:
+                maybe_coro = on_retry(exc, attempt + 1, delay)
+                if asyncio.iscoroutine(maybe_coro):
+                    await maybe_coro
+            await sleep(delay)
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("retry_transient_async exhausted without exception")

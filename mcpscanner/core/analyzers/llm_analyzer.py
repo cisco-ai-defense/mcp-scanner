@@ -20,7 +20,6 @@ This module contains the LLM analyzer class for analyzing MCP tools using any LL
 via LiteLLM to detect malicious content and data exfiltration risks.
 """
 
-import asyncio
 import json
 import secrets
 from typing import Any, Dict, List, Optional
@@ -33,7 +32,7 @@ from ...utils.analyzer_errors import (
     ErrorKind,
     build_infrastructure_error_finding,
     classify_analyzer_error,
-    compute_backoff_delay,
+    retry_transient_async,
 )
 from .base import BaseAnalyzer, SecurityFinding
 
@@ -489,84 +488,69 @@ class LLMAnalyzer(BaseAnalyzer):
         Raises:
             Exception: If all retries are exhausted
         """
-        last_exception = None
+        from mcpscanner.utils.llm_request_params import apply_model_constraints
 
-        for attempt in range(self._max_retries + 1):
-            try:
-                self.logger.debug(
-                    f"LLM API attempt {attempt + 1}/{self._max_retries + 1} for {context}"
-                )
+        max_attempts = self._max_retries + 1
 
-                # Build request parameters with per-request configuration
-                request_params = {
-                    "model": self._model,
-                    "messages": messages,
-                    "max_tokens": self._max_tokens,
-                    "temperature": self._temperature,
-                    "timeout": self._llm_timeout,
-                }
-                from mcpscanner.utils.llm_request_params import apply_model_constraints
+        async def operation() -> Any:
+            self.logger.debug(
+                "LLM API request for %s (max_attempts=%d)",
+                context,
+                max_attempts,
+            )
+            request_params = {
+                "model": self._model,
+                "messages": messages,
+                "max_tokens": self._max_tokens,
+                "temperature": self._temperature,
+                "timeout": self._llm_timeout,
+            }
+            apply_model_constraints(self._model, request_params)
 
-                apply_model_constraints(self._model, request_params)
+            if self._api_key:
+                request_params["api_key"] = self._api_key
+            if self._base_url:
+                request_params["api_base"] = self._base_url
+            if self._api_version:
+                request_params["api_version"] = self._api_version
+            if self._aws_region:
+                request_params["aws_region_name"] = self._aws_region
+            if self._aws_session_token:
+                request_params["aws_session_token"] = self._aws_session_token
+            if self._aws_profile_name:
+                request_params["aws_profile_name"] = self._aws_profile_name
 
-                # Add API key if set (works for OpenAI, Anthropic, and Bedrock API keys)
-                # For Bedrock: api_key can be a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK)
-                # If not set, Bedrock will use AWS credentials (profile/IAM role)
-                if self._api_key:
-                    request_params["api_key"] = self._api_key
+            return await acompletion(**request_params, drop_params=True)
 
-                # Add base URL if configured (for Azure OpenAI or custom endpoints)
-                if self._base_url:
-                    request_params["api_base"] = self._base_url
+        async def on_retry(
+            exc: BaseException, attempt: int, delay: float
+        ) -> None:
+            self.logger.warning(
+                "LLM API transient error for %s, retrying in %.1fs "
+                "(attempt %d/%d): %s",
+                context,
+                delay,
+                attempt,
+                max_attempts,
+                exc,
+            )
 
-                # Add API version if configured (required for Azure OpenAI)
-                if self._api_version:
-                    request_params["api_version"] = self._api_version
-
-                # Add AWS region for Bedrock
-                if self._aws_region:
-                    request_params["aws_region_name"] = self._aws_region
-
-                # Add AWS session token for temporary credentials
-                if self._aws_session_token:
-                    request_params["aws_session_token"] = self._aws_session_token
-
-                # Add AWS profile for credential resolution
-                if self._aws_profile_name:
-                    request_params["aws_profile_name"] = self._aws_profile_name
-
-                response = await acompletion(**request_params, drop_params=True)
-                return response
-
-            except Exception as e:
-                last_exception = e
-                kind = classify_analyzer_error(
-                    e, context="llm", model=self._model
-                )
-                if kind is ErrorKind.FINAL:
-                    self.logger.error(
-                        "LLM API final error for %s: %s", context, e
-                    )
-                    break
-                if attempt < self._max_retries:
-                    delay = compute_backoff_delay(attempt, self._rate_limit_delay)
-                    self.logger.warning(
-                        "LLM API transient error for %s, retrying in %.1fs "
-                        "(attempt %d/%d): %s",
-                        context,
-                        delay,
-                        attempt + 1,
-                        self._max_retries + 1,
-                        e,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
+        try:
+            return await retry_transient_async(
+                operation,
+                max_attempts=max_attempts,
+                base_delay=self._rate_limit_delay,
+                model=self._model,
+                on_retry=on_retry,
+            )
+        except Exception as e:
+            kind = classify_analyzer_error(e, context="llm", model=self._model)
+            if kind is ErrorKind.FINAL:
+                self.logger.error("LLM API final error for %s: %s", context, e)
+            else:
                 self.logger.error(
                     "LLM API transient error for %s, retries exhausted: %s",
                     context,
                     e,
                 )
-                break
-
-        # If we get here, all retries failed
-        raise last_exception
+            raise

@@ -64,7 +64,7 @@ def _non_bedrock_config(**overrides) -> Config:
 def _fast_retry(monkeypatch):
     """Stub out the exponential-backoff sleep so retry tests run in ms."""
     monkeypatch.setattr(
-        "mcpscanner.core.analyzers.behavioral.alignment.alignment_llm_client.asyncio.sleep",
+        "mcpscanner.utils.analyzer_errors.asyncio.sleep",
         AsyncMock(return_value=None),
     )
 
@@ -283,8 +283,7 @@ class TestRequestIdCorrelation:
                 ),
             ):
                 with patch(
-                    "mcpscanner.core.analyzers.behavioral.alignment."
-                    "alignment_llm_client.asyncio.sleep",
+                    "mcpscanner.utils.analyzer_errors.asyncio.sleep",
                     new=AsyncMock(return_value=None),
                 ):
                     with caplog.at_level(
