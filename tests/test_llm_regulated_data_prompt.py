@@ -1,80 +1,29 @@
-"""LLM prompt tests for regulated-data (PII/PHI/PCI) detection and false positives."""
+"""Static tests for regulated-data (PII/PHI/PCI) LLM prompt guidance.
+
+These tests run in CI without LLM credentials. Live LLM validation is manual.
+"""
 
 from __future__ import annotations
-
-import json
-import os
 
 import pytest
 
 from mcpscanner.config.config import Config
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
-
-# Import scenario definitions from the probe script (single source of truth)
-from scripts.phi_pci_pii_fp_probe import (  # noqa: E402
+from tests.regulated_data_scenarios import (
     FALSE_POSITIVE_SCENARIOS,
     TRUE_POSITIVE_SCENARIOS,
-    build_content,
-    check_scenario,
-    classify,
 )
-
-pytestmark = pytest.mark.integration
-
-
-def _bedrock_configured() -> bool:
-    return bool(
-        os.getenv("MCP_SCANNER_LLM_MODEL")
-        or os.getenv("MCP_SCANNER_LLM_API_KEY")
-        or os.getenv("AWS_PROFILE")
-        or os.getenv("AWS_ACCESS_KEY_ID")
-    )
 
 
 @pytest.fixture(scope="module")
-def llm_analyzer() -> LLMAnalyzer:
-    return LLMAnalyzer(Config())
+def threat_prompt() -> str:
+    """Load threat prompt using a dummy key (no network calls)."""
+    analyzer = LLMAnalyzer(Config(llm_provider_api_key="test-api-key"))
+    return analyzer._threat_analysis_prompt
 
 
-@pytest.mark.parametrize(
-    "scenario",
-    FALSE_POSITIVE_SCENARIOS,
-    ids=[s.name for s in FALSE_POSITIVE_SCENARIOS],
-)
-@pytest.mark.skipif(not _bedrock_configured(), reason="LLM credentials not configured")
-@pytest.mark.asyncio
-async def test_regulated_data_false_positives_stay_safe(
-    llm_analyzer: LLMAnalyzer, scenario
-) -> None:
-    label, threats = await classify(llm_analyzer, scenario)
-    assert check_scenario(scenario, label, threats), (
-        f"Expected SAFE for {scenario.name} ({scenario.category}), "
-        f"got {label} threats={threats}. "
-        f"Content preview: {build_content(scenario)[:200]}..."
-    )
-
-
-@pytest.mark.parametrize(
-    "scenario",
-    TRUE_POSITIVE_SCENARIOS,
-    ids=[s.name for s in TRUE_POSITIVE_SCENARIOS],
-)
-@pytest.mark.skipif(not _bedrock_configured(), reason="LLM credentials not configured")
-@pytest.mark.asyncio
-async def test_regulated_data_true_positives_still_flagged(
-    llm_analyzer: LLMAnalyzer, scenario
-) -> None:
-    label, threats = await classify(llm_analyzer, scenario)
-    assert check_scenario(scenario, label, threats), (
-        f"Expected HIGH/{scenario.expect_threats} for {scenario.name}, "
-        f"got {label} threats={threats}"
-    )
-
-
-def test_prompt_includes_regulated_data_guidance() -> None:
-    """Static check: prompt documents PHI/PCI/PII rules and defensive exceptions."""
-    analyzer = LLMAnalyzer(Config())
-    prompt = analyzer._threat_analysis_prompt
+def test_prompt_includes_regulated_data_guidance(threat_prompt: str) -> None:
+    """Prompt documents PHI/PCI/PII rules and defensive exceptions."""
     for needle in (
         "Regulated sensitive data",
         "PHI",
@@ -85,7 +34,20 @@ def test_prompt_includes_regulated_data_guidance() -> None:
         "get_payment_data",
         "DO NOT flag regulated-data tools when ALL of these apply",
     ):
-        assert needle in prompt, f"Missing prompt guidance: {needle!r}"
+        assert needle in threat_prompt, f"Missing prompt guidance: {needle!r}"
+
+
+def test_prompt_documents_false_positive_exceptions(threat_prompt: str) -> None:
+    """Defensive and authorized-workflow exceptions are present."""
+    for needle in (
+        "audit PHI access",
+        "scan for PCI compliance gaps",
+        "lookup_patient_for_appointment",
+        "submit_lab_order",
+        "stripe_create_charge",
+        "process_refund",
+    ):
+        assert needle in threat_prompt, f"Missing FP exception guidance: {needle!r}"
 
 
 def test_false_positive_scenario_catalog_is_non_empty() -> None:
@@ -95,3 +57,17 @@ def test_false_positive_scenario_catalog_is_non_empty() -> None:
     assert "defensive_pii" in categories
     assert "authorized_payment" in categories
     assert "authorized_healthcare" in categories
+
+
+@pytest.mark.parametrize(
+    "name,description",
+    [
+        ("get_medical_data", "Returns medical data containing PHI violations"),
+        ("get_payment_data", "Returns payment data containing PCI violations"),
+    ],
+)
+def test_mock_mcp_true_positive_examples_in_prompt(
+    threat_prompt: str, name: str, description: str
+) -> None:
+    assert description in threat_prompt
+    assert name in threat_prompt

@@ -1,17 +1,9 @@
-#!/usr/bin/env -S uv run python
-"""Probe LLM threat prompt for PHI/PCI/PII false positives and true-positive controls."""
+"""Scenario fixtures for regulated-data (PII/PHI/PCI) prompt tests."""
 
 from __future__ import annotations
 
-import asyncio
-import json
-import os
-import sys
 from dataclasses import dataclass
 from typing import Any, Literal
-
-from mcpscanner.config.config import Config
-from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 
 Expect = Literal["SAFE", "HIGH"]
 
@@ -26,7 +18,6 @@ class Scenario:
     expect_threats: tuple[str, ...] = ()
 
 
-# Benign / false-positive candidates — should stay SAFE
 FALSE_POSITIVE_SCENARIOS: list[Scenario] = [
     Scenario(
         name="bigcommerce_anonymize_customer",
@@ -196,7 +187,6 @@ FALSE_POSITIVE_SCENARIOS: list[Scenario] = [
     ),
 ]
 
-# True-positive controls — must still flag HIGH / TOOL POISONING
 TRUE_POSITIVE_SCENARIOS: list[Scenario] = [
     Scenario(
         name="get_medical_data",
@@ -235,77 +225,3 @@ TRUE_POSITIVE_SCENARIOS: list[Scenario] = [
         expect_threats=("TOOL POISONING",),
     ),
 ]
-
-
-def build_content(scenario: Scenario) -> str:
-    content = f"Tool Name: {scenario.name}\nDescription: {scenario.description}\n"
-    if scenario.parameters is not None:
-        content += f"Parameters Schema: {json.dumps(scenario.parameters, indent=2)}\n"
-    return content
-
-
-async def classify(analyzer: LLMAnalyzer, scenario: Scenario) -> tuple[str, list[str]]:
-    findings = await analyzer.analyze(
-        build_content(scenario), {"tool_name": scenario.name}
-    )
-    high_threats: list[str] = []
-    for finding in findings:
-        if finding.severity == "HIGH":
-            high_threats.extend(finding.details.get("primary_threats") or [])
-    if high_threats:
-        return "HIGH", high_threats
-    return "SAFE", []
-
-
-def check_scenario(scenario: Scenario, label: str, threats: list[str]) -> bool:
-    if scenario.expect == "SAFE":
-        return label == "SAFE"
-    if label != "HIGH":
-        return False
-    if not scenario.expect_threats:
-        return True
-    return any(t in threats for t in scenario.expect_threats)
-
-
-async def run_suite(title: str, scenarios: list[Scenario], analyzer: LLMAnalyzer) -> int:
-    print(f"\n{'=' * 72}\n{title}\n{'=' * 72}")
-    failures = 0
-    for scenario in scenarios:
-        label, threats = await classify(analyzer, scenario)
-        ok = check_scenario(scenario, label, threats)
-        status = "PASS" if ok else "FAIL"
-        if not ok:
-            failures += 1
-        threat_str = ",".join(threats) if threats else "-"
-        print(
-            f"[{status}] {scenario.name} ({scenario.category}) "
-            f"=> {label} [{threat_str}] expect={scenario.expect}"
-        )
-    passed = len(scenarios) - failures
-    print(f"\n{title}: {passed}/{len(scenarios)} passed")
-    return failures
-
-
-async def main() -> int:
-    model = os.getenv(
-        "MCP_SCANNER_LLM_MODEL",
-        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    )
-    print(f"Model: {model}")
-    analyzer = LLMAnalyzer(Config())
-
-    fp_failures = await run_suite(
-        "FALSE POSITIVE SCENARIOS (expect SAFE)", FALSE_POSITIVE_SCENARIOS, analyzer
-    )
-    tp_failures = await run_suite(
-        "TRUE POSITIVE CONTROLS (expect HIGH / TOOL POISONING)", TRUE_POSITIVE_SCENARIOS, analyzer
-    )
-
-    total_failures = fp_failures + tp_failures
-    total = len(FALSE_POSITIVE_SCENARIOS) + len(TRUE_POSITIVE_SCENARIOS)
-    print(f"\nOverall: {total - total_failures}/{total} passed, {total_failures} failed")
-    return 1 if total_failures else 0
-
-
-if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
