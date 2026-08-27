@@ -40,6 +40,9 @@ from typing import Any, Dict, List, Optional
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
+from ...static_analysis.interprocedural.treesitter_call_graph import (
+    TreeSitterCallGraphAnalyzer,
+)
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 
@@ -55,6 +58,18 @@ _JS_EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
 _SKIP_DIRS = frozenset(
     {"node_modules", "dist", "build", "out", ".git", ".next", ".turbo", "coverage"}
 )
+
+# Keep in sync with ``BehavioralCodeAnalyzer._EXT_TO_TS_LANGUAGE`` for JS/TS.
+_EXT_TO_TS_LANGUAGE = {
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+}
 
 
 class JSBehavioralCodeAnalyzer(BaseAnalyzer):
@@ -127,9 +142,14 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         self.logger.debug(
             "js behavioural scan root=%s files=%d", directory, len(files)
         )
+        call_graphs = self._build_directory_call_graphs(files)
         findings: List[SecurityFinding] = []
         for path in files:
-            file_findings = await self._analyze_file(path, context)
+            file_context = context.copy()
+            lang = self._language_for_path(path)
+            if lang:
+                file_context["cross_file_analyzer"] = call_graphs.get(lang)
+            file_findings = await self._analyze_file(path, file_context)
             findings.extend(file_findings)
         return findings
 
@@ -189,6 +209,63 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                 continue
             out.append(str(path))
         return sorted(out)
+
+    @staticmethod
+    def _language_for_path(file_path: str) -> Optional[str]:
+        """Map a source path to its tree-sitter language id."""
+        return _EXT_TO_TS_LANGUAGE.get(Path(file_path).suffix.lower())
+
+    def _build_directory_call_graphs(
+        self, files: List[str]
+    ) -> Dict[str, TreeSitterCallGraphAnalyzer]:
+        """Build per-language cross-file call graphs for a directory scan.
+
+        ``NativeAnalyzer`` needs these to resolve imported endpoint tables
+        (``tool.alias`` loops backed by ``api.endpoints`` in sibling modules).
+        """
+        analyzers: Dict[str, TreeSitterCallGraphAnalyzer] = {}
+        for path in files:
+            lang = self._language_for_path(path)
+            if not lang:
+                continue
+            try:
+                file_size = os.path.getsize(path)
+                if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
+                    self.logger.error(
+                        "js behavioural skip call_graph file=%s size=%d -- too large",
+                        path,
+                        file_size,
+                    )
+                    continue
+                with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                    source_code = fh.read()
+            except OSError as e:
+                self.logger.warning(
+                    "js behavioural call_graph read_failed file=%s error=%s",
+                    path,
+                    e,
+                )
+                continue
+
+            if lang not in analyzers:
+                analyzers[lang] = TreeSitterCallGraphAnalyzer(lang)
+            analyzers[lang].add_file(Path(path), source_code)
+
+        for lang, analyzer in analyzers.items():
+            try:
+                call_graph = analyzer.build_call_graph()
+                self.logger.debug(
+                    "js behavioural call_graph_built language=%s functions=%d",
+                    lang,
+                    len(call_graph.functions),
+                )
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(
+                    "js behavioural call_graph_build_failed language=%s error=%s",
+                    lang,
+                    e,
+                )
+        return analyzers
 
     # ------------------------------------------------------------------
     # Per-source orchestrator call
