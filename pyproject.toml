@@ -7,7 +7,7 @@ required-version = ">=0.8.17"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.8.3"
+version = "4.8.4"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
