@@ -46,7 +46,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Union
+from typing import Any, ClassVar, Dict, Iterator, List, Optional, Set, Union
 
 from .context_extractor import FunctionContext
 from .parser.python_parser import PythonParser
@@ -209,6 +209,16 @@ _PY_MCP_LOWLEVEL_DECORATORS: Dict[str, str] = {
 # ``impl Foo { ... }`` are not lost.
 _TS_NON_FUNCTION_NODE_TYPES: Set[str] = {
     "impl_item",
+}
+
+# Member/property access nodes whose text is preserved as a handler or
+# dynamic-name hint (``m.fn``, ``obj.handler``) when bare identifiers are
+# absent.
+_TS_MEMBER_EXPR_TYPES: Set[str] = {
+    "member_expression",
+    "property_access_expression",
+    "field_expression",
+    "selector_expression",
 }
 
 
@@ -1139,6 +1149,27 @@ class NativeAnalyzer:
                 capability=cap_kind,
                 registered_name=reg.get("name"),
                 source_kind=source_kind,
+            )
+
+        # Gap 8 extension: static endpoint tables (literal ``name`` /
+        # ``alias`` fields) including arrays reached via ``for (const tool
+        # of api.endpoints)`` loops (in-file and cross-file).
+        table_names = self._ts_collect_static_endpoint_tool_names(
+            tree.root_node,
+            import_target_map=import_target_map,
+            cross_file_analyzer=cross_file_analyzer,
+        )
+        for tool_name in table_names:
+            cap_key = (f"table:{tool_name}", "tool")
+            if cap_key in seen_handlers:
+                continue
+            seen_handlers.add(cap_key)
+            self._append_unresolved_capability(
+                contexts,
+                capability="tool",
+                registered_name=tool_name,
+                source_kind="registration.table",
+                handler_name_hint=tool_name,
             )
 
         return contexts
@@ -2383,11 +2414,6 @@ class NativeAnalyzer:
                     else:
                         reg = self._ts_parse_registration_args(args_node, method_lc)
                         if reg is None:
-                            # No string name and no inline/named handler in
-                            # ``arguments``, but the call site itself still
-                            # qualifies as a registration; allow Pass 1 (the
-                            # trailing-lambda lookup below) to populate the
-                            # handler.
                             reg = {
                                 "capability": _normalize_capability(method_lc),
                                 "name": None,
@@ -2945,31 +2971,33 @@ class NativeAnalyzer:
         }
         name: Optional[str] = None
         inline_handler: Optional["Node"] = None
-        identifier_refs: List[str] = []
+        # Positional slots preserve argument order so the first ref
+        # (``tool.alias``) is not confused with later identifiers
+        # (``toolDescription``, ``paramSchema``) in Graph-style loops.
+        positional: List[tuple[str, Any]] = []
 
         for child in args_node.children:
             if child.type in ("(", ")", ",", "comment"):
                 continue
 
-            # Inline function expression / arrow function / lambda.
-            if inline_handler is None and child.type in func_types:
-                inline_handler = child
+            if child.type in func_types:
+                positional.append(("inline", child))
                 continue
 
-            # Bare identifier reference (resolved later against in-file defs).
             if child.type == "identifier":
-                identifier_refs.append(self._ts_get_node_text(child))
+                positional.append(("ref", self._ts_get_node_text(child)))
                 continue
 
-            # First string literal we see is conventionally the MCP name
-            # (e.g. ``'add'`` in ``server.tool('add', schema, handler)``).
-            if name is None and child.type in string_node_types:
-                name = _strip_string_quotes(self._ts_get_node_text(child))
+            if child.type in _TS_MEMBER_EXPR_TYPES:
+                positional.append(("ref", self._ts_get_node_text(child)))
                 continue
 
-            # Object/struct literal may carry ``{ name: '...', handler: fn }``
-            # or Go's ``&mcp.Tool{Name: "add"}`` (which we read for the name
-            # only — the handler is a separate positional arg in Go).
+            if child.type in string_node_types:
+                positional.append(
+                    ("string", _strip_string_quotes(self._ts_get_node_text(child)))
+                )
+                continue
+
             if child.type in (
                 "object",
                 "object_expression",
@@ -2979,33 +3007,49 @@ class NativeAnalyzer:
                 obj_name, obj_handler = self._ts_extract_handler_from_object(
                     child, func_types
                 )
-                if name is None and obj_name:
-                    name = obj_name
-                if inline_handler is None and obj_handler is not None:
-                    inline_handler = obj_handler
+                if obj_name:
+                    positional.append(("string", obj_name))
+                if obj_handler is not None:
+                    positional.append(("inline", obj_handler))
+                if not obj_name and obj_handler is None:
+                    positional.append(("schema", None))
                 continue
 
-            # Unary/pointer wrapper around an object literal (Go
-            # ``&mcp.Tool{...}``): peek through to find a Name field.
             if child.type == "unary_expression":
                 for sub in child.children:
                     if sub.type in ("composite_literal", "literal_value"):
-                        obj_name, _ = self._ts_extract_handler_from_object(
+                        obj_name, obj_handler = self._ts_extract_handler_from_object(
                             sub, func_types
                         )
-                        if name is None and obj_name:
-                            name = obj_name
+                        if obj_name:
+                            positional.append(("string", obj_name))
+                        if obj_handler is not None:
+                            positional.append(("inline", obj_handler))
+                        if not obj_name and obj_handler is None:
+                            positional.append(("schema", None))
                         break
 
-        handler_node = inline_handler
+        for kind, val in positional:
+            if kind == "string" and val:
+                name = val
+                break
+
+        inline_handlers = [val for kind, val in positional if kind == "inline"]
+        refs = [val for kind, val in positional if kind == "ref"]
+
+        handler_node = inline_handlers[-1] if inline_handlers else None
         handler_name: Optional[str] = None
 
-        if handler_node is None and identifier_refs:
-            # Prefer the LAST identifier: in ``mcp.AddTool(server, ..., add)``
-            # ``server`` is the receiver, ``add`` is the handler. The
-            # inline-function check above already covers the JS/TS case
-            # where the handler is the first inline argument.
-            handler_name = identifier_refs[-1]
+        if handler_node is None and refs:
+            handler_name = refs[-1]
+
+        if (
+            name is None
+            and refs
+            and self.language in ("javascript", "typescript")
+            and capability_method.lower() not in _MCP_LOW_LEVEL_REGISTRATION_METHODS
+        ):
+            name = refs[0]
 
         if handler_node is None and handler_name is None:
             return None
@@ -3016,6 +3060,358 @@ class NativeAnalyzer:
             "handler_node": handler_node,
             "handler_name": handler_name,
         }
+
+    _TS_ENDPOINT_NAME_FIELDS: tuple[str, ...] = (
+        "name",
+        "alias",
+        "tool",
+        "toolName",
+    )
+    _TS_ENDPOINT_ROUTE_FIELDS: ClassVar[Set[str]] = {"path", "method", "route", "url"}
+    _TS_ENDPOINT_DESCRIPTOR_FIELDS: ClassVar[Set[str]] = {
+        "fn",
+        "handler",
+        "execute",
+        "callback",
+        "description",
+        "schema",
+        "inputSchema",
+        "parameters",
+    }
+
+    def _ts_collect_static_endpoint_tool_names(
+        self,
+        root: "Node",
+        *,
+        import_target_map: Optional[Dict[str, List[str]]] = None,
+        cross_file_analyzer: Optional[Any] = None,
+    ) -> List[str]:
+        """Collect static MCP tool names from descriptor arrays.
+
+        Only arrays reached through ``for (const tool of api.endpoints)``-style
+        loops are considered (in-file and cross-file). A blanket walk of every
+        array literal would mis-tag HTTP route tables and model catalogues as
+        MCP tools.
+        """
+        names: List[str] = []
+        seen: Set[str] = set()
+        bindings = self._ts_build_simple_value_bindings(root)
+
+        def add_name(value: Optional[str]) -> None:
+            if value and value not in seen:
+                seen.add(value)
+                names.append(value)
+
+        def visit(node: "Node") -> None:
+            if node.type in ("for_in_statement", "for_of_statement"):
+                src = self._ts_for_in_source_node(node)
+                if src is not None:
+                    array_node = self._ts_resolve_to_array_node(src, bindings, root)
+                    if array_node is None:
+                        array_node = self._ts_resolve_cross_file_endpoint_array(
+                            src,
+                            import_target_map=import_target_map,
+                            cross_file_analyzer=cross_file_analyzer,
+                        )
+                    if array_node is not None:
+                        for tool_name in self._ts_endpoint_names_in_array(array_node):
+                            add_name(tool_name)
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return names
+
+    def _ts_endpoint_names_in_array(self, array_node: "Node") -> List[str]:
+        """Return string tool names from object elements in an array literal."""
+        out: List[str] = []
+        for child in array_node.children:
+            if child.type not in ("object", "object_expression"):
+                continue
+            tool_name: Optional[str] = None
+            for name_field in self._TS_ENDPOINT_NAME_FIELDS:
+                tool_name = self._ts_object_string_field(child, name_field)
+                if tool_name:
+                    break
+            if not tool_name:
+                continue
+            if self._ts_object_has_any_field(child, self._TS_ENDPOINT_ROUTE_FIELDS):
+                continue
+            if not self._ts_object_has_any_field(
+                child, self._TS_ENDPOINT_DESCRIPTOR_FIELDS
+            ):
+                continue
+            out.append(tool_name)
+        return out
+
+    def _ts_build_simple_value_bindings(self, root: "Node") -> Dict[str, "Node"]:
+        """Map ``const foo = ...`` initializer nodes for simple resolution."""
+        bindings: Dict[str, "Node"] = {}
+
+        def visit(node: "Node") -> None:
+            if node.type == "export_statement":
+                for child in node.children:
+                    if child.type in (
+                        "object",
+                        "object_expression",
+                        "array",
+                        "array_expression",
+                    ):
+                        bindings.setdefault("default", child)
+            if node.type == "variable_declarator":
+                name_node = node.child_by_field_name("name")
+                value_node = node.child_by_field_name("value")
+                if (
+                    name_node is not None
+                    and value_node is not None
+                    and name_node.type == "identifier"
+                ):
+                    bindings[self._ts_get_node_text(name_node)] = value_node
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return bindings
+
+    def _ts_for_in_source_node(self, for_node: "Node") -> Optional["Node"]:
+        """Return the iterable expression in a ``for...of`` loop."""
+        src = for_node.child_by_field_name("right")
+        if src is not None:
+            return src
+        seen_of = False
+        skip_types = {
+            "for",
+            "of",
+            "const",
+            "let",
+            "var",
+            "identifier",
+            "(",
+            ")",
+            ";",
+        }
+        for child in for_node.children:
+            if child.type == "of":
+                seen_of = True
+                continue
+            if seen_of and child.type not in skip_types:
+                return child
+        return None
+
+    def _ts_resolve_to_array_node(
+        self,
+        expr: "Node",
+        bindings: Dict[str, "Node"],
+        root: "Node",
+    ) -> Optional["Node"]:
+        """Resolve ``api.endpoints`` / ``tools`` to an array literal node."""
+        if expr.type in ("array", "array_expression"):
+            return expr
+        if expr.type == "identifier":
+            bound = bindings.get(self._ts_get_node_text(expr))
+            if bound is not None and bound.type in ("array", "array_expression"):
+                return bound
+            return None
+        if expr.type in _TS_MEMBER_EXPR_TYPES:
+            obj_node = expr.child_by_field_name("object")
+            prop_node = expr.child_by_field_name("property")
+            if obj_node is None or prop_node is None:
+                return None
+            base_text = self._ts_get_node_text(obj_node)
+            prop_text = self._ts_get_node_text(prop_node)
+            if obj_node.type == "identifier":
+                bound = bindings.get(base_text)
+                if bound is not None and bound.type in (
+                    "object",
+                    "object_expression",
+                ):
+                    field_val = self._ts_object_field_value_node(bound, prop_text)
+                    if field_val is not None and field_val.type in (
+                        "array",
+                        "array_expression",
+                    ):
+                        return field_val
+        return None
+
+    def _ts_object_field_value_node(
+        self, obj_node: "Node", field: str
+    ) -> Optional["Node"]:
+        """Return the value node for ``field`` on an object literal."""
+        pair_types = {
+            "pair",
+            "field_initialization",
+            "key_value",
+            "object_property",
+            "element",
+        }
+        for child in obj_node.children:
+            if child.type not in pair_types:
+                continue
+            key_node = child.child_by_field_name("key")
+            value_node = child.child_by_field_name("value")
+            if key_node is None or value_node is None:
+                continue
+            key = _strip_string_quotes(self._ts_get_node_text(key_node).strip())
+            if key == field:
+                return value_node
+        return None
+
+    def _ts_resolve_cross_file_endpoint_array(
+        self,
+        expr: "Node",
+        *,
+        import_target_map: Optional[Dict[str, List[str]]] = None,
+        cross_file_analyzer: Optional[Any] = None,
+    ) -> Optional["Node"]:
+        """Resolve ``api.endpoints`` / imported arrays to a remote array literal."""
+        if not import_target_map or not cross_file_analyzer:
+            return None
+        files = getattr(cross_file_analyzer, "files", None)
+        if not files:
+            return None
+
+        base_name: Optional[str] = None
+        prop_name: Optional[str] = None
+        if expr.type == "identifier":
+            base_name = self._ts_get_node_text(expr)
+        elif expr.type in _TS_MEMBER_EXPR_TYPES:
+            obj_node = expr.child_by_field_name("object")
+            prop_node = expr.child_by_field_name("property")
+            if obj_node is not None and obj_node.type == "identifier" and prop_node is not None:
+                base_name = self._ts_get_node_text(obj_node)
+                prop_name = self._ts_get_node_text(prop_node)
+        if not base_name:
+            return None
+
+        target_paths = import_target_map.get(base_name)
+        if not target_paths:
+            return None
+
+        current_fp = str(self.file_path) if self.file_path else ""
+
+        for fp, (tree, source_bytes) in files.items():
+            fp_str = str(fp)
+            if current_fp and fp_str == current_fp:
+                continue
+            if not any(_path_endswith_suffix(fp_str, tgt) for tgt in target_paths):
+                continue
+
+            try:
+                remote_source = source_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            remote = NativeAnalyzer(remote_source, fp_str)
+            remote_bindings = remote._ts_build_simple_value_bindings(tree.root_node)
+            value_node = remote_bindings.get(base_name)
+            if value_node is None:
+                value_node = remote._ts_find_exported_binding(tree.root_node, base_name)
+            if value_node is None and "default" in remote_bindings:
+                value_node = remote_bindings.get("default")
+
+            if value_node is None:
+                continue
+
+            if prop_name:
+                if value_node.type not in ("object", "object_expression"):
+                    continue
+                field_val = remote._ts_object_field_value_node(value_node, prop_name)
+                if field_val is not None and field_val.type in (
+                    "array",
+                    "array_expression",
+                ):
+                    return field_val
+                continue
+
+            if value_node.type in ("array", "array_expression"):
+                return value_node
+
+        return None
+
+    def _ts_find_exported_binding(
+        self, root: "Node", symbol: str
+    ) -> Optional["Node"]:
+        """Return the initializer for ``export const symbol = ...`` if present."""
+        found: Optional["Node"] = None
+
+        def visit(node: "Node") -> None:
+            nonlocal found
+            if found is not None:
+                return
+            if node.type == "export_statement":
+                for child in node.children:
+                    if child.type == "lexical_declaration":
+                        for decl in child.children:
+                            if decl.type != "variable_declarator":
+                                continue
+                            name_node = decl.child_by_field_name("name")
+                            value_node = decl.child_by_field_name("value")
+                            if (
+                                name_node is not None
+                                and value_node is not None
+                                and name_node.type == "identifier"
+                                and self._ts_get_node_text(name_node) == symbol
+                            ):
+                                found = value_node
+                                return
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return found
+
+    def _ts_object_string_field(
+        self, obj_node: "Node", field: str
+    ) -> Optional[str]:
+        """Return a string literal value for ``field`` on an object literal."""
+        pair_types = {
+            "pair",
+            "field_initialization",
+            "key_value",
+            "object_property",
+            "element",
+        }
+        string_node_types = {
+            "string",
+            "string_literal",
+            "template_string",
+            "raw_string_literal",
+            "interpreted_string_literal",
+        }
+        for child in obj_node.children:
+            if child.type not in pair_types:
+                continue
+            key_node = child.child_by_field_name("key")
+            value_node = child.child_by_field_name("value")
+            if key_node is None or value_node is None:
+                continue
+            key = _strip_string_quotes(self._ts_get_node_text(key_node).strip())
+            if key != field:
+                continue
+            if value_node.type in string_node_types:
+                return _strip_string_quotes(self._ts_get_node_text(value_node))
+        return None
+
+    def _ts_object_has_any_field(
+        self, obj_node: "Node", fields: Set[str]
+    ) -> bool:
+        """Return True when ``obj_node`` defines any key in ``fields``."""
+        pair_types = {
+            "pair",
+            "field_initialization",
+            "key_value",
+            "object_property",
+            "element",
+        }
+        for child in obj_node.children:
+            if child.type not in pair_types:
+                continue
+            key_node = child.child_by_field_name("key")
+            if key_node is None:
+                continue
+            key = _strip_string_quotes(self._ts_get_node_text(key_node).strip())
+            if key in fields:
+                return True
+        return False
 
     def _ts_extract_handler_from_object(
         self, obj_node: "Node", func_types: Set[str]
@@ -3231,6 +3627,26 @@ class NativeAnalyzer:
                 dec_params = self._py_extract_call_kwargs(dec)
                 if dec_params:
                     decorator_params[dec_name] = dec_params
+
+        for _dec_name, params in decorator_params.items():
+            if "name" in params:
+                raw_name = params["name"]
+                if isinstance(raw_name, str):
+                    try:
+                        name = ast.literal_eval(raw_name)
+                    except (ValueError, SyntaxError):
+                        name = raw_name
+                else:
+                    name = raw_name
+            if "description" in params and not docstring:
+                raw_desc = params["description"]
+                if isinstance(raw_desc, str):
+                    try:
+                        docstring = ast.literal_eval(raw_desc)
+                    except (ValueError, SyntaxError):
+                        docstring = raw_desc
+                else:
+                    docstring = raw_desc
 
         # Extract parameters from AST
         parameters = []
@@ -3810,6 +4226,9 @@ class NativeAnalyzer:
 
     def _ts_get_node_text(self, node: "Node") -> str:
         """Get text content of a tree-sitter node."""
+        node_text = getattr(node, "text", None)
+        if node_text is not None:
+            return node_text.decode("utf-8")
         return self.source_bytes[node.start_byte:node.end_byte].decode("utf-8")
 
     def _ts_get_function_name(self, node: "Node") -> str:
