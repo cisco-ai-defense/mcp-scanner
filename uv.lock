@@ -393,7 +393,7 @@ wheels = [
 
 [[package]]
 name = "cisco-ai-mcp-scanner"
-version = "4.8.3"
+version = "4.8.4"
 source = { editable = "." }
 dependencies = [
     { name = "expandvars" },

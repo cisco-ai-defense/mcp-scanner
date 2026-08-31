@@ -150,6 +150,7 @@ class TestAlignmentLLMClientRequestForwarding:
 
         kwargs = mocked.await_args.kwargs
         assert kwargs["api_key"] == "sk-test"
+        assert kwargs["drop_params"] is True
         # AWS routing knobs MUST NOT leak into non-Bedrock requests.
         assert "aws_region_name" not in kwargs
         assert "aws_session_token" not in kwargs
