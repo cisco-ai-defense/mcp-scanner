@@ -45,8 +45,67 @@ from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnal
 from ...static_analysis.interprocedural.treesitter_call_graph import (
     TreeSitterCallGraphAnalyzer,
 )
+from ...static_analysis.graph.integration import (
+    build_code_graph,
+    is_graph_supported_language,
+    language_for_path,
+    partition_functions_by_graph,
+)
+from ...static_analysis.graph.taint_context import populate_taint_fields
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
+
+
+def _build_directory_code_graphs(
+    py_call_graph_analyzer: Optional[CallGraphAnalyzer],
+    ts_call_graph_analyzers: Dict[str, TreeSitterCallGraphAnalyzer],
+    *,
+    source_registry: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Build one CodeGraph per language family for a directory scan."""
+    if not MCPScannerConstants.CODE_GRAPH_ENABLED:
+        return {}
+    if source_registry:
+        from ...static_analysis.graph.integration import build_code_graphs_for_registry
+
+        return build_code_graphs_for_registry(source_registry)
+    graphs: Dict[str, Any] = {}
+    if py_call_graph_analyzer:
+        graphs["python"] = build_code_graph(
+            py_call_graph_analyzer,
+            language="python",
+            source_registry=source_registry,
+        )
+    for lang, ts_analyzer in ts_call_graph_analyzers.items():
+        graphs[lang] = build_code_graph(
+            ts_analyzer,
+            language=lang,
+            source_registry=source_registry,
+        )
+    return graphs
+
+
+def _code_graphs_for_file(
+    cross_file_analyzer: Optional[
+        Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer]
+    ],
+    file_path: str,
+    *,
+    source_registry: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Build a single-file CodeGraph cache entry."""
+    if not MCPScannerConstants.CODE_GRAPH_ENABLED or not cross_file_analyzer:
+        return {}
+    lang = language_for_path(file_path)
+    if not is_graph_supported_language(lang):
+        return {}
+    return {
+        lang: build_code_graph(
+            cross_file_analyzer,
+            language=lang,
+            source_registry=source_registry,
+        )
+    }
 
 
 def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
@@ -345,6 +404,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     ts_call_graph_analyzers[lang] = TreeSitterCallGraphAnalyzer(lang)
 
                 total_size = 0
+                source_registry: Dict[str, str] = {}
                 for accepted in capability_files:
                     try:
                         if accepted.source_bytes:
@@ -368,6 +428,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         else:
                             with open(accepted.path, "r", encoding="utf-8") as f:
                                 source_code = f.read()
+                        source_registry[accepted.path] = source_code
 
                         ext = Path(accepted.path).suffix.lower()
                         if ext in self._PYTHON_EXTENSIONS and py_call_graph_analyzer:
@@ -405,36 +466,71 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         f"Built {lang} call graph with {len(ts_cg.functions)} functions"
                     )
 
-                # Analyze each file with its language-appropriate call graph
-                for accepted in capability_files:
-                    self.logger.debug(f"Analyzing file: {accepted.path}")
-                    ext = Path(accepted.path).suffix.lower()
-                    if ext in self._PYTHON_EXTENSIONS:
-                        file_cga = py_call_graph_analyzer
-                    elif ext in self._EXT_TO_TS_LANGUAGE:
-                        lang = self._EXT_TO_TS_LANGUAGE[ext]
-                        file_cga = ts_call_graph_analyzers.get(lang)
-                    else:
-                        file_cga = None
+                scan_context = {
+                    **context,
+                    "code_graphs": _build_directory_code_graphs(
+                        py_call_graph_analyzer,
+                        ts_call_graph_analyzers,
+                        source_registry=source_registry,
+                    ),
+                }
 
-                    file_start = time.perf_counter()
-                    file_findings = await self._analyze_file(
-                        accepted.path,
-                        context,
-                        file_cga,
-                        cached_source=accepted.source_text or None,
-                    )
-                    file_ms = int((time.perf_counter() - file_start) * 1000)
-                    non_safe = sum(
-                        1 for f in file_findings if getattr(f, "severity", "") != "SAFE"
-                    )
+                # Analyze files concurrently (shared call graphs are read-only).
+                file_concurrency = max(
+                    1,
+                    int(
+                        context.get(
+                            "file_concurrency",
+                            MCPScannerConstants.BEHAVIORAL_FILE_CONCURRENCY,
+                        )
+                    ),
+                )
+                file_semaphore = asyncio.Semaphore(file_concurrency)
+
+                async def _analyze_accepted(accepted: _AcceptedFile) -> List[SecurityFinding]:
+                    async with file_semaphore:
+                        self.logger.debug(f"Analyzing file: {accepted.path}")
+                        ext = Path(accepted.path).suffix.lower()
+                        if ext in self._PYTHON_EXTENSIONS:
+                            file_cga = py_call_graph_analyzer
+                        elif ext in self._EXT_TO_TS_LANGUAGE:
+                            lang = self._EXT_TO_TS_LANGUAGE[ext]
+                            file_cga = ts_call_graph_analyzers.get(lang)
+                        else:
+                            file_cga = None
+
+                        file_start = time.perf_counter()
+                        file_findings = await self._analyze_file(
+                            accepted.path,
+                            scan_context,
+                            file_cga,
+                            cached_source=accepted.source_text or None,
+                        )
+                        file_ms = int((time.perf_counter() - file_start) * 1000)
+                        non_safe = sum(
+                            1
+                            for f in file_findings
+                            if getattr(f, "severity", "") != "SAFE"
+                        )
+                        self.logger.info(
+                            "behavioral file done path=%s findings=%d non_safe=%d duration_ms=%d",
+                            sanitize_log_value(accepted.path),
+                            len(file_findings),
+                            non_safe,
+                            file_ms,
+                        )
+                        return file_findings
+
+                if file_concurrency > 1 and len(capability_files) > 1:
                     self.logger.info(
-                        "behavioral file done path=%s findings=%d non_safe=%d duration_ms=%d",
-                        sanitize_log_value(accepted.path),
-                        len(file_findings),
-                        non_safe,
-                        file_ms,
+                        "behavioral file concurrency=%d files=%d",
+                        file_concurrency,
+                        len(capability_files),
                     )
+
+                for file_findings in await asyncio.gather(
+                    *(_analyze_accepted(accepted) for accepted in capability_files)
+                ):
                     all_findings.extend(file_findings)
 
             # Check if content is a single file
@@ -473,7 +569,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     cross_file_analyzer = None
 
                 all_findings = await self._analyze_file(
-                    content, context, cross_file_analyzer
+                    content,
+                    {
+                        **context,
+                        "code_graphs": _code_graphs_for_file(
+                            cross_file_analyzer,
+                            content,
+                            source_registry={content: source_code},
+                        ),
+                    },
+                    cross_file_analyzer,
                 )
 
             else:
@@ -498,6 +603,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         "Built call graph for inline source"
                     )
                     context["cross_file_analyzer"] = cross_file_analyzer
+                    context["code_graphs"] = _code_graphs_for_file(
+                        cross_file_analyzer,
+                        str(temp_path),
+                        source_registry={str(temp_path): content},
+                    )
                 except Exception as e:
                     self.logger.debug(
                         f"Could not build call graph for inline source: {e}"
@@ -536,6 +646,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
         ".rs": "rust",
         ".php": "php", ".phtml": "php",
+        ".swift": "swift",
     }
 
     _PYTHON_EXTENSIONS = {".py", ".pyw"}
@@ -777,15 +888,37 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
 
             elif is_js_ts:
-                self.logger.debug(f"Using NativeAnalyzer for JS/TS file: {file_path}")
-                native_analyzer = NativeAnalyzer(source_code, file_path)
-                func_contexts = native_analyzer.extract_mcp_capability_contexts(
-                    cross_file_analyzer=context.get("cross_file_analyzer")
-                )
-                if func_contexts:
-                    self.logger.debug(
-                        f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
+                self.logger.debug(f"Using JSContextExtractor + NativeAnalyzer for: {file_path}")
+                js_contexts: List[FunctionContext] = []
+                js_failed = False
+                try:
+                    from ...static_analysis.javascript.js_context_extractor import (
+                        JSContextExtractor,
                     )
+
+                    js_contexts = JSContextExtractor(
+                        source_code, file_path
+                    ).extract_mcp_function_contexts()
+                except Exception as e:
+                    js_failed = True
+                    self.logger.debug(
+                        f"JSContextExtractor failed for {file_path}: {e}"
+                    )
+
+                native_contexts: List[FunctionContext] = []
+                native_failed = False
+                try:
+                    native_analyzer = NativeAnalyzer(source_code, file_path)
+                    native_contexts = native_analyzer.extract_mcp_capability_contexts(
+                        cross_file_analyzer=context.get("cross_file_analyzer")
+                    )
+                except Exception as e:
+                    native_failed = True
+                    self.logger.debug(f"NativeAnalyzer failed for {file_path}: {e}")
+
+                if js_failed and native_failed:
+                    self.analysis_errors += 1
+                func_contexts = _merge_mcp_function_contexts(js_contexts, native_contexts)
 
             else:
                 self.logger.debug(f"Unknown file type {file_path}, trying NativeAnalyzer")
@@ -819,30 +952,77 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
             self.logger.debug(f"Analyzing {len(func_contexts)} functions in {file_path}")
 
+            for fc in func_contexts:
+                populate_taint_fields(fc)
+
             # Enrich with cross-file context if available
             if context.get("cross_file_analyzer"):
+                from ...static_analysis.graph.integration import enrich_with_cross_file_context
+
                 for func_context in func_contexts:
-                    self._enrich_with_cross_file_context(
+                    enrich_with_cross_file_context(
                         func_context, file_path, context["cross_file_analyzer"]
                     )
+
+            llm_contexts = func_contexts
+            if MCPScannerConstants.CODE_GRAPH_ENABLED:
+                lang = language_for_path(file_path)
+                code_graph = None
+                code_graphs = context.get("code_graphs") or {}
+                if is_graph_supported_language(lang) and lang in code_graphs:
+                    code_graph = code_graphs[lang]
+                elif context.get("cross_file_analyzer") and is_graph_supported_language(lang):
+                    code_graph = build_code_graph(
+                        context["cross_file_analyzer"],
+                        language=lang,
+                    )
+                if code_graph is not None:
+                    try:
+                        _graph_findings, llm_contexts = partition_functions_by_graph(
+                            func_contexts,
+                            code_graph,
+                            file_path,
+                        )
+                        self.logger.debug(
+                            "Code graph enriched %d function(s) for LLM in %s",
+                            len(llm_contexts),
+                            sanitize_log_value(file_path),
+                        )
+                    except Exception as graph_err:
+                        self.logger.debug(
+                            "Code graph partition failed for %s: %s",
+                            sanitize_log_value(file_path),
+                            truncate(graph_err),
+                        )
+                        llm_contexts = func_contexts
 
             # Batch alignment checks to reduce LLM round-trips; the
             # default batch size mirrors ``context['batch_size']``.
             use_batching = context.get("use_batching", True)
             batch_size = context.get("batch_size", 5)
+            batch_concurrency = context.get(
+                "batch_concurrency",
+                MCPScannerConstants.BEHAVIORAL_LLM_BATCH_CONCURRENCY,
+            )
 
-            if use_batching and len(func_contexts) > 1:
-                self.logger.debug(f"Using batched analysis with batch_size={batch_size}")
+            if use_batching and len(llm_contexts) > 1:
+                self.logger.debug(
+                    "Using batched analysis batch_size=%d concurrency=%d",
+                    batch_size,
+                    batch_concurrency,
+                )
                 batch_results = await self.alignment_orchestrator.check_alignment_batch(
-                    func_contexts, batch_size=batch_size
+                    llm_contexts,
+                    batch_size=batch_size,
+                    max_concurrency=batch_concurrency,
                 )
                 for analysis, ctx in batch_results:
                     finding = self._create_security_finding(analysis, ctx, file_path)
                     if finding:
                         findings.append(finding)
-            else:
+            elif llm_contexts:
                 # Fallback to individual analysis
-                for func_context in func_contexts:
+                for func_context in llm_contexts:
                     # Check function source size (configurable via constants)
                     func_source_size = (
                         len(func_context.source) if hasattr(func_context, "source") else 0
@@ -1057,46 +1237,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         file_path: str,
         call_graph_analyzer: Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer],
     ) -> None:
-        """Enrich function context with cross-file analysis data.
+        """Enrich function context with cross-file analysis data."""
+        from ...static_analysis.graph.integration import enrich_with_cross_file_context
 
-        Args:
-            func_context: FunctionContext to enrich
-            file_path: Source file path
-            call_graph_analyzer: CallGraphAnalyzer or TreeSitterCallGraphAnalyzer
-        """
-        try:
-            full_func_name = f"{file_path}::{func_context.name}"
-
-            reachable = call_graph_analyzer.get_reachable_functions(full_func_name)
-            if reachable:
-                func_context.reachable_functions = reachable
-
-            if func_context.parameters:
-                param_names = [
-                    p.get("name") for p in func_context.parameters if p.get("name")
-                ]
-                if param_names:
-                    if isinstance(call_graph_analyzer, TreeSitterCallGraphAnalyzer):
-                        flow_info = call_graph_analyzer.analyze_cross_file_flows(
-                            full_func_name, param_names
-                        )
-                    else:
-                        flow_info = (
-                            call_graph_analyzer.analyze_parameter_flow_across_files(
-                                full_func_name, param_names
-                            )
-                        )
-
-                    if flow_info.get("cross_file_flows"):
-                        func_context.cross_file_calls = flow_info["cross_file_flows"]
-
-                    func_context.dataflow_summary["cross_file_analysis"] = {
-                        "total_reachable": len(reachable),
-                        "files_involved": flow_info.get("total_files_involved", 0),
-                        "param_influenced_functions": len(
-                            flow_info.get("param_influenced_functions", [])
-                        ),
-                    }
-
-        except Exception as e:
-            self.logger.warning(f"Failed to enrich with cross-file context: {e}")
+        enrich_with_cross_file_context(func_context, file_path, call_graph_analyzer)

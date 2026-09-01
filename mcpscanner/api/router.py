@@ -36,6 +36,7 @@ from ..core.models import (
     SpecificPromptScanRequest,
     SpecificResourceScanRequest,
     SpecificInstructionsScanRequest,
+    BehavioralSourceScanRequest,
     ToolScanResult,
 )
 from ..core.report_generator import ReportGenerator, results_to_json
@@ -1017,3 +1018,38 @@ async def scan_instructions_endpoint(
         raise HTTPException(
             status_code=500, detail=f"Error scanning instructions: {str(e)}"
         )
+
+
+@router.post("/scan-behavioral-source", tags=["Scanning"])
+async def scan_behavioral_source_endpoint(
+    request: BehavioralSourceScanRequest,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Run behavioral source-code analysis on a local file or directory."""
+    scanner = scanner_factory([AnalyzerEnum.BEHAVIORAL])
+    if not scanner._behavioral_analyzer:
+        raise HTTPException(
+            status_code=400,
+            detail="Behavioral analyzer requires LLM credentials in scanner configuration",
+        )
+
+    analyzer = scanner._behavioral_analyzer
+    findings = await analyzer.analyze(
+        request.source_path,
+        context={"file_path": request.source_path},
+    )
+    return {
+        "source_path": request.source_path,
+        "finding_count": len(findings),
+        "analyzed_functions": analyzer.analyzed_functions,
+        "findings": [
+            {
+                "severity": f.severity,
+                "summary": f.summary,
+                "analyzer": f.analyzer,
+                "threat_category": f.threat_category,
+                "details": f.details,
+            }
+            for f in findings
+        ],
+    }

@@ -103,6 +103,11 @@ class FunctionContext:
     # Dataflow facts
     dataflow_summary: Dict[str, Any] = field(default_factory=dict)
 
+    # Structured taint (populated from parameter_flows + graph analysis)
+    taint_sources: List[Dict[str, Any]] = field(default_factory=list)
+    taint_sinks: List[Dict[str, Any]] = field(default_factory=list)
+    taint_flows: List[Dict[str, Any]] = field(default_factory=list)
+
 
 class ContextExtractor:
     """Extracts comprehensive code context by analyzing Abstract Syntax Trees.

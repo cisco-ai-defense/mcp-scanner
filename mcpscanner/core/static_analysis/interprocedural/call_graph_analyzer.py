@@ -32,6 +32,14 @@ from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.logging_config import get_logger
 
 
+def _is_call_callee_expression(node: ast.Call, root: ast.AST) -> bool:
+    """True when ``node`` is only the callee sub-expression of an outer call."""
+    for parent in ast.walk(root):
+        if isinstance(parent, ast.Call) and parent.func is node:
+            return True
+    return False
+
+
 class CallGraph:
     """Call graph for cross-file analysis."""
 
@@ -332,17 +340,20 @@ class CallGraphAnalyzer:
         """
         # Walk the function body to find calls
         for node in ast.walk(func_node):
-            if isinstance(node, ast.Call):
-                callee_name = analyzer.get_call_name(node)
+            if not isinstance(node, ast.Call):
+                continue
+            if _is_call_callee_expression(node, func_node):
+                continue
+            callee_name = analyzer.get_call_name(node)
 
-                # Try to resolve to full name
-                full_callee = self._resolve_call_target(file_path, callee_name)
+            # Try to resolve to full name
+            full_callee = self._resolve_call_target(file_path, callee_name)
 
-                if full_callee:
-                    self.call_graph.add_call(caller_name, full_callee)
-                else:
-                    # Add with partial name (might be external library)
-                    self.call_graph.add_call(caller_name, callee_name)
+            if full_callee:
+                self.call_graph.add_call(caller_name, full_callee)
+            else:
+                # Add with partial name (might be external library)
+                self.call_graph.add_call(caller_name, callee_name)
 
     def _resolve_call_target(self, file_path: Path, call_name: str) -> str | None:
         """Resolve a function call to its full qualified name.

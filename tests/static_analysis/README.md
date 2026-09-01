@@ -92,13 +92,15 @@ The static analysis components are foundational building blocks used by the Beha
 ```
 BehavioralCodeAnalyzer
     ↓
-Uses: context_extractor.py (extract MCP functions)
+Uses: context_extractor.py (Python) / js_context_extractor.py (JS/TS)
     ↓
-Uses: dataflow/ (track parameter flows)
+Uses: native_analyzer.py (registration-style MCP handlers, all langs)
     ↓
-Uses: semantic/ (resolve imports and calls)
+Uses: dataflow/ + interprocedural call graphs
     ↓
-Feeds data to: AlignmentOrchestrator (LLM analysis)
+Uses: graph/ (code graph evidence + sink hints passed to LLM when CODE_GRAPH=1)
+    ↓
+Feeds data to: AlignmentOrchestrator (LLM alignment for all functions)
 ```
 
 ## Contributing

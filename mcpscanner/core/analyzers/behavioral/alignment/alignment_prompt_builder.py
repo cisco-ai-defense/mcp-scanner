@@ -27,12 +27,143 @@ The prompt builder creates evidence-rich prompts that present:
 
 import json
 import logging
+import re
 import secrets
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .....config.constants import MCPScannerConstants
 from ....static_analysis.context_extractor import FunctionContext
+
+_GRAPH_EVIDENCE_HEADER = (
+    "\n**CODE GRAPH EVIDENCE (deterministic static analysis):**\n"
+)
+_CLASSIC_DATAFLOW_HEADER = (
+    "\n**CLASSIC DATAFLOW (reaching-defs / liveness / available-exprs):**\n"
+)
+_SINK_HINTS_HEADER = (
+    "\n**CODE GRAPH SINK HINTS (deterministic, verify against docstring):**\n"
+)
+_PRESERVED_SECTION_HEADERS = (
+    _GRAPH_EVIDENCE_HEADER,
+    _CLASSIC_DATAFLOW_HEADER,
+    _SINK_HINTS_HEADER,
+)
+_SECTION_HEADER_RE = re.compile(r"\n\*\*[^*\n][^\n]*\n")
+
+
+def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if not ranges:
+        return []
+    sorted_ranges = sorted(ranges)
+    merged = [sorted_ranges[0]]
+    for start, end in sorted_ranges[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _split_preserved_sections(analysis_content: str) -> tuple[str, str]:
+    """Separate deterministic graph blocks so truncation cannot drop them."""
+    if not any(header in analysis_content for header in _PRESERVED_SECTION_HEADERS):
+        return analysis_content, ""
+
+    ranges: list[tuple[int, int]] = []
+    preserved_chunks: list[str] = []
+    for header in _PRESERVED_SECTION_HEADERS:
+        start = 0
+        while True:
+            pos = analysis_content.find(header, start)
+            if pos == -1:
+                break
+            body_start = pos + len(header)
+            match = _SECTION_HEADER_RE.search(analysis_content, body_start)
+            end = match.start() if match else len(analysis_content)
+            ranges.append((pos, end))
+            preserved_chunks.append(analysis_content[pos:end])
+            start = pos + 1
+
+    if not ranges:
+        return analysis_content, ""
+
+    main_parts: list[str] = []
+    cursor = 0
+    for start, end in _merge_ranges(ranges):
+        main_parts.append(analysis_content[cursor:start])
+        cursor = end
+    main_parts.append(analysis_content[cursor:])
+    return "".join(main_parts), "".join(preserved_chunks)
+
+
+def _cap_preserved_sections(preserved: str, max_preserved: int) -> str:
+    """Shrink preserved graph blocks; drop classic dataflow before sink hints."""
+    if len(preserved) <= max_preserved:
+        return preserved
+
+    chunks: list[tuple[int, str]] = []
+    for header in reversed(_PRESERVED_SECTION_HEADERS):
+        while header in preserved:
+            pos = preserved.find(header)
+            body_start = pos + len(header)
+            match = _SECTION_HEADER_RE.search(preserved, body_start)
+            end = match.start() if match else len(preserved)
+            chunk = preserved[pos:end]
+            priority = (
+                0
+                if header == _SINK_HINTS_HEADER
+                else 1
+                if header == _GRAPH_EVIDENCE_HEADER
+                else 2
+            )
+            chunks.append((priority, chunk))
+            preserved = preserved[:pos] + preserved[end:]
+
+    chunks.sort(key=lambda item: item[0])
+    kept: list[str] = []
+    used = 0
+    for _, chunk in chunks:
+        if used + len(chunk) <= max_preserved:
+            kept.append(chunk)
+            used += len(chunk)
+            continue
+        remaining = max_preserved - used
+        header_line = chunk.split("\n", 1)[0] + "\n"
+        if remaining <= len(header_line) + 20:
+            continue
+        kept.append(chunk[:remaining] + "\n... (graph section truncated)\n")
+        used = max_preserved
+        break
+
+    if not kept:
+        joined = "".join(chunk for _, chunk in chunks)
+        return joined[:max_preserved] + "\n... (graph evidence truncated)\n"
+    return "".join(kept)
+
+
+def _truncate_analysis_preserving_graph(
+    main: str,
+    preserved: str,
+    max_analysis: int,
+) -> str:
+    """Truncate non-graph analysis text; graph blocks are appended intact."""
+    preserved = preserved or ""
+    if len(main) + len(preserved) <= max_analysis:
+        return main + preserved
+
+    suffix_len = len(_ANALYSIS_TRUNCATION_SUFFIX)
+    preserved_budget = min(len(preserved), max_analysis)
+    preserved_kept = _cap_preserved_sections(preserved, preserved_budget)
+    main_budget = max(0, max_analysis - len(preserved_kept) - suffix_len)
+    if len(main) > main_budget:
+        if main_budget <= suffix_len:
+            main = _ANALYSIS_TRUNCATION_SUFFIX.strip()
+        else:
+            main = main[: main_budget - suffix_len] + _ANALYSIS_TRUNCATION_SUFFIX
+    return main + preserved_kept
+
 
 # Worst-case suffixes reserved when budgeting total prompt size.
 _ANALYSIS_TRUNCATION_SUFFIX = (
@@ -42,8 +173,18 @@ _TEMPLATE_TRUNCATION_SUFFIX = (
     "\n\n... (alignment instructions truncated to fit model context budget)\n"
 )
 _MIN_ANALYSIS_CHARS = 500
+_MAX_PRESERVED_TOTAL_CHARS = 12_000
+_RESPONSE_FORMAT_MARKER = "## Required Output Format"
 # Newlines joining template, prefix, delimiter tags, and analysis body.
 _PROMPT_FRAME_CHARS = 5
+
+
+def _split_template(template: str) -> tuple[str, str]:
+    """Split truncatable guidance from the pinned response-schema tail."""
+    if _RESPONSE_FORMAT_MARKER not in template:
+        return template, ""
+    guidance, pinned = template.split(_RESPONSE_FORMAT_MARKER, 1)
+    return guidance.rstrip(), _RESPONSE_FORMAT_MARKER + pinned
 
 
 class AlignmentPromptBuilder:
@@ -84,7 +225,9 @@ class AlignmentPromptBuilder:
             max_reaches_calls: Maximum reaches calls to show (default: from env or 10)
         """
         self.logger = logging.getLogger(__name__)
-        self._template = self._load_template()
+        full_template = self._load_template()
+        self._template_guidance, self._template_pinned = _split_template(full_template)
+        self._template = self._template_guidance + self._template_pinned
 
         # Load limits from environment variables or use provided overrides
         self.MAX_OPERATIONS_PER_PARAM = (
@@ -112,20 +255,36 @@ class AlignmentPromptBuilder:
             max_reaches_calls or MCPScannerConstants.BEHAVIORAL_MAX_REACHES_CALLS
         )
 
-    def build_prompt(self, func_context: FunctionContext) -> str:
-        """Build comprehensive alignment verification prompt.
+    @staticmethod
+    def _format_graph_evidence_section(func_context: FunctionContext) -> str:
+        summary = func_context.dataflow_summary or {}
+        parts: list[str] = []
 
-        Args:
-            func_context: Complete function context with dataflow analysis
+        graph_evidence = summary.get("code_graph_evidence")
+        if graph_evidence:
+            parts.append(
+                "\n**CODE GRAPH EVIDENCE (deterministic static analysis):**\n"
+                f"{graph_evidence}\n"
+            )
 
-        Returns:
-            Formatted prompt string with evidence
-        """
-        # Generate random delimiter tags to prevent prompt injection
-        random_id = secrets.token_hex(16)
-        start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
-        end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
+        classic = summary.get("classic_dataflow")
+        if classic:
+            parts.append(
+                "\n**CLASSIC DATAFLOW (reaching-defs / liveness / available-exprs):**\n"
+                f"{json.dumps(classic, indent=2)}\n"
+            )
 
+        sink_hints = summary.get("code_graph_sink_hints")
+        if sink_hints:
+            parts.append(
+                "\n**CODE GRAPH SINK HINTS (deterministic, verify against docstring):**\n"
+                f"{json.dumps(sink_hints, indent=2)}\n"
+            )
+
+        return "".join(parts)
+
+    def build_analysis_content(self, func_context: FunctionContext) -> str:
+        """Build deterministic alignment evidence (no random delimiters)."""
         docstring = func_context.docstring or "No docstring provided"
 
         # Build the analysis content using list accumulation for efficiency
@@ -396,31 +555,42 @@ Parameter Flow Tracking:
                     )
                 content_parts.append("".join(attr_parts))
 
-        # Join all content parts efficiently
-        analysis_content = "".join(content_parts)
+        graph_section = self._format_graph_evidence_section(func_context)
+        if graph_section:
+            content_parts.append(graph_section)
+
+        return "".join(content_parts)
+
+    def build_prompt(self, func_context: FunctionContext) -> str:
+        """Build comprehensive alignment verification prompt.
+
+        Args:
+            func_context: Complete function context with dataflow analysis
+
+        Returns:
+            Formatted prompt string with evidence
+        """
+        random_id = secrets.token_hex(16)
+        start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
+        end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
+
+        analysis_content = self.build_analysis_content(func_context)
 
         # Security validation: Check that the untrusted input doesn't contain our delimiter tags
         if start_tag in analysis_content or end_tag in analysis_content:
-            # WARNING with structured fields so SIEM rules can match on
-            # ``prompt_injection_detected`` consistently across releases.
-            # ``func`` is included so operators can pivot to the offending
-            # source file without grepping the prompt body (which we
-            # deliberately don't log).
             self.logger.warning(
                 "prompt_injection_detected function=%s detail=%s",
                 func_context.name,
                 "untrusted_input_contains_delimiter_tag",
             )
 
-        # Wrap the untrusted content with randomized delimiters
-        prompt = self._assemble_prompt(
+        return self._assemble_prompt(
             template=self._template,
             analysis_content=analysis_content,
             start_tag=start_tag,
             end_tag=end_tag,
             log_label=f"function={func_context.name}",
         )
-        return prompt
 
     def build_batch_analysis_content(
         self, func_contexts: List[FunctionContext]
@@ -480,6 +650,10 @@ Parameter Flow Tracking:
                 if len(source) > 2000:
                     source = source[:2000] + "\n... (truncated)"
                 all_content.append(f"**Source Code:**\n```\n{source}\n```\n")
+
+            graph_section = self._format_graph_evidence_section(func_context)
+            if graph_section:
+                all_content.append(graph_section)
 
             all_content.append("\n")
 
@@ -545,68 +719,134 @@ For functions with no issues, just include function_index, function_name, and mi
         prefix: str = "",
     ) -> str:
         """Build the final prompt and enforce the alignment context budget."""
-        # Budget the *total* prompt against ALIGNMENT_MAX_PROMPT_CHARS (hard cap
-        # for Bedrock/Haiku), not the softer PROMPT_LENGTH_THRESHOLD warning.
-        # The markdown template alone is ~72 KiB, so it may need truncation too.
         max_total = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
         frame_overhead = (
             len(prefix) + len(start_tag) + len(end_tag) + _PROMPT_FRAME_CHARS
         )
-        reserved_for_analysis = _MIN_ANALYSIS_CHARS + len(_ANALYSIS_TRUNCATION_SUFFIX)
-        max_template_len = max(0, max_total - frame_overhead - reserved_for_analysis)
+        available = max(0, max_total - frame_overhead)
 
-        template_used = template
-        if len(template) > max_template_len:
-            allow = max(0, max_template_len - len(_TEMPLATE_TRUNCATION_SUFFIX))
-            template_used = template[:allow] + _TEMPLATE_TRUNCATION_SUFFIX
+        guidance, pinned = _split_template(template)
+        pinned_len = len(pinned)
+
+        main, preserved = _split_preserved_sections(analysis_content)
+        preserved_budget = min(
+            _MAX_PRESERVED_TOTAL_CHARS,
+            max(len(preserved), available // 3),
+        )
+        preserved = _cap_preserved_sections(preserved, preserved_budget)
+
+        reserved_analysis = (
+            pinned_len
+            + len(preserved)
+            + _MIN_ANALYSIS_CHARS
+            + len(_ANALYSIS_TRUNCATION_SUFFIX)
+        )
+        max_guidance_len = max(0, available - reserved_analysis)
+
+        guidance_used = guidance
+        if len(guidance) > max_guidance_len:
+            allow = max(0, max_guidance_len - len(_TEMPLATE_TRUNCATION_SUFFIX))
+            guidance_used = guidance[:allow] + _TEMPLATE_TRUNCATION_SUFFIX
             self.logger.warning(
                 "prompt template truncated label=%s template_length=%d "
-                "max_template=%d budget=%d",
+                "max_guidance=%d pinned=%d budget=%d preserved_reserved=%d",
                 log_label,
-                len(template),
-                max_template_len,
+                len(guidance),
+                max_guidance_len,
+                pinned_len,
                 max_total,
+                len(preserved),
             )
 
-        fixed_overhead = len(template_used) + frame_overhead
+        template_used = guidance_used + pinned
         max_analysis = max(
-            _MIN_ANALYSIS_CHARS,
-            max_total - fixed_overhead - len(_ANALYSIS_TRUNCATION_SUFFIX),
+            len(preserved),
+            available - len(template_used) - len(_ANALYSIS_TRUNCATION_SUFFIX),
         )
         original_analysis_len = len(analysis_content)
-        if original_analysis_len > max_analysis:
+        if len(main) + len(preserved) > max_analysis:
             self.logger.warning(
                 "prompt truncated label=%s analysis_length=%d max_analysis=%d "
-                "budget=%d",
+                "budget=%d preserved=%d pinned=%d",
                 log_label,
                 original_analysis_len,
                 max_analysis,
                 max_total,
+                len(preserved),
+                pinned_len,
             )
-            analysis_content = analysis_content[:max_analysis] + _ANALYSIS_TRUNCATION_SUFFIX
+        analysis_content = _truncate_analysis_preserving_graph(
+            main, preserved, max_analysis
+        )
 
-        prompt = f"""{template_used}
+        def _build(template_body: str, body: str) -> str:
+            return (
+                f"""{template_body}
 
 {prefix}{start_tag}
-{analysis_content}
+{body}
 {end_tag}
 """
-        prompt = prompt.strip()
-        if len(prompt) > max_total:
+            ).strip()
+
+        prompt = _build(template_used, analysis_content)
+        previous_len: Optional[int] = None
+        while len(prompt) > max_total:
+            guidance_body = guidance_used
+            if guidance_used.endswith(_TEMPLATE_TRUNCATION_SUFFIX):
+                guidance_body = guidance_used[: -len(_TEMPLATE_TRUNCATION_SUFFIX)]
+
+            if len(guidance_body) > 0 and previous_len != len(prompt):
+                previous_len = len(prompt)
+                new_len = max(
+                    0, len(guidance_body) - max(256, len(guidance_body) // 10)
+                )
+                if new_len < len(guidance):
+                    guidance_used = guidance[:new_len] + _TEMPLATE_TRUNCATION_SUFFIX
+                else:
+                    guidance_used = guidance_body[:new_len]
+                template_used = guidance_used + pinned
+                max_analysis = max(
+                    len(preserved),
+                    available
+                    - len(template_used)
+                    - len(_ANALYSIS_TRUNCATION_SUFFIX),
+                )
+                analysis_content = _truncate_analysis_preserving_graph(
+                    main, preserved, max_analysis
+                )
+                prompt = _build(template_used, analysis_content)
+                continue
+
+            _, preserved_live = _split_preserved_sections(analysis_content)
+            main_live = analysis_content[: len(analysis_content) - len(preserved_live)]
+            if len(main_live) > len(_ANALYSIS_TRUNCATION_SUFFIX) + 32:
+                previous_len = len(prompt)
+                main_live = main_live[: max(0, len(main_live) - 256)]
+                if not main_live.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
+                    main_live += _ANALYSIS_TRUNCATION_SUFFIX
+                analysis_content = main_live + preserved_live
+                prompt = _build(template_used, analysis_content)
+                continue
+
             self.logger.warning(
                 "prompt exceeds alignment cap after assembly label=%s "
-                "prompt_length=%d budget=%d -- hard truncating",
+                "prompt_length=%d budget=%d -- cannot shrink further without "
+                "dropping graph evidence",
                 log_label,
                 len(prompt),
                 max_total,
             )
-            prompt = prompt[:max_total]
+            break
 
         self.logger.debug(
-            "prompt built label=%s prompt_length=%d analysis_content_length=%d",
+            "prompt built label=%s prompt_length=%d analysis_content_length=%d "
+            "preserved_length=%d pinned_length=%d",
             log_label,
             len(prompt),
             len(analysis_content),
+            len(preserved),
+            pinned_len,
         )
         return prompt
 

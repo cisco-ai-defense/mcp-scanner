@@ -20,6 +20,7 @@ Provides interprocedural analysis across TypeScript, JavaScript, Go, Java,
 Kotlin, C#, Ruby, Rust, and PHP codebases.
 """
 
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,31 @@ from tree_sitter import Language, Parser, Node
 
 from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.logging_config import get_logger
+
+
+_MCP_DECORATOR_RE = re.compile(
+    r"(?:"
+    r"@\w*\.(?:tool|prompt|resource)\b"
+    r"|@(?:tool|prompt|resource)\b"
+    r"|@Mcp(?:Tool|Resource|Prompt)\b"
+    r"|#\[Mcp(?:Tool|Resource|Prompt)\b"
+    r"|@Tool\b"
+    r"|registerTool\b|registerPrompt\b|registerResource\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _qualified_name_matches(func_full: str, call_name: str) -> bool:
+    """Return True when ``call_name`` refers to ``func_full`` (``path::Class.method``)."""
+    qualified = func_full.split("::", 1)[-1] if "::" in func_full else func_full
+    short = call_name.split(".")[-1]
+    return (
+        qualified == call_name
+        or qualified.endswith(f".{call_name}")
+        or qualified == short
+        or qualified.endswith(f".{short}")
+    )
 
 
 @dataclass
@@ -211,6 +237,8 @@ class TreeSitterCallGraphAnalyzer:
             "namespace_declaration",
             "class_body",
             "interface_body",
+            "declaration_list",
+            "body_statement",
             "block",
             "export_statement",
             "export_declaration",
@@ -222,11 +250,20 @@ class TreeSitterCallGraphAnalyzer:
                 name = self._get_function_name(child, source_bytes)
                 if class_name:
                     name = f"{class_name}.{name}"
-                self.call_graph.add_function(name, child, file_path)
+                self.call_graph.add_function(
+                    name,
+                    child,
+                    file_path,
+                    is_entry=self._is_mcp_entry_point(child, source_bytes),
+                )
 
             elif child.type in class_types:
                 # Get class name and recurse
-                name_node = child.child_by_field_name("name")
+                name_node = (
+                    child.child_by_field_name("name")
+                    or child.child_by_field_name("type")
+                    or child.child_by_field_name("constant")
+                )
                 if name_node:
                     cls_name = source_bytes[name_node.start_byte:name_node.end_byte].decode("utf-8")
                     self._extract_functions(file_path, child, source_bytes, cls_name)
@@ -235,6 +272,40 @@ class TreeSitterCallGraphAnalyzer:
             elif child.type in container_types:
                 self._extract_functions(file_path, child, source_bytes, class_name)
     
+    @staticmethod
+    def _node_text(node: Node, source_bytes: bytes) -> str:
+        return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
+
+    def _decorator_texts_for_function(self, node: Node, source_bytes: bytes) -> list[str]:
+        texts: list[str] = []
+        for child in node.children:
+            if child.type in {"attribute_list", "modifiers"}:
+                texts.append(self._node_text(child, source_bytes))
+
+        parent = node.parent
+        if parent is not None:
+            for child in parent.children:
+                if child is node:
+                    break
+                if child.type in {"decorator", "attribute_list", "modifiers"}:
+                    texts.append(self._node_text(child, source_bytes))
+
+        prev = node.prev_sibling
+        while prev is not None:
+            if prev.type in {"decorator", "attribute_list", "modifiers", "call"}:
+                texts.append(self._node_text(prev, source_bytes))
+                break
+            if prev.type not in {"comment", "line_comment", "block_comment"}:
+                break
+            prev = prev.prev_sibling
+        return texts
+
+    def _is_mcp_entry_point(self, node: Node, source_bytes: bytes) -> bool:
+        for text in self._decorator_texts_for_function(node, source_bytes):
+            if _MCP_DECORATOR_RE.search(text):
+                return True
+        return False
+
     def _get_function_name(self, node: Node, source_bytes: bytes) -> str:
         """Get function name from AST node."""
         name_node = node.child_by_field_name("name")
@@ -287,49 +358,165 @@ class TreeSitterCallGraphAnalyzer:
         )
         return self.call_graph
     
-    def _extract_calls(self, file_path: Path, root: Node, source_bytes: bytes, current_func: str = "") -> None:
+    _CLASS_TYPES = frozenset(
+        {"class_declaration", "class", "struct_item", "impl_item", "object_declaration"}
+    )
+    _CONTAINER_TYPES = frozenset(
+        {
+            "program",
+            "source_file",
+            "module",
+            "namespace_declaration",
+            "class_body",
+            "interface_body",
+            "declaration_list",
+            "body_statement",
+            "block",
+            "export_statement",
+            "export_declaration",
+            "default_export_declaration",
+        }
+    )
+
+    def _extract_calls(
+        self,
+        file_path: Path,
+        root: Node,
+        source_bytes: bytes,
+        current_func: str = "",
+        class_name: str = "",
+    ) -> None:
         """Extract function calls from AST."""
         func_types = self.FUNCTION_TYPES.get(self.language, set())
         call_types = self.CALL_TYPES.get(self.language, set())
-        
+
         for child in root.children:
-            # Track current function context
             if child.type in func_types:
                 func_name = self._get_function_name(child, source_bytes)
+                if class_name:
+                    func_name = f"{class_name}.{func_name}"
                 full_name = f"{file_path}::{func_name}"
-                self._extract_calls(file_path, child, source_bytes, full_name)
-            
-            # Extract calls
+                self._extract_calls(
+                    file_path, child, source_bytes, full_name, class_name
+                )
+
             elif child.type in call_types and current_func:
                 callee_name = self._get_call_name(child, source_bytes)
                 if callee_name:
-                    # Try to resolve to full name
                     resolved = self._resolve_call(file_path, callee_name)
                     self.call_graph.add_call(current_func, resolved or callee_name)
-            
+
+            elif child.type in self._CLASS_TYPES:
+                name_node = (
+                    child.child_by_field_name("name")
+                    or child.child_by_field_name("type")
+                    or child.child_by_field_name("constant")
+                )
+                if name_node:
+                    cls_name = source_bytes[
+                        name_node.start_byte : name_node.end_byte
+                    ].decode("utf-8")
+                    self._extract_calls(
+                        file_path, child, source_bytes, current_func, cls_name
+                    )
+                else:
+                    self._extract_calls(
+                        file_path, child, source_bytes, current_func, class_name
+                    )
+
+            elif child.type in self._CONTAINER_TYPES:
+                self._extract_calls(
+                    file_path, child, source_bytes, current_func, class_name
+                )
+
             else:
-                self._extract_calls(file_path, child, source_bytes, current_func)
+                self._extract_calls(
+                    file_path, child, source_bytes, current_func, class_name
+                )
     
     def _get_call_name(self, node: Node, source_bytes: bytes) -> str:
         """Get the name of a function call."""
-        func = node.child_by_field_name("function") or node.child_by_field_name("name")
+        if node.type == "member_call_expression":
+            obj = node.child_by_field_name("object")
+            name = node.child_by_field_name("name")
+            if obj is not None and name is not None:
+                obj_text = source_bytes[obj.start_byte : obj.end_byte].decode("utf-8")
+                name_text = source_bytes[name.start_byte : name.end_byte].decode("utf-8")
+                return f"{obj_text}->{name_text}"
+
+        receiver = node.child_by_field_name("receiver")
+        method = node.child_by_field_name("method")
+        if receiver is not None and method is not None:
+            recv = source_bytes[receiver.start_byte : receiver.end_byte].decode("utf-8")
+            meth = source_bytes[method.start_byte : method.end_byte].decode("utf-8")
+            if meth == "send":
+                first_arg = self._first_call_argument_name(node, source_bytes)
+                if first_arg:
+                    return f"{recv}.send({first_arg})"
+            return f"{recv}.{meth}"
+
+        func = (
+            node.child_by_field_name("function")
+            or node.child_by_field_name("name")
+            or (method if method is not None else None)
+        )
         if func:
-            return source_bytes[func.start_byte:func.end_byte].decode("utf-8")
+            return source_bytes[func.start_byte : func.end_byte].decode("utf-8")
+
+        skip_types = {
+            "(",
+            ")",
+            ";",
+            "argument_list",
+            "arguments",
+            "value_arguments",
+            "type_arguments",
+        }
+        for child in node.children:
+            if child.type in skip_types:
+                continue
+            text = source_bytes[child.start_byte : child.end_byte].decode("utf-8").strip()
+            if text:
+                return text
         return ""
     
+    @staticmethod
+    def _first_call_argument_name(node: Node, source_bytes: bytes) -> str | None:
+        args = node.child_by_field_name("arguments") or node.child_by_field_name(
+            "argument_list"
+        )
+        if args is None:
+            return None
+        for child in args.children:
+            if child.type in {"(", ")", ",", ";"}:
+                continue
+            if child.type == "argument":
+                inner = child.child_by_field_name("value") or (
+                    child.children[0] if child.children else None
+                )
+                if inner is not None and inner.type == "identifier":
+                    return source_bytes[inner.start_byte : inner.end_byte].decode("utf-8")
+            if child.type == "identifier":
+                return source_bytes[child.start_byte : child.end_byte].decode("utf-8")
+        return None
+
     def _resolve_call(self, file_path: Path, call_name: str) -> Optional[str]:
         """Resolve a call to its full qualified name."""
-        # Check same file
+        same_file: list[str] = []
+        all_matches: list[str] = []
         for func_name in self.call_graph.functions:
-            if func_name.endswith(f"::{call_name}"):
-                if func_name.startswith(str(file_path)):
-                    return func_name
-        
-        # Check all files (for cross-file calls)
-        for func_name in self.call_graph.functions:
-            if func_name.endswith(f"::{call_name}"):
-                return func_name
-        
+            if not _qualified_name_matches(func_name, call_name):
+                continue
+            all_matches.append(func_name)
+            if func_name.startswith(str(file_path)):
+                same_file.append(func_name)
+
+        if len(same_file) == 1:
+            return same_file[0]
+        if len(same_file) > 1:
+            return same_file[0]
+        if len(all_matches) == 1:
+            return all_matches[0]
         return None
     
     def get_reachable_functions(self, start_func: str) -> List[str]:

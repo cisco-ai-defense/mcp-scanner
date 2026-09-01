@@ -76,7 +76,9 @@ class TestAlignmentPromptBudget:
             end_tag="<!---UNTRUSTED_INPUT_END_test--->",
             log_label="test=template_cap",
         )
-        assert _TEMPLATE_TRUNCATION_SUFFIX in prompt
+        assert _TEMPLATE_TRUNCATION_SUFFIX.strip() in prompt
+        assert "## Required Output Format" in prompt
+        assert '"mismatch_detected"' in prompt
         assert len(prompt) <= 8000
 
     def test_build_prompt_respects_alignment_cap(self):
@@ -98,6 +100,82 @@ class TestAlignmentPromptBudget:
         )
         assert _ANALYSIS_TRUNCATION_SUFFIX in prompt
         assert len(prompt) <= cap
+
+    def test_graph_evidence_preserved_when_analysis_truncated(self, monkeypatch):
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 2500)
+        builder = AlignmentPromptBuilder()
+        graph_marker = "**CODE GRAPH EVIDENCE (deterministic static analysis):**"
+        graph_body = "SINK: os.remove at line 42"
+        analysis = (
+            "F" * 8000
+            + "\n**CODE GRAPH EVIDENCE (deterministic static analysis):**\n"
+            + graph_body
+            + "\n"
+        )
+        prompt = builder._assemble_prompt(
+            template="T" * 800,
+            analysis_content=analysis,
+            start_tag="<!---UNTRUSTED_INPUT_START_test--->",
+            end_tag="<!---UNTRUSTED_INPUT_END_test--->",
+            log_label="test=graph_preserve",
+        )
+        assert graph_marker in prompt
+        assert graph_body in prompt
+        assert len(prompt) <= 2500
+
+    def test_sink_hints_preserved_when_analysis_truncated(self, monkeypatch):
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 3000)
+        builder = AlignmentPromptBuilder()
+        sink_marker = "**CODE GRAPH SINK HINTS (deterministic, verify against docstring):**"
+        sink_body = '"sink_name": "os.remove"'
+        analysis = (
+            "M" * 10_000
+            + "\n**CODE GRAPH SINK HINTS (deterministic, verify against docstring):**\n"
+            + f"[{sink_body}]\n"
+        )
+        prompt = builder._assemble_prompt(
+            template="T" * 900,
+            analysis_content=analysis,
+            start_tag="<!---UNTRUSTED_INPUT_START_test--->",
+            end_tag="<!---UNTRUSTED_INPUT_END_test--->",
+            log_label="test=sink_hints_preserve",
+        )
+        assert sink_marker in prompt
+        assert sink_body in prompt
+        assert len(prompt) <= 3000
+
+    def test_default_cap_preserves_graph_with_real_template(self):
+        builder = AlignmentPromptBuilder()
+        graph_body = "SINK ANALYSIS (deterministic):\n  os.remove"
+        ctx = _minimal_function_context(
+            dataflow_summary={
+                "code_graph_evidence": graph_body,
+                "code_graph_sink_hints": [
+                    {"sink_name": "os.remove", "category": "file"}
+                ],
+            }
+        )
+        prompt = builder.build_prompt(ctx)
+        cap = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        assert len(prompt) <= cap
+        assert "**CODE GRAPH EVIDENCE (deterministic static analysis):**" in prompt
+        assert graph_body in prompt
+        assert "**CODE GRAPH SINK HINTS" in prompt
+        assert "os.remove" in prompt
+
+    def test_pinned_response_schema_survives_guidance_truncation(self, monkeypatch):
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 12000)
+        builder = AlignmentPromptBuilder()
+        prompt = builder.build_prompt(
+            _minimal_function_context(
+                dataflow_summary={"code_graph_evidence": "SINK: os.remove"}
+            )
+        )
+        assert "## Required Output Format" in prompt
+        assert '"mismatch_detected"' in prompt
+        assert '"threat_name"' in prompt
+        assert '"summary"' in prompt
+        assert len(prompt) <= 12000
 
 
 class TestPromptBuilder:
@@ -257,3 +335,26 @@ class TestPromptBuilder:
             1 for kw in example_keywords if kw.lower() in content.lower()
         )
         assert found_examples >= 2, "Prompt should contain example cases"
+
+
+class TestBatchGraphEvidence:
+    def test_batch_prompt_includes_code_graph_evidence(self):
+        builder = AlignmentPromptBuilder()
+        evidence = "CODE GRAPH SLICE (deterministic static analysis)\nEntry: foo"
+        ctx = _minimal_function_context(
+            name="tool_a",
+            dataflow_summary={"code_graph_evidence": evidence},
+        )
+        batch_body = builder.build_batch_analysis_content([ctx])
+        assert "CODE GRAPH EVIDENCE" in batch_body
+        assert evidence in batch_body
+
+    def test_single_and_batch_graph_sections_match(self):
+        builder = AlignmentPromptBuilder()
+        evidence = "SINK ANALYSIS (deterministic):\n  os.system"
+        ctx = _minimal_function_context(
+            dataflow_summary={"code_graph_evidence": evidence},
+        )
+        single_section = builder._format_graph_evidence_section(ctx)
+        batch_body = builder.build_batch_analysis_content([ctx])
+        assert single_section.strip() in batch_body

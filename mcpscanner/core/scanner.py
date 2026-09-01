@@ -146,6 +146,7 @@ class Scanner:
             if (config.llm_provider_api_key or is_bedrock)
             else None
         )
+        self._behavioral_source_path = config.behavioral_source_path
         self._vt_analyzer = (
             VirusTotalAnalyzer(
                 api_key=config.virustotal_api_key,
@@ -619,6 +620,72 @@ class Scanner:
             return result
 
         return list(await asyncio.gather(*(_dispatch(r) for r in scan_results)))
+
+    async def _attach_behavioral_source_findings(
+        self,
+        scan_results: List[ToolScanResult],
+        analyzers: List[AnalyzerEnum],
+        source_path: Optional[str] = None,
+    ) -> List[ToolScanResult]:
+        """Run behavioral analysis on a local source tree and merge by tool name."""
+        if AnalyzerEnum.BEHAVIORAL not in analyzers or not self._behavioral_analyzer:
+            return scan_results
+
+        resolved_path = (source_path or self._behavioral_source_path or "").strip()
+        if not resolved_path:
+            logger.debug(
+                "BEHAVIORAL analyzer requested for server scan but no source_path "
+                "configured (set MCP_SCANNER_BEHAVIORAL_SOURCE_PATH or pass source_path=)"
+            )
+            return scan_results
+
+        try:
+            behavioral_findings = await self._behavioral_analyzer.analyze(
+                resolved_path,
+                context={"file_path": resolved_path},
+            )
+        except Exception as exc:
+            logger.warning(
+                "Behavioral source scan failed path=%s error=%s",
+                resolved_path,
+                exc,
+            )
+            return scan_results
+
+        if not behavioral_findings:
+            return scan_results
+
+        by_tool: dict[str, list] = {}
+        unmatched = []
+        for finding in behavioral_findings:
+            details = finding.details or {}
+            tool_name = details.get("function_name") or details.get("tool_name")
+            if tool_name:
+                by_tool.setdefault(tool_name, []).append(finding)
+            else:
+                unmatched.append(finding)
+
+        for result in scan_results:
+            for finding in by_tool.get(result.tool_name, []):
+                finding.analyzer = "Behavioral"
+                result.findings.append(finding)
+
+        if unmatched:
+            if scan_results:
+                for finding in unmatched:
+                    finding.analyzer = "Behavioral"
+                    scan_results[0].findings.append(finding)
+            else:
+                scan_results.append(
+                    ToolScanResult(
+                        tool_name="__behavioral_source__",
+                        tool_description="Behavioral source scan",
+                        status="completed",
+                        analyzers=[AnalyzerEnum.BEHAVIORAL],
+                        findings=unmatched,
+                    )
+                )
+        return scan_results
 
     async def _run_meta_analysis_on_results(
         self,
@@ -1719,6 +1786,7 @@ class Scanner:
         http_headers: Optional[dict] = None,
         connector_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
+        source_path: Optional[str] = None,
     ) -> List[ToolScanResult]:
         """Scan all tools on an MCP server.
 
@@ -1780,6 +1848,10 @@ class Scanner:
             # Run meta-analysis if enabled (post-pass on all results)
             scan_results = await self._run_meta_analysis_on_results(
                 list(scan_results), analyzers
+            )
+
+            scan_results = await self._attach_behavioral_source_findings(
+                scan_results, analyzers, source_path=source_path
             )
 
             return scan_results
@@ -1938,6 +2010,7 @@ class Scanner:
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
         errlog: Any = None,
+        source_path: Optional[str] = None,
     ) -> List[ToolScanResult]:
         """Scan tools from a stdio MCP server.
 
@@ -1992,6 +2065,10 @@ class Scanner:
                 # Run meta-analysis if enabled (post-pass on all results)
                 scan_results = await self._run_meta_analysis_on_results(
                     list(scan_results), analyzers
+                )
+
+                scan_results = await self._attach_behavioral_source_findings(
+                    scan_results, analyzers, source_path=source_path
                 )
 
                 return scan_results

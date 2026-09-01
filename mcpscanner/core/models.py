@@ -469,6 +469,12 @@ class SpecificInstructionsScanRequest(APIScanRequest):
     pass  # No additional fields needed - scans the server's instructions field
 
 
+class BehavioralSourceScanRequest(BaseModel):
+    """Request for scanning MCP server source with the behavioral analyzer."""
+
+    source_path: str
+
+
 class AnalyzerFinding(BaseModel):
     """Analyzer finding with grouped structure."""
 

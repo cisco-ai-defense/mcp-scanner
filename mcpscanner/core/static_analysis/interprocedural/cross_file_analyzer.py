@@ -25,6 +25,7 @@ Kept here for compatibility and full-featured cross-file analysis.
 
 import ast
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -92,16 +93,16 @@ class CallGraph:
 class CrossFileAnalyzer:
     """Performs cross-file analysis for MCP servers.
 
-    REVERSED APPROACH: Tracks parameter flow from MCP entry points through
-    the entire codebase across multiple files.
-
-    Note: This is the original implementation. The refactored version is
-    CallGraphAnalyzer in call_graph_analyzer.py. This version is kept for
-    compatibility and provides additional features.
+    .. deprecated::
+        Use :class:`CallGraphAnalyzer` in ``call_graph_analyzer.py`` instead.
     """
 
     def __init__(self) -> None:
-        """Initialize cross-file analyzer."""
+        warnings.warn(
+            "CrossFileAnalyzer is deprecated; use CallGraphAnalyzer instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.call_graph = CallGraph()
         self.analyzers: Dict[Path, BaseParser] = {}
         self.import_map: Dict[Path, List[Path]] = {}  # file -> imported files
