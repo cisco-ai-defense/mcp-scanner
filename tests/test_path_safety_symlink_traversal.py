@@ -245,14 +245,10 @@ class TestConfinePath:
         root = tmp_path / "scanroot"
         root.mkdir()
 
-        original_resolve = Path.resolve
+        def realpath_raises(_path: str) -> str:
+            raise OSError("failed to resolve root")
 
-        def resolve_raises_for_loop(self, *args, **kwargs):
-            if self.name == "loop_a":
-                raise RuntimeError("symlink loop detected")
-            return original_resolve(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "resolve", resolve_raises_for_loop)
+        monkeypatch.setattr(os.path, "realpath", realpath_raises)
 
         with pytest.raises(ValueError, match="could not be resolved safely"):
             confine_path("loop_a", root)
@@ -279,7 +275,19 @@ class TestConfinePath:
         target.write_text("ok = 1\n")
 
         confined = require_confined_path("src/server.py", root)
-        assert confined == target.resolve()
+        assert confined == str(target.resolve())
+
+    def test_sanitize_confined_path_returns_path_under_root(self, tmp_path: Path):
+        from mcpscanner.utils.path_safety import sanitize_confined_path
+
+        root = tmp_path / "scanroot"
+        root.mkdir()
+        target = root / "src" / "server.py"
+        target.parent.mkdir()
+        target.write_text("ok = 1\n")
+
+        sanitized = sanitize_confined_path("src/server.py", root)
+        assert sanitized == str(target.resolve())
 
 
 # ---------------------------------------------------------------------------

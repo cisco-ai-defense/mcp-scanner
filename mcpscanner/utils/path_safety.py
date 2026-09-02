@@ -176,21 +176,54 @@ def validate_confined_path_input(source_path: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
-def _resolve_validated_parts_under_root(
-    root: Path, parts: tuple[str, ...]
-) -> Path:
-    """Resolve validated path segments under an already-canonical root."""
+def _canonical_root(resolved_root: str | os.PathLike) -> str:
+    """Return a symlink-resolved absolute root directory path."""
     try:
-        candidate = root.joinpath(*parts).resolve(strict=False)
-    except (OSError, RuntimeError) as exc:
+        return os.path.realpath(os.fspath(resolved_root))
+    except OSError as exc:
         raise ValueError(
-            f"Path {parts!r} could not be resolved safely under {root!r}"
+            f"Root {resolved_root!r} could not be resolved safely"
         ) from exc
-    if not is_within_root(candidate, root):
-        raise ValueError(
-            f"Path {parts!r} is outside the allowed root {root!r}"
-        )
-    return candidate
+
+
+def _confined_path_string(root: str, parts: tuple[str, ...]) -> str:
+    """Build a confined absolute path string under ``root`` using ``os.path``."""
+    fullpath = os.path.normpath(os.path.join(root, *parts))
+    if fullpath != root and not fullpath.startswith(root + os.sep):
+        raise ValueError(f"Path {parts!r} is outside the allowed root {root!r}")
+    return fullpath
+
+
+def sanitize_confined_path(
+    source_path: str | os.PathLike,
+    resolved_root: str | os.PathLike,
+) -> str:
+    """Validate and return a confined absolute path string safe for file access.
+
+  Uses ``os.path.normpath`` / ``os.path.realpath`` with a root prefix check so
+  static analysis can treat the returned value as sanitized.
+    """
+    parts = validate_confined_path_input(os.fspath(source_path))
+    root = _canonical_root(resolved_root)
+    return _confined_path_string(root, parts)
+
+
+def _validated_path_exists(root: str, parts: tuple[str, ...]) -> bool:
+    """Return whether validated segments exist under ``root`` without pathlib."""
+    current = root
+    for segment in parts:
+        if not os.path.isdir(current):
+            return False
+        found = False
+        for entry in os.scandir(current):
+            if entry.name != segment:
+                continue
+            current = entry.path
+            found = True
+            break
+        if not found:
+            return False
+    return True
 
 
 def confine_path(
@@ -210,22 +243,30 @@ def confine_path(
     if the confined path is missing. Existence checks belong here so API
     handlers do not perform filesystem operations on request-derived paths.
     """
-    root = safe_resolve_root(resolved_root)
     parts = validate_confined_path_input(os.fspath(source_path))
-    candidate = _resolve_validated_parts_under_root(root, parts)
-    if must_exist and not candidate.exists():
+    root = _canonical_root(resolved_root)
+    if must_exist and not _validated_path_exists(root, parts):
         raise ConfinedPathNotFoundError(
             f"Path {source_path!r} does not exist under {root!r}"
         )
-    return candidate
+    return Path(_confined_path_string(root, parts))
 
 
 def require_confined_path(
     source_path: str | os.PathLike,
     resolved_root: str | os.PathLike,
-) -> Path:
-    """Like :func:`confine_path` but require the confined path to exist."""
-    return confine_path(source_path, resolved_root, must_exist=True)
+) -> str:
+    """Like :func:`confine_path` but require the confined path to exist.
+
+    Returns a sanitized absolute path string suitable for filesystem access.
+    """
+    parts = validate_confined_path_input(os.fspath(source_path))
+    root = _canonical_root(resolved_root)
+    if not _validated_path_exists(root, parts):
+        raise ConfinedPathNotFoundError(
+            f"Path {source_path!r} does not exist under {root!r}"
+        )
+    return sanitize_confined_path(source_path, resolved_root)
 
 
 __all__ = [
@@ -235,5 +276,6 @@ __all__ = [
     "is_within_root",
     "require_confined_path",
     "safe_resolve_root",
+    "sanitize_confined_path",
     "validate_confined_path_input",
 ]

@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Any, Dict, List, Optional, Union
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -1082,7 +1083,21 @@ async def scan_behavioral_source_endpoint(
 
     try:
         try:
-            confined_path = require_confined_path(request.source_path, api_root)
+            try:
+                api_root_real = os.path.realpath(api_root)
+            except OSError as exc:
+                logger.error("Invalid API root path: %s", api_root)
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid API root path",
+                ) from exc
+            if not os.path.isdir(api_root_real):
+                logger.error("API root is not a directory: %s", api_root)
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid API root path",
+                )
+            confined_str = require_confined_path(request.source_path, api_root_real)
         except ConfinedPathNotFoundError as exc:
             logger.error(
                 "Behavioral source path not found under API root: %s",
@@ -1108,7 +1123,6 @@ async def scan_behavioral_source_endpoint(
             )
 
         analyzer = scanner._behavioral_analyzer
-        confined_str = str(confined_path)
         findings = await analyzer.analyze(
             confined_str,
             context={"file_path": confined_str},
