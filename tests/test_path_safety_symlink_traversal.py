@@ -257,6 +257,30 @@ class TestConfinePath:
         with pytest.raises(ValueError, match="could not be resolved safely"):
             confine_path("loop_a", root)
 
+    def test_require_confined_path_raises_when_missing(self, tmp_path: Path):
+        from mcpscanner.utils.path_safety import (
+            ConfinedPathNotFoundError,
+            require_confined_path,
+        )
+
+        root = tmp_path / "scanroot"
+        root.mkdir()
+
+        with pytest.raises(ConfinedPathNotFoundError, match="does not exist"):
+            require_confined_path("missing.py", root)
+
+    def test_require_confined_path_returns_existing_path(self, tmp_path: Path):
+        from mcpscanner.utils.path_safety import require_confined_path
+
+        root = tmp_path / "scanroot"
+        root.mkdir()
+        target = root / "src" / "server.py"
+        target.parent.mkdir()
+        target.write_text("ok = 1\n")
+
+        confined = require_confined_path("src/server.py", root)
+        assert confined == target.resolve()
+
 
 # ---------------------------------------------------------------------------
 # BehavioralCodeAnalyzer

@@ -48,6 +48,10 @@ _MAX_CONFINED_PATH_LEN = 4096
 _SAFE_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
+class ConfinedPathNotFoundError(ValueError):
+    """Raised when a validated confined path does not exist on disk."""
+
+
 def safe_resolve_root(directory: str | os.PathLike) -> Path:
     """Resolve ``directory`` to an absolute, symlink-free canonical path.
 
@@ -172,9 +176,28 @@ def validate_confined_path_input(source_path: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
+def _resolve_validated_parts_under_root(
+    root: Path, parts: tuple[str, ...]
+) -> Path:
+    """Resolve validated path segments under an already-canonical root."""
+    try:
+        candidate = root.joinpath(*parts).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(
+            f"Path {parts!r} could not be resolved safely under {root!r}"
+        ) from exc
+    if not is_within_root(candidate, root):
+        raise ValueError(
+            f"Path {parts!r} is outside the allowed root {root!r}"
+        )
+    return candidate
+
+
 def confine_path(
     source_path: str | os.PathLike,
     resolved_root: str | os.PathLike,
+    *,
+    must_exist: bool = False,
 ) -> Path:
     """Resolve ``source_path`` and require it to stay inside ``resolved_root``.
 
@@ -182,27 +205,35 @@ def confine_path(
     caller's input is normalized into discrete segments before joining
     under ``resolved_root`` so untrusted request data never flows directly
     into :class:`pathlib.Path` constructors.
+
+    When ``must_exist`` is true, raises :class:`ConfinedPathNotFoundError`
+    if the confined path is missing. Existence checks belong here so API
+    handlers do not perform filesystem operations on request-derived paths.
     """
     root = safe_resolve_root(resolved_root)
-    raw = os.fspath(source_path)
-    parts = validate_confined_path_input(raw)
-    try:
-        candidate = root.joinpath(*parts).resolve(strict=False)
-    except (OSError, RuntimeError) as exc:
-        raise ValueError(
-            f"Path {source_path!r} could not be resolved safely under {root!r}"
-        ) from exc
-    if not is_within_root(candidate, root):
-        raise ValueError(
-            f"Path {source_path!r} is outside the allowed root {root!r}"
+    parts = validate_confined_path_input(os.fspath(source_path))
+    candidate = _resolve_validated_parts_under_root(root, parts)
+    if must_exist and not candidate.exists():
+        raise ConfinedPathNotFoundError(
+            f"Path {source_path!r} does not exist under {root!r}"
         )
     return candidate
 
 
+def require_confined_path(
+    source_path: str | os.PathLike,
+    resolved_root: str | os.PathLike,
+) -> Path:
+    """Like :func:`confine_path` but require the confined path to exist."""
+    return confine_path(source_path, resolved_root, must_exist=True)
+
+
 __all__ = [
+    "ConfinedPathNotFoundError",
     "confine_path",
     "filter_safe_paths",
     "is_within_root",
+    "require_confined_path",
     "safe_resolve_root",
     "validate_confined_path_input",
 ]

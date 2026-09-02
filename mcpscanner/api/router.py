@@ -41,7 +41,7 @@ from ..core.models import (
 )
 from ..config.constants import MCPScannerConstants
 from ..core.report_generator import ReportGenerator, results_to_json
-from ..utils.path_safety import confine_path
+from ..utils.path_safety import ConfinedPathNotFoundError, require_confined_path
 from ..core.result import (
     ScanResult,
     PromptScanResult,
@@ -1082,12 +1082,8 @@ async def scan_behavioral_source_endpoint(
 
     try:
         try:
-            confined_path = confine_path(request.source_path, api_root)
-        except ValueError as exc:
-            logger.error("Invalid behavioral source path: %s", exc)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        if not confined_path.exists():
+            confined_path = require_confined_path(request.source_path, api_root)
+        except ConfinedPathNotFoundError as exc:
             logger.error(
                 "Behavioral source path not found under API root: %s",
                 request.source_path,
@@ -1095,7 +1091,10 @@ async def scan_behavioral_source_endpoint(
             raise HTTPException(
                 status_code=404,
                 detail=f"Path not found under API root: {request.source_path}",
-            )
+            ) from exc
+        except ValueError as exc:
+            logger.error("Invalid behavioral source path: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         scanner_factory = _resolve_scanner_factory(http_request)
         scanner = scanner_factory([AnalyzerEnum.BEHAVIORAL])
