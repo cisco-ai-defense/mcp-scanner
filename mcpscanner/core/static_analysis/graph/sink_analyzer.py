@@ -13,6 +13,15 @@ from .models import CodeGraph, CodeEdge, Provenance, Relation, SinkHit
 
 
 def _normalize_lang(language: str | None) -> str:
+    """
+    Normalize a language identifier for sink-catalog lookup.
+    
+    Parameters:
+    	language (str | None): The language identifier to normalize.
+    
+    Returns:
+    	str: The normalized language identifier, defaulting to `"python"` when none is provided.
+    """
     if not language:
         return "python"
     lang = language.lower()
@@ -24,6 +33,14 @@ def _normalize_lang(language: str | None) -> str:
 
 
 def _sink_lookup(language: str | None) -> dict[str, set[str]]:
+    """Build a case-insensitive sink catalog for the specified language.
+    
+    Parameters:
+    	language (str | None): Language whose sink catalog should be loaded.
+    
+    Returns:
+    	dict[str, set[str]]: Sink categories mapped to lowercased sink names.
+    """
     sinks = get_all_sinks_for_language(_normalize_lang(language))
     flat: dict[str, set[str]] = {}
     for category, names in sinks.items():
@@ -43,6 +60,15 @@ def _normalize_sink_label(label: str) -> str:
 
 
 def _match_sink(label: str, sinks: dict[str, set[str]]) -> tuple[str, str] | None:
+    """Find the sink category and name matching a label.
+    
+    Parameters:
+    	label (str): Sink label to match.
+    	sinks (dict[str, set[str]]): Sink catalog grouped by category.
+    
+    Returns:
+    	tuple[str, str] | None: The matching category and sink name, or `None` when no match is found.
+    """
     normalized = _normalize_sink_label(label)
     for candidate in (label, normalized):
         lower = candidate.lower()
@@ -62,10 +88,20 @@ class SinkAnalysisResult:
 
     @property
     def has_definitive_hit(self) -> bool:
+        """Determine whether any recorded sink hit is definitive.
+        
+        Returns:
+        	bool: `true` if at least one hit is definitive, `false` otherwise.
+        """
         return any(hit.definitive for hit in self.hits)
 
     @property
     def categories(self) -> set[str]:
+        """Return the set of categories represented by the recorded sink hits.
+        
+        Returns:
+            set[str]: The categories associated with the sink hits.
+        """
         return {hit.category for hit in self.hits}
 
 
@@ -73,10 +109,24 @@ class SinkAnalyzer:
     """Walk call graph from MCP entries and match sink catalogs."""
 
     def __init__(self, graph: CodeGraph) -> None:
+        """Initialize the analyzer with a code graph and its language-specific sink catalog.
+        
+        Parameters:
+        	graph (CodeGraph): The code graph to analyze.
+        """
         self._graph = graph
         self._sinks = _sink_lookup(graph.language)
 
     def analyze_entry(self, entry_id: str) -> SinkAnalysisResult:
+        """
+        Analyze an entry point for reachable sinks and record associated taint flows.
+        
+        Parameters:
+        	entry_id (str): Identifier of the entry point to analyze.
+        
+        Returns:
+        	SinkAnalysisResult: Detected sink hits and their call paths. An unknown entry point produces an empty result.
+        """
         result = SinkAnalysisResult(entry_id=entry_id)
         if entry_id not in self._graph.nodes:
             return result
@@ -135,6 +185,7 @@ class SinkAnalyzer:
         return result
 
     def analyze_all_entries(self) -> list[SinkAnalysisResult]:
+        """Analyze all available entry points and return their sink-analysis results in sorted order."""
         entries = self._graph.entry_points
         if not entries:
             entries = {
@@ -147,6 +198,15 @@ class SinkAnalyzer:
         return [self.analyze_entry(entry_id) for entry_id in sorted(entries)]
 
     def _shortest_path(self, start: str, goal: str) -> list[str]:
+        """Find the shortest call path from one graph node to another.
+        
+        Parameters:
+        	start (str): Identifier of the starting node.
+        	goal (str): Identifier of the destination node.
+        
+        Returns:
+        	list[str]: The shortest path from `start` to `goal`, or a two-node path containing `start` and `goal` when no path is found.
+        """
         if start == goal:
             return [start]
         queue: list[list[str]] = [[start]]

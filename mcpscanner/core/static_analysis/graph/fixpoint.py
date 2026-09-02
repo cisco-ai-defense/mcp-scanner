@@ -20,12 +20,21 @@ logger = get_logger(__name__)
 
 
 def _caller_file(node_id: str) -> str:
+    """Extract the file component from a node identifier.
+    
+    Parameters:
+    	node_id (str): Node identifier containing a file component before ``::``.
+    
+    Returns:
+    	str: The file component, or an empty string when the identifier has no ``::`` separator.
+    """
     if "::" in node_id:
         return node_id.split("::", 1)[0]
     return ""
 
 
 def _edge_key(edge: CodeEdge) -> tuple[str, str, str | None]:
+    """Identify a call edge by its source, target, and call expression."""
     return (edge.source, edge.target, edge.call_expression)
 
 
@@ -38,9 +47,16 @@ def refine_call_graph(
     resolver: CrossFileSymbolResolver,
     max_rounds: int | None = None,
 ) -> int:
-    """Iterate summary propagation + call-edge refinement until fixpoint.
-
-    Returns the number of rounds executed.
+    """
+    Refine the call graph by propagating program facts and resolving external call edges until reaching a fixpoint or the round limit.
+    
+    Parameters:
+        files (dict[Path, str]): Source files used during call-graph analysis.
+        known_functions (set[str]): Function identifiers eligible for call-edge resolution.
+        max_rounds (int | None): Maximum number of refinement rounds; uses the configured default when omitted.
+    
+    Returns:
+        int: Number of refinement rounds executed, or zero when refinement is disabled or no source registry is available.
     """
     rounds = (
         MCPScannerConstants.CODE_GRAPH_FIXPOINT_ROUNDS
@@ -98,7 +114,18 @@ def _refine_external_edges(
     language: str,
     round_idx: int,
 ) -> bool:
-    """Re-resolve dynamic/external call edges using propagated facts."""
+    """
+    Re-resolve external call edges using propagated symbol facts.
+    
+    Parameters:
+        resolver (CrossFileSymbolResolver): Resolves call expressions to candidate targets.
+        known_functions (set[str]): Known function identifiers used during resolution.
+        language (str): Source language used when creating missing target nodes.
+        round_idx (int): Current refinement round.
+        
+    Returns:
+        bool: `true` if any external edge was replaced with resolved call edges, `false` otherwise.
+    """
     changed = False
     existing = {_edge_key(e) for e in graph.edges if e.relation == Relation.CALLS}
     to_remove: list[CodeEdge] = []
@@ -155,7 +182,15 @@ def _refine_external_edges(
 
 
 def call_edges_without_superseded_external(edges: list[CodeEdge]) -> list[CodeEdge]:
-    """Return call edges, dropping external targets replaced by resolved edges."""
+    """
+    Remove superseded external call edges from a collection.
+    
+    Parameters:
+    	edges (list[CodeEdge]): Call edges to filter.
+    
+    Returns:
+    	list[CodeEdge]: Call edges excluding external targets whose expressions are matched or contained by resolved call expressions.
+    """
     if not edges:
         return edges
     resolved_exprs = {
@@ -206,6 +241,14 @@ def prune_redundant_external_edges(graph: CodeGraph) -> int:
 
 
 def _ensure_target_node(graph: CodeGraph, node_id: str, *, language: str) -> None:
+    """
+    Add a missing function node for a resolvable target identifier.
+    
+    Parameters:
+        graph (CodeGraph): Call graph to update.
+        node_id (str): Target identifier containing a file and symbol component.
+        language (str): Programming language associated with the target node.
+    """
     if node_id in graph.nodes:
         return
     if "::" not in node_id:

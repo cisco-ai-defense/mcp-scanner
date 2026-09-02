@@ -21,6 +21,15 @@ from mcpscanner.core.static_analysis.interprocedural.call_graph_analyzer import 
 
 
 def _tool_function_context(name: str, *, line_number: int = 1) -> FunctionContext:
+    """Create a synthetic tool function context with file-operation metadata enabled.
+    
+    Parameters:
+        name (str): Name of the function.
+        line_number (int): Source line number associated with the function.
+    
+    Returns:
+        FunctionContext: The configured function context.
+    """
     return FunctionContext(
         name=name,
         decorator_types=["tool"],

@@ -123,12 +123,13 @@ class Scanner:
         rules_dir: Optional[str] = None,
         custom_analyzers: Optional[List[BaseAnalyzer]] = None,
     ):
-        """Initialize a new Scanner instance.
-
-        Args:
-            config (Config): The configuration for the scanner.
-            rules_dir (Optional[str]): Custom path to YARA rules directory.
-            custom_analyzers (Optional[List[BaseAnalyzer]]): A list of custom analyzer instances.
+        """
+        Initialize a scanner with the specified configuration and analyzers.
+        
+        Parameters:
+            config (Config): Scanner configuration, including analyzer credentials and options.
+            rules_dir (Optional[str]): Custom directory containing YARA rules.
+            custom_analyzers (Optional[List[BaseAnalyzer]]): Additional analyzers to run.
         """
         self._config = config
         self._api_analyzer = ApiAnalyzer(config) if config.api_key else None
@@ -572,28 +573,17 @@ class Scanner:
         scan_results: Sequence[ScanResult],
         analyzers: Optional[List[AnalyzerEnum]] = None,
     ) -> List[ScanResult]:
-        """Apply meta-analysis to a heterogeneous list of scan results.
-
-        Public, single-source-of-truth entrypoint that the static-config
-        CLI path uses (P1-6). Previously the CLI reimplemented the entire
-        per-result loop inline in ``cli.py``; that duplicate had already
-        drifted from the Scanner's own helpers and produced two real bugs
-        (P0-4: silently dropped resource/instructions enrichment,
-        P0-5: silently no-op'd on the IAM-only Bedrock flow). Routing the
-        CLI through this method keeps all four entity types (tool, prompt,
-        resource, instructions) in lock-step.
-
-        Args:
-            scan_results: Heterogeneous list of ScanResult subclasses.
-            analyzers: Analyzer set requested for the scan. If META is not
-                in this list (or omitted) the input is returned unchanged.
-                Default: ``[META]`` so callers that already gated on
-                ``--enable-meta`` upstream don't need to re-pass it.
-
+        """
+        Apply meta-analysis to supported scan result types while preserving order.
+        
+        Parameters:
+            scan_results: Scan results containing tools, prompts, resources, or
+                server instructions.
+            analyzers: Analyzers enabled for the scan. Meta-analysis is applied when
+                this includes `AnalyzerEnum.META`; defaults to meta-analysis only.
+        
         Returns:
-            The same list with ``ScanResult.meta_filtered_findings``
-            populated on each enriched result. Order is preserved. On
-            per-result failure the original is kept (no silent drop).
+            Scan results enriched with meta-analysis findings when available.
         """
         if analyzers is None:
             analyzers = [AnalyzerEnum.META]
@@ -627,7 +617,17 @@ class Scanner:
         analyzers: List[AnalyzerEnum],
         source_path: Optional[str] = None,
     ) -> List[ToolScanResult]:
-        """Run behavioral analysis on a local source tree and merge by tool name."""
+        """
+        Run behavioral analysis on a local source tree and merge findings into the corresponding tool results.
+        
+        Parameters:
+            scan_results (List[ToolScanResult]): Tool scan results to augment.
+            analyzers (List[AnalyzerEnum]): Analyzers requested for the scan.
+            source_path (Optional[str]): Local source-tree path to analyze. Uses the configured path when omitted.
+        
+        Returns:
+            List[ToolScanResult]: The scan results with behavioral findings attached.
+        """
         if AnalyzerEnum.BEHAVIORAL not in analyzers or not self._behavioral_analyzer:
             return scan_results
 
@@ -692,22 +692,16 @@ class Scanner:
         scan_results: List[ToolScanResult],
         analyzers: List[AnalyzerEnum],
     ) -> List[ToolScanResult]:
-        """Run meta-analysis on tool scan results if META analyzer is enabled.
-
-        P1-2: bounded concurrency. Previously this loop awaited each
-        per-tool LLM call sequentially, making total wall-clock cost
-        N × LLM round-trip (~1–4 s each). Now we run up to
-        ``_META_CONCURRENCY`` analyses in flight simultaneously, with
-        ``asyncio.gather`` preserving the input order so consumers don't
-        see reshuffled findings.
-
+        """
+        Apply meta-analysis to tool scan results when the META analyzer is available.
+        
         Args:
-            scan_results: The tool scan results from primary analyzers.
-            analyzers: The list of analyzers that were used.
-
+            scan_results: Tool scan results produced by the primary analyzers.
+            analyzers: Analyzers used for the scan.
+        
         Returns:
-            The scan results with meta-analysis enrichments applied,
-            in the same order as ``scan_results``.
+            The results with meta-analysis findings applied in their original order, or
+            the unchanged results when meta-analysis is unavailable or not enabled.
         """
         if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
             return scan_results
@@ -1788,22 +1782,22 @@ class Scanner:
         tenant_id: Optional[str] = None,
         source_path: Optional[str] = None,
     ) -> List[ToolScanResult]:
-        """Scan all tools on an MCP server.
-
-        Args:
-            server_url (str): The URL of the MCP server to scan.
-            auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
-            analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to all analyzers.
-            http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
-
+        """Scan all tools exposed by an MCP server.
+        
+        Parameters:
+            server_url (str): URL of the MCP server to scan.
+            auth (Optional[Auth]): Authentication configuration for the server.
+            analyzers (Optional[List[AnalyzerEnum]]): Analyzers to run; defaults to all configured analyzers.
+            http_headers (Optional[dict]): HTTP headers passed to analyzers.
+            connector_id (Optional[str]): Connector identifier used for the server connection.
+            tenant_id (Optional[str]): Tenant identifier used for the server connection.
+            source_path (Optional[str]): Local source path for behavioral analysis.
+        
         Returns:
-            List[ToolScanResult]: The results of the scan for each tool.
-
+            List[ToolScanResult]: Scan results for each tool, or an empty list when the server does not expose tools.
+        
         Raises:
-            MCPAuthenticationError: If authentication fails (HTTP 401/403).
-            MCPServerNotFoundError: If the server endpoint is not found (HTTP 404).
-            MCPConnectionError: If unable to connect to the server (network issues, DNS failure, etc).
-            ValueError: If the server URL is invalid or empty.
+            ValueError: If `server_url` is empty or a requested analyzer is unavailable.
         """
         if not server_url:
             raise ValueError(
@@ -2012,16 +2006,17 @@ class Scanner:
         errlog: Any = None,
         source_path: Optional[str] = None,
     ) -> List[ToolScanResult]:
-        """Scan tools from a stdio MCP server.
-
+        """Scan and analyze all tools exposed by a stdio MCP server.
+        
         Args:
-            server_config: The stdio server configuration
-            analyzers: List of analyzers to use
-            timeout: Connection timeout in seconds (defaults to config's stdio_timeout)
-            errlog: Optional file-like object for stderr redirection
-
+            server_config: The stdio server configuration.
+            analyzers: Analyzers to apply to each tool.
+            timeout: Connection timeout in seconds. Defaults to the configured stdio timeout.
+            errlog: Optional file-like object for stderr redirection.
+            source_path: Optional local source tree to analyze for behavioral findings.
+        
         Returns:
-            List[ToolScanResult]: List of tool scan results
+            A list of tool scan results.
         """
         if timeout is None:
             timeout = self._config.stdio_timeout
@@ -2038,6 +2033,12 @@ class Scanner:
         try:
             # Create a new task for the connection to isolate async contexts
             async def connect_and_scan():
+                """
+                Connect to a stdio MCP server and scan all exposed tools.
+                
+                Returns:
+                	list: Tool scan results, or an empty list if the server does not expose tools.
+                """
                 nonlocal client_context, session
                 client_context, session = await self._get_stdio_session(
                     server_config, timeout, errlog

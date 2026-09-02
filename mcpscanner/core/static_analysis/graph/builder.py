@@ -39,6 +39,14 @@ GRAPH_SUPPORTED_LANGUAGES = frozenset({"python", *_LANG_FOR_TS})
 
 
 def _caller_file(node_id: str) -> str:
+    """Extract the file path prefix from a function identifier.
+    
+    Parameters:
+        node_id (str): Function identifier that may include a file path followed by ``::``.
+    
+    Returns:
+        str: The file path prefix, or an empty string if the identifier has no ``::`` separator.
+    """
     if "::" in node_id:
         return node_id.split("::", 1)[0]
     return ""
@@ -62,17 +70,33 @@ class CodeGraphBuilder:
 
     @staticmethod
     def _language_for_path(path: Path) -> str:
+        """Determine the supported graph language for a file path.
+        
+        Parameters:
+        	path (Path): The file path whose extension identifies the language.
+        
+        Returns:
+        	str: The mapped language name, or "unknown" when the extension is unsupported.
+        """
         ext = path.suffix.lower()
         return NativeAnalyzer.EXTENSION_MAP.get(ext, "unknown")
 
     def add_file(self, file_path: Path, source_code: str) -> None:
+        """Store source code for a resolved file path."""
         self._files[file_path.resolve()] = source_code
 
     def add_path(self, file_path: Path) -> None:
+        """Read a source file and add its contents to the builder under its resolved path."""
         resolved = file_path.resolve()
         self._files[resolved] = resolved.read_text(encoding="utf-8", errors="replace")
 
     def build(self) -> CodeGraph:
+        """
+        Build a unified code graph from the registered source files.
+        
+        Returns:
+            CodeGraph: The combined graph of analyzed files.
+        """
         graph = CodeGraph()
         if not self._files:
             return graph
@@ -115,6 +139,17 @@ class CodeGraphBuilder:
         language: str,
         build_fn,
     ) -> CodeGraph:
+        """
+        Build a graph for a file collection, reusing cached results for single-file builds.
+        
+        Parameters:
+            files (dict[Path, str]): Source files keyed by their paths.
+            language (str): Language assigned to the resulting graph.
+            build_fn (Callable): Function that builds a graph from a mapping of file paths to source code.
+        
+        Returns:
+            CodeGraph: The merged graph for the provided files.
+        """
         if len(files) > 1:
             return build_fn(files)
 
@@ -131,6 +166,10 @@ class CodeGraphBuilder:
         return partial
 
     def _merge_graphs(self, target: CodeGraph, other: CodeGraph) -> None:
+        """Merge nodes, edges, entry points, and taint flows from one code graph into another.
+        
+        Existing nodes in the target graph are preserved when both graphs contain the same node ID.
+        """
         for node_id, node in other.nodes.items():
             if node_id not in target.nodes:
                 target.add_node(node)
@@ -140,6 +179,15 @@ class CodeGraphBuilder:
 
     def _ingest_python(self, files: dict[Path, str], graph: CodeGraph) -> None:
         def _build(single_files: dict[Path, str]) -> CodeGraph:
+            """
+            Build a Python code graph from the provided source files.
+            
+            Parameters:
+                single_files (dict[Path, str]): Source code keyed by file path.
+            
+            Returns:
+                CodeGraph: The merged Python code graph with cross-file call resolution.
+            """
             analyzer = CallGraphAnalyzer()
             for path, source in single_files.items():
                 analyzer.add_file(path, source)
@@ -169,9 +217,26 @@ class CodeGraphBuilder:
         files: dict[Path, str],
         graph: CodeGraph,
     ) -> None:
+        """
+        Ingest tree-sitter analysis results for source files into a graph.
+        
+        Parameters:
+            language (str): Graph language associated with the source files.
+            files (dict[Path, str]): Source files to analyze, keyed by path.
+            graph (CodeGraph): Graph to which the analyzed results are added.
+        """
         ts_lang = _LANG_FOR_TS.get(language, language)
 
         def _build(single_files: dict[Path, str]) -> CodeGraph:
+            """
+            Build a partial code graph from the supplied source files.
+            
+            Parameters:
+                single_files (dict[Path, str]): Source files to analyze.
+            
+            Returns:
+                CodeGraph: The merged graph for the supplied files.
+            """
             analyzer = TreeSitterCallGraphAnalyzer(ts_lang)
             for path, source in single_files.items():
                 analyzer.add_file(path, source)
@@ -204,6 +269,15 @@ class CodeGraphBuilder:
         mcp_entries: set[str],
         resolver: CrossFileSymbolResolver | None = None,
     ) -> None:
+        """Merge analyzed functions, calls, imports, and entry points into a code graph.
+        
+        Parameters:
+            raw (CallGraph | TSCallGraph): Call graph data to merge.
+            graph (CodeGraph): Destination graph.
+            language (str): Language associated with the analyzed graph.
+            mcp_entries (set[str]): Function identifiers designated as MCP entry points.
+            resolver (CrossFileSymbolResolver | None): Optional resolver for cross-file call targets and imports.
+        """
         known_functions = set(raw.functions.keys())
         func_nodes = dict(raw.functions)
 
@@ -320,6 +394,17 @@ class CodeGraphBuilder:
         fallback_confidence: float,
         fallback_context: str | None,
     ) -> None:
+        """
+        Ensure that a resolved call target has a corresponding graph node, creating an external sink for unresolved targets.
+        
+        Parameters:
+            resolved (str): Identifier of the resolved call target.
+            callee_label (str): Display label for an unresolved external target.
+            language (str): Language associated with the created node.
+            fallback_provenance (Provenance): Provenance assigned when redirecting an unresolved call edge.
+            fallback_confidence (float): Confidence assigned when redirecting an unresolved call edge.
+            fallback_context (str | None): Context assigned when redirecting an unresolved call edge.
+        """
         if resolved in graph.nodes:
             return
         if "::" in resolved:
@@ -367,7 +452,17 @@ class CodeGraphBuilder:
         extensions: set[str] | None = None,
         cache: GraphCache[CodeGraph] | CodeGraphCache | None = None,
     ) -> CodeGraph:
-        """Build a graph from all supported source files under ``root``."""
+        """
+        Build a code graph from supported source files under a directory.
+        
+        Parameters:
+            root (Path): Directory to scan recursively.
+            extensions (set[str] | None): File extensions to include; when omitted, all
+                supported graph-language extensions are included.
+        
+        Returns:
+            CodeGraph: The combined graph for the readable matching files.
+        """
         builder = cls(cache=cache or graph_cache_for_scan())
         allowed = extensions or {
             ext
@@ -391,7 +486,17 @@ class CodeGraphBuilder:
         language: str,
         source_registry: dict[str, str] | None = None,
     ) -> CodeGraph:
-        """Adapt an existing analyzer instance (behavioral scan integration)."""
+        """
+        Build a unified code graph from an existing call-graph analyzer.
+        
+        Parameters:
+        	analyzer: Analyzer whose call graph should be converted.
+        	language: Language associated with the analyzed source.
+        	source_registry: Optional mapping of source file paths to their contents, used for cross-file symbol resolution.
+        
+        Returns:
+        	CodeGraph: The converted code graph.
+        """
         graph = CodeGraph()
         builder = cls()
         raw = analyzer.build_call_graph()

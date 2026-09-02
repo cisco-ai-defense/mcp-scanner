@@ -43,6 +43,12 @@ class TaintFlowRecord:
     line: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """
+        Serialize the taint-flow record to a dictionary.
+        
+        Returns:
+        	dict[str, Any]: The record fields, including serialized provenance and optional source line.
+        """
         return {
             "source_id": self.source_id,
             "target_id": self.target_id,
@@ -68,10 +74,19 @@ class CodeNode:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """
+        Set the module identifier to the absolute source-file path when it is missing.
+        """
         if not self.module_id and self.source_file:
             self.module_id = str(Path(self.source_file).resolve())
 
     def to_dict(self) -> dict[str, Any]:
+        """
+        Serialize the code node to a dictionary.
+        
+        Returns:
+        	dict[str, Any]: A dictionary containing the node's identifiers, source details, classification, location, entry-point status, module ID, and metadata.
+        """
         return {
             "node_id": self.node_id,
             "label": self.label,
@@ -86,6 +101,15 @@ class CodeNode:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CodeNode:
+        """
+        Reconstruct a code node from serialized data.
+        
+        Parameters:
+            data (dict[str, Any]): Serialized node fields, including `node_id` and `label`.
+        
+        Returns:
+            CodeNode: The reconstructed code node.
+        """
         return cls(
             node_id=data["node_id"],
             label=data["label"],
@@ -100,6 +124,7 @@ class CodeNode:
 
     @property
     def short_name(self) -> str:
+        """Return the node name without its namespace prefix when present."""
         if "::" in self.node_id:
             return self.node_id.split("::", 1)[1]
         return self.label
@@ -119,6 +144,12 @@ class CodeEdge:
     call_expression: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """
+        Serialize the code edge to a dictionary.
+        
+        Returns:
+        	dict[str, Any]: A dictionary containing the edge endpoints, relation, provenance, source location, confidence score, context, and call expression.
+        """
         return {
             "source": self.source,
             "target": self.target,
@@ -132,6 +163,16 @@ class CodeEdge:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CodeEdge:
+        """
+        Reconstruct a code graph edge from serialized data.
+        
+        Parameters:
+            data (dict[str, Any]): Serialized edge fields, including source, target,
+                relation, and provenance.
+        
+        Returns:
+            CodeEdge: The reconstructed code graph edge.
+        """
         return cls(
             source=data["source"],
             target=data["target"],
@@ -157,6 +198,12 @@ class SinkHit:
 
     @property
     def definitive(self) -> bool:
+        """
+        Indicates whether the sink hit is definitive.
+        
+        Returns:
+        	bool: `True` if the hit was extracted, `False` otherwise.
+        """
         return self.provenance == Provenance.EXTRACTED
 
 
@@ -173,11 +220,18 @@ class CodeGraph:
     version: str = GRAPH_IR_VERSION
 
     def add_node(self, node: CodeNode) -> None:
+        """
+        Add a node to the graph and register it as an MCP entry point when applicable.
+        
+        Parameters:
+        	node (CodeNode): The node to store in the graph.
+        """
         self.nodes[node.node_id] = node
         if node.is_mcp_entry:
             self.entry_points.add(node.node_id)
 
     def add_edge(self, edge: CodeEdge) -> None:
+        """Add a directed edge to the graph."""
         self.edges.append(edge)
 
     def neighbors(
@@ -186,6 +240,16 @@ class CodeGraph:
         *,
         relation: Relation | None = Relation.CALLS,
     ) -> list[str]:
+        """
+        Return the identifiers of nodes reachable by matching outgoing edges.
+        
+        Parameters:
+        	node_id (str): Identifier of the source node.
+        	relation (Relation | None): Edge relation to match, or `None` to include all relations. Defaults to `Relation.CALLS`.
+        
+        Returns:
+        	list[str]: Target node identifiers for matching outgoing edges.
+        """
         out: list[str] = []
         for edge in self.edges:
             if edge.source != node_id:
@@ -196,6 +260,14 @@ class CodeGraph:
         return out
 
     def get_callees(self, node_id: str) -> list[str]:
+        """Return the identifiers of functions called by the specified node.
+        
+        Parameters:
+        	node_id (str): Identifier of the node whose call targets are queried.
+        
+        Returns:
+        	list[str]: Identifiers of the node's direct call targets.
+        """
         return self.neighbors(node_id, relation=Relation.CALLS)
 
     def reachable(
@@ -204,7 +276,16 @@ class CodeGraph:
         *,
         max_hops: int | None = None,
     ) -> list[str]:
-        """BFS reachability over call edges."""
+        """
+        Find nodes reachable from a starting node through call edges.
+        
+        Parameters:
+        	start (str): Identifier of the node from which traversal begins.
+        	max_hops (int | None): Maximum number of call-edge hops to traverse; traverses without a limit when omitted.
+        
+        Returns:
+        	list[str]: Reachable node identifiers in breadth-first order, excluding the starting node. Returns an empty list when the starting node is unknown.
+        """
         if start not in self.nodes:
             return []
 
@@ -234,6 +315,16 @@ class CodeGraph:
         *,
         relation: Relation | None = None,
     ) -> CodeEdge | None:
+        """Finds the first edge connecting two nodes, optionally filtered by relation.
+        
+        Parameters:
+        	source (str): Identifier of the source node.
+        	target (str): Identifier of the target node.
+        	relation (Relation | None): Relation required for a matching edge when provided.
+        
+        Returns:
+        	CodeEdge | None: The first matching edge, or `None` when no edge matches.
+        """
         for edge in self.edges:
             if edge.source != source or edge.target != target:
                 continue
@@ -243,6 +334,12 @@ class CodeGraph:
         return None
 
     def stats(self) -> dict[str, int]:
+        """
+        Summarize the counts of nodes, edges, entry points, and selected relationship types.
+        
+        Returns:
+        	dict[str, int]: Counts for nodes, edges, entry points, calls, taint flows, and sink-reachability edges.
+        """
         return {
             "nodes": len(self.nodes),
             "edges": len(self.edges),
@@ -255,6 +352,12 @@ class CodeGraph:
         }
 
     def to_dict(self) -> dict[str, Any]:
+        """
+        Serialize the code graph and its metadata to a dictionary.
+        
+        Returns:
+        	dict[str, Any]: A dictionary containing the graph version, language, serialized nodes and edges, sorted entry points, and serialized taint-flow records.
+        """
         return {
             "version": self.version,
             "language": self.language,
@@ -266,6 +369,15 @@ class CodeGraph:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CodeGraph:
+        """
+        Reconstruct a code graph from its serialized dictionary representation.
+        
+        Parameters:
+            data (dict[str, Any]): Serialized graph data containing nodes, edges, entry points, and taint flows.
+        
+        Returns:
+            CodeGraph: The reconstructed code graph.
+        """
         graph = cls(
             language=data.get("language"),
             version=data.get("version", GRAPH_IR_VERSION),

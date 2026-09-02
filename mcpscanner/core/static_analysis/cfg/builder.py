@@ -125,10 +125,11 @@ class DataFlowAnalyzer(Generic[T]):
         self.out_facts: dict[int, T] = {}
 
     def build_cfg(self) -> ControlFlowGraph:
-        """Build Control Flow Graph from AST.
-
+        """
+        Build a control-flow graph from the analyzer's abstract syntax tree.
+        
         Returns:
-            Control Flow Graph
+            ControlFlowGraph: The constructed control-flow graph.
         """
         build_start = time.perf_counter()
         ast_root = self.analyzer.get_ast()
@@ -167,14 +168,15 @@ class DataFlowAnalyzer(Generic[T]):
         return cfg
 
     def _build_python_cfg(self, node: ast.AST, cfg: ControlFlowGraph) -> CFGNode:
-        """Build CFG for Python AST.
-
-        Args:
-            node: Python AST node
-            cfg: Control Flow Graph
-
+        """
+        Build a control-flow graph for a Python AST subtree.
+        
+        Parameters:
+            node (ast.AST): The AST node to translate.
+            cfg (ControlFlowGraph): The graph to populate.
+        
         Returns:
-            Last CFG node created
+            CFGNode: The terminal node for the translated subtree.
         """
         if isinstance(node, ast.Module):
             entry = cfg.create_node(node, "entry")

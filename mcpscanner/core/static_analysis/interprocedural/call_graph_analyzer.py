@@ -33,7 +33,16 @@ from ....utils.logging_config import get_logger
 
 
 def _is_call_callee_expression(node: ast.Call, root: ast.AST) -> bool:
-    """True when ``node`` is only the callee sub-expression of an outer call."""
+    """
+    Determine whether a call node serves as the callee of an enclosing call.
+    
+    Parameters:
+    	node (ast.Call): The call node to inspect.
+    	root (ast.AST): The syntax tree containing the node.
+    
+    Returns:
+    	bool: `true` if the node is the callee of an enclosing call, `false` otherwise.
+    """
     for parent in ast.walk(root):
         if isinstance(parent, ast.Call) and parent.func is node:
             return True
@@ -330,13 +339,13 @@ class CallGraphAnalyzer:
         caller_name: str,
         analyzer: PythonParser,
     ) -> None:
-        """Extract calls from a single function.
-
+        """Record calls found within a function in the call graph.
+        
         Args:
-            file_path: File path
-            func_node: Function AST node
-            caller_name: Full caller name
-            analyzer: Python analyzer
+            file_path: Path of the file containing the function.
+            func_node: Abstract syntax tree node for the function.
+            caller_name: Fully qualified name of the calling function.
+            analyzer: Parser used to derive names from call expressions.
         """
         # Walk the function body to find calls
         for node in ast.walk(func_node):
@@ -356,14 +365,15 @@ class CallGraphAnalyzer:
                 self.call_graph.add_call(caller_name, callee_name)
 
     def _resolve_call_target(self, file_path: Path, call_name: str) -> str | None:
-        """Resolve a function call to its full qualified name.
-
+        """
+        Resolve a call name to its fully qualified function name.
+        
         Args:
-            file_path: File where call occurs
-            call_name: Function call name (could be 'func' or 'obj.method')
-
+            file_path: Path of the file containing the call.
+            call_name: Called function or method name.
+        
         Returns:
-            Full qualified name or None
+            The fully qualified function name, or `None` when no matching function is found.
         """
         # Handle method calls (e.g., 'processor.process' or 'DataProcessor.process')
         if "." in call_name:

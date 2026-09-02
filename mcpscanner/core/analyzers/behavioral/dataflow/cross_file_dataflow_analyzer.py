@@ -74,6 +74,13 @@ class CrossFileDataflowAnalyzer:
         file_path: str,
         call_graph_analyzer: Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer],
     ) -> None:
+        """Enrich a function context with cross-file call-graph and parameter-flow metadata.
+        
+        Parameters:
+        	func_context (FunctionContext): The function context to enrich.
+        	file_path (str): Path of the file containing the function.
+        	call_graph_analyzer (Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer]): Analyzer used to obtain cross-file relationships.
+        """
         enrich_with_cross_file_context(func_context, file_path, call_graph_analyzer)
 
     def analyze_parameter_flow(
@@ -82,6 +89,16 @@ class CrossFileDataflowAnalyzer:
         param_names: list[str],
         call_graph_analyzer: Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer],
     ) -> dict[str, Any]:
+        """
+        Analyze how named parameters flow across files from an entry-point function.
+        
+        Parameters:
+            entry_point (str): Fully qualified name of the function where analysis begins.
+            param_names (list[str]): Parameter names to trace.
+        
+        Returns:
+            dict[str, Any]: Cross-file parameter-flow analysis results.
+        """
         if isinstance(call_graph_analyzer, TreeSitterCallGraphAnalyzer):
             return call_graph_analyzer.analyze_cross_file_flows(entry_point, param_names)
         return call_graph_analyzer.analyze_parameter_flow_across_files(

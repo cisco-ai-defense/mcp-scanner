@@ -23,6 +23,13 @@ from mcpscanner.core.static_analysis.graph.resolver import CrossFileSymbolResolv
 
 
 def _ctx(**overrides):
+    """Create a default function context for graph and taint analysis tests.
+    
+    Keyword arguments override the default context fields.
+    
+    Returns:
+    	FunctionContext: A configured function context with an MCP tool name and file-operation parameter flow.
+    """
     base = dict(
         name="tool",
         decorator_types=["@mcp.tool"],

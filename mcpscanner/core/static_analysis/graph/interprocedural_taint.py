@@ -31,6 +31,12 @@ class InterproceduralTaintResult:
     sink_reachability: list[str] = field(default_factory=list)
 
     def to_dicts(self) -> list[dict]:
+        """
+        Serialize taint flow steps as dictionaries.
+        
+        Returns:
+        	list[dict]: Dictionaries containing each flow's source, sink, parameter, caller taint, provenance, confidence, and line.
+        """
         return [
             {
                 "source": step.source_id,
@@ -54,6 +60,12 @@ class InterproceduralTaintAnalyzer:
         *,
         fusion: CFGFusionEngine | None = None,
     ) -> None:
+        """Initialize the analyzer with a code graph and optional CFG fusion engine.
+        
+        Parameters:
+        	graph (CodeGraph): Code graph to analyze.
+        	fusion (CFGFusionEngine | None): Optional engine for resolving parameter bindings.
+        """
         self._graph = graph
         from .classic_dataflow import ClassicDataflowEngine
 
@@ -62,6 +74,15 @@ class InterproceduralTaintAnalyzer:
         self._fusion = fusion or CFGFusionEngine(graph, classic=self._classic)
 
     def analyze_entry(self, entry_id: str) -> InterproceduralTaintResult:
+        """
+        Propagate taint from an entry node through resolved call edges.
+        
+        Parameters:
+            entry_id (str): Identifier of the entry node to analyze.
+        
+        Returns:
+            InterproceduralTaintResult: Taint flow records and externally reachable sink identifiers.
+        """
         result = InterproceduralTaintResult(entry_id=entry_id)
         if entry_id not in self._graph.nodes:
             return result
@@ -118,6 +139,15 @@ class InterproceduralTaintAnalyzer:
         return result
 
     def _fallback_bindings(self, edge: CodeEdge, param: str) -> list[ParamBinding]:
+        """Create a parameter binding when precise call-argument metadata is unavailable.
+        
+        Parameters:
+        	edge (CodeEdge): Call edge containing provenance, confidence, and line information.
+        	param (str): Tainted caller parameter to map to the callee.
+        
+        Returns:
+        	list[ParamBinding]: A binding for the matching parameter, the first declared callee parameter when inferred, or the original parameter when no callee parameter is available.
+        """
         callee = self._graph.nodes.get(edge.target)
         if callee is None:
             return [
@@ -162,6 +192,7 @@ class InterproceduralTaintAnalyzer:
         ]
 
     def _callees(self, node_id: str) -> list[CodeEdge]:
+        """Return active call edges originating from the specified node."""
         edges = [
             edge
             for edge in self._graph.edges

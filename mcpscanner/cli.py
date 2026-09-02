@@ -183,6 +183,16 @@ def _package_scan_to_tool_results(
 def _build_config(
     selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None
 ) -> Config:
+    """
+    Builds scanner configuration from the selected analyzers, endpoint, and environment variables.
+    
+    Parameters:
+    	selected_analyzers (List[AnalyzerEnum]): Analyzers whose credentials and settings should be included.
+    	endpoint_url (Optional[str]): Endpoint URL to use instead of the environment-configured endpoint.
+    
+    Returns:
+    	Config: The configured scanner settings.
+    """
     api_key = os.environ.get("MCP_SCANNER_API_KEY", "")
     llm_api_key = os.environ.get("MCP_SCANNER_LLM_API_KEY", "")
     llm_base_url = os.environ.get("MCP_SCANNER_LLM_BASE_URL")

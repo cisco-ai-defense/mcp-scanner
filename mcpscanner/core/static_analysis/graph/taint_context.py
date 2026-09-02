@@ -10,7 +10,12 @@ from ..context_extractor import FunctionContext
 
 
 def populate_taint_fields(func_context: FunctionContext) -> None:
-    """Derive ``taint_sources`` / ``taint_sinks`` / ``taint_flows`` from flows."""
+    """
+    Derive structured taint sources, sinks, and flows from the function context's parameter and dataflow information.
+    
+    Parameters:
+    	func_context (FunctionContext): Function context to update with the derived taint metadata.
+    """
     sources: list[dict[str, Any]] = []
     sinks: list[dict[str, Any]] = []
     flows: list[dict[str, Any]] = []

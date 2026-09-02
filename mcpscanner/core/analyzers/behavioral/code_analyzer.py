@@ -62,7 +62,17 @@ def _build_directory_code_graphs(
     *,
     source_registry: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Build one CodeGraph per language family for a directory scan."""
+    """
+    Build code graphs for the languages included in a directory scan.
+    
+    Parameters:
+    	py_call_graph_analyzer (Optional[CallGraphAnalyzer]): Python call-graph analyzer, when available.
+    	ts_call_graph_analyzers (Dict[str, TreeSitterCallGraphAnalyzer]): Tree-sitter call-graph analyzers keyed by language.
+    	source_registry (Optional[Dict[str, str]]): Source contents keyed by file path, when available.
+    
+    Returns:
+    	Dict[str, Any]: Code graphs keyed by language. Returns an empty dictionary when code-graph analysis is disabled.
+    """
     if not MCPScannerConstants.CODE_GRAPH_ENABLED:
         return {}
     if source_registry:
@@ -93,7 +103,16 @@ def _code_graphs_for_file(
     *,
     source_registry: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Build a single-file CodeGraph cache entry."""
+    """
+    Build the CodeGraph cache entry for a supported source file.
+    
+    Parameters:
+        file_path (str): Path used to determine the source language.
+        source_registry (dict[str, str] | None): Optional mapping of source paths to source text used to build the graph.
+    
+    Returns:
+        dict[str, Any]: A mapping from the detected language to its CodeGraph, or an empty dictionary when graph analysis is unavailable or unsupported.
+    """
     if not MCPScannerConstants.CODE_GRAPH_ENABLED or not cross_file_analyzer:
         return {}
     lang = language_for_path(file_path)
@@ -302,21 +321,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     async def analyze(
         self, content: str, context: Dict[str, Any]
     ) -> List[SecurityFinding]:
-        """Analyze MCP tool source code for docstring/behavior mismatches.
-
-        Returns one ``SecurityFinding`` per scanned MCP tool/function.
-        Tools with no detected mismatch are returned with
-        ``severity == "SAFE"`` and ``threat_category == ""``.
-
+        """
+        Analyze MCP source code for mismatches between documented capabilities and observed behavior.
+        
         Args:
-            content: File path to a source file/directory OR raw source
-                code string.
-            context: Analysis context with ``tool_name``, ``file_path``,
-                etc.
-
+            content: File or directory path, or inline source code.
+            context: Analysis context, including optional tool and file metadata.
+        
         Returns:
-            List of ``SecurityFinding`` objects covering every scanned
-            tool. Empty when no functions were extractable at all.
+            Security findings for detected MCP functions, including safe results when no mismatch is found.
         """
         scan_mode: str = "unknown"
         scan_target: str = "-"
@@ -488,6 +501,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 file_semaphore = asyncio.Semaphore(file_concurrency)
 
                 async def _analyze_accepted(accepted: _AcceptedFile) -> List[SecurityFinding]:
+                    """
+                    Analyzes an accepted source file and returns its behavioral security findings.
+                    """
                     async with file_semaphore:
                         self.logger.debug(f"Analyzing file: {accepted.path}")
                         ext = Path(accepted.path).suffix.lower()
@@ -826,14 +842,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     async def _analyze_source_code(
         self, source_code: str, context: Dict[str, Any]
     ) -> List[SecurityFinding]:
-        """Analyze source code for docstring/behavior mismatches.
-
+        """
+        Analyze source code for MCP capability behavior mismatches.
+        
         Args:
-            source_code: Source code to analyze
-            context: Analysis context with file_path
-
+            source_code: Source code to analyze.
+            context: Analysis context, including the source file path and optional analysis settings.
+        
         Returns:
-            List of security findings.
+            Security findings for detected behavioral mismatches, inconclusive alignment checks, and analyzed capabilities without mismatches.
         """
         file_path = context.get("file_path", "unknown")
         findings = []

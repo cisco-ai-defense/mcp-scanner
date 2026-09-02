@@ -62,13 +62,11 @@ class AlignmentOrchestrator:
     """
 
     def __init__(self, config: Config):
-        """Initialize alignment orchestrator.
-
+        """
+        Initialize the alignment orchestrator with the provided configuration.
+        
         Args:
-            config: Configuration with LLM credentials
-
-        Raises:
-            ValueError: If LLM configuration is missing
+            config: Configuration used to initialize the language model client and classifier.
         """
         self.logger = logging.getLogger(__name__)
 
@@ -131,6 +129,15 @@ class AlignmentOrchestrator:
     def _cache_lookup(
         self, func_context: FunctionContext
     ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """
+        Look up a cached alignment result for a function context.
+        
+        Parameters:
+            func_context (FunctionContext): The function context used to generate the cache key.
+        
+        Returns:
+            tuple[Optional[Dict[str, Any]], Optional[str]]: The cached alignment result and its cache key, or ``None`` values when caching is disabled or no key is available.
+        """
         if not MCPScannerConstants.ALIGNMENT_CACHE_ENABLED:
             return None, None
         cache_key = self._result_cache.key_for(
@@ -142,6 +149,13 @@ class AlignmentOrchestrator:
         return entry.result, cache_key
 
     def _store_cache(self, cache_key: Optional[str], result: Dict[str, Any]) -> None:
+        """
+        Store an alignment result in the cache when caching is enabled and a cache key is available.
+        
+        Parameters:
+            cache_key (Optional[str]): Key identifying the cached alignment result.
+            result (Dict[str, Any]): Alignment result to cache.
+        """
         if cache_key and MCPScannerConstants.ALIGNMENT_CACHE_ENABLED:
             self._result_cache.put(cache_key, result)
 
@@ -150,6 +164,15 @@ class AlignmentOrchestrator:
         func_context: FunctionContext,
         result: Dict[str, Any],
     ) -> Optional[Tuple[Dict[str, Any], FunctionContext]]:
+        """Process a cached alignment result and update analysis statistics.
+        
+        Parameters:
+        	func_context (FunctionContext): Context for the function associated with the cached result.
+        	result (Dict[str, Any]): Cached alignment result.
+        
+        Returns:
+        	Optional[Tuple[Dict[str, Any], FunctionContext]]: The cached result and function context when a mismatch is detected; otherwise, `None`.
+        """
         self.stats["total_analyzed"] += 1
         self.stats["cache_hits"] += 1
         if result.get("mismatch_detected"):
@@ -161,20 +184,16 @@ class AlignmentOrchestrator:
     async def check_alignment(
         self, func_context: FunctionContext
     ) -> Optional[Tuple[Dict[str, Any], FunctionContext]]:
-        """Check if function behavior aligns with its docstring.
-
-        This is the main entry point for alignment verification. It coordinates
-        the full verification pipeline:
-        1. Build comprehensive prompt with evidence
-        2. Query LLM for alignment analysis
-        3. Validate response
-        4. Return analysis and context for SecurityFinding creation
-
+        """
+        Determine whether a function's implementation matches its documented behavior.
+        
         Args:
-            func_context: Complete function context with dataflow analysis
-
+            func_context: Function context containing the docstring, implementation, and
+                supporting analysis evidence.
+        
         Returns:
-            Tuple of (analysis_dict, func_context) if mismatch detected, None if aligned
+            A tuple containing the mismatch analysis and function context when a mismatch
+            is detected; otherwise, None.
         """
         check_start = time.perf_counter()
         stage = "local"
@@ -344,6 +363,16 @@ class AlignmentOrchestrator:
         async def _run_batch(
             batch_idx: int, batch: List[FunctionContext]
         ) -> List[Tuple[Dict[str, Any], FunctionContext]]:
+            """
+            Process one alignment batch while respecting the configured concurrency limit.
+            
+            Parameters:
+            	batch_idx (int): Zero-based index of the batch.
+            	batch (List[FunctionContext]): Function contexts included in the batch.
+            
+            Returns:
+            	List[Tuple[Dict[str, Any], FunctionContext]]: Mismatch results paired with their function contexts.
+            """
             async with semaphore:
                 return await self._process_alignment_batch(
                     batch,
@@ -366,7 +395,17 @@ class AlignmentOrchestrator:
         batch_idx: int,
         total_batches: int,
     ) -> List[Tuple[Dict[str, Any], FunctionContext]]:
-        """Process one alignment batch (single LLM request + parse/classify)."""
+        """
+        Process a batch of function contexts through alignment analysis and return detected mismatches.
+        
+        Parameters:
+        	batch (List[FunctionContext]): Function contexts to analyze.
+        	batch_idx (int): One-based position of the batch in the overall analysis.
+        	total_batches (int): Total number of batches being processed.
+        
+        Returns:
+        	List[Tuple[Dict[str, Any], FunctionContext]]: Mismatch results paired with their function contexts. Unparseable or failed batch responses are retried or processed individually.
+        """
         results: List[Tuple[Dict[str, Any], FunctionContext]] = []
         batch_start = time.perf_counter()
         self.logger.debug(
@@ -535,13 +574,14 @@ class AlignmentOrchestrator:
 
     @staticmethod
     def _get_mapped_severity(threat_name: str) -> str:
-        """Derive severity from centralized ThreatMapping.
-
-        Args:
-            threat_name: Threat name from the LLM result
-
+        """
+        Map a behavioral threat name to its severity.
+        
+        Parameters:
+            threat_name (str): Threat name to look up.
+        
         Returns:
-            Mapped severity string, or "UNKNOWN" when the threat name is unrecognised.
+            str: The mapped severity, or "UNKNOWN" when the name is empty or unrecognized.
         """
         if not threat_name:
             return "UNKNOWN"
