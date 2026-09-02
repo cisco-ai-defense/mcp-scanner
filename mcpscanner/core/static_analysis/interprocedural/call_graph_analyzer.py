@@ -47,8 +47,7 @@ def _dynamic_inner_callee_calls_to_skip(func_node: ast.AST) -> set[int]:
         if not isinstance(inner, ast.Call):
             continue
         callee_name = _call_expression_name(inner)
-        short = callee_name.rsplit(".", 1)[-1] if callee_name else ""
-        if short in _DYNAMIC_INNER_CALLEE_NAMES:
+        if callee_name in _DYNAMIC_INNER_CALLEE_NAMES:
             skip.add(id(inner))
     return skip
 

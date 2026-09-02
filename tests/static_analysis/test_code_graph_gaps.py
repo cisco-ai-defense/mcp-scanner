@@ -11,9 +11,11 @@ from mcpscanner.core.static_analysis.context_extractor import FunctionContext
 from mcpscanner.core.static_analysis.graph import (
     CFGFusionEngine,
     ClassicDataflowEngine,
+    CodeEdge,
     CodeGraph,
     CodeGraphBuilder,
     CodeNode,
+    GraphSlicer,
     InterproceduralTaintAnalyzer,
     Provenance,
     Relation,
@@ -243,6 +245,65 @@ export function handler(path: string): void {
         ]
         assert call_edges
         assert call_edges[0].context.startswith("fixpoint_r0:const_prop_semantic_bracket_variable")
+
+    def test_slicer_trim_preserves_entry_id(self) -> None:
+        entry = "/z.py::handler_with_long_name"
+        callee = "/a.py::aaa"
+        graph = CodeGraph()
+        graph.add_node(
+            CodeNode(
+                node_id=entry,
+                label="handler_with_long_name",
+                source_file="/z.py",
+                language="python",
+                is_mcp_entry=True,
+            )
+        )
+        graph.add_node(
+            CodeNode(
+                node_id=callee,
+                label="aaa",
+                source_file="/a.py",
+                language="python",
+            )
+        )
+        graph.add_edge(
+            CodeEdge(
+                source=entry,
+                target=callee,
+                relation=Relation.CALLS,
+                provenance=Provenance.EXTRACTED,
+            )
+        )
+
+        slice_ = GraphSlicer(graph).slice(entry, max_chars=len(callee) + 5)
+        assert entry in slice_.node_ids
+
+    def test_call_graph_keeps_qualified_getattr_inner_call(self, tmp_path: Path) -> None:
+        from mcpscanner.core.static_analysis.interprocedural.call_graph_analyzer import (
+            CallGraphAnalyzer,
+        )
+
+        sample = tmp_path / "server.py"
+        sample.write_text(
+            """
+def handler(path):
+    import helpers
+    helpers.getattr(worker, "run")(path)
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        cga = CallGraphAnalyzer()
+        cga.add_file(sample, sample.read_text(encoding="utf-8"))
+        graph = cga.build_call_graph()
+        handler_id = f"{sample}::handler"
+        callee_labels = {
+            callee.split("::", 1)[-1] if "::" in callee else callee
+            for _caller, callee in graph.calls
+            if _caller == handler_id
+        }
+        assert "helpers.getattr" in callee_labels
 
     def test_sink_matches_require_fs_chain(self) -> None:
         from mcpscanner.core.static_analysis.graph.sink_analyzer import _match_sink, _sink_lookup

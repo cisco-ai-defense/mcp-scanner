@@ -62,7 +62,7 @@ class GraphSlicer:
             frontier = next_frontier
             hops += 1
 
-        trimmed = self._trim_nodes(node_ids, max_chars)
+        trimmed = self._trim_nodes(node_ids, max_chars, entry_id=entry_id)
         trimmed_edges = [
             edge
             for edge in edges
@@ -75,12 +75,21 @@ class GraphSlicer:
             hop_limit=hops,
         )
 
-    def _trim_nodes(self, node_ids: set[str], max_chars: int | None) -> set[str]:
+    def _trim_nodes(
+        self,
+        node_ids: set[str],
+        max_chars: int | None,
+        *,
+        entry_id: str | None = None,
+    ) -> set[str]:
         if max_chars is None:
             return node_ids
         kept: set[str] = set()
         budget = max_chars
-        for node_id in sorted(node_ids):
+        if entry_id and entry_id in node_ids:
+            kept.add(entry_id)
+            budget -= len(entry_id)
+        for node_id in sorted(node_ids - kept):
             label_len = len(node_id)
             if budget - label_len < 0 and kept:
                 break
