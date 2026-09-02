@@ -44,6 +44,16 @@ def _caller_file(node_id: str) -> str:
     return ""
 
 
+def _function_start_line(func_node: Any) -> int | None:
+    lineno = getattr(func_node, "lineno", None)
+    if lineno is not None:
+        return int(lineno)
+    start_point = getattr(func_node, "start_point", None)
+    if start_point is not None:
+        return int(start_point[0]) + 1
+    return None
+
+
 class CodeGraphBuilder:
     """Merge Python and tree-sitter call graphs into one CodeGraph."""
 
@@ -218,6 +228,7 @@ class CodeGraphBuilder:
                     source_file=file_path,
                     language=language,
                     module_id=module_id_for(file_path) if file_path else "",
+                    line=_function_start_line(func_node),
                     is_mcp_entry=full_name in mcp_entries,
                     metadata={"parameters": params},
                 )
@@ -375,7 +386,8 @@ class CodeGraphBuilder:
             if lang in GRAPH_SUPPORTED_LANGUAGES
         }
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.suffix not in allowed:
+            suffix = path.suffix.lower()
+            if not path.is_file() or suffix not in allowed:
                 continue
             try:
                 builder.add_path(path)

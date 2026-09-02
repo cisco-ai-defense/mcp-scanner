@@ -98,7 +98,7 @@ Uses: native_analyzer.py (registration-style MCP handlers, all langs)
     ↓
 Uses: dataflow/ + interprocedural call graphs
     ↓
-Uses: graph/ (code graph evidence + sink hints passed to LLM when CODE_GRAPH=1)
+Uses: graph/ (code graph evidence + sink hints passed to LLM when MCP_SCANNER_CODE_GRAPH=1)
     ↓
 Feeds data to: AlignmentOrchestrator (LLM alignment for all functions)
 ```

@@ -113,7 +113,9 @@ def _iter_assignments(stmt: Node, source_bytes: bytes) -> list[tuple[str, Node]]
 
     if stmt.type == "variable_declarator":
         add_pair(stmt.child_by_field_name("name"), _value_node(stmt))
-    elif stmt.type in ("assignment_expression", "assignment", "augmented_assignment_expression"):
+    elif stmt.type in ("assignment_expression", "assignment", "assignment_statement"):
+        add_pair(stmt.child_by_field_name("left"), stmt.child_by_field_name("right"))
+    elif stmt.type == "augmented_assignment_expression":
         add_pair(stmt.child_by_field_name("left"), stmt.child_by_field_name("right"))
     elif stmt.type in (
         "lexical_declaration",
@@ -373,7 +375,7 @@ class TreeSitterLivenessAnalyzer(TreeSitterDataFlowAnalyzer[LivenessFact]):
     ) -> None:
         super().__init__(language, function_node, source_bytes, parameter_names)
         self.param_influenced: set[str] = set(parameter_names)
-        self.dead_code: list[TSCFGNode] = []
+        self.dead_code: list[tuple[TSCFGNode, str]] = []
 
     def analyze_liveness(self) -> dict[int, set[str]]:
         self.analyze(LivenessFact(), forward=False)
@@ -454,7 +456,7 @@ class TreeSitterLivenessAnalyzer(TreeSitterDataFlowAnalyzer[LivenessFact]):
             live_after = self.out_facts.get(node.node_id, LivenessFact())
             for target, _value in _iter_assignments(node.ast_node, self.source_bytes):
                 if target not in live_after.live_vars:
-                    self.dead_code.append(node)
+                    self.dead_code.append((node, target))
 
     def get_parameter_live_vars(self) -> set[str]:
         return self.param_influenced.copy()

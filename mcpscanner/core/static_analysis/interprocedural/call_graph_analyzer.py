@@ -32,12 +32,42 @@ from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.logging_config import get_logger
 
 
-def _is_call_callee_expression(node: ast.Call, root: ast.AST) -> bool:
-    """True when ``node`` is only the callee sub-expression of an outer call."""
-    for parent in ast.walk(root):
-        if isinstance(parent, ast.Call) and parent.func is node:
-            return True
-    return False
+_DYNAMIC_INNER_CALLEE_NAMES = frozenset(
+    {"getattr", "hasattr", "setattr", "delattr", "operator.getattr"}
+)
+
+
+def _dynamic_inner_callee_calls_to_skip(func_node: ast.AST) -> set[int]:
+    """Return inner ``ast.Call`` nodes used only as dynamic-dispatch callees."""
+    skip: set[int] = set()
+    for parent in ast.walk(func_node):
+        if not isinstance(parent, ast.Call):
+            continue
+        inner = parent.func
+        if not isinstance(inner, ast.Call):
+            continue
+        callee_name = _call_expression_name(inner)
+        short = callee_name.rsplit(".", 1)[-1] if callee_name else ""
+        if short in _DYNAMIC_INNER_CALLEE_NAMES:
+            skip.add(id(inner))
+    return skip
+
+
+def _call_expression_name(node: ast.Call) -> str:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        parts: list[str] = []
+        current: ast.expr = func
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            parts.append(current.id)
+        parts.reverse()
+        return ".".join(parts)
+    return ""
 
 
 class CallGraph:
@@ -339,10 +369,11 @@ class CallGraphAnalyzer:
             analyzer: Python analyzer
         """
         # Walk the function body to find calls
+        skip_calls = _dynamic_inner_callee_calls_to_skip(func_node)
         for node in ast.walk(func_node):
             if not isinstance(node, ast.Call):
                 continue
-            if _is_call_callee_expression(node, func_node):
+            if id(node) in skip_calls:
                 continue
             callee_name = analyzer.get_call_name(node)
 

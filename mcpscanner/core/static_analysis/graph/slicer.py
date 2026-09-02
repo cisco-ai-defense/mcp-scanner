@@ -62,10 +62,16 @@ class GraphSlicer:
             frontier = next_frontier
             hops += 1
 
+        trimmed = self._trim_nodes(node_ids, max_chars)
+        trimmed_edges = [
+            edge
+            for edge in edges
+            if edge.source in trimmed and edge.target in trimmed
+        ]
         return GraphSlice(
             entry_id=entry_id,
-            node_ids=self._trim_nodes(node_ids, max_chars),
-            edges=edges,
+            node_ids=trimmed,
+            edges=trimmed_edges,
             hop_limit=hops,
         )
 

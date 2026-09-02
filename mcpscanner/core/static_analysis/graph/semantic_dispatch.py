@@ -568,6 +568,8 @@ class SemanticDispatchEngine:
         callee_label: str,
         kind: str,
     ) -> str | None:
+        if callee_label.endswith("()"):
+            callee_label = callee_label[:-2]
         if kind == "bracket_variable":
             key = callee_label.split("[", 1)[1].rstrip("]").strip()
             if key in state.string_consts:

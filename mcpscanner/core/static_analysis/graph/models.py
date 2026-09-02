@@ -262,6 +262,7 @@ class CodeGraph:
             "edges": [edge.to_dict() for edge in self.edges],
             "entry_points": sorted(self.entry_points),
             "taint_flows": [flow.to_dict() for flow in self.taint_flows],
+            "source_registry": self.source_registry,
         }
 
     @classmethod
@@ -287,4 +288,7 @@ class CodeGraph:
                     line=flow_data.get("line"),
                 )
             )
+        registry = data.get("source_registry")
+        if isinstance(registry, dict):
+            graph.source_registry = {str(k): str(v) for k, v in registry.items()}
         return graph

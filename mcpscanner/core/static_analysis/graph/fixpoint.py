@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ....config.constants import MCPScannerConstants
@@ -154,6 +155,15 @@ def _refine_external_edges(
     return changed
 
 
+def _external_expr_superseded_by_resolved(expr: str, resolved: str) -> bool:
+    if not expr or not resolved:
+        return False
+    if expr == resolved:
+        return True
+    pattern = r"(?<![\w$.])" + re.escape(expr) + r"\s*\("
+    return re.search(pattern, resolved) is not None
+
+
 def call_edges_without_superseded_external(edges: list[CodeEdge]) -> list[CodeEdge]:
     """Return call edges, dropping external targets replaced by resolved edges."""
     if not edges:
@@ -175,9 +185,8 @@ def call_edges_without_superseded_external(edges: list[CodeEdge]) -> list[CodeEd
         if expr in resolved_exprs:
             continue
         if any(
-            resolved
+            _external_expr_superseded_by_resolved(expr, resolved)
             for resolved in resolved_exprs
-            if resolved and expr in resolved
         ):
             continue
         kept.append(edge)

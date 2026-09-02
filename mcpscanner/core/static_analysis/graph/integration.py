@@ -87,6 +87,8 @@ def build_code_graphs_for_registry(
         if isinstance(cache, CodeGraphCache):
             merged = cache.get_merged(lang, files)
             if merged is not None:
+                if not merged.source_registry:
+                    merged.source_registry = dict(files)
                 graphs[lang] = merged
                 continue
         builder = CodeGraphBuilder(cache=cache)

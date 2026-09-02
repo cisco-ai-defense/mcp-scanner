@@ -627,37 +627,38 @@ class CrossFileSymbolResolver:
         return f"external::{callee_label}", Provenance.INFERRED, 0.75, None
 
     def import_edges(self) -> list[CodeEdge]:
+        """Derive IMPORTS edges from parsed binding maps (not line re-parsing)."""
         edges: list[CodeEdge] = []
-        for path, source in self._files.items():
-            module = str(path)
-            for line in source.splitlines():
-                stripped = line.strip()
-                if self._language == "python" and stripped.startswith(("import ", "from ")):
-                    target = self.resolve_import_target(stripped.split()[-1])
-                    if target:
-                        edges.append(
-                            CodeEdge(
-                                source=f"{module}::__module__",
-                                target=target,
-                                relation=Relation.IMPORTS,
-                                provenance=Provenance.EXTRACTED,
-                                confidence_score=1.0,
-                                context=stripped[:120],
-                            )
-                        )
-                elif self._language in ("javascript", "typescript", "tsx") and "from " in stripped:
-                    parts = stripped.replace("from", " ").replace("import", " ").split()
-                    if parts:
-                        target = self.resolve_import_target(parts[0])
-                        if target:
-                            edges.append(
-                                CodeEdge(
-                                    source=f"{module}::__module__",
-                                    target=target,
-                                    relation=Relation.IMPORTS,
-                                    provenance=Provenance.EXTRACTED,
-                                    confidence_score=1.0,
-                                    context=stripped[:120],
-                                )
-                            )
+        seen: set[tuple[str, str]] = set()
+        known_files = {str(path) for path in self._files}
+
+        for file_key in sorted(known_files):
+            module_source = f"{file_key}::__module__"
+            targets: set[str] = set()
+
+            for binding in self._import_bindings.get(file_key, {}).values():
+                target_file = binding.split("::", 1)[0]
+                resolved = self.resolve_import_target(target_file, importer=file_key) or target_file
+                if resolved in known_files:
+                    targets.add(resolved)
+
+            for target in self._import_star_targets.get(file_key, []):
+                if target in known_files:
+                    targets.add(target)
+
+            for target in sorted(targets):
+                edge_key = (module_source, target)
+                if edge_key in seen:
+                    continue
+                seen.add(edge_key)
+                edges.append(
+                    CodeEdge(
+                        source=module_source,
+                        target=target,
+                        relation=Relation.IMPORTS,
+                        provenance=Provenance.EXTRACTED,
+                        confidence_score=1.0,
+                        context="import_binding",
+                    )
+                )
         return edges

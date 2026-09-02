@@ -1854,13 +1854,13 @@ class Scanner:
             # Run all tasks concurrently
             scan_results = await asyncio.gather(*scan_tasks)
 
-            # Run meta-analysis if enabled (post-pass on all results)
-            scan_results = await self._run_meta_analysis_on_results(
-                list(scan_results), analyzers
+            scan_results = await self._attach_behavioral_source_findings(
+                list(scan_results), analyzers, source_path=source_path
             )
 
-            scan_results = await self._attach_behavioral_source_findings(
-                scan_results, analyzers, source_path=source_path
+            # Run meta-analysis if enabled (post-pass on all results)
+            scan_results = await self._run_meta_analysis_on_results(
+                scan_results, analyzers
             )
 
             return scan_results
@@ -2071,13 +2071,13 @@ class Scanner:
                 # Run all tasks concurrently
                 scan_results = await asyncio.gather(*scan_tasks)
 
-                # Run meta-analysis if enabled (post-pass on all results)
-                scan_results = await self._run_meta_analysis_on_results(
-                    list(scan_results), analyzers
+                scan_results = await self._attach_behavioral_source_findings(
+                    list(scan_results), analyzers, source_path=source_path
                 )
 
-                scan_results = await self._attach_behavioral_source_findings(
-                    scan_results, analyzers, source_path=source_path
+                # Run meta-analysis if enabled (post-pass on all results)
+                scan_results = await self._run_meta_analysis_on_results(
+                    scan_results, analyzers
                 )
 
                 return scan_results

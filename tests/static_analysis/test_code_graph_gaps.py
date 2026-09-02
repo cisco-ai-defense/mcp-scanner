@@ -70,6 +70,44 @@ class TestGraphGaps:
         assert ctx.taint_sources
         assert ctx.taint_sinks
         assert ctx.taint_flows
+        assert any(s["sink"] == "os.remove" for s in ctx.taint_sinks)
+
+    def test_populate_taint_fields_filters_benign_calls(self):
+        ctx = _ctx(
+            parameter_flows=[
+                {
+                    "parameter": "path",
+                    "operations": [
+                        {"type": "function_call", "function": "len", "line": 2},
+                        {"type": "function_call", "function": "os.remove", "line": 3},
+                    ],
+                }
+            ]
+        )
+        populate_taint_fields(ctx)
+        assert not any(s["sink"] == "len" for s in ctx.taint_sinks)
+        assert any(s["sink"] == "os.remove" for s in ctx.taint_sinks)
+
+    def test_resolver_import_edges_use_bindings(self, tmp_path: Path) -> None:
+        util = tmp_path / "util.py"
+        server = tmp_path / "server.py"
+        util.write_text("def helper():\n    pass\n", encoding="utf-8")
+        server.write_text(
+            "from util import helper\n\ndef handler():\n    helper()\n",
+            encoding="utf-8",
+        )
+        resolver = CrossFileSymbolResolver(
+            {util.resolve(): util.read_text(), server.resolve(): server.read_text()},
+            language="python",
+        )
+        edges = resolver.import_edges()
+        server_key = str(server.resolve())
+        util_key = str(util.resolve())
+        import_edges = [
+            e for e in edges if e.source == f"{server_key}::__module__" and e.target == util_key
+        ]
+        assert import_edges
+        assert import_edges[0].context == "import_binding"
 
     def test_resolver_dynamic_dispatch(self):
         resolver = CrossFileSymbolResolver({}, language="javascript")

@@ -81,11 +81,7 @@ class CodeGraphCache:
             return
         disk_path = self._disk_path(path, content)
         try:
-            disk_path.parent.mkdir(parents=True, exist_ok=True)
-            disk_path.write_text(
-                json.dumps(value.to_dict(), separators=(",", ":")),
-                encoding="utf-8",
-            )
+            self._atomic_write_json(disk_path, value.to_dict())
         except OSError:
             return
 
@@ -122,13 +118,18 @@ class CodeGraphCache:
             return
         disk_path = self._merged_disk_path(key)
         try:
-            disk_path.parent.mkdir(parents=True, exist_ok=True)
-            disk_path.write_text(
-                json.dumps(value.to_dict(), separators=(",", ":")),
-                encoding="utf-8",
-            )
+            self._atomic_write_json(disk_path, value.to_dict())
         except OSError:
             return
+
+    def _atomic_write_json(self, disk_path: Path, payload: dict) -> None:
+        disk_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = disk_path.with_suffix(disk_path.suffix + ".tmp")
+        tmp_path.write_text(
+            json.dumps(payload, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        tmp_path.replace(disk_path)
 
     def _disk_path(self, path: str, content: str) -> Path:
         assert self.cache_dir is not None

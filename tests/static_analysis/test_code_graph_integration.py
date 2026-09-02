@@ -6,9 +6,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import importlib
+
 import pytest
 
-from mcpscanner.config.constants import MCPScannerConstants
+from mcpscanner.config import constants
 from mcpscanner.core.static_analysis.context_extractor import ContextExtractor, FunctionContext
 from mcpscanner.core.static_analysis.graph.integration import (
     build_code_graph,
@@ -49,7 +51,8 @@ FIXTURE = (
 
 def test_code_graph_enabled_by_default(monkeypatch):
     monkeypatch.delenv("MCP_SCANNER_CODE_GRAPH", raising=False)
-    assert MCPScannerConstants.CODE_GRAPH_ENABLED is True
+    importlib.reload(constants)
+    assert constants.MCPScannerConstants.CODE_GRAPH_ENABLED is True
 
 
 @pytest.mark.skipif(not FIXTURE.is_file(), reason="behavioral fixture missing")
