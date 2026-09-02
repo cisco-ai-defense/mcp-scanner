@@ -21,6 +21,15 @@ from __future__ import annotations
 from ....config.config import Config
 from .code_analyzer import BehavioralCodeAnalyzer
 
+# Source extensions we treat as JS/TS. Keep in sync with
+# ``NativeAnalyzer`` / ``BehavioralCodeAnalyzer`` path handling.
+_JS_EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
+
+# Directories we never recurse into during npm scans.
+_SKIP_DIRS = frozenset(
+    {"node_modules", "dist", "build", "out", ".git", ".next", ".turbo", "coverage"}
+)
+
 
 class JSBehavioralCodeAnalyzer(BehavioralCodeAnalyzer):
     """Backward-compatible JS/TS entry point.
