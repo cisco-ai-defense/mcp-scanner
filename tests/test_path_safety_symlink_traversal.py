@@ -289,6 +289,15 @@ class TestConfinePath:
         sanitized = sanitize_confined_path("src/server.py", root)
         assert sanitized == str(target.resolve())
 
+    def test_confined_parts_missing_detects_absent_leaf(self, tmp_path: Path):
+        from mcpscanner.utils.path_safety import _confined_parts_missing
+
+        root = tmp_path / "scanroot"
+        root.mkdir()
+        (root / "src").mkdir()
+
+        assert _confined_parts_missing(str(root.resolve()), ("src", "missing.py"))
+
 
 # ---------------------------------------------------------------------------
 # BehavioralCodeAnalyzer

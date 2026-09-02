@@ -194,26 +194,53 @@ def _confined_path_string(root: str, parts: tuple[str, ...]) -> str:
     return fullpath
 
 
+def _confined_parts_missing(root: str, parts: tuple[str, ...]) -> bool:
+    """Return whether validated path segments are absent under ``root``.
+
+    Walks the tree using directory listings from the filesystem. Each step
+    advances with a name returned by ``os.listdir``, not the request string.
+    """
+    current = root
+    for segment in parts:
+        try:
+            child_names = os.listdir(current)
+        except OSError:
+            return True
+        matched_name: str | None = None
+        for name in child_names:
+            if name != segment:
+                continue
+            matched_name = name
+            break
+        if matched_name is None:
+            return True
+        current = os.path.join(current, matched_name)
+    return False
+
+
+def _assert_confined_parts_exist(
+    source_path: str | os.PathLike,
+    root: str,
+    parts: tuple[str, ...],
+) -> None:
+    if _confined_parts_missing(root, parts):
+        raise ConfinedPathNotFoundError(
+            f"Path {source_path!r} does not exist under {root!r}"
+        )
+
+
 def sanitize_confined_path(
     source_path: str | os.PathLike,
     resolved_root: str | os.PathLike,
-    *,
-    must_exist: bool = False,
 ) -> str:
     """Validate and return a confined absolute path string safe for file access.
 
     Uses ``os.path.normpath`` / ``os.path.realpath`` with a root prefix check so
-    static analysis can treat the returned value as sanitized. When
-    ``must_exist`` is true, the existence probe runs only after that guard.
+    static analysis can treat the returned value as sanitized.
     """
     parts = validate_confined_path_input(os.fspath(source_path))
     root = _canonical_root(resolved_root)
-    fullpath = _confined_path_string(root, parts)
-    if must_exist and not os.path.lexists(fullpath):
-        raise ConfinedPathNotFoundError(
-            f"Path {source_path!r} does not exist under {root!r}"
-        )
-    return fullpath
+    return _confined_path_string(root, parts)
 
 
 def resolve_confined_api_root(configured_root: str) -> str:
@@ -251,8 +278,11 @@ def confine_path(
     if the confined path is missing. Existence checks belong here so API
     handlers do not perform filesystem operations on request-derived paths.
     """
-    sanitized = sanitize_confined_path(source_path, resolved_root, must_exist=must_exist)
-    return Path(sanitized)
+    parts = validate_confined_path_input(os.fspath(source_path))
+    root = _canonical_root(resolved_root)
+    if must_exist:
+        _assert_confined_parts_exist(source_path, root, parts)
+    return Path(_confined_path_string(root, parts))
 
 
 def require_confined_path(
@@ -263,7 +293,10 @@ def require_confined_path(
 
     Returns a sanitized absolute path string suitable for filesystem access.
     """
-    return sanitize_confined_path(source_path, resolved_root, must_exist=True)
+    parts = validate_confined_path_input(os.fspath(source_path))
+    root = _canonical_root(resolved_root)
+    _assert_confined_parts_exist(source_path, root, parts)
+    return _confined_path_string(root, parts)
 
 
 __all__ = [
