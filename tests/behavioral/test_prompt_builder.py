@@ -144,6 +144,20 @@ class TestAlignmentPromptBudget:
         assert sink_body in prompt
         assert len(prompt) <= 3000
 
+    def test_hard_cap_preserves_untrusted_input_end_tag(self, monkeypatch):
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 400)
+        builder = AlignmentPromptBuilder()
+        end_tag = "<!---UNTRUSTED_INPUT_END_hardcap--->"
+        prompt = builder._assemble_prompt(
+            template="G" * 2000,
+            analysis_content="A" * 2000,
+            start_tag="<!---UNTRUSTED_INPUT_START_hardcap--->",
+            end_tag=end_tag,
+            log_label="test=hardcap_fence",
+        )
+        assert len(prompt) <= 400
+        assert prompt.endswith(end_tag)
+
     def test_default_cap_preserves_graph_with_real_template(self):
         builder = AlignmentPromptBuilder()
         graph_body = "SINK ANALYSIS (deterministic):\n  os.remove"

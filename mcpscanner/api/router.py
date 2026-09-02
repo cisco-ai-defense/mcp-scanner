@@ -76,6 +76,37 @@ def get_scanner() -> ScannerFactory:
     )
 
 
+def _behavioral_source_api_gate() -> str:
+    """Validate behavioral source API is enabled and return the configured root."""
+    if not MCPScannerConstants.BEHAVIORAL_SOURCE_API_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Behavioral source API is disabled. Set "
+                "MCP_SCANNER_ENABLE_BEHAVIORAL_SOURCE_API=true to enable it."
+            ),
+        )
+
+    api_root = (MCPScannerConstants.BEHAVIORAL_SOURCE_API_ROOT or "").strip()
+    if not api_root:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Behavioral source API requires MCP_SCANNER_BEHAVIORAL_SOURCE_API_ROOT "
+                "(or MCP_SCANNER_BEHAVIORAL_SOURCE_PATH) to confine readable paths."
+            ),
+        )
+    return api_root
+
+
+def _resolve_scanner_factory(request: Request) -> ScannerFactory:
+    """Resolve ``get_scanner`` after API gates so disabled mounts do not 500."""
+    override = request.app.dependency_overrides.get(get_scanner)
+    if override is not None:
+        return override()
+    return get_scanner()
+
+
 def _build_meta_analysis_audit(scanner_result: Any) -> Optional[Dict[str, Any]]:
     """Build the API ``meta_analysis`` audit block from a scan result.
 
@@ -1025,33 +1056,22 @@ async def scan_instructions_endpoint(
 @router.post("/scan-behavioral-source", tags=["Scanning"])
 async def scan_behavioral_source_endpoint(
     request: BehavioralSourceScanRequest,
-    scanner_factory: ScannerFactory = Depends(get_scanner),
+    http_request: Request,
+    api_root: str = Depends(_behavioral_source_api_gate),
 ):
     """Run behavioral source-code analysis on a local file or directory."""
-    if not MCPScannerConstants.BEHAVIORAL_SOURCE_API_ENABLED:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Behavioral source API is disabled. Set "
-                "MCP_SCANNER_ENABLE_BEHAVIORAL_SOURCE_API=true to enable it."
-            ),
-        )
-
-    api_root = (MCPScannerConstants.BEHAVIORAL_SOURCE_API_ROOT or "").strip()
-    if not api_root:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Behavioral source API requires MCP_SCANNER_BEHAVIORAL_SOURCE_API_ROOT "
-                "(or MCP_SCANNER_BEHAVIORAL_SOURCE_PATH) to confine readable paths."
-            ),
-        )
-
     try:
         confined_path = confine_path(request.source_path, api_root)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if not confined_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Path not found under API root: {request.source_path}",
+        )
+
+    scanner_factory = _resolve_scanner_factory(http_request)
     scanner = scanner_factory([AnalyzerEnum.BEHAVIORAL])
     if not scanner._behavioral_analyzer:
         raise HTTPException(

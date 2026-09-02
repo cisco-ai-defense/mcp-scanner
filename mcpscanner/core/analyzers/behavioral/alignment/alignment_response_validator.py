@@ -40,7 +40,8 @@ from .json_utils import parse_json_from_llm
 # the LLM did *not* successfully analyse the corresponding function
 # (short-padding, non-dict item, missing field, or malformed mismatch).
 # The orchestrator routes any slot carrying this key to
-# ``errored_function_names`` instead of ``no_mismatch``.
+# ``errored_function_keys`` (scoped by source file + name) instead of
+# ``no_mismatch``.
 #
 # It MUST NOT survive on an LLM-supplied dict: a model could otherwise
 # coerce its own clean responses into the "errored" bucket simply by
@@ -395,7 +396,7 @@ class AlignmentResponseValidator:
           ``expected_count``.
 
         The orchestrator routes every ``_unanalysed`` slot to
-        ``errored_function_names`` so callers don't mis-label
+        ``errored_function_keys`` so callers don't mis-label
         never-analysed functions as clean.
         """
         results: List[Dict[str, Any]] = []
@@ -464,7 +465,7 @@ class AlignmentResponseValidator:
         initial_len = len(results)
         while len(results) < expected_count:
             # Tag short-padding slots so the orchestrator can route them
-            # to ``errored_function_names`` rather than ``no_mismatch``
+            # to ``errored_function_keys`` rather than ``no_mismatch``
             # (a function the LLM never analysed is not "safe").
             results.append(_unanalysed_sentinel())
         short_padding = len(results) - initial_len

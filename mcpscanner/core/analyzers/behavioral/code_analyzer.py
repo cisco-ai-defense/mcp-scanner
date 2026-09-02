@@ -108,6 +108,16 @@ def _code_graphs_for_file(
     }
 
 
+def _normalize_behavioral_source_path(path: str) -> str:
+    """Canonicalize source paths for errored-function key lookups."""
+    if not path or path == "unknown":
+        return path
+    try:
+        return str(Path(path).resolve(strict=False))
+    except (OSError, RuntimeError, ValueError):
+        return path
+
+
 def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
     """Dedupe key for merged MCP contexts.
 
@@ -794,7 +804,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     source_code = f.read()
 
             file_context = context.copy()
-            file_context["file_path"] = file_path
+            file_context["file_path"] = _normalize_behavioral_source_path(file_path)
+            normalized_path = file_context["file_path"]
             file_context["cross_file_analyzer"] = cross_file_analyzer
 
             findings = await self._analyze_source_code(source_code, file_context)
@@ -802,7 +813,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # Tag findings with file path
             for finding in findings:
                 if finding.details:
-                    finding.details["source_file"] = file_path
+                    finding.details["source_file"] = normalized_path
 
             self.logger.debug(
                 "behavioral _analyze_file ok path=%s findings=%d source_length=%d "
@@ -838,7 +849,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         Returns:
             List of security findings.
         """
-        file_path = context.get("file_path", "unknown")
+        file_path = _normalize_behavioral_source_path(
+            context.get("file_path", "unknown")
+        )
         findings = []
         func_contexts = []
 

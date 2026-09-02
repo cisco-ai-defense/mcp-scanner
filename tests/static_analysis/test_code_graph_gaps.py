@@ -151,6 +151,22 @@ class TestGraphGaps:
         assert provenance.value == "ambiguous"
         assert context == "ambiguous_suffix"
 
+    def test_resolver_ambiguous_same_file_suffix(self) -> None:
+        resolver = CrossFileSymbolResolver({}, language="python")
+        caller = "/caller.py"
+        known = {
+            f"{caller}::Handler.run",
+            f"{caller}::Worker.run",
+        }
+        resolved, provenance, _confidence, context = resolver.resolve_callee(
+            f"{caller}::handler",
+            "run",
+            known,
+        )
+        assert resolved == "external::run"
+        assert provenance.value == "ambiguous"
+        assert context == "ambiguous_same_file"
+
     def test_resolver_dynamic_dispatch(self):
         resolver = CrossFileSymbolResolver({}, language="javascript")
         resolved, provenance, confidence, context = resolver.resolve_callee(

@@ -23,7 +23,17 @@ def api_root(tmp_path):
     """Writable directory used as the confined API root."""
     sample = tmp_path / "server.py"
     sample.write_text("def handler():\n    pass\n", encoding="utf-8")
+    subdir = tmp_path / "pkg"
+    subdir.mkdir()
+    (subdir / "tool.py").write_text("def run():\n    pass\n", encoding="utf-8")
     return tmp_path
+
+
+def _app_with_factory(factory, *, api_root: str, enabled: bool = True) -> FastAPI:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_scanner] = lambda: factory
+    return app
 
 
 @pytest.fixture
@@ -52,14 +62,12 @@ def behavioral_app(api_root, monkeypatch):
         assert analyzers == [AnalyzerEnum.BEHAVIORAL]
         return scanner
 
-    app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[get_scanner] = lambda: factory
+    app = _app_with_factory(factory, api_root=str(api_root))
     return app, behavioral, api_root
 
 
 class TestBehavioralSourceEndpoint:
-    def test_disabled_returns_403(self, api_root, monkeypatch):
+    def test_disabled_returns_403_without_scanner_override(self, api_root, monkeypatch):
         monkeypatch.setattr(
             MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", False
         )
@@ -68,7 +76,6 @@ class TestBehavioralSourceEndpoint:
         )
         app = FastAPI()
         app.include_router(router)
-        app.dependency_overrides[get_scanner] = lambda: MagicMock()
         client = TestClient(app)
         resp = client.post(
             "/scan-behavioral-source", json={"source_path": "server.py"}
@@ -76,14 +83,13 @@ class TestBehavioralSourceEndpoint:
         assert resp.status_code == 403
         assert "disabled" in resp.json()["detail"].lower()
 
-    def test_missing_root_returns_503(self, monkeypatch):
+    def test_missing_root_returns_503_without_scanner_override(self, monkeypatch):
         monkeypatch.setattr(
             MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", True
         )
         monkeypatch.setattr(MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ROOT", "")
         app = FastAPI()
         app.include_router(router)
-        app.dependency_overrides[get_scanner] = lambda: MagicMock()
         client = TestClient(app)
         resp = client.post(
             "/scan-behavioral-source", json={"source_path": "server.py"}
@@ -106,6 +112,45 @@ class TestBehavioralSourceEndpoint:
             "/scan-behavioral-source", json={"source_path": "/etc/passwd"}
         )
         assert resp.status_code == 422
+
+    def test_missing_path_returns_404(self, behavioral_app):
+        app, _, _ = behavioral_app
+        client = TestClient(app)
+        resp = client.post(
+            "/scan-behavioral-source", json={"source_path": "missing.py"}
+        )
+        assert resp.status_code == 404
+
+    def test_missing_behavioral_analyzer_returns_400(self, api_root, monkeypatch):
+        monkeypatch.setattr(
+            MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", True
+        )
+        monkeypatch.setattr(
+            MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ROOT", str(api_root)
+        )
+        scanner = MagicMock()
+        scanner._behavioral_analyzer = None
+
+        def factory(_analyzers):
+            return scanner
+
+        app = _app_with_factory(factory, api_root=str(api_root))
+        client = TestClient(app)
+        resp = client.post(
+            "/scan-behavioral-source", json={"source_path": "server.py"}
+        )
+        assert resp.status_code == 400
+        assert "llm" in resp.json()["detail"].lower()
+
+    def test_directory_scan_returns_findings(self, behavioral_app):
+        app, behavioral, api_root = behavioral_app
+        client = TestClient(app)
+        resp = client.post("/scan-behavioral-source", json={"source_path": "pkg"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["finding_count"] == 1
+        assert str(api_root / "pkg") in body["source_path"]
+        behavioral.analyze.assert_awaited_once()
 
     def test_happy_path_returns_findings(self, behavioral_app):
         app, behavioral, api_root = behavioral_app

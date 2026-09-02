@@ -596,6 +596,13 @@ class CrossFileSymbolResolver:
         )
         if len(same_file) == 1:
             return same_file[0], Provenance.EXTRACTED, 1.0, None
+        if len(same_file) > 1:
+            return (
+                f"external::{callee_label}",
+                Provenance.AMBIGUOUS,
+                0.5,
+                "ambiguous_same_file",
+            )
 
         cross_file = sorted(
             fn

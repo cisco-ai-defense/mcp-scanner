@@ -29,6 +29,7 @@ This is the entry point for all alignment verification operations.
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .....config.config import Config
@@ -93,6 +94,11 @@ class AlignmentOrchestrator:
     def _function_key(func_context: Any) -> Tuple[str, str]:
         name = getattr(func_context, "name", None) or ""
         source = getattr(func_context, "source_file", "") or ""
+        if source and source != "unknown":
+            try:
+                source = str(Path(source).resolve(strict=False))
+            except (OSError, RuntimeError, ValueError):
+                pass
         return (source, name)
 
     def _mark_errored(self, func_context: Any) -> None:

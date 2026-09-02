@@ -179,6 +179,19 @@ _RESPONSE_FORMAT_MARKER = "## Required Output Format"
 _PROMPT_FRAME_CHARS = 5
 
 
+def _cap_prompt_preserving_end_tag(
+    prompt: str, *, max_total: int, end_tag: str
+) -> str:
+    """Hard-cap prompt length while keeping the untrusted-input closing fence."""
+    if len(prompt) <= max_total:
+        return prompt
+    trailer = f"\n{end_tag}\n"
+    if len(trailer) >= max_total:
+        return prompt[:max_total]
+    body_budget = max_total - len(trailer)
+    return prompt[:body_budget].rstrip() + trailer
+
+
 def _split_template(template: str) -> tuple[str, str]:
     """Split truncatable guidance from the pinned response-schema tail."""
     if _RESPONSE_FORMAT_MARKER not in template:
@@ -926,7 +939,9 @@ For functions with no issues, just include function_index, function_name, and mi
                         analysis_content += _ANALYSIS_TRUNCATION_SUFFIX
                     prompt = _build(template_used, analysis_content)
             if len(prompt) > max_total:
-                prompt = prompt[:max_total]
+                prompt = _cap_prompt_preserving_end_tag(
+                    prompt, max_total=max_total, end_tag=end_tag
+                )
 
         self.logger.debug(
             "prompt built label=%s prompt_length=%d analysis_content_length=%d "

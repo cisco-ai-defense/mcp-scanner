@@ -724,6 +724,8 @@ class Scanner:
         for extra in finalized[1:]:
             if extra.tool_name == "__behavioral_source__":
                 primary.findings.extend(extra.findings)
+                # ``meta_analysis`` audit blocks are derived from
+                # ``meta_filtered_findings`` at serialization time.
                 primary.meta_filtered_findings.extend(
                     list(getattr(extra, "meta_filtered_findings", []) or [])
                 )
