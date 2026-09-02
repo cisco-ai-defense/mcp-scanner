@@ -237,19 +237,22 @@ class TestConfinePath:
         with pytest.raises(ValueError, match="invalid characters"):
             validate_confined_path_input("src/evil$.py")
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="Symlink cycle creation is unreliable on Windows CI runners.",
-    )
-    def test_confine_path_maps_symlink_cycle_to_value_error(self, tmp_path: Path):
+    def test_confine_path_maps_resolution_failure_to_value_error(
+        self, tmp_path: Path, monkeypatch
+    ):
         from mcpscanner.utils.path_safety import confine_path
 
         root = tmp_path / "scanroot"
         root.mkdir()
-        loop_a = root / "loop_a"
-        loop_b = root / "loop_b"
-        os.symlink(loop_b, loop_a)
-        os.symlink(loop_a, loop_b)
+
+        original_resolve = Path.resolve
+
+        def resolve_raises_for_loop(self, *args, **kwargs):
+            if self.name == "loop_a":
+                raise RuntimeError("symlink loop detected")
+            return original_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", resolve_raises_for_loop)
 
         with pytest.raises(ValueError, match="could not be resolved safely"):
             confine_path("loop_a", root)
