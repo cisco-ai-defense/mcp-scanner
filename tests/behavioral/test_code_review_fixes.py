@@ -182,7 +182,7 @@ class TestAnalyzeUnboundScanModeRegression:
     """``analyze`` must remain total when reset_stats raises."""
 
     @pytest.mark.asyncio
-    async def test_reset_stats_raises_returns_empty(self, caplog, monkeypatch):
+    async def test_reset_stats_raises_returns_infrastructure_finding(self, caplog, monkeypatch):
         from mcpscanner.utils.logging_config import get_logger
 
         analyzer = BehavioralCodeAnalyzer(_cfg())
@@ -200,7 +200,9 @@ class TestAnalyzeUnboundScanModeRegression:
         with caplog.at_level(logging.ERROR):
             result = await analyzer.analyze("/nonexistent/path", {"tool_name": "t"})
 
-        assert result == []
+        assert len(result) == 1
+        assert result[0].threat_category == "ANALYZER INFRASTRUCTURE"
+        assert result[0].analyzer == "Behavioral"
         # The error handler logged the failure with the pre-initialised
         # sentinel values (``mode=unknown target=-``), confirming neither
         # variable was unbound.
@@ -636,7 +638,8 @@ class TestAnalyzedFunctionsResetOnEarlyFailure:
         analyzer.alignment_orchestrator.reset_stats = _boom  # type: ignore[method-assign]
 
         result = await analyzer.analyze("/nonexistent", {"tool_name": "t"})
-        assert result == []
+        assert len(result) == 1
+        assert result[0].threat_category == "ANALYZER INFRASTRUCTURE"
         assert analyzer.analyzed_functions == [], (
             "stale analyzed_functions should be cleared even when the "
             "scan body bails before populating it"

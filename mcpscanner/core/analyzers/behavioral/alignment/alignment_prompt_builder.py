@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .....config.constants import MCPScannerConstants
+from .....utils.log_format import truncate
 from ....static_analysis.context_extractor import FunctionContext
 
 _GRAPH_EVIDENCE_HEADER = (
@@ -401,8 +402,12 @@ Parameter Flow Tracking:
                     call_parts.append(
                         f"  Line {call_line}: {call_name}({', '.join(str(a) for a in call_args)})\n"
                     )
-                except Exception:
-                    # Skip malformed call entries
+                except Exception as exc:
+                    self.logger.debug(
+                        "alignment prompt skipped_malformed kind=function_call error_type=%s error=%s",
+                        type(exc).__name__,
+                        truncate(exc),
+                    )
                     continue
             content_parts.append("".join(call_parts))
 
@@ -417,9 +422,13 @@ Parameter Flow Tracking:
                     var = assign.get("variable", "unknown")
                     val = assign.get("value", "unknown")
                     assign_parts.append(f"  Line {line}: {var} = {val}\n")
-                except Exception:
+                except Exception as exc:
+                    self.logger.debug(
+                        "alignment prompt skipped_malformed kind=assignment error_type=%s error=%s",
+                        type(exc).__name__,
+                        truncate(exc),
+                    )
                     continue
-            content_parts.append("".join(assign_parts))
 
         # Add control flow information
         if func_context.control_flow:
@@ -458,7 +467,12 @@ Parameter Flow Tracking:
                                 self._format_call_chain(call["call_chain"], indent=4)
                             )
                     cross_file_parts.append("\n")
-                except Exception:
+                except Exception as exc:
+                    self.logger.debug(
+                        "alignment prompt skipped_malformed kind=cross_file_call error_type=%s error=%s",
+                        type(exc).__name__,
+                        truncate(exc),
+                    )
                     continue
             cross_file_parts.append(
                 "Note: Analyze the entire call chain to understand what operations are performed.\n"

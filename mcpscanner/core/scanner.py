@@ -639,20 +639,31 @@ class Scanner:
             )
             return scan_results
 
+        logger.debug(
+            "Running behavioral source attach path=%s tool_results=%d",
+            resolved_path,
+            len(scan_results),
+        )
+
         try:
             behavioral_findings = await self._behavioral_analyzer.analyze(
                 resolved_path,
                 context={"file_path": resolved_path},
             )
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "Behavioral source scan failed path=%s error=%s",
                 resolved_path,
                 exc,
+                exc_info=True,
             )
             return scan_results
 
         if not behavioral_findings:
+            logger.debug(
+                "Behavioral source scan returned no findings path=%s",
+                resolved_path,
+            )
             return scan_results
 
         by_tool: dict[str, list] = {}
@@ -694,6 +705,16 @@ class Scanner:
                 )
                 scan_results.append(source_result)
             source_result.findings.extend(unmatched)
+        matched_count = sum(
+            1 for r in scan_results for f in r.findings if f.analyzer == "Behavioral"
+        )
+        logger.debug(
+            "Behavioral source attach complete path=%s raw_findings=%d merged=%d orphan=%d",
+            resolved_path,
+            len(behavioral_findings),
+            matched_count,
+            len(unmatched),
+        )
         return scan_results
 
     async def _finalize_tool_scan_results(

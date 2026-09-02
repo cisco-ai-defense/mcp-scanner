@@ -38,6 +38,7 @@ from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ....utils.log_format import sanitize_log_value, truncate
+from ....utils.analyzer_errors import build_infrastructure_error_finding
 from ....utils.path_safety import filter_safe_paths, safe_resolve_root
 from ...static_analysis.context_extractor import ContextExtractor, FunctionContext
 from ...static_analysis.native_analyzer import NativeAnalyzer
@@ -306,8 +307,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.alignment_orchestrator.log_summary(
                 scope=f"{scan_mode}:{tool_label}",
             )
-        except Exception:  # pragma: no cover - logging must never raise
-            pass
+        except Exception as exc:  # pragma: no cover - logging must never raise
+            self.logger.debug(
+                "behavioral alignment summary log failed scope=%s:%s error_type=%s error=%s",
+                scan_mode,
+                tool_label,
+                type(exc).__name__,
+                truncate(exc),
+            )
 
     async def analyze(
         self, content: str, context: Dict[str, Any]
@@ -452,7 +459,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                             )
                     except Exception as e:
                         self.logger.warning(
-                            f"Failed to add file {accepted.path} to cross-file analyzer: {e}"
+                            "behavioral call_graph_add_file failed path=%s error_type=%s error=%s",
+                            sanitize_log_value(accepted.path),
+                            type(e).__name__,
+                            truncate(e),
+                            exc_info=True,
                         )
 
                 self.logger.debug(
@@ -575,7 +586,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         )
                 except Exception as e:
                     self.logger.warning(
-                        f"Failed to build call graph for {content}: {e}"
+                        "behavioral call_graph_build failed path=%s error_type=%s error=%s",
+                        sanitize_log_value(content),
+                        type(e).__name__,
+                        truncate(e),
+                        exc_info=True,
                     )
                     cross_file_analyzer = None
 
@@ -648,7 +663,17 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 truncate(e),
                 exc_info=True,
             )
-            return []
+            return [
+                build_infrastructure_error_finding(
+                    analyzer_name="Behavioral",
+                    subject=scan_target or tool_label,
+                    error=e,
+                    context="local",
+                    model=getattr(
+                        self.alignment_orchestrator.llm_client, "_model", None
+                    ),
+                )
+            ]
 
     _EXT_TO_TS_LANGUAGE = {
         ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
@@ -834,6 +859,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 int((time.perf_counter() - analyze_start) * 1000),
                 type(e).__name__,
                 truncate(e),
+                exc_info=True,
             )
             return []
 
@@ -1009,10 +1035,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                             sanitize_log_value(file_path),
                         )
                     except Exception as graph_err:
-                        self.logger.debug(
-                            "Code graph partition failed for %s: %s",
+                        self.analysis_errors += 1
+                        self.logger.warning(
+                            "code_graph partition failed file=%s error_type=%s error=%s",
                             sanitize_log_value(file_path),
+                            type(graph_err).__name__,
                             truncate(graph_err),
+                            exc_info=True,
                         )
                         llm_contexts = func_contexts
 

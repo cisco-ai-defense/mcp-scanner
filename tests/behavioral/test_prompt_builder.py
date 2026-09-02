@@ -390,10 +390,13 @@ class TestBatchGraphEvidence:
     def test_batch_assembled_prompt_keeps_graph_evidence_with_function(
         self, monkeypatch
     ):
-        from mcpscanner.config.constants import MCPScannerConstants
+        import mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder as apb
 
         monkeypatch.setattr(
             MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000
+        )
+        monkeypatch.setattr(
+            apb.MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000
         )
         builder = AlignmentPromptBuilder()
         evidence_a = "SINK ANALYSIS (deterministic):\n  os.system in tool_a"

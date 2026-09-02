@@ -180,6 +180,7 @@ class AlignmentResponseValidator:
                 response_length,
                 type(e).__name__,
                 truncate(e),
+                exc_info=True,
             )
             return None
 
@@ -326,6 +327,7 @@ class AlignmentResponseValidator:
                 expected_count,
                 type(e).__name__,
                 truncate(e),
+                exc_info=True,
             )
             return None
 

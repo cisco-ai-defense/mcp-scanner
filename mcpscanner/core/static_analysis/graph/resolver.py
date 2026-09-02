@@ -23,6 +23,9 @@ from .dynamic_dispatch import (
 )
 from .models import CodeEdge, Provenance, Relation
 from .semantic_dispatch import DispatchResult, DispatchTarget, ProgramFacts
+from ....utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 _TS_LANGS = frozenset(
     {"javascript", "typescript", "tsx", "go", "rust", "java", "kotlin", "c_sharp", "ruby", "php"}
 )
@@ -102,7 +105,12 @@ class CrossFileSymbolResolver:
             self._export_bindings[file_key] = self._parse_python_export_bindings(
                 source, file_key
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "code_graph python index failed file=%s error=%s",
+                file_key,
+                exc,
+            )
             return
 
     def _index_treesitter_file(self, path: Path, source: str, file_key: str) -> None:
@@ -125,14 +133,24 @@ class CrossFileSymbolResolver:
             self._export_bindings[file_key] = self._parse_ts_export_bindings(
                 tree.root_node, source_bytes, file_key
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "code_graph treesitter index failed file=%s error=%s",
+                file_key,
+                exc,
+            )
             return
 
     def _parse_python_import_bindings(self, source: str, file_key: str) -> dict[str, str]:
         bindings: dict[str, str] = {}
         try:
             tree = ast.parse(source)
-        except SyntaxError:
+        except SyntaxError as exc:
+            logger.debug(
+                "code_graph python_import_bindings parse_failed file=%s error=%s",
+                file_key,
+                exc,
+            )
             return bindings
 
         for node in tree.body:
@@ -161,7 +179,12 @@ class CrossFileSymbolResolver:
         exports: dict[str, str] = {}
         try:
             tree = ast.parse(source)
-        except SyntaxError:
+        except SyntaxError as exc:
+            logger.debug(
+                "code_graph python_export_bindings parse_failed file=%s error=%s",
+                file_key,
+                exc,
+            )
             return exports
 
         for node in tree.body:

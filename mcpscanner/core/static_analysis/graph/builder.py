@@ -80,7 +80,17 @@ class CodeGraphBuilder:
 
     def add_path(self, file_path: Path) -> None:
         resolved = file_path.resolve()
-        self._files[resolved] = resolved.read_text(encoding="utf-8", errors="replace")
+        try:
+            self._files[resolved] = resolved.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.warning(
+                "code_graph add_path failed path=%s error_type=%s error=%s",
+                resolved,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise
 
     def build(self) -> CodeGraph:
         graph = CodeGraph()
@@ -133,6 +143,7 @@ class CodeGraphBuilder:
         for path, source in files.items():
             cached = self._cache.get(str(path), source)
             if cached is not None:
+                logger.debug("code_graph cache hit path=%s language=%s", path, language)
                 self._merge_graphs(partial, cached)
                 continue
             single = build_fn({path: source})
@@ -391,7 +402,12 @@ class CodeGraphBuilder:
                 continue
             try:
                 builder.add_path(path)
-            except OSError:
+            except OSError as exc:
+                logger.debug(
+                    "code_graph skipped unreadable file path=%s error=%s",
+                    path,
+                    exc,
+                )
                 continue
         return builder.build()
 
@@ -425,5 +441,12 @@ class CodeGraphBuilder:
             language=language,
             mcp_entries=mcp_entries,
             resolver=resolver,
+        )
+        logger.info(
+            "code_graph built_from_analyzer nodes=%d edges=%d entry_points=%d language=%s",
+            len(graph.nodes),
+            len(graph.edges),
+            len(graph.entry_points),
+            language,
         )
         return graph

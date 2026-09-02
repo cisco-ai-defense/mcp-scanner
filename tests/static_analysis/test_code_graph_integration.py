@@ -4,13 +4,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
-
-import importlib
 
 import pytest
 
-from mcpscanner.config import constants
+from mcpscanner.config.constants import MCPScannerConstants
 from mcpscanner.core.static_analysis.context_extractor import ContextExtractor, FunctionContext
 from mcpscanner.core.static_analysis.graph.integration import (
     build_code_graph,
@@ -50,9 +49,21 @@ FIXTURE = (
 
 
 def test_code_graph_enabled_by_default(monkeypatch):
+    """Default is enabled when MCP_SCANNER_CODE_GRAPH is unset.
+
+    Do not ``importlib.reload`` the constants module here: reload forks
+    ``MCPScannerConstants`` and leaves already-imported modules (e.g.
+    ``alignment_prompt_builder``) bound to the stale class, which breaks
+    later tests that monkeypatch alignment prompt limits.
+    """
     monkeypatch.delenv("MCP_SCANNER_CODE_GRAPH", raising=False)
-    importlib.reload(constants)
-    assert constants.MCPScannerConstants.CODE_GRAPH_ENABLED is True
+    default_from_env = os.getenv("MCP_SCANNER_CODE_GRAPH", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+    assert default_from_env is True
+    assert MCPScannerConstants.CODE_GRAPH_ENABLED is True
 
 
 @pytest.mark.skipif(not FIXTURE.is_file(), reason="behavioral fixture missing")

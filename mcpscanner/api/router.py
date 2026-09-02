@@ -1074,43 +1074,78 @@ async def scan_behavioral_source_endpoint(
     endpoint is enabled (see ``mcpscanner.api.api``). Place the service behind
     network/auth controls; it reads arbitrary files under the configured API root.
     """
-    try:
-        confined_path = confine_path(request.source_path, api_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if not confined_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Path not found under API root: {request.source_path}",
-        )
-
-    scanner_factory = _resolve_scanner_factory(http_request)
-    scanner = scanner_factory([AnalyzerEnum.BEHAVIORAL])
-    if not scanner._behavioral_analyzer:
-        raise HTTPException(
-            status_code=400,
-            detail="Behavioral analyzer requires LLM credentials in scanner configuration",
-        )
-
-    analyzer = scanner._behavioral_analyzer
-    confined_str = str(confined_path)
-    findings = await analyzer.analyze(
-        confined_str,
-        context={"file_path": confined_str},
+    logger.debug(
+        "Starting behavioral source scan - path: %s api_root: %s",
+        request.source_path,
+        api_root,
     )
-    return {
-        "source_path": confined_str,
-        "finding_count": len(findings),
-        "analyzed_functions": analyzer.analyzed_functions,
-        "findings": [
-            {
-                "severity": f.severity,
-                "summary": f.summary,
-                "analyzer": f.analyzer,
-                "threat_category": f.threat_category,
-                "details": f.details,
-            }
-            for f in findings
-        ],
-    }
+
+    try:
+        try:
+            confined_path = confine_path(request.source_path, api_root)
+        except ValueError as exc:
+            logger.error("Invalid behavioral source path: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not confined_path.exists():
+            logger.error(
+                "Behavioral source path not found under API root: %s",
+                request.source_path,
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=f"Path not found under API root: {request.source_path}",
+            )
+
+        scanner_factory = _resolve_scanner_factory(http_request)
+        scanner = scanner_factory([AnalyzerEnum.BEHAVIORAL])
+        if not scanner._behavioral_analyzer:
+            logger.error(
+                "Behavioral source scan rejected: LLM credentials not configured"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Behavioral analyzer requires LLM credentials in scanner configuration",
+            )
+
+        analyzer = scanner._behavioral_analyzer
+        confined_str = str(confined_path)
+        findings = await analyzer.analyze(
+            confined_str,
+            context={"file_path": confined_str},
+        )
+        analyzed_functions = getattr(analyzer, "analyzed_functions", 0)
+        logger.debug(
+            "Behavioral source scan completed - path: %s finding_count=%d analyzed_functions=%s",
+            confined_str,
+            len(findings),
+            analyzed_functions,
+        )
+        return {
+            "source_path": confined_str,
+            "finding_count": len(findings),
+            "analyzed_functions": analyzed_functions,
+            "findings": [
+                {
+                    "severity": f.severity,
+                    "summary": f.summary,
+                    "analyzer": f.analyzer,
+                    "threat_category": f.threat_category,
+                    "details": f.details,
+                }
+                for f in findings
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Unexpected error in behavioral source scan path=%s: %s",
+            request.source_path,
+            e,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error scanning behavioral source: {str(e)}",
+        )
