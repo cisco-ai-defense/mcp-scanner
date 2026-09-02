@@ -130,7 +130,21 @@ class TestBehavioralSourceEndpoint:
         assert resp.status_code == 422
 
     def test_missing_path_returns_404(self, behavioral_app):
-        app, _, _ = behavioral_app
+        app, behavioral, _ = behavioral_app
+        from mcpscanner.utils.analyzer_errors import build_infrastructure_error_finding
+
+        behavioral.analyze = AsyncMock(
+            return_value=[
+                build_infrastructure_error_finding(
+                    analyzer_name="Behavioral",
+                    subject="missing.py",
+                    error=FileNotFoundError(
+                        "Path not found under configured API root"
+                    ),
+                    context="local",
+                )
+            ]
+        )
         client = TestClient(app)
         resp = client.post(
             "/scan-behavioral-source", json={"source_path": "missing.py"}

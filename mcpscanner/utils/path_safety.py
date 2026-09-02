@@ -48,10 +48,6 @@ _MAX_CONFINED_PATH_LEN = 4096
 _SAFE_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-class ConfinedPathNotFoundError(ValueError):
-    """Raised when a validated confined path does not exist on disk."""
-
-
 def safe_resolve_root(directory: str | os.PathLike) -> Path:
     """Resolve ``directory`` to an absolute, symlink-free canonical path.
 
@@ -176,71 +172,37 @@ def validate_confined_path_input(source_path: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
-def _canonical_root(resolved_root: str | os.PathLike) -> str:
-    """Return a symlink-resolved absolute root directory path."""
-    try:
-        return os.path.realpath(os.fspath(resolved_root))
-    except OSError as exc:
-        raise ValueError(
-            f"Root {resolved_root!r} could not be resolved safely"
-        ) from exc
-
-
-def _confined_path_string(root: str, parts: tuple[str, ...]) -> str:
-    """Build a confined absolute path string under ``root`` using ``os.path``."""
-    fullpath = os.path.normpath(os.path.join(root, *parts))
-    if fullpath != root and not fullpath.startswith(root + os.sep):
-        raise ValueError(f"Path {parts!r} is outside the allowed root {root!r}")
-    return fullpath
-
-
-def _confined_parts_missing(root: str, parts: tuple[str, ...]) -> bool:
-    """Return whether validated path segments are absent under ``root``.
-
-    Walks the tree using directory listings from the filesystem. Each step
-    advances with a name returned by ``os.listdir``, not the request string.
-    """
-    current = root
-    for segment in parts:
-        try:
-            child_names = os.listdir(current)
-        except OSError:
-            return True
-        matched_name: str | None = None
-        for name in child_names:
-            if name != segment:
-                continue
-            matched_name = name
-            break
-        if matched_name is None:
-            return True
-        current = os.path.join(current, matched_name)
-    return False
-
-
-def _assert_confined_parts_exist(
-    source_path: str | os.PathLike,
-    root: str,
-    parts: tuple[str, ...],
-) -> None:
-    if _confined_parts_missing(root, parts):
-        raise ConfinedPathNotFoundError(
-            f"Path {source_path!r} does not exist under {root!r}"
-        )
-
-
 def sanitize_confined_path(
     source_path: str | os.PathLike,
     resolved_root: str | os.PathLike,
 ) -> str:
     """Validate and return a confined absolute path string safe for file access.
 
-    Uses ``os.path.normpath`` / ``os.path.realpath`` with a root prefix check so
-    static analysis can treat the returned value as sanitized.
+    Follows the CodeQL-recommended pattern: ``normpath(join(base, parts))``
+    then reject paths that escape ``base`` via a prefix check. No filesystem
+    probes are performed here; callers verify existence at scan time if needed.
     """
     parts = validate_confined_path_input(os.fspath(source_path))
-    root = _canonical_root(resolved_root)
-    return _confined_path_string(root, parts)
+    try:
+        base_path = os.path.realpath(os.fspath(resolved_root))
+    except OSError as exc:
+        raise ValueError(
+            f"Root {resolved_root!r} could not be resolved safely"
+        ) from exc
+    fullpath = os.path.normpath(os.path.join(base_path, *parts))
+    if fullpath != base_path and not fullpath.startswith(base_path + os.sep):
+        raise ValueError(
+            f"Path {source_path!r} is outside the allowed root {base_path!r}"
+        )
+    return fullpath
+
+
+def require_confined_path(
+    source_path: str | os.PathLike,
+    resolved_root: str | os.PathLike,
+) -> str:
+    """Return a sanitized confined path string (alias of :func:`sanitize_confined_path`)."""
+    return sanitize_confined_path(source_path, resolved_root)
 
 
 def resolve_confined_api_root(configured_root: str) -> str:
@@ -264,43 +226,12 @@ def resolve_confined_api_root(configured_root: str) -> str:
 def confine_path(
     source_path: str | os.PathLike,
     resolved_root: str | os.PathLike,
-    *,
-    must_exist: bool = False,
 ) -> Path:
-    """Resolve ``source_path`` and require it to stay inside ``resolved_root``.
-
-    Only relative paths made of validated components are accepted. The
-    caller's input is normalized into discrete segments before joining
-    under ``resolved_root`` so untrusted request data never flows directly
-    into :class:`pathlib.Path` constructors.
-
-    When ``must_exist`` is true, raises :class:`ConfinedPathNotFoundError`
-    if the confined path is missing. Existence checks belong here so API
-    handlers do not perform filesystem operations on request-derived paths.
-    """
-    parts = validate_confined_path_input(os.fspath(source_path))
-    root = _canonical_root(resolved_root)
-    if must_exist:
-        _assert_confined_parts_exist(source_path, root, parts)
-    return Path(_confined_path_string(root, parts))
-
-
-def require_confined_path(
-    source_path: str | os.PathLike,
-    resolved_root: str | os.PathLike,
-) -> str:
-    """Like :func:`confine_path` but require the confined path to exist.
-
-    Returns a sanitized absolute path string suitable for filesystem access.
-    """
-    parts = validate_confined_path_input(os.fspath(source_path))
-    root = _canonical_root(resolved_root)
-    _assert_confined_parts_exist(source_path, root, parts)
-    return _confined_path_string(root, parts)
+    """Resolve ``source_path`` and require it to stay inside ``resolved_root``."""
+    return Path(sanitize_confined_path(source_path, resolved_root))
 
 
 __all__ = [
-    "ConfinedPathNotFoundError",
     "confine_path",
     "filter_safe_paths",
     "is_within_root",

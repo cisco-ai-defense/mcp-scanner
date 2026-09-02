@@ -41,11 +41,7 @@ from ..core.models import (
 )
 from ..config.constants import MCPScannerConstants
 from ..core.report_generator import ReportGenerator, results_to_json
-from ..utils.path_safety import (
-    ConfinedPathNotFoundError,
-    require_confined_path,
-    resolve_confined_api_root,
-)
+from ..utils.path_safety import require_confined_path, resolve_confined_api_root
 from ..core.result import (
     ScanResult,
     PromptScanResult,
@@ -104,6 +100,17 @@ def _behavioral_source_api_gate() -> str:
         return resolve_confined_api_root(api_root)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _behavioral_api_path_not_found(findings: List[Any]) -> bool:
+    """Return True when the behavioral analyzer reported a missing confined path."""
+    if len(findings) != 1:
+        return False
+    finding = findings[0]
+    if getattr(finding, "threat_category", "") != "ANALYZER INFRASTRUCTURE":
+        return False
+    details = getattr(finding, "details", None) or {}
+    return details.get("error_type") == "FileNotFoundError"
 
 
 def _resolve_scanner_factory(request: Request) -> ScannerFactory:
@@ -1090,15 +1097,6 @@ async def scan_behavioral_source_endpoint(
     try:
         try:
             confined_str = require_confined_path(request.source_path, api_root)
-        except ConfinedPathNotFoundError as exc:
-            logger.error(
-                "Behavioral source path not found under API root: %s",
-                request.source_path,
-            )
-            raise HTTPException(
-                status_code=404,
-                detail=f"Path not found under API root: {request.source_path}",
-            ) from exc
         except ValueError as exc:
             logger.error("Invalid behavioral source path: %s", exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1117,8 +1115,17 @@ async def scan_behavioral_source_endpoint(
         analyzer = scanner._behavioral_analyzer
         findings = await analyzer.analyze(
             confined_str,
-            context={"file_path": confined_str},
+            context={"file_path": confined_str, "api_confined_scan": True},
         )
+        if _behavioral_api_path_not_found(findings):
+            logger.error(
+                "Behavioral source path not found under API root: %s",
+                request.source_path,
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=f"Path not found under API root: {request.source_path}",
+            )
         analyzed_functions = getattr(analyzer, "analyzed_functions", 0)
         logger.debug(
             "Behavioral source scan completed - path: %s finding_count=%d analyzed_functions=%s",

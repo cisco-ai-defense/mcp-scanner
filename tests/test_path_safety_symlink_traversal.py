@@ -253,17 +253,16 @@ class TestConfinePath:
         with pytest.raises(ValueError, match="could not be resolved safely"):
             confine_path("loop_a", root)
 
-    def test_require_confined_path_raises_when_missing(self, tmp_path: Path):
-        from mcpscanner.utils.path_safety import (
-            ConfinedPathNotFoundError,
-            require_confined_path,
-        )
+    def test_require_confined_path_returns_sanitized_missing_path(
+        self, tmp_path: Path
+    ):
+        from mcpscanner.utils.path_safety import require_confined_path
 
         root = tmp_path / "scanroot"
         root.mkdir()
 
-        with pytest.raises(ConfinedPathNotFoundError, match="does not exist"):
-            require_confined_path("missing.py", root)
+        confined = require_confined_path("missing.py", root)
+        assert confined.endswith(f"{os.sep}missing.py")
 
     def test_require_confined_path_returns_existing_path(self, tmp_path: Path):
         from mcpscanner.utils.path_safety import require_confined_path
@@ -288,15 +287,6 @@ class TestConfinePath:
 
         sanitized = sanitize_confined_path("src/server.py", root)
         assert sanitized == str(target.resolve())
-
-    def test_confined_parts_missing_detects_absent_leaf(self, tmp_path: Path):
-        from mcpscanner.utils.path_safety import _confined_parts_missing
-
-        root = tmp_path / "scanroot"
-        root.mkdir()
-        (root / "src").mkdir()
-
-        assert _confined_parts_missing(str(root.resolve()), ("src", "missing.py"))
 
 
 # ---------------------------------------------------------------------------

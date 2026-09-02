@@ -363,6 +363,19 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 tool_label=tool_label,
             )
 
+            if context.get("api_confined_scan") and scan_mode == "inline":
+                if os.path.isabs(content):
+                    return [
+                        build_infrastructure_error_finding(
+                            analyzer_name="Behavioral",
+                            subject=scan_target,
+                            error=FileNotFoundError(
+                                "Path not found under configured API root"
+                            ),
+                            context="local",
+                        )
+                    ]
+
             # Check if content is a directory
             if os.path.isdir(content):
                 self.logger.debug(f"Scanning directory: {content}")
