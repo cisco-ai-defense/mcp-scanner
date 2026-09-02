@@ -186,7 +186,12 @@ def confine_path(
     root = safe_resolve_root(resolved_root)
     raw = os.fspath(source_path)
     parts = validate_confined_path_input(raw)
-    candidate = root.joinpath(*parts).resolve(strict=False)
+    try:
+        candidate = root.joinpath(*parts).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(
+            f"Path {source_path!r} could not be resolved safely under {root!r}"
+        ) from exc
     if not is_within_root(candidate, root):
         raise ValueError(
             f"Path {source_path!r} is outside the allowed root {root!r}"
@@ -195,9 +200,9 @@ def confine_path(
 
 
 __all__ = [
-    "safe_resolve_root",
-    "is_within_root",
-    "filter_safe_paths",
-    "validate_confined_path_input",
     "confine_path",
+    "filter_safe_paths",
+    "is_within_root",
+    "safe_resolve_root",
+    "validate_confined_path_input",
 ]

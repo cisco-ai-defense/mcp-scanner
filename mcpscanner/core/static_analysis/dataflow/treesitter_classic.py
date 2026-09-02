@@ -176,7 +176,10 @@ def _normalize_expr(node: Node, source_bytes: bytes) -> str:
 
 def _expr_uses_vars(expr_str: str, variable_names: set[str]) -> bool:
     for var in variable_names:
-        if re.search(rf"\b{re.escape(var)}\b", expr_str):
+        pattern = (
+            rf"(?<![A-Za-z0-9_$]){re.escape(var)}(?![A-Za-z0-9_$])"
+        )
+        if re.search(pattern, expr_str):
             return True
     return False
 
