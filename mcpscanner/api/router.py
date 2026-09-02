@@ -15,7 +15,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Any, Dict, List, Optional, Union
-import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -42,7 +41,11 @@ from ..core.models import (
 )
 from ..config.constants import MCPScannerConstants
 from ..core.report_generator import ReportGenerator, results_to_json
-from ..utils.path_safety import ConfinedPathNotFoundError, require_confined_path
+from ..utils.path_safety import (
+    ConfinedPathNotFoundError,
+    require_confined_path,
+    resolve_confined_api_root,
+)
 from ..core.result import (
     ScanResult,
     PromptScanResult,
@@ -97,7 +100,10 @@ def _behavioral_source_api_gate() -> str:
                 "(or MCP_SCANNER_BEHAVIORAL_SOURCE_PATH) to confine readable paths."
             ),
         )
-    return api_root
+    try:
+        return resolve_confined_api_root(api_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _resolve_scanner_factory(request: Request) -> ScannerFactory:
@@ -1083,21 +1089,7 @@ async def scan_behavioral_source_endpoint(
 
     try:
         try:
-            try:
-                api_root_real = os.path.realpath(api_root)
-            except OSError as exc:
-                logger.error("Invalid API root path: %s", api_root)
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid API root path",
-                ) from exc
-            if not os.path.isdir(api_root_real):
-                logger.error("API root is not a directory: %s", api_root)
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid API root path",
-                )
-            confined_str = require_confined_path(request.source_path, api_root_real)
+            confined_str = require_confined_path(request.source_path, api_root)
         except ConfinedPathNotFoundError as exc:
             logger.error(
                 "Behavioral source path not found under API root: %s",

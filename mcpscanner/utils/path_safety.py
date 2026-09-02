@@ -197,33 +197,41 @@ def _confined_path_string(root: str, parts: tuple[str, ...]) -> str:
 def sanitize_confined_path(
     source_path: str | os.PathLike,
     resolved_root: str | os.PathLike,
+    *,
+    must_exist: bool = False,
 ) -> str:
     """Validate and return a confined absolute path string safe for file access.
 
-  Uses ``os.path.normpath`` / ``os.path.realpath`` with a root prefix check so
-  static analysis can treat the returned value as sanitized.
+    Uses ``os.path.normpath`` / ``os.path.realpath`` with a root prefix check so
+    static analysis can treat the returned value as sanitized. When
+    ``must_exist`` is true, the existence probe runs only after that guard.
     """
     parts = validate_confined_path_input(os.fspath(source_path))
     root = _canonical_root(resolved_root)
-    return _confined_path_string(root, parts)
+    fullpath = _confined_path_string(root, parts)
+    if must_exist and not os.path.lexists(fullpath):
+        raise ConfinedPathNotFoundError(
+            f"Path {source_path!r} does not exist under {root!r}"
+        )
+    return fullpath
 
 
-def _validated_path_exists(root: str, parts: tuple[str, ...]) -> bool:
-    """Return whether validated segments exist under ``root`` without pathlib."""
-    current = root
-    for segment in parts:
-        if not os.path.isdir(current):
-            return False
-        found = False
-        for entry in os.scandir(current):
-            if entry.name != segment:
-                continue
-            current = entry.path
-            found = True
-            break
-        if not found:
-            return False
-    return True
+def resolve_confined_api_root(configured_root: str) -> str:
+    """Resolve and validate a configured API root directory.
+
+    Intended for server configuration (``BEHAVIORAL_SOURCE_API_ROOT``), not
+    request-supplied paths.
+    """
+    configured_root = configured_root.strip()
+    if not configured_root:
+        raise ValueError("API root must be configured")
+    try:
+        root = os.path.realpath(configured_root)
+    except OSError as exc:
+        raise ValueError("Invalid API root path") from exc
+    if not os.path.isdir(root):
+        raise ValueError("API root is not a directory")
+    return root
 
 
 def confine_path(
@@ -243,13 +251,8 @@ def confine_path(
     if the confined path is missing. Existence checks belong here so API
     handlers do not perform filesystem operations on request-derived paths.
     """
-    parts = validate_confined_path_input(os.fspath(source_path))
-    root = _canonical_root(resolved_root)
-    if must_exist and not _validated_path_exists(root, parts):
-        raise ConfinedPathNotFoundError(
-            f"Path {source_path!r} does not exist under {root!r}"
-        )
-    return Path(_confined_path_string(root, parts))
+    sanitized = sanitize_confined_path(source_path, resolved_root, must_exist=must_exist)
+    return Path(sanitized)
 
 
 def require_confined_path(
@@ -260,13 +263,7 @@ def require_confined_path(
 
     Returns a sanitized absolute path string suitable for filesystem access.
     """
-    parts = validate_confined_path_input(os.fspath(source_path))
-    root = _canonical_root(resolved_root)
-    if not _validated_path_exists(root, parts):
-        raise ConfinedPathNotFoundError(
-            f"Path {source_path!r} does not exist under {root!r}"
-        )
-    return sanitize_confined_path(source_path, resolved_root)
+    return sanitize_confined_path(source_path, resolved_root, must_exist=True)
 
 
 __all__ = [
@@ -275,6 +272,7 @@ __all__ = [
     "filter_safe_paths",
     "is_within_root",
     "require_confined_path",
+    "resolve_confined_api_root",
     "safe_resolve_root",
     "sanitize_confined_path",
     "validate_confined_path_input",
