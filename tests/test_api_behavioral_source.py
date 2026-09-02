@@ -97,6 +97,22 @@ class TestBehavioralSourceEndpoint:
         assert resp.status_code == 503
         assert "root" in resp.json()["detail"].lower()
 
+    def test_enabled_without_scanner_factory_returns_503(self, api_root, monkeypatch):
+        monkeypatch.setattr(
+            MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", True
+        )
+        monkeypatch.setattr(
+            MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ROOT", str(api_root)
+        )
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        resp = client.post(
+            "/scan-behavioral-source", json={"source_path": "server.py"}
+        )
+        assert resp.status_code == 503
+        assert "dependency_overrides" in resp.json()["detail"]
+
     def test_traversal_rejected_with_400(self, behavioral_app):
         app, _, _ = behavioral_app
         client = TestClient(app)

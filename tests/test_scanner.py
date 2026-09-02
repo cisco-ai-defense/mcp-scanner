@@ -1587,6 +1587,54 @@ async def test_scan_remote_server_tool_attaches_behavioral_findings_e2e(config):
 
 
 @pytest.mark.asyncio
+async def test_scan_stdio_server_tool_attaches_behavioral_findings_e2e(config):
+    """Single-tool stdio scans must attach behavioral findings without mocking finalize."""
+    behavioral_finding = SecurityFinding(
+        analyzer="Behavioral",
+        severity="HIGH",
+        summary="behavioral mismatch",
+        threat_category="MALICIOUS_CODE",
+        details={"function_name": "safe_tool"},
+    )
+    mock_session = AsyncMock()
+    mock_tool = MCPTool(name="safe_tool", description="tool", parameters=[])
+    mock_session.list_tools.return_value = type("ToolList", (), {"tools": [mock_tool]})()
+
+    tool_result = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+    server_config = StdioServer(command="python", args=["server.py"])
+
+    scanner = Scanner(config)
+    behavioral = MagicMock()
+    behavioral.analyze = AsyncMock(return_value=[behavioral_finding])
+    scanner._behavioral_analyzer = behavioral
+
+    with (
+        patch.object(
+            scanner,
+            "_get_stdio_session",
+            AsyncMock(return_value=(AsyncMock(), mock_session)),
+        ),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+        patch.object(scanner, "_analyze_tool", AsyncMock(return_value=tool_result)),
+    ):
+        result = await scanner.scan_stdio_server_tool(
+            server_config,
+            "safe_tool",
+            analyzers=[AnalyzerEnum.BEHAVIORAL],
+            source_path="/tmp/server-src",
+        )
+
+    assert behavioral_finding in result.findings
+    behavioral.analyze.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_attach_behavioral_source_routes_unmatched_to_orphan_bucket(config):
     """Unmatched behavioral findings must land in __behavioral_source__."""
     scanner = Scanner(config)

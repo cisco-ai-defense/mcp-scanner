@@ -104,7 +104,16 @@ def _resolve_scanner_factory(request: Request) -> ScannerFactory:
     override = request.app.dependency_overrides.get(get_scanner)
     if override is not None:
         return override()
-    return get_scanner()
+    try:
+        return get_scanner()
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Behavioral source API requires the host application to register "
+                "a scanner factory via app.dependency_overrides[get_scanner]."
+            ),
+        ) from exc
 
 
 def _build_meta_analysis_audit(scanner_result: Any) -> Optional[Dict[str, Any]]:
@@ -1059,7 +1068,12 @@ async def scan_behavioral_source_endpoint(
     http_request: Request,
     api_root: str = Depends(_behavioral_source_api_gate),
 ):
-    """Run behavioral source-code analysis on a local file or directory."""
+    """Run behavioral source-code analysis on a local file or directory.
+
+    Host applications must set ``app.dependency_overrides[get_scanner]`` when this
+    endpoint is enabled (see ``mcpscanner.api.api``). Place the service behind
+    network/auth controls; it reads arbitrary files under the configured API root.
+    """
     try:
         confined_path = confine_path(request.source_path, api_root)
     except ValueError as exc:

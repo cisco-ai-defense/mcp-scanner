@@ -187,6 +187,8 @@ def _cap_prompt_preserving_end_tag(
         return prompt
     trailer = f"\n{end_tag}\n"
     if len(trailer) >= max_total:
+        if end_tag and max_total > 0:
+            return end_tag[-max_total:]
         return prompt[:max_total]
     body_budget = max_total - len(trailer)
     return prompt[:body_budget].rstrip() + trailer

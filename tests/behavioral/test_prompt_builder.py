@@ -158,6 +158,20 @@ class TestAlignmentPromptBudget:
         assert len(prompt) <= 400
         assert prompt.endswith(end_tag)
 
+    def test_hard_cap_preserves_end_tag_suffix_when_budget_tiny(self, monkeypatch):
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 24)
+        builder = AlignmentPromptBuilder()
+        end_tag = "<!---UNTRUSTED_INPUT_END_tiny--->"
+        prompt = builder._assemble_prompt(
+            template="G" * 500,
+            analysis_content="A" * 500,
+            start_tag="<!---UNTRUSTED_INPUT_START_tiny--->",
+            end_tag=end_tag,
+            log_label="test=tiny_hardcap",
+        )
+        assert len(prompt) <= 24
+        assert prompt in end_tag
+
     def test_default_cap_preserves_graph_with_real_template(self):
         builder = AlignmentPromptBuilder()
         graph_body = "SINK ANALYSIS (deterministic):\n  os.remove"
