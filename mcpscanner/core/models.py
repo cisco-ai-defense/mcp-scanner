@@ -474,6 +474,14 @@ class BehavioralSourceScanRequest(BaseModel):
 
     source_path: str
 
+    @field_validator("source_path")
+    @classmethod
+    def validate_source_path(cls, value: str) -> str:
+        from ..utils.path_safety import validate_confined_path_input
+
+        validate_confined_path_input(value)
+        return value
+
 
 class AnalyzerFinding(BaseModel):
     """Analyzer finding with grouped structure."""

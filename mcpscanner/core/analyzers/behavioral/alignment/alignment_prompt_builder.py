@@ -754,6 +754,7 @@ For functions with no issues, just include function_index, function_name, and mi
             start_tag=start_tag,
             end_tag=end_tag,
             log_label=f"batch_functions={len(func_contexts)}",
+            relocate_preserved=False,
         )
 
     def build_batch_prompt(self, func_contexts: List[FunctionContext]) -> str:
@@ -777,10 +778,10 @@ For functions with no issues, just include function_index, function_name, and mi
         end_tag: str,
         log_label: str,
         prefix: str = "",
+        relocate_preserved: bool = True,
     ) -> str:
-        """
-        Assemble the alignment prompt within the configured character budget while preserving required template instructions and graph evidence.
-        """
+        """Build the final prompt and enforce the alignment context budget."""
+        original_analysis_content = analysis_content
         max_total = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
         frame_overhead = (
             len(prefix) + len(start_tag) + len(end_tag) + _PROMPT_FRAME_CHARS
@@ -790,12 +791,17 @@ For functions with no issues, just include function_index, function_name, and mi
         guidance, pinned = _split_template(template)
         pinned_len = len(pinned)
 
-        main, preserved = _split_preserved_sections(analysis_content)
-        preserved_budget = min(
-            _MAX_PRESERVED_TOTAL_CHARS,
-            max(len(preserved), available // 3),
-        )
-        preserved = _cap_preserved_sections(preserved, preserved_budget)
+        main = ""
+        preserved = ""
+        if relocate_preserved:
+            main, preserved = _split_preserved_sections(analysis_content)
+            preserved_budget = min(
+                _MAX_PRESERVED_TOTAL_CHARS,
+                max(len(preserved), available // 3),
+            )
+            preserved = _cap_preserved_sections(preserved, preserved_budget)
+        else:
+            preserved_budget = 0
 
         reserved_analysis = (
             pinned_len
@@ -826,7 +832,26 @@ For functions with no issues, just include function_index, function_name, and mi
             available - len(template_used) - len(_ANALYSIS_TRUNCATION_SUFFIX),
         )
         original_analysis_len = len(analysis_content)
-        if len(main) + len(preserved) > max_analysis:
+        if relocate_preserved:
+            if len(original_analysis_content) <= max_analysis:
+                analysis_content = original_analysis_content
+            elif len(main) + len(preserved) > max_analysis:
+                self.logger.warning(
+                    "prompt truncated label=%s analysis_length=%d max_analysis=%d "
+                    "budget=%d preserved=%d pinned=%d",
+                    log_label,
+                    original_analysis_len,
+                    max_analysis,
+                    max_total,
+                    len(preserved),
+                    pinned_len,
+                )
+                analysis_content = _truncate_analysis_preserving_graph(
+                    main, preserved, max_analysis
+                )
+            else:
+                analysis_content = main + preserved
+        elif len(analysis_content) > max_analysis:
             self.logger.warning(
                 "prompt truncated label=%s analysis_length=%d max_analysis=%d "
                 "budget=%d preserved=%d pinned=%d",
@@ -837,9 +862,14 @@ For functions with no issues, just include function_index, function_name, and mi
                 len(preserved),
                 pinned_len,
             )
-        analysis_content = _truncate_analysis_preserving_graph(
-            main, preserved, max_analysis
-        )
+            suffix_len = len(_ANALYSIS_TRUNCATION_SUFFIX)
+            if max_analysis <= suffix_len:
+                analysis_content = _ANALYSIS_TRUNCATION_SUFFIX.strip()
+            else:
+                analysis_content = (
+                    analysis_content[: max_analysis - suffix_len]
+                    + _ANALYSIS_TRUNCATION_SUFFIX
+                )
 
         def _build(template_body: str, body: str) -> str:
             """
@@ -884,20 +914,41 @@ For functions with no issues, just include function_index, function_name, and mi
                     - len(template_used)
                     - len(_ANALYSIS_TRUNCATION_SUFFIX),
                 )
-                analysis_content = _truncate_analysis_preserving_graph(
-                    main, preserved, max_analysis
-                )
+                if relocate_preserved:
+                    analysis_content = _truncate_analysis_preserving_graph(
+                        main, preserved, max_analysis
+                    )
+                else:
+                    suffix_len = len(_ANALYSIS_TRUNCATION_SUFFIX)
+                    if len(analysis_content) > max_analysis:
+                        if max_analysis <= suffix_len:
+                            analysis_content = _ANALYSIS_TRUNCATION_SUFFIX.strip()
+                        else:
+                            analysis_content = (
+                                analysis_content[: max_analysis - suffix_len]
+                                + _ANALYSIS_TRUNCATION_SUFFIX
+                            )
                 prompt = _build(template_used, analysis_content)
                 continue
 
-            _, preserved_live = _split_preserved_sections(analysis_content)
-            main_live = analysis_content[: len(analysis_content) - len(preserved_live)]
-            if len(main_live) > len(_ANALYSIS_TRUNCATION_SUFFIX) + 32:
+            if relocate_preserved:
+                _, preserved_live = _split_preserved_sections(analysis_content)
+                main_live = analysis_content[
+                    : len(analysis_content) - len(preserved_live)
+                ]
+                if len(main_live) > len(_ANALYSIS_TRUNCATION_SUFFIX) + 32:
+                    previous_len = len(prompt)
+                    main_live = main_live[: max(0, len(main_live) - 256)]
+                    if not main_live.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
+                        main_live += _ANALYSIS_TRUNCATION_SUFFIX
+                    analysis_content = main_live + preserved_live
+                    prompt = _build(template_used, analysis_content)
+                    continue
+            elif len(analysis_content) > len(_ANALYSIS_TRUNCATION_SUFFIX) + 32:
                 previous_len = len(prompt)
-                main_live = main_live[: max(0, len(main_live) - 256)]
-                if not main_live.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
-                    main_live += _ANALYSIS_TRUNCATION_SUFFIX
-                analysis_content = main_live + preserved_live
+                analysis_content = analysis_content[: max(0, len(analysis_content) - 256)]
+                if not analysis_content.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
+                    analysis_content += _ANALYSIS_TRUNCATION_SUFFIX
                 prompt = _build(template_used, analysis_content)
                 continue
 

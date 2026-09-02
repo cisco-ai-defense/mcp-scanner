@@ -39,7 +39,9 @@ from ..core.models import (
     BehavioralSourceScanRequest,
     ToolScanResult,
 )
+from ..config.constants import MCPScannerConstants
 from ..core.report_generator import ReportGenerator, results_to_json
+from ..utils.path_safety import confine_path
 from ..core.result import (
     ScanResult,
     PromptScanResult,
@@ -1034,15 +1036,31 @@ async def scan_behavioral_source_endpoint(
     request: BehavioralSourceScanRequest,
     scanner_factory: ScannerFactory = Depends(get_scanner),
 ):
-    """
-    Run behavioral source-code analysis on a local file or directory.
-    
-    Parameters:
-        request (BehavioralSourceScanRequest): Request containing the source path to analyze.
-    
-    Returns:
-        dict: The source path, analyzed function count, finding count, and serialized findings.
-    """
+    """Run behavioral source-code analysis on a local file or directory."""
+    if not MCPScannerConstants.BEHAVIORAL_SOURCE_API_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Behavioral source API is disabled. Set "
+                "MCP_SCANNER_ENABLE_BEHAVIORAL_SOURCE_API=true to enable it."
+            ),
+        )
+
+    api_root = (MCPScannerConstants.BEHAVIORAL_SOURCE_API_ROOT or "").strip()
+    if not api_root:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Behavioral source API requires MCP_SCANNER_BEHAVIORAL_SOURCE_API_ROOT "
+                "(or MCP_SCANNER_BEHAVIORAL_SOURCE_PATH) to confine readable paths."
+            ),
+        )
+
+    try:
+        confined_path = confine_path(request.source_path, api_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     scanner = scanner_factory([AnalyzerEnum.BEHAVIORAL])
     if not scanner._behavioral_analyzer:
         raise HTTPException(
@@ -1051,12 +1069,13 @@ async def scan_behavioral_source_endpoint(
         )
 
     analyzer = scanner._behavioral_analyzer
+    confined_str = str(confined_path)
     findings = await analyzer.analyze(
-        request.source_path,
-        context={"file_path": request.source_path},
+        confined_str,
+        context={"file_path": confined_str},
     )
     return {
-        "source_path": request.source_path,
+        "source_path": confined_str,
         "finding_count": len(findings),
         "analyzed_functions": analyzer.analyzed_functions,
         "findings": [

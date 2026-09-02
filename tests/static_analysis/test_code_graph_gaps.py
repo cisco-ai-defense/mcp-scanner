@@ -873,3 +873,14 @@ function handler(path: string): void {
         sample.write_text("func run() {}\n", encoding="utf-8")
         assert language_for_path(str(sample)) == "swift"
         assert build_code_graphs_for_registry({str(sample): sample.read_text()}) == {}
+
+
+class TestTreeSitterClassicHelpers:
+    def test_expr_uses_vars_matches_dollar_prefixed_identifiers(self) -> None:
+        from mcpscanner.core.static_analysis.dataflow.treesitter_classic import (
+            _expr_uses_vars,
+        )
+
+        assert _expr_uses_vars("$input + 1", {"$input"})
+        assert not _expr_uses_vars("$input + 1", {"input"})
+        assert not _expr_uses_vars("reinput", {"input"})

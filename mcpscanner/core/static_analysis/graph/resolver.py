@@ -767,7 +767,7 @@ class CrossFileSymbolResolver:
                         return fn, Provenance.INFERRED, 0.9, "import_binding"
 
         short = callee_label.split(".")[-1]
-        same_file = [
+        same_file = sorted(
             fn
             for fn in known_functions
             if fn.startswith(f"{caller_file}::")
@@ -776,15 +776,15 @@ class CrossFileSymbolResolver:
                 or fn.endswith(f".{short}")
                 or fn.endswith(f"::{short}")
             )
-        ]
+        )
         if len(same_file) == 1:
             return same_file[0], Provenance.EXTRACTED, 1.0, None
 
-        cross_file = [
+        cross_file = sorted(
             fn
             for fn in known_functions
             if fn.endswith(f".{short}") or fn.endswith(f"::{short}")
-        ]
+        )
         if len(cross_file) == 1:
             return cross_file[0], Provenance.INFERRED, 0.8, "cross_file_suffix"
         if len(cross_file) > 1:

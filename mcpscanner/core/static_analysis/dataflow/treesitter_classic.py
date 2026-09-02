@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Generic, TypeVar
 
@@ -235,18 +236,12 @@ def _normalize_expr(node: Node, source_bytes: bytes) -> str:
     return text[:200] if text else ""
 
 
-def _expr_uses_vars(expr_str: str, vars: set[str]) -> bool:
-    """Determine whether an expression references any specified variable.
-    
-    Parameters:
-    	expr_str (str): The expression text to inspect.
-    	vars (set[str]): Variable names to search for.
-    
-    Returns:
-    	bool: `true` if the expression contains any specified variable name, `false` otherwise.
-    """
-    for var in vars:
-        if var in expr_str:
+def _expr_uses_vars(expr_str: str, variable_names: set[str]) -> bool:
+    for var in variable_names:
+        pattern = (
+            rf"(?<![A-Za-z0-9_$]){re.escape(var)}(?![A-Za-z0-9_$])"
+        )
+        if re.search(pattern, expr_str):
             return True
     return False
 

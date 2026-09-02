@@ -191,6 +191,70 @@ class TestPathSafetyHelper:
         )
 
 
+class TestConfinePath:
+    def test_confine_path_accepts_relative_path_under_root(self, tmp_path: Path):
+        from mcpscanner.utils.path_safety import confine_path
+
+        root = tmp_path / "scanroot"
+        root.mkdir()
+        target = root / "src" / "server.py"
+        target.parent.mkdir()
+        target.write_text("ok = 1\n")
+
+        confined = confine_path("src/server.py", root)
+        assert confined == target.resolve()
+
+    def test_confine_path_rejects_parent_traversal(self, tmp_path: Path):
+        from mcpscanner.utils.path_safety import confine_path
+
+        root = tmp_path / "scanroot"
+        root.mkdir()
+
+        with pytest.raises(ValueError, match="\\.\\."):
+            confine_path("../outside/secret.py", root)
+
+    def test_confine_path_rejects_absolute_path(self, tmp_path: Path):
+        from mcpscanner.utils.path_safety import confine_path
+
+        root = tmp_path / "scanroot"
+        root.mkdir()
+
+        with pytest.raises(ValueError, match="relative"):
+            confine_path("/etc/passwd", root)
+
+    def test_confine_path_rejects_home_expansion(self, tmp_path: Path):
+        from mcpscanner.utils.path_safety import confine_path
+
+        root = tmp_path / "scanroot"
+        root.mkdir()
+
+        with pytest.raises(ValueError, match="home-directory"):
+            confine_path("~/.aws/credentials", root)
+
+    def test_validate_confined_path_input_rejects_unsafe_segments(self):
+        from mcpscanner.utils.path_safety import validate_confined_path_input
+
+        with pytest.raises(ValueError, match="invalid characters"):
+            validate_confined_path_input("src/evil$.py")
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Symlink cycle creation is unreliable on Windows CI runners.",
+    )
+    def test_confine_path_maps_symlink_cycle_to_value_error(self, tmp_path: Path):
+        from mcpscanner.utils.path_safety import confine_path
+
+        root = tmp_path / "scanroot"
+        root.mkdir()
+        loop_a = root / "loop_a"
+        loop_b = root / "loop_b"
+        os.symlink(loop_b, loop_a)
+        os.symlink(loop_a, loop_b)
+
+        with pytest.raises(ValueError, match="could not be resolved safely"):
+            confine_path("loop_a", root)
+
+
 # ---------------------------------------------------------------------------
 # BehavioralCodeAnalyzer
 # ---------------------------------------------------------------------------

@@ -666,25 +666,34 @@ class Scanner:
                 unmatched.append(finding)
 
         for result in scan_results:
-            for finding in by_tool.get(result.tool_name, []):
+            for finding in by_tool.pop(result.tool_name, []):
                 finding.analyzer = "Behavioral"
                 result.findings.append(finding)
 
+        for findings in by_tool.values():
+            unmatched.extend(findings)
+
         if unmatched:
-            if scan_results:
-                for finding in unmatched:
-                    finding.analyzer = "Behavioral"
-                    scan_results[0].findings.append(finding)
-            else:
-                scan_results.append(
-                    ToolScanResult(
-                        tool_name="__behavioral_source__",
-                        tool_description="Behavioral source scan",
-                        status="completed",
-                        analyzers=[AnalyzerEnum.BEHAVIORAL],
-                        findings=unmatched,
-                    )
+            for finding in unmatched:
+                finding.analyzer = "Behavioral"
+            source_result = next(
+                (
+                    r
+                    for r in scan_results
+                    if r.tool_name == "__behavioral_source__"
+                ),
+                None,
+            )
+            if source_result is None:
+                source_result = ToolScanResult(
+                    tool_name="__behavioral_source__",
+                    tool_description="Behavioral source scan",
+                    status="completed",
+                    analyzers=[AnalyzerEnum.BEHAVIORAL],
+                    findings=[],
                 )
+                scan_results.append(source_result)
+            source_result.findings.extend(unmatched)
         return scan_results
 
     async def _run_meta_analysis_on_results(

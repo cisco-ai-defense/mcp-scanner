@@ -38,10 +38,14 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+_MAX_CONFINED_PATH_LEN = 4096
+_SAFE_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def safe_resolve_root(directory: str | os.PathLike) -> Path:
@@ -126,4 +130,79 @@ def filter_safe_paths(
     return safe, skipped
 
 
-__all__ = ["safe_resolve_root", "is_within_root", "filter_safe_paths"]
+def validate_confined_path_input(source_path: str) -> tuple[str, ...]:
+    """Validate API-supplied path text before any filesystem operations.
+
+    Returns the normalized relative path components. Rejects traversal,
+    home expansion, absolute paths, and other values that must not reach
+    :class:`pathlib.Path` construction directly from request input.
+    """
+    if not isinstance(source_path, str):
+        raise ValueError("source_path must be a string")
+    if not source_path or source_path.isspace():
+        raise ValueError("source_path must be a non-empty string")
+    if len(source_path) > _MAX_CONFINED_PATH_LEN:
+        raise ValueError("source_path exceeds maximum allowed length")
+    if "\x00" in source_path:
+        raise ValueError("source_path contains null bytes")
+    if source_path.startswith("~"):
+        raise ValueError("source_path must not use home-directory expansion")
+
+    pure = PurePosixPath(source_path.replace("\\", "/"))
+    if pure.is_absolute():
+        raise ValueError("source_path must be relative to the configured API root")
+    if ".." in pure.parts:
+        raise ValueError("source_path must not contain '..' segments")
+
+    parts: list[str] = []
+    for part in pure.parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            raise ValueError("source_path must not contain '..' segments")
+        if not _SAFE_PATH_SEGMENT_RE.fullmatch(part):
+            raise ValueError(
+                "source_path contains invalid characters; "
+                "use alphanumeric names with . _ - only"
+            )
+        parts.append(part)
+
+    if not parts:
+        raise ValueError("source_path must not be empty")
+    return tuple(parts)
+
+
+def confine_path(
+    source_path: str | os.PathLike,
+    resolved_root: str | os.PathLike,
+) -> Path:
+    """Resolve ``source_path`` and require it to stay inside ``resolved_root``.
+
+    Only relative paths made of validated components are accepted. The
+    caller's input is normalized into discrete segments before joining
+    under ``resolved_root`` so untrusted request data never flows directly
+    into :class:`pathlib.Path` constructors.
+    """
+    root = safe_resolve_root(resolved_root)
+    raw = os.fspath(source_path)
+    parts = validate_confined_path_input(raw)
+    try:
+        candidate = root.joinpath(*parts).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(
+            f"Path {source_path!r} could not be resolved safely under {root!r}"
+        ) from exc
+    if not is_within_root(candidate, root):
+        raise ValueError(
+            f"Path {source_path!r} is outside the allowed root {root!r}"
+        )
+    return candidate
+
+
+__all__ = [
+    "confine_path",
+    "filter_safe_paths",
+    "is_within_root",
+    "safe_resolve_root",
+    "validate_confined_path_input",
+]

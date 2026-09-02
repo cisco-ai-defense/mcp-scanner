@@ -407,20 +407,43 @@ class AlignmentOrchestrator:
         	List[Tuple[Dict[str, Any], FunctionContext]]: Mismatch results paired with their function contexts. Unparseable or failed batch responses are retried or processed individually.
         """
         results: List[Tuple[Dict[str, Any], FunctionContext]] = []
+        pending: List[Tuple[FunctionContext, Optional[str]]] = []
+
+        for func_context in batch:
+            cached_result, cache_key = self._cache_lookup(func_context)
+            if cached_result is not None:
+                hit = self._return_cached_result(func_context, cached_result)
+                if hit:
+                    results.append(hit)
+                continue
+            pending.append((func_context, cache_key))
+
+        if not pending:
+            return results
+
+        pending_contexts = [ctx for ctx, _ in pending]
         batch_start = time.perf_counter()
         self.logger.debug(
-            "batch %d/%d start size=%d", batch_idx, total_batches, len(batch)
+            "batch %d/%d start size=%d cached=%d",
+            batch_idx,
+            total_batches,
+            len(pending_contexts),
+            len(batch) - len(pending_contexts),
         )
 
         stage = "local"
         try:
-            batch_body = self.prompt_builder.build_batch_analysis_content(batch)
+            batch_body = self.prompt_builder.build_batch_analysis_content(
+                pending_contexts
+            )
             batch_results = None
             parse_attempts = max(1, MCPScannerConstants.LLM_BATCH_PARSE_MAX_ATTEMPTS)
             base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
 
             for parse_attempt in range(parse_attempts):
-                prompt = self.prompt_builder.wrap_batch_prompt(batch, batch_body)
+                prompt = self.prompt_builder.wrap_batch_prompt(
+                    pending_contexts, batch_body
+                )
                 stage = "llm"
                 if parse_attempt == 0:
                     response = await self.llm_client.verify_alignment(prompt)
@@ -430,7 +453,7 @@ class AlignmentOrchestrator:
                     )
                 stage = "parse"
                 batch_results = self.response_validator.validate_batch(
-                    response, len(batch)
+                    response, len(pending_contexts)
                 )
                 if batch_results is not None:
                     break
@@ -454,9 +477,9 @@ class AlignmentOrchestrator:
                     "-- LLM returned an unparseable batch, retrying each function individually",
                     batch_idx,
                     total_batches,
-                    len(batch),
+                    len(pending_contexts),
                 )
-                for func_context in batch:
+                for func_context, _ in pending:
                     result = await self.check_alignment(func_context)
                     if result:
                         results.append(result)
@@ -466,23 +489,11 @@ class AlignmentOrchestrator:
             batch_clean = 0
             batch_unanalysed = 0
             for idx, result in enumerate(batch_results):
-                if idx >= len(batch):
+                if idx >= len(pending):
                     break
 
-                func_context = batch[idx]
+                func_context, cache_key = pending[idx]
                 self.stats["total_analyzed"] += 1
-
-                cached_result, cache_key = self._cache_lookup(func_context)
-                if cached_result is not None:
-                    self.stats["cache_hits"] += 1
-                    if cached_result.get("mismatch_detected"):
-                        self.stats["mismatches_detected"] += 1
-                        batch_mismatches += 1
-                        results.append((cached_result, func_context))
-                    else:
-                        self.stats["no_mismatch"] += 1
-                        batch_clean += 1
-                    continue
 
                 if is_unanalysed(result):
                     self.stats["skipped_invalid_response"] += 1
@@ -540,7 +551,7 @@ class AlignmentOrchestrator:
                 "unanalysed=%d duration_ms=%d",
                 batch_idx,
                 total_batches,
-                len(batch),
+                len(pending_contexts),
                 batch_mismatches,
                 batch_clean,
                 batch_unanalysed,
@@ -560,13 +571,13 @@ class AlignmentOrchestrator:
                 "error_type=%s error=%s fallback=individual_analysis",
                 batch_idx,
                 total_batches,
-                len(batch),
+                len(pending_contexts),
                 batch_ms,
                 kind.value,
                 type(e).__name__,
                 truncate(e),
             )
-            for func_context in batch:
+            for func_context, _ in pending:
                 result = await self.check_alignment(func_context)
                 if result:
                     results.append(result)
