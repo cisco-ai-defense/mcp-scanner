@@ -126,4 +126,31 @@ def filter_safe_paths(
     return safe, skipped
 
 
-__all__ = ["safe_resolve_root", "is_within_root", "filter_safe_paths"]
+def confine_path(
+    source_path: str | os.PathLike,
+    resolved_root: str | os.PathLike,
+) -> Path:
+    """Resolve ``source_path`` and require it to stay inside ``resolved_root``.
+
+    Relative paths are resolved against ``resolved_root``. Raises
+    :class:`ValueError` when the canonical location escapes the root.
+    """
+    root = safe_resolve_root(resolved_root)
+    candidate = Path(source_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = (root / candidate).resolve(strict=False)
+    else:
+        candidate = candidate.resolve(strict=False)
+    if not is_within_root(candidate, root):
+        raise ValueError(
+            f"Path {source_path!r} is outside the allowed root {root!r}"
+        )
+    return candidate
+
+
+__all__ = [
+    "safe_resolve_root",
+    "is_within_root",
+    "filter_safe_paths",
+    "confine_path",
+]

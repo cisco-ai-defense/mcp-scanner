@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from ..taint.patterns import get_all_sinks_for_language
 from .interprocedural_taint import InterproceduralTaintAnalyzer
-from .models import CodeGraph, CodeEdge, Provenance, Relation, SinkHit
+from .models import CodeGraph, Provenance, Relation, SinkHit
 
 
 def _normalize_lang(language: str | None) -> str:
@@ -48,7 +48,7 @@ def _match_sink(label: str, sinks: dict[str, set[str]]) -> tuple[str, str] | Non
         lower = candidate.lower()
         for category, names in sinks.items():
             for name in names:
-                if lower == name or lower.endswith(f".{name}") or lower.endswith(name):
+                if lower == name or lower.endswith(f".{name}") or lower.endswith(f"::{name}"):
                     return category, name
     return None
 
@@ -59,6 +59,7 @@ class SinkAnalysisResult:
 
     entry_id: str
     hits: list[SinkHit] = field(default_factory=list)
+    taint_flows: list = field(default_factory=list)
 
     @property
     def has_definitive_hit(self) -> bool:
@@ -85,7 +86,7 @@ class SinkAnalyzer:
         from .models import TaintFlowRecord
 
         for step in taint.flows:
-            self._graph.taint_flows.append(
+            result.taint_flows.append(
                 TaintFlowRecord(
                     source_id=step.source_id,
                     target_id=step.target_id,
@@ -121,17 +122,6 @@ class SinkAnalyzer:
                 path=path,
             )
             result.hits.append(hit)
-            if len(path) >= 2:
-                self._graph.add_edge(
-                    CodeEdge(
-                        source=path[-2],
-                        target=node_id,
-                        relation=Relation.REACHES_SINK,
-                        provenance=provenance,
-                        confidence_score=edge.confidence_score if edge else 0.75,
-                        context=f"sink={sink_name}",
-                    )
-                )
         return result
 
     def analyze_all_entries(self) -> list[SinkAnalysisResult]:

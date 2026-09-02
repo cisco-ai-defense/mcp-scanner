@@ -254,6 +254,15 @@ class MCPScannerConstants:
     # Optional local source tree for behavioral analysis during live MCP server scans.
     BEHAVIORAL_SOURCE_PATH: str = os.getenv("MCP_SCANNER_BEHAVIORAL_SOURCE_PATH", "")
 
+    # HTTP behavioral source endpoint is opt-in and confined to this root.
+    BEHAVIORAL_SOURCE_API_ENABLED: bool = os.getenv(
+        "MCP_SCANNER_ENABLE_BEHAVIORAL_SOURCE_API", "false"
+    ).lower() in ("true", "1", "yes")
+    BEHAVIORAL_SOURCE_API_ROOT: str = os.getenv(
+        "MCP_SCANNER_BEHAVIORAL_SOURCE_API_ROOT",
+        os.getenv("MCP_SCANNER_BEHAVIORAL_SOURCE_PATH", ""),
+    )
+
     # VirusTotal Configuration
     ENV_VIRUSTOTAL_API_KEY: str = os.getenv(
         "MCP_SCANNER_ENV_VIRUSTOTAL_API_KEY_NAME", "VIRUSTOTAL_API_KEY"

@@ -537,6 +537,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             elif os.path.isfile(content):
                 ext = Path(content).suffix.lower()
                 cross_file_analyzer = None
+                source_code = ""
                 try:
                     with open(content, "r", encoding="utf-8") as f:
                         source_code = f.read()
@@ -568,16 +569,19 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
                     cross_file_analyzer = None
 
+                file_context = {
+                    **context,
+                }
+                if source_code:
+                    file_context["code_graphs"] = _code_graphs_for_file(
+                        cross_file_analyzer,
+                        content,
+                        source_registry={content: source_code},
+                    )
+
                 all_findings = await self._analyze_file(
                     content,
-                    {
-                        **context,
-                        "code_graphs": _code_graphs_for_file(
-                            cross_file_analyzer,
-                            content,
-                            source_registry={content: source_code},
-                        ),
-                    },
+                    file_context,
                     cross_file_analyzer,
                 )
 
@@ -646,7 +650,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
         ".rs": "rust",
         ".php": "php", ".phtml": "php",
-        ".swift": "swift",
     }
 
     _PYTHON_EXTENSIONS = {".py", ".pyw"}

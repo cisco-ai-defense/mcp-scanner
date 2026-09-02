@@ -210,7 +210,7 @@ def attach_graph_evidence(
         if classic:
             func_context.dataflow_summary["classic_dataflow"] = classic
     func_context.dataflow_summary["taint_flows"] = [
-        flow.to_dict() for flow in graph.taint_flows
+        flow.to_dict() for flow in sink_result.taint_flows
     ]
     populate_taint_fields(func_context)
     return sink_result

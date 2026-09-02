@@ -358,3 +358,32 @@ class TestBatchGraphEvidence:
         single_section = builder._format_graph_evidence_section(ctx)
         batch_body = builder.build_batch_analysis_content([ctx])
         assert single_section.strip() in batch_body
+
+    def test_batch_assembled_prompt_keeps_graph_evidence_with_function(
+        self, monkeypatch
+    ):
+        from mcpscanner.config.constants import MCPScannerConstants
+
+        monkeypatch.setattr(
+            MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000
+        )
+        builder = AlignmentPromptBuilder()
+        evidence_a = "SINK ANALYSIS (deterministic):\n  os.system in tool_a"
+        evidence_b = "SINK ANALYSIS (deterministic):\n  subprocess.run in tool_b"
+        ctx_a = _minimal_function_context(
+            name="tool_a",
+            dataflow_summary={"code_graph_evidence": evidence_a},
+        )
+        ctx_b = _minimal_function_context(
+            name="tool_b",
+            dataflow_summary={"code_graph_evidence": evidence_b},
+        )
+        batch_body = builder.build_batch_analysis_content([ctx_a, ctx_b])
+        prompt = builder.wrap_batch_prompt([ctx_a, ctx_b], batch_body)
+        pos_a = prompt.find("=== FUNCTION 1 of 2 ===")
+        pos_b = prompt.find("=== FUNCTION 2 of 2 ===")
+        pos_evidence_a = prompt.find(evidence_a)
+        pos_evidence_b = prompt.find(evidence_b)
+        assert pos_a != -1 and pos_b != -1
+        assert pos_evidence_a != -1 and pos_evidence_b != -1
+        assert pos_a < pos_evidence_a < pos_b < pos_evidence_b
