@@ -892,6 +892,42 @@ For functions with no issues, just include function_index, function_name, and mi
             )
             break
 
+        if len(prompt) > max_total:
+            self.logger.warning(
+                "prompt hard-truncating label=%s prompt_length=%d budget=%d",
+                log_label,
+                len(prompt),
+                max_total,
+            )
+            if relocate_preserved:
+                _, preserved_live = _split_preserved_sections(analysis_content)
+                while (
+                    len(prompt) > max_total
+                    and len(analysis_content)
+                    > len(preserved_live) + len(_ANALYSIS_TRUNCATION_SUFFIX)
+                ):
+                    main_live = analysis_content[
+                        : len(analysis_content) - len(preserved_live)
+                    ]
+                    main_live = main_live[: max(0, len(main_live) - 512)]
+                    if not main_live.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
+                        main_live += _ANALYSIS_TRUNCATION_SUFFIX
+                    analysis_content = main_live + preserved_live
+                    prompt = _build(template_used, analysis_content)
+            else:
+                while (
+                    len(prompt) > max_total
+                    and len(analysis_content) > len(_ANALYSIS_TRUNCATION_SUFFIX)
+                ):
+                    analysis_content = analysis_content[
+                        : max(0, len(analysis_content) - 512)
+                    ]
+                    if not analysis_content.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
+                        analysis_content += _ANALYSIS_TRUNCATION_SUFFIX
+                    prompt = _build(template_used, analysis_content)
+            if len(prompt) > max_total:
+                prompt = prompt[:max_total]
+
         self.logger.debug(
             "prompt built label=%s prompt_length=%d analysis_content_length=%d "
             "preserved_length=%d pinned_length=%d",

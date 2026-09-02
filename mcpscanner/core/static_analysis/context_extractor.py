@@ -108,6 +108,9 @@ class FunctionContext:
     taint_sinks: List[Dict[str, Any]] = field(default_factory=list)
     taint_flows: List[Dict[str, Any]] = field(default_factory=list)
 
+    # Owning source file for cross-file errored-function tracking
+    source_file: str = ""
+
 
 class ContextExtractor:
     """Extracts comprehensive code context by analyzing Abstract Syntax Trees.

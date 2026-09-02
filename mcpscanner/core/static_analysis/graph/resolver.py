@@ -605,7 +605,12 @@ class CrossFileSymbolResolver:
         if len(cross_file) == 1:
             return cross_file[0], Provenance.INFERRED, 0.8, "cross_file_suffix"
         if len(cross_file) > 1:
-            return cross_file[0], Provenance.AMBIGUOUS, 0.5, "ambiguous_suffix"
+            return (
+                f"external::{callee_label}",
+                Provenance.AMBIGUOUS,
+                0.5,
+                "ambiguous_suffix",
+            )
 
         if callee_label in known_functions:
             return callee_label, Provenance.INFERRED, 0.75, None

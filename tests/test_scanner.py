@@ -1439,3 +1439,78 @@ async def test_finalize_single_tool_scan_merges_orphan_behavioral_findings(confi
 
     assert merged.tool_name == "safe_tool"
     assert merged.findings == [orphan_finding]
+
+
+@pytest.mark.asyncio
+async def test_finalize_single_tool_scan_merges_orphan_meta_filtered(config):
+    """Orphan behavioral meta-filtered findings must fold into the primary result."""
+    scanner = Scanner(config)
+    primary = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META],
+        findings=[],
+    )
+    dropped = SecurityFinding(
+        analyzer="Behavioral",
+        severity="SAFE",
+        summary="filtered orphan",
+        threat_category="",
+        details={"function_name": "other_tool"},
+    )
+    orphan_bucket = ToolScanResult(
+        tool_name="__behavioral_source__",
+        tool_description="Behavioral source scan",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META],
+        findings=[],
+    )
+    orphan_bucket.meta_filtered_findings = [dropped]
+
+    async def fake_finalize(results, analyzers, source_path=None):
+        return [results[0], orphan_bucket]
+
+    with patch.object(
+        scanner, "_finalize_tool_scan_results", side_effect=fake_finalize
+    ):
+        merged = await scanner._finalize_single_tool_scan(
+            primary,
+            [AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META],
+            source_path="/tmp/src",
+        )
+
+    assert merged.meta_filtered_findings == [dropped]
+
+
+@pytest.mark.asyncio
+async def test_attach_behavioral_source_routes_unmatched_to_orphan_bucket(config):
+    """Unmatched behavioral findings must land in __behavioral_source__."""
+    scanner = Scanner(config)
+    primary = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+    orphan_finding = SecurityFinding(
+        analyzer="Behavioral",
+        severity="HIGH",
+        summary="unmatched handler",
+        threat_category="MALICIOUS_CODE",
+        details={"function_name": "other_handler"},
+    )
+    behavioral = MagicMock()
+    behavioral.analyze = AsyncMock(return_value=[orphan_finding])
+    scanner._behavioral_analyzer = behavioral
+
+    results = await scanner._attach_behavioral_source_findings(
+        [primary],
+        [AnalyzerEnum.BEHAVIORAL],
+        source_path="/tmp/src",
+    )
+
+    orphan = next(r for r in results if r.tool_name == "__behavioral_source__")
+    assert orphan.findings == [orphan_finding]
+    assert primary.findings == []

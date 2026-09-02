@@ -959,6 +959,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 populate_taint_fields(fc)
 
             # Enrich with cross-file context if available
+            for func_context in func_contexts:
+                if not func_context.source_file:
+                    func_context.source_file = file_path
+
             if context.get("cross_file_analyzer"):
                 from ...static_analysis.graph.integration import enrich_with_cross_file_context
 
@@ -1062,7 +1066,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             funcs_with_findings.discard(None)
             errored_funcs = set(
                 getattr(
-                    self.alignment_orchestrator, "errored_function_names", set()
+                    self.alignment_orchestrator, "errored_function_keys", set()
                 )
             )
             for fc in func_contexts:
@@ -1075,7 +1079,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # SecurityFinding framework accepts here) so the reporter
                 # doesn't claim we successfully analysed something we
                 # never did.
-                if name in errored_funcs:
+                if (file_path, name) in errored_funcs:
                     findings.append(
                         SecurityFinding(
                             severity="UNKNOWN",

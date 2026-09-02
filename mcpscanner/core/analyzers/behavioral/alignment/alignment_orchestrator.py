@@ -82,13 +82,28 @@ class AlignmentOrchestrator:
         )
 
         self.stats = self._fresh_stats()
-        # Names of functions whose alignment check raised or produced an
-        # invalid response in the current scan. Consumed by the behavioural
-        # analyzer to skip SAFE-synthesis (an errored function is not
-        # "safe", just unknown).
-        self.errored_function_names: Set[str] = set()
+        # (source_file, function_name) pairs whose alignment check raised or
+        # produced an invalid response in the current scan. Scoped per file so
+        # concurrent directory scans cannot cross-contaminate same-named funcs.
+        self.errored_function_keys: Set[Tuple[str, str]] = set()
 
         self.logger.debug("AlignmentOrchestrator initialized")
+
+    @staticmethod
+    def _function_key(func_context: Any) -> Tuple[str, str]:
+        name = getattr(func_context, "name", None) or ""
+        source = getattr(func_context, "source_file", "") or ""
+        return (source, name)
+
+    def _mark_errored(self, func_context: Any) -> None:
+        name = getattr(func_context, "name", None)
+        if name:
+            self.errored_function_keys.add(self._function_key(func_context))
+
+    @property
+    def errored_function_names(self) -> Set[str]:
+        """Function names that errored (any source file). Test/diagnostic helper."""
+        return {name for _, name in self.errored_function_keys}
 
     def _record_skipped_error(
         self, exc: BaseException, *, context: str = "llm"
@@ -124,7 +139,7 @@ class AlignmentOrchestrator:
         """Reset cumulative counters to zero."""
         for key in self.stats:
             self.stats[key] = 0
-        self.errored_function_names.clear()
+        self.errored_function_keys.clear()
         self._result_cache.clear()
         self._result_cache.model = getattr(self.llm_client, "_model", None) or "unknown"
 
@@ -208,9 +223,7 @@ class AlignmentOrchestrator:
                     f"Invalid response for {func_context.name}, skipping"
                 )
                 self.stats["skipped_invalid_response"] += 1
-                name = getattr(func_context, "name", None)
-                if name:
-                    self.errored_function_names.add(name)
+                self._mark_errored(func_context)
                 return None
 
             # Step 4: Return analysis if mismatch detected
@@ -292,9 +305,7 @@ class AlignmentOrchestrator:
                 type(e).__name__,
                 truncate(e),
             )
-            name = getattr(func_context, "name", None)
-            if name:
-                self.errored_function_names.add(name)
+            self._mark_errored(func_context)
             return None
 
     async def check_alignment_batch(
@@ -459,9 +470,7 @@ class AlignmentOrchestrator:
                 if is_unanalysed(result):
                     self.stats["skipped_invalid_response"] += 1
                     batch_unanalysed += 1
-                    name = getattr(func_context, "name", None)
-                    if name:
-                        self.errored_function_names.add(name)
+                    self._mark_errored(func_context)
                     continue
 
                 if result and result.get("mismatch_detected"):

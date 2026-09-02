@@ -111,6 +111,46 @@ class TestGraphGaps:
         assert import_edges
         assert import_edges[0].context == "import_binding"
 
+    def test_resolver_import_edges_include_star_targets(self, tmp_path: Path) -> None:
+        handlers = tmp_path / "handlers.py"
+        server = tmp_path / "server.py"
+        handlers.write_text("def helper():\n    pass\n", encoding="utf-8")
+        server.write_text(
+            "from handlers import *\n\ndef handler():\n    helper()\n",
+            encoding="utf-8",
+        )
+        resolver = CrossFileSymbolResolver(
+            {
+                handlers.resolve(): handlers.read_text(),
+                server.resolve(): server.read_text(),
+            },
+            language="python",
+        )
+        edges = resolver.import_edges()
+        server_key = str(server.resolve())
+        handlers_key = str(handlers.resolve())
+        targets = {
+            e.target
+            for e in edges
+            if e.source == f"{server_key}::__module__"
+        }
+        assert handlers_key in targets
+
+    def test_resolver_ambiguous_cross_file_suffix(self) -> None:
+        resolver = CrossFileSymbolResolver({}, language="python")
+        known = {
+            "/a.py::run",
+            "/b.py::run",
+        }
+        resolved, provenance, _confidence, context = resolver.resolve_callee(
+            "/caller.py::handler",
+            "run",
+            known,
+        )
+        assert resolved == "external::run"
+        assert provenance.value == "ambiguous"
+        assert context == "ambiguous_suffix"
+
     def test_resolver_dynamic_dispatch(self):
         resolver = CrossFileSymbolResolver({}, language="javascript")
         resolved, provenance, confidence, context = resolver.resolve_callee(

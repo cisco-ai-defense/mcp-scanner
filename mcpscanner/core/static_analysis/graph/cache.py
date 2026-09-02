@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generic, TypeVar
@@ -125,11 +126,19 @@ class CodeGraphCache:
     def _atomic_write_json(self, disk_path: Path, payload: dict) -> None:
         disk_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = disk_path.with_suffix(disk_path.suffix + ".tmp")
-        tmp_path.write_text(
-            json.dumps(payload, separators=(",", ":")),
-            encoding="utf-8",
-        )
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, separators=(",", ":")))
+            handle.flush()
+            os.fsync(handle.fileno())
         tmp_path.replace(disk_path)
+        try:
+            dir_fd = os.open(disk_path.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
     def _disk_path(self, path: str, content: str) -> Path:
         assert self.cache_dir is not None

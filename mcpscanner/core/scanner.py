@@ -724,6 +724,9 @@ class Scanner:
         for extra in finalized[1:]:
             if extra.tool_name == "__behavioral_source__":
                 primary.findings.extend(extra.findings)
+                primary.meta_filtered_findings.extend(
+                    list(getattr(extra, "meta_filtered_findings", []) or [])
+                )
         return primary
 
     async def _run_meta_analysis_on_results(
