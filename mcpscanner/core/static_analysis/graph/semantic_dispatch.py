@@ -800,16 +800,18 @@ class SemanticDispatchEngine:
         kind: str,
     ) -> str | None:
         """Resolve a dynamically supplied method name from propagated string constants.
-        
+
         Parameters:
             state (FunctionSemanticState): Semantic facts available in the caller function.
             receiver (str): Receiver associated with the dynamic call.
             callee_label (str): Label describing the dynamic call expression.
             kind (str): Dynamic-call syntax used to supply the method name.
-        
+
         Returns:
             str | None: The resolved method name, or None when no string constant is available.
         """
+        if callee_label.endswith("()"):
+            callee_label = callee_label[:-2]
         if kind == "bracket_variable":
             key = callee_label.split("[", 1)[1].rstrip("]").strip()
             if key in state.string_consts:

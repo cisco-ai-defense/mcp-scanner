@@ -29,6 +29,7 @@ This is the entry point for all alignment verification operations.
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .....config.config import Config
@@ -80,13 +81,38 @@ class AlignmentOrchestrator:
         )
 
         self.stats = self._fresh_stats()
-        # Names of functions whose alignment check raised or produced an
-        # invalid response in the current scan. Consumed by the behavioural
-        # analyzer to skip SAFE-synthesis (an errored function is not
-        # "safe", just unknown).
-        self.errored_function_names: Set[str] = set()
+        # (source_file, function_name) pairs whose alignment check raised or
+        # produced an invalid response in the current scan. Scoped per file so
+        # concurrent directory scans cannot cross-contaminate same-named funcs.
+        self.errored_function_keys: Set[Tuple[str, str]] = set()
 
         self.logger.debug("AlignmentOrchestrator initialized")
+
+    @staticmethod
+    def _function_key(func_context: Any) -> Tuple[str, str]:
+        name = getattr(func_context, "name", None) or ""
+        source = getattr(func_context, "source_file", "") or ""
+        if source and source != "unknown":
+            try:
+                source = str(Path(source).resolve(strict=False))
+            except (OSError, RuntimeError, ValueError) as exc:
+                logging.getLogger(__name__).debug(
+                    "alignment function_key path_resolve_failed source=%s error_type=%s error=%s",
+                    source,
+                    type(exc).__name__,
+                    truncate(exc),
+                )
+        return (source, name)
+
+    def _mark_errored(self, func_context: Any) -> None:
+        name = getattr(func_context, "name", None)
+        if name:
+            self.errored_function_keys.add(self._function_key(func_context))
+
+    @property
+    def errored_function_names(self) -> Set[str]:
+        """Function names that errored (any source file). Test/diagnostic helper."""
+        return {name for _, name in self.errored_function_keys}
 
     def _record_skipped_error(
         self, exc: BaseException, *, context: str = "llm"
@@ -122,7 +148,7 @@ class AlignmentOrchestrator:
         """Reset cumulative counters to zero."""
         for key in self.stats:
             self.stats[key] = 0
-        self.errored_function_names.clear()
+        self.errored_function_keys.clear()
         self._result_cache.clear()
         self._result_cache.model = getattr(self.llm_client, "_model", None) or "unknown"
 
@@ -224,12 +250,12 @@ class AlignmentOrchestrator:
 
             if not result:
                 self.logger.warning(
-                    f"Invalid response for {func_context.name}, skipping"
+                    "alignment invalid_response function=%s source_file=%s stage=parse",
+                    func_context.name,
+                    sanitize_log_value(getattr(func_context, "source_file", "")),
                 )
                 self.stats["skipped_invalid_response"] += 1
-                name = getattr(func_context, "name", None)
-                if name:
-                    self.errored_function_names.add(name)
+                self._mark_errored(func_context)
                 return None
 
             # Step 4: Return analysis if mismatch detected
@@ -275,7 +301,9 @@ class AlignmentOrchestrator:
                             )
                         else:
                             self.logger.warning(
-                                f"Failed to classify finding for {func_context.name}"
+                                "alignment classify_empty function=%s threat=%s",
+                                func_context.name,
+                                threat_name or "<unset>",
                             )
                             result["threat_vulnerability_classification"] = "UNCLEAR"
                     except Exception as e:
@@ -303,17 +331,18 @@ class AlignmentOrchestrator:
             check_ms = int((time.perf_counter() - check_start) * 1000)
             kind = self._record_skipped_error(e, context=stage)
             self.logger.error(
-                "alignment check failed function=%s duration_ms=%d error_kind=%s "
-                "error_type=%s error=%s",
+                "alignment check failed function=%s source_file=%s stage=%s duration_ms=%d "
+                "error_kind=%s error_type=%s error=%s",
                 func_context.name,
+                sanitize_log_value(getattr(func_context, "source_file", "")),
+                stage,
                 check_ms,
                 kind.value,
                 type(e).__name__,
                 truncate(e),
+                exc_info=True,
             )
-            name = getattr(func_context, "name", None)
-            if name:
-                self.errored_function_names.add(name)
+            self._mark_errored(func_context)
             return None
 
     async def check_alignment_batch(
@@ -498,9 +527,7 @@ class AlignmentOrchestrator:
                 if is_unanalysed(result):
                     self.stats["skipped_invalid_response"] += 1
                     batch_unanalysed += 1
-                    name = getattr(func_context, "name", None)
-                    if name:
-                        self.errored_function_names.add(name)
+                    self._mark_errored(func_context)
                     continue
 
                 if result and result.get("mismatch_detected"):
@@ -535,7 +562,15 @@ class AlignmentOrchestrator:
                             else:
                                 result["threat_vulnerability_classification"] = "UNCLEAR"
                         except Exception as e:
-                            self.logger.error(f"Classification failed: {e}")
+                            self.logger.error(
+                                "alignment batch classify_failed function=%s threat=%s "
+                                "error_type=%s error=%s",
+                                func_context.name,
+                                threat_name or "<unset>",
+                                type(e).__name__,
+                                truncate(e),
+                                exc_info=True,
+                            )
                             result["threat_vulnerability_classification"] = "UNCLEAR"
 
                     self._store_cache(cache_key, result)
@@ -567,15 +602,17 @@ class AlignmentOrchestrator:
                 model=getattr(self.llm_client, "_model", None),
             )
             self.logger.error(
-                "batch %d/%d failed size=%d duration_ms=%d error_kind=%s "
+                "batch %d/%d failed size=%d duration_ms=%d stage=%s error_kind=%s "
                 "error_type=%s error=%s fallback=individual_analysis",
                 batch_idx,
                 total_batches,
                 len(pending_contexts),
                 batch_ms,
+                stage,
                 kind.value,
                 type(e).__name__,
                 truncate(e),
+                exc_info=True,
             )
             for func_context, _ in pending:
                 result = await self.check_alignment(func_context)

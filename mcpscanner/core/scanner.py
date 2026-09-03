@@ -639,20 +639,31 @@ class Scanner:
             )
             return scan_results
 
+        logger.debug(
+            "Running behavioral source attach path=%s tool_results=%d",
+            resolved_path,
+            len(scan_results),
+        )
+
         try:
             behavioral_findings = await self._behavioral_analyzer.analyze(
                 resolved_path,
                 context={"file_path": resolved_path},
             )
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "Behavioral source scan failed path=%s error=%s",
                 resolved_path,
                 exc,
+                exc_info=True,
             )
             return scan_results
 
         if not behavioral_findings:
+            logger.debug(
+                "Behavioral source scan returned no findings path=%s",
+                resolved_path,
+            )
             return scan_results
 
         by_tool: dict[str, list] = {}
@@ -694,7 +705,52 @@ class Scanner:
                 )
                 scan_results.append(source_result)
             source_result.findings.extend(unmatched)
+        matched_count = sum(
+            1 for r in scan_results for f in r.findings if f.analyzer == "Behavioral"
+        )
+        logger.debug(
+            "Behavioral source attach complete path=%s raw_findings=%d merged=%d orphan=%d",
+            resolved_path,
+            len(behavioral_findings),
+            matched_count,
+            len(unmatched),
+        )
         return scan_results
+
+    async def _finalize_tool_scan_results(
+        self,
+        scan_results: List[ToolScanResult],
+        analyzers: List[AnalyzerEnum],
+        *,
+        source_path: Optional[str] = None,
+    ) -> List[ToolScanResult]:
+        """Attach behavioral source findings, then run meta-analysis when enabled."""
+        scan_results = await self._attach_behavioral_source_findings(
+            list(scan_results), analyzers, source_path=source_path
+        )
+        return await self._run_meta_analysis_on_results(scan_results, analyzers)
+
+    async def _finalize_single_tool_scan(
+        self,
+        result: ToolScanResult,
+        analyzers: List[AnalyzerEnum],
+        *,
+        source_path: Optional[str] = None,
+    ) -> ToolScanResult:
+        """Finalize one tool scan, folding orphan behavioral findings into the result."""
+        finalized = await self._finalize_tool_scan_results(
+            [result], analyzers, source_path=source_path
+        )
+        primary = finalized[0]
+        for extra in finalized[1:]:
+            if extra.tool_name == "__behavioral_source__":
+                primary.findings.extend(extra.findings)
+                # ``meta_analysis`` audit blocks are derived from
+                # ``meta_filtered_findings`` at serialization time.
+                primary.meta_filtered_findings.extend(
+                    list(getattr(extra, "meta_filtered_findings", []) or [])
+                )
+        return primary
 
     async def _run_meta_analysis_on_results(
         self,
@@ -1708,6 +1764,7 @@ class Scanner:
         http_headers: Optional[dict] = None,
         connector_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
+        source_path: Optional[str] = None,
     ) -> ToolScanResult:
         """Scan a specific tool on an MCP server.
 
@@ -1766,10 +1823,9 @@ class Scanner:
             # Analyze the tool
             result = await self._analyze_tool(target_tool, analyzers, http_headers)
 
-            # Run meta-analysis if enabled
-            result = await self._run_meta_analysis_on_single_tool(result, analyzers)
-
-            return result
+            return await self._finalize_single_tool_scan(
+                result, analyzers, source_path=source_path
+            )
 
         except ValueError:
             raise
@@ -1848,16 +1904,9 @@ class Scanner:
             # Run all tasks concurrently
             scan_results = await asyncio.gather(*scan_tasks)
 
-            # Run meta-analysis if enabled (post-pass on all results)
-            scan_results = await self._run_meta_analysis_on_results(
-                list(scan_results), analyzers
+            return await self._finalize_tool_scan_results(
+                list(scan_results), analyzers, source_path=source_path
             )
-
-            scan_results = await self._attach_behavioral_source_findings(
-                scan_results, analyzers, source_path=source_path
-            )
-
-            return scan_results
 
         except Exception as e:
             logger.error(f"Error scanning server {server_url}: {e}")
@@ -2072,16 +2121,9 @@ class Scanner:
                 # Run all tasks concurrently
                 scan_results = await asyncio.gather(*scan_tasks)
 
-                # Run meta-analysis if enabled (post-pass on all results)
-                scan_results = await self._run_meta_analysis_on_results(
-                    list(scan_results), analyzers
+                return await self._finalize_tool_scan_results(
+                    list(scan_results), analyzers, source_path=source_path
                 )
-
-                scan_results = await self._attach_behavioral_source_findings(
-                    scan_results, analyzers, source_path=source_path
-                )
-
-                return scan_results
 
             # Run the connection and scanning in an isolated task
             return await connect_and_scan()
@@ -2100,6 +2142,7 @@ class Scanner:
         analyzers: Optional[List[AnalyzerEnum]] = None,
         timeout: Optional[int] = None,
         errlog: Any = None,
+        source_path: Optional[str] = None,
     ) -> ToolScanResult:
         """Scan a specific tool on a stdio MCP server.
 
@@ -2156,10 +2199,9 @@ class Scanner:
             # Analyze the tool
             result = await self._analyze_tool(target_tool, analyzers)
 
-            # Run meta-analysis if enabled
-            result = await self._run_meta_analysis_on_single_tool(result, analyzers)
-
-            return result
+            return await self._finalize_single_tool_scan(
+                result, analyzers, source_path=source_path
+            )
 
         except ValueError:
             raise

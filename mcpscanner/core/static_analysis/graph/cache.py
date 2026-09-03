@@ -6,11 +6,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Generic, TypeVar
 
 from .models import CodeGraph
+
+from ....utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 T = TypeVar("T")
 
@@ -118,7 +123,12 @@ class CodeGraphCache:
         try:
             payload = json.loads(disk_path.read_text(encoding="utf-8"))
             graph = CodeGraph.from_dict(payload)
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            logger.debug(
+                "code_graph per-file cache read failed path=%s error=%s",
+                disk_path,
+                exc,
+            )
             return None
         self._memory.put(path, content, graph)
         return graph
@@ -130,12 +140,13 @@ class CodeGraphCache:
             return
         disk_path = self._disk_path(path, content)
         try:
-            disk_path.parent.mkdir(parents=True, exist_ok=True)
-            disk_path.write_text(
-                json.dumps(value.to_dict(), separators=(",", ":")),
-                encoding="utf-8",
+            self._atomic_write_json(disk_path, value.to_dict())
+        except OSError as exc:
+            logger.debug(
+                "code_graph per-file cache write failed path=%s error=%s",
+                disk_path,
+                exc,
             )
-        except OSError:
             return
 
     def clear(self) -> None:
@@ -180,7 +191,12 @@ class CodeGraphCache:
         try:
             payload = json.loads(disk_path.read_text(encoding="utf-8"))
             graph = CodeGraph.from_dict(payload)
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            logger.debug(
+                "code_graph merged cache read failed path=%s error=%s",
+                disk_path,
+                exc,
+            )
             return None
         self._memory._store[key] = graph
         return graph
@@ -195,13 +211,36 @@ class CodeGraphCache:
             return
         disk_path = self._merged_disk_path(key)
         try:
-            disk_path.parent.mkdir(parents=True, exist_ok=True)
-            disk_path.write_text(
-                json.dumps(value.to_dict(), separators=(",", ":")),
-                encoding="utf-8",
+            self._atomic_write_json(disk_path, value.to_dict())
+        except OSError as exc:
+            logger.debug(
+                "code_graph merged cache write failed path=%s error=%s",
+                disk_path,
+                exc,
             )
-        except OSError:
             return
+
+    def _atomic_write_json(self, disk_path: Path, payload: dict) -> None:
+        disk_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = disk_path.with_suffix(disk_path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, separators=(",", ":")))
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp_path.replace(disk_path)
+        try:
+            dir_fd = os.open(disk_path.parent, os.O_RDONLY)
+        except OSError as exc:
+            logger.debug(
+                "code_graph cache fsync_dir failed path=%s error=%s",
+                disk_path.parent,
+                exc,
+            )
+            return
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
     def _disk_path(self, path: str, content: str) -> Path:
         """Build the disk path for a cached file graph entry.

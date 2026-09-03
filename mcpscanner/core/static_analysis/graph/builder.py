@@ -52,6 +52,16 @@ def _caller_file(node_id: str) -> str:
     return ""
 
 
+def _function_start_line(func_node: Any) -> int | None:
+    lineno = getattr(func_node, "lineno", None)
+    if lineno is not None:
+        return int(lineno)
+    start_point = getattr(func_node, "start_point", None)
+    if start_point is not None:
+        return int(start_point[0]) + 1
+    return None
+
+
 class CodeGraphBuilder:
     """Merge Python and tree-sitter call graphs into one CodeGraph."""
 
@@ -88,7 +98,17 @@ class CodeGraphBuilder:
     def add_path(self, file_path: Path) -> None:
         """Read a source file and add its contents to the builder under its resolved path."""
         resolved = file_path.resolve()
-        self._files[resolved] = resolved.read_text(encoding="utf-8", errors="replace")
+        try:
+            self._files[resolved] = resolved.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.warning(
+                "code_graph add_path failed path=%s error_type=%s error=%s",
+                resolved,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise
 
     def build(self) -> CodeGraph:
         """
@@ -158,6 +178,7 @@ class CodeGraphBuilder:
         for path, source in files.items():
             cached = self._cache.get(str(path), source)
             if cached is not None:
+                logger.debug("code_graph cache hit path=%s language=%s", path, language)
                 self._merge_graphs(partial, cached)
                 continue
             single = build_fn({path: source})
@@ -292,6 +313,7 @@ class CodeGraphBuilder:
                     source_file=file_path,
                     language=language,
                     module_id=module_id_for(file_path) if file_path else "",
+                    line=_function_start_line(func_node),
                     is_mcp_entry=full_name in mcp_entries,
                     metadata={"parameters": params},
                 )
@@ -470,11 +492,17 @@ class CodeGraphBuilder:
             if lang in GRAPH_SUPPORTED_LANGUAGES
         }
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.suffix not in allowed:
+            suffix = path.suffix.lower()
+            if not path.is_file() or suffix not in allowed:
                 continue
             try:
                 builder.add_path(path)
-            except OSError:
+            except OSError as exc:
+                logger.debug(
+                    "code_graph skipped unreadable file path=%s error=%s",
+                    path,
+                    exc,
+                )
                 continue
         return builder.build()
 
@@ -518,5 +546,12 @@ class CodeGraphBuilder:
             language=language,
             mcp_entries=mcp_entries,
             resolver=resolver,
+        )
+        logger.info(
+            "code_graph built_from_analyzer nodes=%d edges=%d entry_points=%d language=%s",
+            len(graph.nodes),
+            len(graph.edges),
+            len(graph.entry_points),
+            language,
         )
         return graph

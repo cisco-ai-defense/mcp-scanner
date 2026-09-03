@@ -38,6 +38,7 @@ from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ....utils.log_format import sanitize_log_value, truncate
+from ....utils.analyzer_errors import build_infrastructure_error_finding
 from ....utils.path_safety import filter_safe_paths, safe_resolve_root
 from ...static_analysis.context_extractor import ContextExtractor, FunctionContext
 from ...static_analysis.native_analyzer import NativeAnalyzer
@@ -125,6 +126,16 @@ def _code_graphs_for_file(
             source_registry=source_registry,
         )
     }
+
+
+def _normalize_behavioral_source_path(path: str) -> str:
+    """Canonicalize source paths for errored-function key lookups."""
+    if not path or path == "unknown":
+        return path
+    try:
+        return str(Path(path).resolve(strict=False))
+    except (OSError, RuntimeError, ValueError):
+        return path
 
 
 def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
@@ -315,8 +326,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             self.alignment_orchestrator.log_summary(
                 scope=f"{scan_mode}:{tool_label}",
             )
-        except Exception:  # pragma: no cover - logging must never raise
-            pass
+        except Exception as exc:  # pragma: no cover - logging must never raise
+            self.logger.debug(
+                "behavioral alignment summary log failed scope=%s:%s error_type=%s error=%s",
+                scan_mode,
+                tool_label,
+                type(exc).__name__,
+                truncate(exc),
+            )
 
     async def analyze(
         self, content: str, context: Dict[str, Any]
@@ -358,6 +375,19 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 scan_target=scan_target,
                 tool_label=tool_label,
             )
+
+            if context.get("api_confined_scan") and scan_mode == "inline":
+                if os.path.isabs(content):
+                    return [
+                        build_infrastructure_error_finding(
+                            analyzer_name="Behavioral",
+                            subject=scan_target,
+                            error=FileNotFoundError(
+                                "Path not found under configured API root"
+                            ),
+                            context="local",
+                        )
+                    ]
 
             # Check if content is a directory
             if os.path.isdir(content):
@@ -455,7 +485,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                             )
                     except Exception as e:
                         self.logger.warning(
-                            f"Failed to add file {accepted.path} to cross-file analyzer: {e}"
+                            "behavioral call_graph_add_file failed path=%s error_type=%s error=%s",
+                            sanitize_log_value(accepted.path),
+                            type(e).__name__,
+                            truncate(e),
+                            exc_info=True,
                         )
 
                 self.logger.debug(
@@ -581,7 +615,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         )
                 except Exception as e:
                     self.logger.warning(
-                        f"Failed to build call graph for {content}: {e}"
+                        "behavioral call_graph_build failed path=%s error_type=%s error=%s",
+                        sanitize_log_value(content),
+                        type(e).__name__,
+                        truncate(e),
+                        exc_info=True,
                     )
                     cross_file_analyzer = None
 
@@ -654,7 +692,17 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 truncate(e),
                 exc_info=True,
             )
-            return []
+            return [
+                build_infrastructure_error_finding(
+                    analyzer_name="Behavioral",
+                    subject=scan_target or tool_label,
+                    error=e,
+                    context="local",
+                    model=getattr(
+                        self.alignment_orchestrator.llm_client, "_model", None
+                    ),
+                )
+            ]
 
     _EXT_TO_TS_LANGUAGE = {
         ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
@@ -810,7 +858,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     source_code = f.read()
 
             file_context = context.copy()
-            file_context["file_path"] = file_path
+            file_context["file_path"] = _normalize_behavioral_source_path(file_path)
+            normalized_path = file_context["file_path"]
             file_context["cross_file_analyzer"] = cross_file_analyzer
 
             findings = await self._analyze_source_code(source_code, file_context)
@@ -818,7 +867,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # Tag findings with file path
             for finding in findings:
                 if finding.details:
-                    finding.details["source_file"] = file_path
+                    finding.details["source_file"] = normalized_path
 
             self.logger.debug(
                 "behavioral _analyze_file ok path=%s findings=%d source_length=%d "
@@ -839,6 +888,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 int((time.perf_counter() - analyze_start) * 1000),
                 type(e).__name__,
                 truncate(e),
+                exc_info=True,
             )
             return []
 
@@ -855,7 +905,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         Returns:
             Security findings for detected behavioral mismatches, inconclusive alignment checks, and analyzed capabilities without mismatches.
         """
-        file_path = context.get("file_path", "unknown")
+        file_path = _normalize_behavioral_source_path(
+            context.get("file_path", "unknown")
+        )
         findings = []
         func_contexts = []
 
@@ -976,6 +1028,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 populate_taint_fields(fc)
 
             # Enrich with cross-file context if available
+            for func_context in func_contexts:
+                if not func_context.source_file:
+                    func_context.source_file = file_path
+
             if context.get("cross_file_analyzer"):
                 from ...static_analysis.graph.integration import enrich_with_cross_file_context
 
@@ -1009,10 +1065,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                             sanitize_log_value(file_path),
                         )
                     except Exception as graph_err:
-                        self.logger.debug(
-                            "Code graph partition failed for %s: %s",
+                        self.analysis_errors += 1
+                        self.logger.warning(
+                            "code_graph partition failed file=%s error_type=%s error=%s",
                             sanitize_log_value(file_path),
+                            type(graph_err).__name__,
                             truncate(graph_err),
+                            exc_info=True,
                         )
                         llm_contexts = func_contexts
 
@@ -1079,7 +1138,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             funcs_with_findings.discard(None)
             errored_funcs = set(
                 getattr(
-                    self.alignment_orchestrator, "errored_function_names", set()
+                    self.alignment_orchestrator, "errored_function_keys", set()
                 )
             )
             for fc in func_contexts:
@@ -1092,7 +1151,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # SecurityFinding framework accepts here) so the reporter
                 # doesn't claim we successfully analysed something we
                 # never did.
-                if name in errored_funcs:
+                if (file_path, name) in errored_funcs:
                     findings.append(
                         SecurityFinding(
                             severity="UNKNOWN",

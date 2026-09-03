@@ -246,7 +246,7 @@ def _iter_treesitter_assignments(
             value = _treesitter_value_node(node)
             if target and value is not None:
                 pairs.append((target, value))
-        elif node.type in ("assignment_expression", "assignment"):
+        elif node.type in ("assignment_expression", "assignment", "assignment_statement"):
             left = node.child_by_field_name("left")
             right = node.child_by_field_name("right")
             if left is not None and right is not None:
@@ -428,14 +428,11 @@ def analyze_python_function(
 
     dead_lines: list[int] = []
     dead_vars: set[str] = set()
-    for node in liveness.dead_code:
+    for node, var in liveness.dead_code:
         line = getattr(node.ast_node, "lineno", None)
         if isinstance(line, int):
             dead_lines.append(line)
-        if isinstance(node.ast_node, ast.Assign):
-            for target in node.ast_node.targets:
-                if isinstance(target, ast.Name):
-                    dead_vars.add(target.id)
+        dead_vars.add(var)
 
     return ClassicDataflowSummary(
         parameter_influenced=reaching.get_parameter_influenced_vars(),
@@ -470,10 +467,9 @@ def analyze_treesitter_function(
 
     dead_lines: list[int] = []
     dead_vars: set[str] = set()
-    for node in liveness.dead_code:
+    for node, var in liveness.dead_code:
         dead_lines.append(node.ast_node.start_point[0] + 1)
-        for target, _ in _ts_iter_assignments(node.ast_node, source_bytes):
-            dead_vars.add(target)
+        dead_vars.add(var)
 
     return ClassicDataflowSummary(
         parameter_influenced=reaching.get_parameter_influenced_vars(),
@@ -492,6 +488,8 @@ class ClassicDataflowEngine:
         """Initialize a dataflow engine for the specified code graph."""
         self._graph = graph
         self._cache: dict[str, ClassicDataflowSummary] = {}
+        self._python_trees: dict[str, ast.Module] = {}
+        self._treesitter_roots: dict[str, tuple[Node, bytes]] = {}
 
     def enrich_graph(self) -> None:
         """Run classic analyses and store summaries on supported function nodes."""
@@ -559,19 +557,20 @@ class ClassicDataflowEngine:
         params: list[str],
     ) -> ClassicDataflowSummary | None:
         """Analyze a Python function's source and return its dataflow summary.
-        
+
         Parameters:
-        	caller_file (str): Path of the file containing the function.
-        	caller_label (str): Function label used to locate the function in the source.
-        	source (str): Python source code containing the function.
-        	params (list[str]): Parameter names to use for the analysis; inferred from the function when empty.
-        
+            caller_file (str): Path of the file containing the function.
+            caller_label (str): Function label used to locate the function in the source.
+            source (str): Python source code containing the function.
+            params (list[str]): Parameter names to use for the analysis; inferred
+                from the function when empty.
+
         Returns:
-        	ClassicDataflowSummary | None: The function's dataflow summary, or `None` if the source is invalid or the function cannot be found.
+            ClassicDataflowSummary | None: The function's dataflow summary, or
+            ``None`` if the source is invalid or the function cannot be found.
         """
-        try:
-            tree = ast.parse(source)
-        except SyntaxError:
+        tree = self._python_tree(caller_file, source)
+        if tree is None:
             return None
 
         func_node = _find_python_function(tree, caller_label)
@@ -583,6 +582,17 @@ class ClassicDataflowEngine:
 
         return analyze_python_function(source, caller_file, func_node, params)
 
+    def _python_tree(self, caller_file: str, source: str) -> ast.Module | None:
+        cached = self._python_trees.get(caller_file)
+        if cached is not None:
+            return cached
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return None
+        self._python_trees[caller_file] = tree
+        return tree
+
     def _analyze_treesitter(
         self,
         language: str,
@@ -591,14 +601,16 @@ class ClassicDataflowEngine:
         source: str,
         params: list[str],
     ) -> ClassicDataflowSummary | None:
-        """Analyze a Tree-sitter function and return its dataflow summary when parsing and function resolution succeed."""
-        ts_lang = _treesitter_parse_language(language)
-        ts_language = _get_language(ts_lang)
-        if ts_language is None:
-            return None
+        """Analyze a Tree-sitter function and return its dataflow summary.
 
-        source_bytes = source.encode("utf-8")
-        root = Parser(ts_language).parse(source_bytes).root_node
+        Returns the summary when parsing and function resolution succeed, or
+        ``None`` otherwise.
+        """
+        parsed = self._treesitter_root(language, caller_file, source)
+        if parsed is None:
+            return None
+        root, source_bytes = parsed
+
         func_node = _find_treesitter_function(root, caller_label, source_bytes)
         if func_node is None:
             return None
@@ -607,6 +619,25 @@ class ClassicDataflowEngine:
             params = self._treesitter_param_names(func_node, source_bytes)
 
         return analyze_treesitter_function(language, func_node, params, source_bytes)
+
+    def _treesitter_root(
+        self,
+        language: str,
+        caller_file: str,
+        source: str,
+    ) -> tuple[Node, bytes] | None:
+        cached = self._treesitter_roots.get(caller_file)
+        if cached is not None:
+            return cached
+        ts_lang = _treesitter_parse_language(language)
+        ts_language = _get_language(ts_lang)
+        if ts_language is None:
+            return None
+        source_bytes = source.encode("utf-8")
+        root = Parser(ts_language).parse(source_bytes).root_node
+        parsed = (root, source_bytes)
+        self._treesitter_roots[caller_file] = parsed
+        return parsed
 
     @staticmethod
     def _treesitter_param_names(func_node: Node, source_bytes: bytes) -> list[str]:
@@ -628,6 +659,8 @@ class ClassicDataflowEngine:
         names: list[str] = []
         for child in params_node.children:
             if child.type in {",", "(", ")", "[", "]"}:
+                continue
+            if child.type == "self_parameter":
                 continue
             name_node = child.child_by_field_name("name")
             if name_node is None and child.type == "identifier":

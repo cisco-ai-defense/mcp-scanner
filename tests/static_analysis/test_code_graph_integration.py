@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -57,7 +58,20 @@ FIXTURE = (
 
 
 def test_code_graph_enabled_by_default(monkeypatch):
+    """Default is enabled when MCP_SCANNER_CODE_GRAPH is unset.
+
+    Do not ``importlib.reload`` the constants module here: reload forks
+    ``MCPScannerConstants`` and leaves already-imported modules (e.g.
+    ``alignment_prompt_builder``) bound to the stale class, which breaks
+    later tests that monkeypatch alignment prompt limits.
+    """
     monkeypatch.delenv("MCP_SCANNER_CODE_GRAPH", raising=False)
+    default_from_env = os.getenv("MCP_SCANNER_CODE_GRAPH", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+    assert default_from_env is True
     assert MCPScannerConstants.CODE_GRAPH_ENABLED is True
 
 

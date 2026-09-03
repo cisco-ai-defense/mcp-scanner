@@ -76,28 +76,46 @@ class GraphSlicer:
             frontier = next_frontier
             hops += 1
 
+        trimmed = self._trim_nodes(node_ids, max_chars, entry_id=entry_id)
+        trimmed_edges = [
+            edge
+            for edge in edges
+            if edge.source in trimmed and edge.target in trimmed
+        ]
         return GraphSlice(
             entry_id=entry_id,
-            node_ids=self._trim_nodes(node_ids, max_chars),
-            edges=edges,
+            node_ids=trimmed,
+            edges=trimmed_edges,
             hop_limit=hops,
         )
 
-    def _trim_nodes(self, node_ids: set[str], max_chars: int | None) -> set[str]:
+    def _trim_nodes(
+        self,
+        node_ids: set[str],
+        max_chars: int | None,
+        *,
+        entry_id: str | None = None,
+    ) -> set[str]:
         """Select node identifiers that fit within the character budget.
-        
+
         Parameters:
-        	node_ids (set[str]): Node identifiers to select.
-        	max_chars (int | None): Maximum cumulative length of the selected identifiers, or None for no limit.
-        
+            node_ids (set[str]): Node identifiers to select.
+            max_chars (int | None): Maximum cumulative length of the selected
+                identifiers, or None for no limit.
+            entry_id (str | None): Entry node to preserve when trimming.
+
         Returns:
-        	set[str]: Selected node identifiers, preserving at least one identifier when the input is non-empty.
+            set[str]: Selected node identifiers, preserving at least one
+            identifier when the input is non-empty.
         """
         if max_chars is None:
             return node_ids
         kept: set[str] = set()
         budget = max_chars
-        for node_id in sorted(node_ids):
+        if entry_id and entry_id in node_ids:
+            kept.add(entry_id)
+            budget -= len(entry_id)
+        for node_id in sorted(node_ids - kept):
             label_len = len(node_id)
             if budget - label_len < 0 and kept:
                 break

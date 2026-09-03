@@ -298,16 +298,34 @@ class TreeSitterCallGraphAnalyzer:
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
     def _decorator_texts_for_function(self, node: Node, source_bytes: bytes) -> list[str]:
-        """
-        Collect decorator and attribute text associated with a function node.
-        
+        """Collect decorator and attribute text associated with a function node.
+
         Parameters:
             node (Node): Function syntax node whose annotations are inspected.
             source_bytes (bytes): Source bytes used to extract annotation text.
-        
+
         Returns:
-            list[str]: Text of decorators, attributes, and modifiers associated with the function.
+            list[str]: Text of decorators, attributes, and modifiers associated
+            with the function.
         """
+        annotation_types = {
+            "decorator",
+            "attribute_list",
+            "attribute_item",
+            "modifiers",
+            "call",
+        }
+        ignorable_between = {
+            "export",
+            "default",
+            "async",
+            "static",
+            "public",
+            "private",
+            "protected",
+            "readonly",
+            "*",
+        }
         texts: list[str] = []
         for child in node.children:
             if child.type in {"attribute_list", "modifiers"}:
@@ -315,20 +333,44 @@ class TreeSitterCallGraphAnalyzer:
 
         parent = node.parent
         if parent is not None:
-            for child in parent.children:
-                if child is node:
+            siblings = parent.children
+            try:
+                idx = siblings.index(node)
+            except ValueError:
+                idx = -1
+            if idx > 0:
+                collected_parent: list[str] = []
+                i = idx - 1
+                while i >= 0:
+                    sib = siblings[i]
+                    if sib.type in {"comment", "line_comment", "block_comment"}:
+                        i -= 1
+                        continue
+                    if sib.type in annotation_types:
+                        collected_parent.append(self._node_text(sib, source_bytes))
+                        i -= 1
+                        continue
+                    if sib.type in ignorable_between:
+                        i -= 1
+                        continue
                     break
-                if child.type in {"decorator", "attribute_list", "modifiers"}:
-                    texts.append(self._node_text(child, source_bytes))
+                texts.extend(reversed(collected_parent))
 
         prev = node.prev_sibling
+        collected: list[str] = []
         while prev is not None:
-            if prev.type in {"decorator", "attribute_list", "modifiers", "call"}:
-                texts.append(self._node_text(prev, source_bytes))
-                break
-            if prev.type not in {"comment", "line_comment", "block_comment"}:
-                break
-            prev = prev.prev_sibling
+            if prev.type in {"comment", "line_comment", "block_comment"}:
+                prev = prev.prev_sibling
+                continue
+            if prev.type in annotation_types:
+                collected.append(self._node_text(prev, source_bytes))
+                prev = prev.prev_sibling
+                continue
+            if prev.type in ignorable_between:
+                prev = prev.prev_sibling
+                continue
+            break
+        texts.extend(reversed(collected))
         return texts
 
     def _is_mcp_entry_point(self, node: Node, source_bytes: bytes) -> bool:
@@ -597,7 +639,7 @@ class TreeSitterCallGraphAnalyzer:
         if len(same_file) == 1:
             return same_file[0]
         if len(same_file) > 1:
-            return same_file[0]
+            return None
         if len(all_matches) == 1:
             return all_matches[0]
         return None

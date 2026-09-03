@@ -23,6 +23,9 @@ from .dynamic_dispatch import (
 )
 from .models import CodeEdge, Provenance, Relation
 from .semantic_dispatch import DispatchResult, DispatchTarget, ProgramFacts
+from ....utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 _TS_LANGS = frozenset(
     {"javascript", "typescript", "tsx", "go", "rust", "java", "kotlin", "c_sharp", "ruby", "php"}
 )
@@ -134,7 +137,12 @@ class CrossFileSymbolResolver:
             self._export_bindings[file_key] = self._parse_python_export_bindings(
                 source, file_key
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "code_graph python index failed file=%s error=%s",
+                file_key,
+                exc,
+            )
             return
 
     def _index_treesitter_file(self, path: Path, source: str, file_key: str) -> None:
@@ -158,7 +166,12 @@ class CrossFileSymbolResolver:
             self._export_bindings[file_key] = self._parse_ts_export_bindings(
                 tree.root_node, source_bytes, file_key
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "code_graph treesitter index failed file=%s error=%s",
+                file_key,
+                exc,
+            )
             return
 
     def _parse_python_import_bindings(self, source: str, file_key: str) -> dict[str, str]:
@@ -175,7 +188,12 @@ class CrossFileSymbolResolver:
         bindings: dict[str, str] = {}
         try:
             tree = ast.parse(source)
-        except SyntaxError:
+        except SyntaxError as exc:
+            logger.debug(
+                "code_graph python_import_bindings parse_failed file=%s error=%s",
+                file_key,
+                exc,
+            )
             return bindings
 
         for node in tree.body:
@@ -214,7 +232,12 @@ class CrossFileSymbolResolver:
         exports: dict[str, str] = {}
         try:
             tree = ast.parse(source)
-        except SyntaxError:
+        except SyntaxError as exc:
+            logger.debug(
+                "code_graph python_export_bindings parse_failed file=%s error=%s",
+                file_key,
+                exc,
+            )
             return exports
 
         for node in tree.body:
@@ -779,6 +802,13 @@ class CrossFileSymbolResolver:
         )
         if len(same_file) == 1:
             return same_file[0], Provenance.EXTRACTED, 1.0, None
+        if len(same_file) > 1:
+            return (
+                f"external::{callee_label}",
+                Provenance.AMBIGUOUS,
+                0.5,
+                "ambiguous_same_file",
+            )
 
         cross_file = sorted(
             fn
@@ -788,7 +818,12 @@ class CrossFileSymbolResolver:
         if len(cross_file) == 1:
             return cross_file[0], Provenance.INFERRED, 0.8, "cross_file_suffix"
         if len(cross_file) > 1:
-            return cross_file[0], Provenance.AMBIGUOUS, 0.5, "ambiguous_suffix"
+            return (
+                f"external::{callee_label}",
+                Provenance.AMBIGUOUS,
+                0.5,
+                "ambiguous_suffix",
+            )
 
         if callee_label in known_functions:
             return callee_label, Provenance.INFERRED, 0.75, None
@@ -810,43 +845,43 @@ class CrossFileSymbolResolver:
         return f"external::{callee_label}", Provenance.INFERRED, 0.75, None
 
     def import_edges(self) -> list[CodeEdge]:
-        """
-        Create import edges for resolvable Python, JavaScript, TypeScript, and TSX imports.
-        
+        """Derive IMPORTS edges from parsed binding maps (not line re-parsing).
+
         Returns:
-        	list[CodeEdge]: Import edges with the importing module as the source and the resolved target module as the target.
+            list[CodeEdge]: Import edges with the importing module as the source
+            and the resolved target module as the target.
         """
         edges: list[CodeEdge] = []
-        for path, source in self._files.items():
-            module = str(path)
-            for line in source.splitlines():
-                stripped = line.strip()
-                if self._language == "python" and stripped.startswith(("import ", "from ")):
-                    target = self.resolve_import_target(stripped.split()[-1])
-                    if target:
-                        edges.append(
-                            CodeEdge(
-                                source=f"{module}::__module__",
-                                target=target,
-                                relation=Relation.IMPORTS,
-                                provenance=Provenance.EXTRACTED,
-                                confidence_score=1.0,
-                                context=stripped[:120],
-                            )
-                        )
-                elif self._language in ("javascript", "typescript", "tsx") and "from " in stripped:
-                    parts = stripped.replace("from", " ").replace("import", " ").split()
-                    if parts:
-                        target = self.resolve_import_target(parts[0])
-                        if target:
-                            edges.append(
-                                CodeEdge(
-                                    source=f"{module}::__module__",
-                                    target=target,
-                                    relation=Relation.IMPORTS,
-                                    provenance=Provenance.EXTRACTED,
-                                    confidence_score=1.0,
-                                    context=stripped[:120],
-                                )
-                            )
+        seen: set[tuple[str, str]] = set()
+        known_files = {str(path) for path in self._files}
+
+        for file_key in sorted(known_files):
+            module_source = f"{file_key}::__module__"
+            targets: set[str] = set()
+
+            for binding in self._import_bindings.get(file_key, {}).values():
+                target_file = binding.split("::", 1)[0]
+                resolved = self.resolve_import_target(target_file, importer=file_key) or target_file
+                if resolved in known_files:
+                    targets.add(resolved)
+
+            for target in self._import_star_targets.get(file_key, []):
+                if target in known_files:
+                    targets.add(target)
+
+            for target in sorted(targets):
+                edge_key = (module_source, target)
+                if edge_key in seen:
+                    continue
+                seen.add(edge_key)
+                edges.append(
+                    CodeEdge(
+                        source=module_source,
+                        target=target,
+                        relation=Relation.IMPORTS,
+                        provenance=Provenance.EXTRACTED,
+                        confidence_score=1.0,
+                        context="import_binding",
+                    )
+                )
         return edges

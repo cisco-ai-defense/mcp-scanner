@@ -248,7 +248,7 @@ def add(a: float, b: float) -> float:
             assert func_names == ["add", "echo"], func_names
             for f in safe_findings:
                 d = f.details or {}
-                assert d.get("source_file") == temp_path
+                assert d.get("source_file") == str(Path(temp_path).resolve())
                 assert d.get("no_findings") is True, (
                     "synthesized SAFE finding must be marked with no_findings=True"
                 )

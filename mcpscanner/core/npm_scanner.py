@@ -27,9 +27,9 @@ Sibling of :class:`PyPIPackageScanner` for npm packages. Same two modes:
   executed — only parsed.
 
 Detection runs the same docstring-vs-behaviour alignment LLM check that
-PyPI scans use, against JS / TS sources via the tree-sitter-backed
-:class:`JSContextExtractor` is used via the unified
-:class:`BehavioralCodeAnalyzer` pipeline.
+PyPI scans use. JS/TS sources are analyzed via the tree-sitter-backed
+:class:`JSContextExtractor` in the unified :class:`BehavioralCodeAnalyzer`
+pipeline.
 """
 
 from __future__ import annotations

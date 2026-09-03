@@ -128,6 +128,8 @@ def _treesitter_parameters(node: Node) -> list[dict[str, Any]]:
     for child in params_node.children:
         if child.type in {",", "(", ")", "[", "]"}:
             continue
+        if child.type == "self_parameter":
+            continue
         if child.type in (
             "identifier",
             "required_parameter",
@@ -135,6 +137,7 @@ def _treesitter_parameters(node: Node) -> list[dict[str, Any]]:
             "formal_parameter",
             "parameter_declaration",
             "simple_parameter",
+            "parameter",
         ):
             name = _treesitter_param_name(child)
             if name and name not in {"self", "this"}:

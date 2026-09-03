@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .....config.constants import MCPScannerConstants
+from .....utils.log_format import truncate
 from ....static_analysis.context_extractor import FunctionContext
 
 _GRAPH_EVIDENCE_HEADER = (
@@ -213,6 +214,21 @@ _MAX_PRESERVED_TOTAL_CHARS = 12_000
 _RESPONSE_FORMAT_MARKER = "## Required Output Format"
 # Newlines joining template, prefix, delimiter tags, and analysis body.
 _PROMPT_FRAME_CHARS = 5
+
+
+def _cap_prompt_preserving_end_tag(
+    prompt: str, *, max_total: int, end_tag: str
+) -> str:
+    """Hard-cap prompt length while keeping the untrusted-input closing fence."""
+    if len(prompt) <= max_total:
+        return prompt
+    trailer = f"\n{end_tag}\n"
+    if len(trailer) >= max_total:
+        if end_tag and max_total > 0:
+            return end_tag[-max_total:]
+        return prompt[:max_total]
+    body_budget = max_total - len(trailer)
+    return prompt[:body_budget].rstrip() + trailer
 
 
 def _split_template(template: str) -> tuple[str, str]:
@@ -440,8 +456,12 @@ Parameter Flow Tracking:
                     call_parts.append(
                         f"  Line {call_line}: {call_name}({', '.join(str(a) for a in call_args)})\n"
                     )
-                except Exception:
-                    # Skip malformed call entries
+                except Exception as exc:
+                    self.logger.debug(
+                        "alignment prompt skipped_malformed kind=function_call error_type=%s error=%s",
+                        type(exc).__name__,
+                        truncate(exc),
+                    )
                     continue
             content_parts.append("".join(call_parts))
 
@@ -456,9 +476,13 @@ Parameter Flow Tracking:
                     var = assign.get("variable", "unknown")
                     val = assign.get("value", "unknown")
                     assign_parts.append(f"  Line {line}: {var} = {val}\n")
-                except Exception:
+                except Exception as exc:
+                    self.logger.debug(
+                        "alignment prompt skipped_malformed kind=assignment error_type=%s error=%s",
+                        type(exc).__name__,
+                        truncate(exc),
+                    )
                     continue
-            content_parts.append("".join(assign_parts))
 
         # Add control flow information
         if func_context.control_flow:
@@ -497,7 +521,12 @@ Parameter Flow Tracking:
                                 self._format_call_chain(call["call_chain"], indent=4)
                             )
                     cross_file_parts.append("\n")
-                except Exception:
+                except Exception as exc:
+                    self.logger.debug(
+                        "alignment prompt skipped_malformed kind=cross_file_call error_type=%s error=%s",
+                        type(exc).__name__,
+                        truncate(exc),
+                    )
                     continue
             cross_file_parts.append(
                 "Note: Analyze the entire call chain to understand what operations are performed.\n"
@@ -961,6 +990,44 @@ For functions with no issues, just include function_index, function_name, and mi
                 max_total,
             )
             break
+
+        if len(prompt) > max_total:
+            self.logger.warning(
+                "prompt hard-truncating label=%s prompt_length=%d budget=%d",
+                log_label,
+                len(prompt),
+                max_total,
+            )
+            if relocate_preserved:
+                _, preserved_live = _split_preserved_sections(analysis_content)
+                while (
+                    len(prompt) > max_total
+                    and len(analysis_content)
+                    > len(preserved_live) + len(_ANALYSIS_TRUNCATION_SUFFIX)
+                ):
+                    main_live = analysis_content[
+                        : len(analysis_content) - len(preserved_live)
+                    ]
+                    main_live = main_live[: max(0, len(main_live) - 512)]
+                    if not main_live.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
+                        main_live += _ANALYSIS_TRUNCATION_SUFFIX
+                    analysis_content = main_live + preserved_live
+                    prompt = _build(template_used, analysis_content)
+            else:
+                while (
+                    len(prompt) > max_total
+                    and len(analysis_content) > len(_ANALYSIS_TRUNCATION_SUFFIX)
+                ):
+                    analysis_content = analysis_content[
+                        : max(0, len(analysis_content) - 512)
+                    ]
+                    if not analysis_content.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
+                        analysis_content += _ANALYSIS_TRUNCATION_SUFFIX
+                    prompt = _build(template_used, analysis_content)
+            if len(prompt) > max_total:
+                prompt = _cap_prompt_preserving_end_tag(
+                    prompt, max_total=max_total, end_tag=end_tag
+                )
 
         self.logger.debug(
             "prompt built label=%s prompt_length=%d analysis_content_length=%d "

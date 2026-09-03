@@ -111,4 +111,4 @@ class TestCodeGraphBuilder:
         built = CodeGraphBuilder()
         built.add_path(sample)
         graph = built.build()
-        assert graph.language == expected_lang or graph.stats()["nodes"] >= 0
+        assert graph.language == expected_lang

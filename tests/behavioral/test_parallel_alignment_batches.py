@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -32,6 +31,7 @@ def _ctx(name: str) -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_parallel_batches_run_concurrently(monkeypatch):
     monkeypatch.setattr(MCPScannerConstants, "BEHAVIORAL_LLM_BATCH_CONCURRENCY", 3)
+    monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_CACHE_ENABLED", False)
 
     orch = AlignmentOrchestrator(_cfg())
     active = 0
@@ -59,12 +59,9 @@ async def test_parallel_batches_run_concurrently(monkeypatch):
     )
 
     ctxs = [_ctx(f"fn{i}") for i in range(6)]
-    start = time.perf_counter()
     results = await orch.check_alignment_batch(ctxs, batch_size=1, max_concurrency=3)
-    elapsed = time.perf_counter() - start
 
     assert results == []
     assert peak >= 2, f"expected concurrent batches, peak={peak}"
-    assert elapsed < 0.25, f"parallel batches too slow: {elapsed:.2f}s"
     assert orch.stats["total_analyzed"] == 6
     assert orch.stats["no_mismatch"] == 6

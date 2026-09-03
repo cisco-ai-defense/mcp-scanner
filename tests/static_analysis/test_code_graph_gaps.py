@@ -11,9 +11,11 @@ from mcpscanner.core.static_analysis.context_extractor import FunctionContext
 from mcpscanner.core.static_analysis.graph import (
     CFGFusionEngine,
     ClassicDataflowEngine,
+    CodeEdge,
     CodeGraph,
     CodeGraphBuilder,
     CodeNode,
+    GraphSlicer,
     InterproceduralTaintAnalyzer,
     Provenance,
     Relation,
@@ -77,6 +79,100 @@ class TestGraphGaps:
         assert ctx.taint_sources
         assert ctx.taint_sinks
         assert ctx.taint_flows
+        assert any(s["sink"] == "os.remove" for s in ctx.taint_sinks)
+
+    def test_populate_taint_fields_filters_benign_calls(self):
+        ctx = _ctx(
+            parameter_flows=[
+                {
+                    "parameter": "path",
+                    "operations": [
+                        {"type": "function_call", "function": "len", "line": 2},
+                        {"type": "function_call", "function": "os.remove", "line": 3},
+                    ],
+                }
+            ]
+        )
+        populate_taint_fields(ctx)
+        assert not any(s["sink"] == "len" for s in ctx.taint_sinks)
+        assert any(s["sink"] == "os.remove" for s in ctx.taint_sinks)
+
+    def test_resolver_import_edges_use_bindings(self, tmp_path: Path) -> None:
+        util = tmp_path / "util.py"
+        server = tmp_path / "server.py"
+        util.write_text("def helper():\n    pass\n", encoding="utf-8")
+        server.write_text(
+            "from util import helper\n\ndef handler():\n    helper()\n",
+            encoding="utf-8",
+        )
+        resolver = CrossFileSymbolResolver(
+            {util.resolve(): util.read_text(), server.resolve(): server.read_text()},
+            language="python",
+        )
+        edges = resolver.import_edges()
+        server_key = str(server.resolve())
+        util_key = str(util.resolve())
+        import_edges = [
+            e for e in edges if e.source == f"{server_key}::__module__" and e.target == util_key
+        ]
+        assert import_edges
+        assert import_edges[0].context == "import_binding"
+
+    def test_resolver_import_edges_include_star_targets(self, tmp_path: Path) -> None:
+        handlers = tmp_path / "handlers.py"
+        server = tmp_path / "server.py"
+        handlers.write_text("def helper():\n    pass\n", encoding="utf-8")
+        server.write_text(
+            "from handlers import *\n\ndef handler():\n    helper()\n",
+            encoding="utf-8",
+        )
+        resolver = CrossFileSymbolResolver(
+            {
+                handlers.resolve(): handlers.read_text(),
+                server.resolve(): server.read_text(),
+            },
+            language="python",
+        )
+        edges = resolver.import_edges()
+        server_key = str(server.resolve())
+        handlers_key = str(handlers.resolve())
+        targets = {
+            e.target
+            for e in edges
+            if e.source == f"{server_key}::__module__"
+        }
+        assert handlers_key in targets
+
+    def test_resolver_ambiguous_cross_file_suffix(self) -> None:
+        resolver = CrossFileSymbolResolver({}, language="python")
+        known = {
+            "/a.py::run",
+            "/b.py::run",
+        }
+        resolved, provenance, _confidence, context = resolver.resolve_callee(
+            "/caller.py::handler",
+            "run",
+            known,
+        )
+        assert resolved == "external::run"
+        assert provenance.value == "ambiguous"
+        assert context == "ambiguous_suffix"
+
+    def test_resolver_ambiguous_same_file_suffix(self) -> None:
+        resolver = CrossFileSymbolResolver({}, language="python")
+        caller = "/caller.py"
+        known = {
+            f"{caller}::Handler.run",
+            f"{caller}::Worker.run",
+        }
+        resolved, provenance, _confidence, context = resolver.resolve_callee(
+            f"{caller}::handler",
+            "run",
+            known,
+        )
+        assert resolved == "external::run"
+        assert provenance.value == "ambiguous"
+        assert context == "ambiguous_same_file"
 
     def test_resolver_dynamic_dispatch(self):
         resolver = CrossFileSymbolResolver({}, language="javascript")
@@ -212,6 +308,65 @@ export function handler(path: string): void {
         ]
         assert call_edges
         assert call_edges[0].context.startswith("fixpoint_r0:const_prop_semantic_bracket_variable")
+
+    def test_slicer_trim_preserves_entry_id(self) -> None:
+        entry = "/z.py::handler_with_long_name"
+        callee = "/a.py::aaa"
+        graph = CodeGraph()
+        graph.add_node(
+            CodeNode(
+                node_id=entry,
+                label="handler_with_long_name",
+                source_file="/z.py",
+                language="python",
+                is_mcp_entry=True,
+            )
+        )
+        graph.add_node(
+            CodeNode(
+                node_id=callee,
+                label="aaa",
+                source_file="/a.py",
+                language="python",
+            )
+        )
+        graph.add_edge(
+            CodeEdge(
+                source=entry,
+                target=callee,
+                relation=Relation.CALLS,
+                provenance=Provenance.EXTRACTED,
+            )
+        )
+
+        slice_ = GraphSlicer(graph).slice(entry, max_chars=len(callee) + 5)
+        assert entry in slice_.node_ids
+
+    def test_call_graph_keeps_qualified_getattr_inner_call(self, tmp_path: Path) -> None:
+        from mcpscanner.core.static_analysis.interprocedural.call_graph_analyzer import (
+            CallGraphAnalyzer,
+        )
+
+        sample = tmp_path / "server.py"
+        sample.write_text(
+            """
+def handler(path):
+    import helpers
+    helpers.getattr(worker, "run")(path)
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        cga = CallGraphAnalyzer()
+        cga.add_file(sample, sample.read_text(encoding="utf-8"))
+        graph = cga.build_call_graph()
+        handler_id = f"{sample}::handler"
+        callee_labels = {
+            callee.split("::", 1)[-1] if "::" in callee else callee
+            for _caller, callee in graph.calls
+            if _caller == handler_id
+        }
+        assert "helpers.getattr" in callee_labels
 
     def test_sink_matches_require_fs_chain(self) -> None:
         from mcpscanner.core.static_analysis.graph.sink_analyzer import _match_sink, _sink_lookup

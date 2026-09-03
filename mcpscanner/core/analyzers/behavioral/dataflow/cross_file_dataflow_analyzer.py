@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any, Union
 
+from .....utils.analyzer_errors import classify_analyzer_error
+from .....utils.log_format import truncate
 from ....static_analysis.context_extractor import FunctionContext
 from ....static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
 from ....static_analysis.interprocedural.treesitter_call_graph import (
@@ -57,11 +59,16 @@ def enrich_with_cross_file_context(
             ),
         }
     except Exception as exc:
+        kind = classify_analyzer_error(exc, context="local")
         logger.warning(
-            "cross_file_dataflow enrich_failed file=%s function=%s error=%s",
+            "cross_file_dataflow enrich_failed file=%s function=%s error_kind=%s "
+            "error_type=%s error=%s",
             file_path,
             func_context.name,
-            exc,
+            kind.value,
+            type(exc).__name__,
+            truncate(exc),
+            exc_info=True,
         )
 
 

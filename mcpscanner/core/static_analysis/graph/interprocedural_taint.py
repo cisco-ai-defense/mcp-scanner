@@ -117,17 +117,26 @@ class InterproceduralTaintAnalyzer:
                         caller_taint=binding.caller_taint,
                     )
                     result.flows.append(step)
-                    self._graph.add_edge(
-                        CodeEdge(
-                            source=node_id,
-                            target=edge.target,
-                            relation=Relation.TAINT_FLOW,
-                            provenance=binding.provenance,
-                            confidence_score=binding.confidence,
-                            line=step.line,
-                            context=f"{binding.caller_taint}->{binding.callee_param}",
+                    flow_context = f"{binding.caller_taint}->{binding.callee_param}"
+                    target_id = edge.target
+                    if not any(
+                        existing.relation == Relation.TAINT_FLOW
+                        and existing.source == node_id
+                        and existing.target == target_id
+                        and existing.context == flow_context
+                        for existing in self._graph.edges
+                    ):
+                        self._graph.add_edge(
+                            CodeEdge(
+                                source=node_id,
+                                target=target_id,
+                                relation=Relation.TAINT_FLOW,
+                                provenance=binding.provenance,
+                                confidence_score=binding.confidence,
+                                line=step.line,
+                                context=flow_context,
+                            )
                         )
-                    )
                     key = (edge.target, binding.callee_param)
                     if key not in seen:
                         seen.add(key)

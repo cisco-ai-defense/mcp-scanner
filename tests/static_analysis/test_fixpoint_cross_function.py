@@ -232,6 +232,23 @@ def test_call_edges_without_superseded_external() -> None:
     kept = call_edges_without_superseded_external([resolved, external])
     assert kept == [resolved]
 
+    remove_file = CodeEdge(
+        source="a::handler",
+        target="a::worker.removeFile",
+        relation=Relation.CALLS,
+        provenance=Provenance.INFERRED,
+        call_expression="removeFile(path)",
+    )
+    remove_external = CodeEdge(
+        source="a::handler",
+        target="external::remove",
+        relation=Relation.CALLS,
+        provenance=Provenance.AMBIGUOUS,
+        call_expression="remove",
+    )
+    kept_remove = call_edges_without_superseded_external([remove_file, remove_external])
+    assert kept_remove == [remove_file, remove_external]
+
 
 def _handler_node_id(nodes: dict) -> str:
     """Find the identifier of the handler node.
