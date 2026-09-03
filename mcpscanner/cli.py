@@ -238,6 +238,21 @@ def _build_config(
     return Config(**config_params)
 
 
+def _threat_vulnerability_classification(
+    func_findings: List[Any],
+    max_severity: str,
+) -> str | None:
+    """Resolve THREAT/VULNERABILITY label for behavioral CLI filtering."""
+    classification = None
+    if func_findings and func_findings[0].details:
+        classification = func_findings[0].details.get(
+            "threat_vulnerability_classification"
+        )
+    if not classification and max_severity not in ("SAFE", "UNKNOWN"):
+        return "THREAT"
+    return classification
+
+
 def _build_behavioral_results(
     analyzer: Any,
     findings: List[Any],
@@ -318,11 +333,9 @@ def _build_behavioral_results(
                 if taxonomy_key not in existing_keys:
                     mcp_taxonomies.append(taxonomy)
 
-            threat_vuln_classification = None
-            if func_findings[0].details:
-                threat_vuln_classification = func_findings[0].details.get(
-                    "threat_vulnerability_classification"
-                )
+            threat_vuln_classification = _threat_vulnerability_classification(
+                func_findings, max_severity
+            )
 
             # Derive is_safe from severity instead of hardcoding False.
             # Analyzers can now emit SAFE-severity findings for tools that
@@ -399,6 +412,25 @@ def _build_behavioral_results(
             if taxonomy and taxonomy not in mcp_taxonomies:
                 mcp_taxonomies.append(taxonomy)
 
+        threat_vuln_classification = _threat_vulnerability_classification(
+            func_findings, max_severity
+        )
+
+        analyzer_finding: Dict[str, Any] = {
+            "severity": max_severity,
+            "threat_summary": func_findings[0].summary,
+            "threat_names": sorted(
+                {f.threat_category for f in func_findings if f.threat_category}
+            ),
+            "total_findings": len(func_findings),
+            "source_file": src_file,
+            "mcp_taxonomies": mcp_taxonomies,
+        }
+        if threat_vuln_classification:
+            analyzer_finding["threat_vulnerability_classification"] = (
+                threat_vuln_classification
+            )
+
         results.append(
             {
                 "tool_name": func_name,
@@ -409,16 +441,7 @@ def _build_behavioral_results(
                 # unsafe and dropped by the downstream THREAT filter.
                 "is_safe": max_severity == "SAFE",
                 "findings": {
-                    "behavioral_analyzer": {
-                        "severity": max_severity,
-                        "threat_summary": func_findings[0].summary,
-                        "threat_names": sorted(
-                            {f.threat_category for f in func_findings if f.threat_category}
-                        ),
-                        "total_findings": len(func_findings),
-                        "source_file": src_file,
-                        "mcp_taxonomies": mcp_taxonomies,
-                    }
+                    "behavioral_analyzer": analyzer_finding,
                 },
             }
         )

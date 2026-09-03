@@ -21,6 +21,12 @@ from .forward_analysis import ForwardDataflowAnalysis, FlowPath
 from .reaching_definitions import ReachingDefinitionsAnalysis
 from .liveness_analysis import LivenessAnalyzer
 from .available_expressions import AvailableExpressionsAnalyzer
+from .treesitter_classic import (
+    TreeSitterAvailableExpressions,
+    TreeSitterLivenessAnalyzer,
+    TreeSitterReachingDefinitions,
+    analyze_treesitter_classic,
+)
 from .treesitter_analysis import TreeSitterDataflowAnalysis, TSFlowPath, TSFlowFact
 
 __all__ = [
@@ -30,6 +36,10 @@ __all__ = [
     "ReachingDefinitionsAnalysis",
     "LivenessAnalyzer",
     "AvailableExpressionsAnalyzer",
+    "TreeSitterAvailableExpressions",
+    "TreeSitterLivenessAnalyzer",
+    "TreeSitterReachingDefinitions",
+    "analyze_treesitter_classic",
     "TreeSitterDataflowAnalysis",
     "TSFlowPath",
     "TSFlowFact",

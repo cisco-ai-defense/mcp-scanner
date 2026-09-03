@@ -32,6 +32,43 @@ from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.logging_config import get_logger
 
 
+_DYNAMIC_INNER_CALLEE_NAMES = frozenset(
+    {"getattr", "hasattr", "setattr", "delattr", "operator.getattr"}
+)
+
+
+def _dynamic_inner_callee_calls_to_skip(func_node: ast.AST) -> set[int]:
+    """Return inner ``ast.Call`` nodes used only as dynamic-dispatch callees."""
+    skip: set[int] = set()
+    for parent in ast.walk(func_node):
+        if not isinstance(parent, ast.Call):
+            continue
+        inner = parent.func
+        if not isinstance(inner, ast.Call):
+            continue
+        callee_name = _call_expression_name(inner)
+        if callee_name in _DYNAMIC_INNER_CALLEE_NAMES:
+            skip.add(id(inner))
+    return skip
+
+
+def _call_expression_name(node: ast.Call) -> str:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        parts: list[str] = []
+        current: ast.expr = func
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            parts.append(current.id)
+        parts.reverse()
+        return ".".join(parts)
+    return ""
+
+
 class CallGraph:
     """Call graph for cross-file analysis."""
 
@@ -331,18 +368,22 @@ class CallGraphAnalyzer:
             analyzer: Python analyzer
         """
         # Walk the function body to find calls
+        skip_calls = _dynamic_inner_callee_calls_to_skip(func_node)
         for node in ast.walk(func_node):
-            if isinstance(node, ast.Call):
-                callee_name = analyzer.get_call_name(node)
+            if not isinstance(node, ast.Call):
+                continue
+            if id(node) in skip_calls:
+                continue
+            callee_name = analyzer.get_call_name(node)
 
-                # Try to resolve to full name
-                full_callee = self._resolve_call_target(file_path, callee_name)
+            # Try to resolve to full name
+            full_callee = self._resolve_call_target(file_path, callee_name)
 
-                if full_callee:
-                    self.call_graph.add_call(caller_name, full_callee)
-                else:
-                    # Add with partial name (might be external library)
-                    self.call_graph.add_call(caller_name, callee_name)
+            if full_callee:
+                self.call_graph.add_call(caller_name, full_callee)
+            else:
+                # Add with partial name (might be external library)
+                self.call_graph.add_call(caller_name, callee_name)
 
     def _resolve_call_target(self, file_path: Path, call_name: str) -> str | None:
         """Resolve a function call to its full qualified name.

@@ -248,7 +248,7 @@ def add(a: float, b: float) -> float:
             assert func_names == ["add", "echo"], func_names
             for f in safe_findings:
                 d = f.details or {}
-                assert d.get("source_file") == temp_path
+                assert d.get("source_file") == str(Path(temp_path).resolve())
                 assert d.get("no_findings") is True, (
                     "synthesized SAFE finding must be marked with no_findings=True"
                 )
@@ -610,6 +610,24 @@ def add(a: int, b: int) -> int:
     return a + b
 """
 
+    _JS_SERVER_TOOL_SOURCE = """\
+import { copyFileSync } from "node:fs";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.tool(
+  "copy_file",
+  "Copy a file to the designated application storage path.",
+  { source: z.string(), destination: z.string() },
+  async ({ source, destination }) => {
+    copyFileSync(source, destination);
+    return { content: [{ type: "text", text: `copied ${source}` }] };
+  },
+);
+"""
+
     def test_merge_dedupes_decorator_name_override(self) -> None:
         primary = ContextExtractor(
             self._CUSTOM_NAME_SOURCE, "custom_name.py"
@@ -620,3 +638,17 @@ def add(a: int, b: int) -> int:
         merged = _merge_mcp_function_contexts(primary, supplemental)
         assert len(merged) == 1
         assert merged[0].name == "custom"
+
+    def test_merge_dedupes_js_server_tool_handler_stub(self) -> None:
+        from mcpscanner.core.static_analysis.javascript.js_context_extractor import (
+            JSContextExtractor,
+        )
+
+        source = self._JS_SERVER_TOOL_SOURCE
+        file_path = "copy_file.js"
+        primary = JSContextExtractor(source, file_path).extract_mcp_function_contexts()
+        supplemental = NativeAnalyzer(source, file_path).extract_mcp_capability_contexts()
+        merged = _merge_mcp_function_contexts(primary, supplemental)
+        assert len(merged) == 1
+        assert merged[0].name == "copy_file"
+        assert "designated application storage path" in (merged[0].docstring or "")

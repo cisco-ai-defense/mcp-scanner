@@ -1,40 +1,54 @@
 # Copyright 2025 Cisco Systems, Inc. and its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for CrossFileDataflowAnalyzer component"""
 
-import pytest
+from mcpscanner.core.analyzers.behavioral.dataflow import (
+    CrossFileDataflowAnalyzer,
+    cross_file_dataflow_analyzer,
+    enrich_with_cross_file_context,
+)
+from mcpscanner.core.static_analysis.context_extractor import FunctionContext
+
+
+def _minimal_context(name: str = "handler") -> FunctionContext:
+    return FunctionContext(
+        name=name,
+        decorator_types=["tool"],
+        imports=[],
+        function_calls=[],
+        assignments=[],
+        control_flow={},
+        parameter_flows=[],
+        constants={},
+        variable_dependencies={},
+        has_file_operations=False,
+        has_network_operations=False,
+        has_subprocess_calls=False,
+        has_eval_exec=False,
+        has_dangerous_imports=False,
+        parameters=[{"name": "path"}],
+    )
 
 
 class TestCrossFileDataflowAnalyzer:
-    """Test cross-file dataflow analysis for behavioral analyzer."""
+    def test_module_exports(self) -> None:
+        assert cross_file_dataflow_analyzer is not None
+        assert isinstance(cross_file_dataflow_analyzer, CrossFileDataflowAnalyzer)
 
-    def test_behavioral_dataflow_module_exists(self):
-        """Test that behavioral analyzer dataflow module exists."""
-        from mcpscanner.core.analyzers import behavioral
+    def test_enrich_is_callable(self) -> None:
+        ctx = _minimal_context()
+        enrich_with_cross_file_context(ctx, "/tmp/x.py", _FakeCallGraph())
+        assert ctx.dataflow_summary.get("cross_file_analysis") is not None
 
-        assert behavioral is not None
 
-    def test_cross_file_analyzer_importable(self):
-        """Test that CrossFileDataflowAnalyzer can be imported."""
-        try:
-            from mcpscanner.core.analyzers.behavioral.dataflow import (
-                cross_file_dataflow_analyzer,
-            )
+class _FakeCallGraph:
+    def get_reachable_functions(self, _name: str):
+        return ["/tmp/x.py::helper"]
 
-            assert cross_file_dataflow_analyzer is not None
-        except ImportError:
-            pytest.skip("CrossFileDataflowAnalyzer import path needs verification")
+    def analyze_parameter_flow_across_files(self, _entry: str, _params: list[str]):
+        return {
+            "cross_file_flows": [],
+            "total_files_involved": 1,
+            "param_influenced_functions": [],
+        }

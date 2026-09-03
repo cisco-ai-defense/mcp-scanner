@@ -146,6 +146,26 @@ class DataFlowAnalyzer(Generic[T]):
         )
         return cfg
 
+    def build_cfg_for_function(
+        self, func_node: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> ControlFlowGraph:
+        """Build a CFG scoped to a single Python function body."""
+        build_start = time.perf_counter()
+        cfg = ControlFlowGraph()
+
+        if isinstance(self.analyzer, PythonParser):
+            self._build_python_cfg(func_node, cfg)
+
+        self.cfg = cfg
+        logger.debug(
+            "static_cfg python function built file=%s func=%s nodes=%d duration_us=%d",
+            sanitize_log_value(getattr(self.analyzer, "file_path", "<unknown>")),
+            getattr(func_node, "name", "?"),
+            len(cfg.nodes),
+            int((time.perf_counter() - build_start) * 1_000_000),
+        )
+        return cfg
+
     def _build_python_cfg(self, node: ast.AST, cfg: ControlFlowGraph) -> CFGNode:
         """Build CFG for Python AST.
 

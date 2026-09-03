@@ -10,3 +10,12 @@ def apply_model_constraints(model: str, params: dict) -> None:
     if "max_tokens" in params:
         params["max_completion_tokens"] = params.pop("max_tokens")
     params["temperature"] = 1
+
+
+def apply_deterministic_sampling(model: str, params: dict) -> None:
+    """Normalize sampling params for repeatable analyzer runs."""
+    params.pop("top_p", None)
+    if "gpt-5" in model.lower():
+        apply_model_constraints(model, params)
+        return
+    params["temperature"] = 0.0
