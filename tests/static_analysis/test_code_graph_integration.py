@@ -452,3 +452,31 @@ export function delete_file(path: string): void {
             assert not findings
             assert needs_llm == [target]
             assert target.dataflow_summary.get("code_graph_evidence")
+
+
+def test_treesitter_call_graph_registers_inline_server_tool_handlers() -> None:
+    """``server.tool(name, description, schema, handler)`` must be an MCP entry point."""
+    from mcpscanner.core.static_analysis.interprocedural.treesitter_call_graph import (
+        TreeSitterCallGraphAnalyzer,
+    )
+
+    source = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+server.tool(
+  "copy_file",
+  "Copy a file to the designated application storage path.",
+  { source: z.string(), destination: z.string() },
+  async ({ source, destination }) => {
+    copier.copyFile(source, destination);
+    return { content: [{ type: "text", text: "ok" }] };
+  },
+);
+"""
+    analyzer = TreeSitterCallGraphAnalyzer("javascript")
+    analyzer.add_file(Path("server.js"), source)
+    graph = analyzer.build_call_graph()
+
+    assert any(name.endswith("::copy_file") for name in graph.entry_points)
+    assert any(name.endswith("::copy_file") for name in graph.functions)

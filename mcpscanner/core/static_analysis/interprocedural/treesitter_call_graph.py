@@ -32,6 +32,17 @@ from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.logging_config import get_logger
 
 
+_MCP_REGISTRATION_METHODS = frozenset(
+    {
+        "tool",
+        "registerTool",
+        "registerPrompt",
+        "registerResource",
+        "prompt",
+        "resource",
+    }
+)
+
 _MCP_DECORATOR_RE = re.compile(
     r"(?:"
     r"@\w*\.(?:tool|prompt|resource)\b"
@@ -208,6 +219,9 @@ class TreeSitterCallGraphAnalyzer:
             
             # Extract functions
             self._extract_functions(file_path, tree.root_node, source_bytes)
+
+            # Inline ``server.tool(name, ..., handler)`` registrations are MCP entry points.
+            self._extract_mcp_registrations(file_path, tree.root_node, source_bytes)
             
             # Extract imports
             self._extract_imports(file_path, tree.root_node, source_bytes)
@@ -347,6 +361,82 @@ class TreeSitterCallGraphAnalyzer:
             if _MCP_DECORATOR_RE.search(text):
                 return True
         return False
+
+    def _registration_arguments(self, call_node: Node) -> list[Node]:
+        args_node = call_node.child_by_field_name("arguments")
+        if args_node is None:
+            return []
+        return [
+            child
+            for child in args_node.children
+            if child.type not in {",", "(", ")", "comment"}
+        ]
+
+    def _string_literal_value(self, node: Node, source_bytes: bytes) -> Optional[str]:
+        if node.type not in {
+            "string",
+            "string_literal",
+            "template_string",
+            "raw_string_literal",
+            "interpreted_string_literal",
+        }:
+            return None
+        text = source_bytes[node.start_byte : node.end_byte].decode("utf-8")
+        if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'`":
+            return text[1:-1]
+        return text
+
+    def _extract_mcp_registrations(
+        self, file_path: Path, root: Node, source_bytes: bytes
+    ) -> None:
+        """Register inline MCP SDK handlers (``server.tool(...)``) as entry points."""
+        if self.language not in {"javascript", "typescript"}:
+            return
+
+        func_types = self.FUNCTION_TYPES.get(self.language, set())
+
+        def visit(node: Node) -> None:
+            if node.type == "call_expression":
+                func = node.child_by_field_name("function")
+                if func is not None and func.type == "member_expression":
+                    prop = func.child_by_field_name("property")
+                    if prop is not None:
+                        method = source_bytes[
+                            prop.start_byte : prop.end_byte
+                        ].decode("utf-8")
+                        if method in _MCP_REGISTRATION_METHODS:
+                            args = self._registration_arguments(node)
+                            tool_name: Optional[str] = None
+                            handler: Optional[Node] = None
+                            for arg in args:
+                                if tool_name is None:
+                                    literal = self._string_literal_value(
+                                        arg, source_bytes
+                                    )
+                                    if literal is not None:
+                                        tool_name = literal
+                                        continue
+                                if arg.type in func_types:
+                                    handler = arg
+                            if tool_name and handler is not None:
+                                self.call_graph.add_function(
+                                    tool_name,
+                                    handler,
+                                    file_path,
+                                    is_entry=True,
+                                )
+                                full_name = f"{file_path}::{tool_name}"
+                                self._extract_calls(
+                                    file_path,
+                                    handler,
+                                    source_bytes,
+                                    full_name,
+                                    "",
+                                )
+            for child in node.children:
+                visit(child)
+
+        visit(root)
 
     def _get_function_name(self, node: Node, source_bytes: bytes) -> str:
         """Get function name from AST node."""
