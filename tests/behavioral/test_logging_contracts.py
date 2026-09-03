@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from mcpscanner.config.config import Config
+from mcpscanner.config.constants import MCPScannerConstants
 from mcpscanner.core.analyzers.behavioral.alignment.alignment_llm_client import (
     AlignmentLLMClient,
     _PROCESS_REQUEST_IDS,
@@ -63,7 +64,7 @@ def _non_bedrock_config(**overrides) -> Config:
 def _fast_retry(monkeypatch):
     """Stub out the exponential-backoff sleep so retry tests run in ms."""
     monkeypatch.setattr(
-        "mcpscanner.core.analyzers.behavioral.alignment.alignment_llm_client.asyncio.sleep",
+        "mcpscanner.utils.analyzer_errors.asyncio.sleep",
         AsyncMock(return_value=None),
     )
 
@@ -273,17 +274,24 @@ class TestRequestIdCorrelation:
         cfg = _non_bedrock_config()
         client = AlignmentLLMClient(cfg)
 
-        with patch(
-            "mcpscanner.core.analyzers.behavioral.alignment."
-            "alignment_llm_client.acompletion",
-            new=AsyncMock(side_effect=RuntimeError("nope")),
-        ):
-            with caplog.at_level(
-                logging.WARNING,
-                logger="mcpscanner.core.analyzers.behavioral.alignment.alignment_llm_client",
+        with patch.object(MCPScannerConstants, "LLM_MAX_RETRIES", 2):
+            with patch(
+                "mcpscanner.core.analyzers.behavioral.alignment."
+                "alignment_llm_client.acompletion",
+                new=AsyncMock(
+                    side_effect=RuntimeError("503 service unavailable")
+                ),
             ):
-                with pytest.raises(RuntimeError):
-                    await client.verify_alignment("hello")
+                with patch(
+                    "mcpscanner.utils.analyzer_errors.asyncio.sleep",
+                    new=AsyncMock(return_value=None),
+                ):
+                    with caplog.at_level(
+                        logging.WARNING,
+                        logger="mcpscanner.core.analyzers.behavioral.alignment.alignment_llm_client",
+                    ):
+                        with pytest.raises(RuntimeError):
+                            await client.verify_alignment("hello")
 
         pattern = re.compile(r"request_id=(\d+)")
         retry_ids: list[str] = []
