@@ -620,3 +620,21 @@ def add(a: int, b: int) -> int:
         merged = _merge_mcp_function_contexts(primary, supplemental)
         assert len(merged) == 1
         assert merged[0].name == "custom"
+
+    def test_merge_dedupes_js_server_tool_handler_stub(self) -> None:
+        fixture = (
+            Path(__file__).resolve().parents[2]
+            / "evals/mcp-scanner-analysis-data/code-scanning-determinism/data"
+            / "arbitrary-resource-read-write/arbitrary_file_copy_sensitive_data.js"
+        )
+        source = fixture.read_text()
+        from mcpscanner.core.static_analysis.javascript.js_context_extractor import (
+            JSContextExtractor,
+        )
+
+        primary = JSContextExtractor(source, str(fixture)).extract_mcp_function_contexts()
+        supplemental = NativeAnalyzer(source, str(fixture)).extract_mcp_capability_contexts()
+        merged = _merge_mcp_function_contexts(primary, supplemental)
+        assert len(merged) == 1
+        assert merged[0].name == "copy_file"
+        assert "designated application storage path" in (merged[0].docstring or "")

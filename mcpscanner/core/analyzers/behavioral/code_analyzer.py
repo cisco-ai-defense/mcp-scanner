@@ -133,6 +133,30 @@ def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
     return ("full", ctx.name, ctx.line_number, decs)
 
 
+def _is_duplicate_native_registration_stub(
+    primary: FunctionContext,
+    supplemental: FunctionContext,
+) -> bool:
+    """Return True when NativeAnalyzer repeats a tool the primary extractor already captured.
+
+    JS/TS ``server.tool(name, description, …)`` registrations are surfaced by
+    JSContextExtractor at the call site (with the description string) while
+    NativeAnalyzer also emits a handler stub at the callback line with
+    ``<registration>.tool`` and no docstring. Keeping both forces batched
+    alignment and can hide mismatches behind aggressive batch truncation.
+    """
+    if primary.name != supplemental.name:
+        return False
+    primary_doc = (primary.docstring or "").strip()
+    supplemental_doc = (supplemental.docstring or "").strip()
+    if primary_doc and not supplemental_doc:
+        return True
+    supplemental_decs = tuple(supplemental.decorator_types or ())
+    if primary_doc and "<registration>.tool" in supplemental_decs:
+        return True
+    return False
+
+
 def _merge_mcp_function_contexts(
     primary: List[FunctionContext],
     supplemental: List[FunctionContext],
@@ -148,6 +172,8 @@ def _merge_mcp_function_contexts(
     for ctx in supplemental:
         key = _context_dedupe_key(ctx)
         if key in seen:
+            continue
+        if any(_is_duplicate_native_registration_stub(p, ctx) for p in primary):
             continue
         seen.add(key)
         merged.append(ctx)
