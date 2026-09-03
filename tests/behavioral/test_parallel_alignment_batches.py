@@ -17,6 +17,14 @@ from tests.behavioral.test_code_review_fixes import _cfg
 
 
 def _ctx(name: str) -> SimpleNamespace:
+    """Create a test context with the specified name.
+    
+    Parameters:
+    	name (str): The context name.
+    
+    Returns:
+    	SimpleNamespace: A context object containing the name.
+    """
     return SimpleNamespace(name=name)
 
 

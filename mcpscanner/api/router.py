@@ -1009,7 +1009,16 @@ async def scan_instructions_endpoint(
     http_request: Request,
     scanner_factory: ScannerFactory = Depends(get_scanner),
 ):
-    """Scan server instructions from the InitializeResult."""
+    """Scan server instructions and return their metadata, status, safety, and findings.
+    
+    Parameters:
+        request (SpecificInstructionsScanRequest): Server and scan configuration.
+        http_request (Request): Incoming request containing headers used by the scan.
+        scanner_factory (ScannerFactory): Factory for creating the configured scanner.
+    
+    Returns:
+        dict: Server metadata, instructions, scan status, safety status, grouped findings, and optional meta-analysis data.
+    """
     logger.debug(f"Starting instructions scan - server: {request.server_url}")
 
     try:

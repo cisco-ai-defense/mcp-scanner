@@ -72,13 +72,30 @@ class ParamBinding:
 
 
 def extract_function_parameters(func_node: Any, language: str) -> list[dict[str, Any]]:
-    """Return ``[{"name": str, "index": int}, ...]`` for a function AST node."""
+    """
+    Extract formal parameters from a function AST node.
+    
+    Parameters:
+    	func_node (Any): Function AST node whose parameters should be extracted.
+    	language (str): Source language of the function node.
+    
+    Returns:
+    	list[dict[str, Any]]: Parameter records containing each parameter's name and positional index.
+    """
     if language == "python":
         return _python_parameters(func_node)
     return _treesitter_parameters(func_node)
 
 
 def _python_parameters(node: ast.AST) -> list[dict[str, Any]]:
+    """Extract positional parameters from a Python function, excluding ``self``.
+    
+    Parameters:
+    	node (ast.AST): The function node to inspect.
+    
+    Returns:
+    	list[dict[str, Any]]: Parameter records containing each parameter's name and positional index.
+    """
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return []
     params: list[dict[str, Any]] = []
@@ -90,6 +107,15 @@ def _python_parameters(node: ast.AST) -> list[dict[str, Any]]:
 
 
 def _treesitter_parameters(node: Node) -> list[dict[str, Any]]:
+    """
+    Extract formal parameter names and positional indexes from a Tree-sitter function node.
+    
+    Parameters:
+    	node (Node): The Tree-sitter function node whose parameters should be extracted.
+    
+    Returns:
+    	list[dict[str, Any]]: Parameter records containing each parameter's ``name`` and zero-based ``index``.
+    """
     if node is None:
         return []
     params_node = node.child_by_field_name("parameters") or node.child_by_field_name(
@@ -121,6 +147,15 @@ def _treesitter_parameters(node: Node) -> list[dict[str, Any]]:
 
 
 def _treesitter_param_name(node: Node) -> str:
+    """
+    Extracts a parameter name from a Tree-sitter node.
+    
+    Parameters:
+    	node (Node): Tree-sitter node representing a formal parameter.
+    
+    Returns:
+    	str: The parameter name, or an empty string when no identifier is found.
+    """
     name_node = node.child_by_field_name("name")
     if name_node is not None and name_node.type == "identifier":
         return name_node.text.decode("utf-8") if hasattr(name_node, "text") else ""
@@ -133,6 +168,15 @@ def _treesitter_param_name(node: Node) -> str:
 
 
 def _python_call_name(node: ast.Call) -> str:
+    """
+    Build the dotted name of a Python call target.
+    
+    Parameters:
+        node (ast.Call): Call expression whose target name is extracted.
+    
+    Returns:
+        str: The direct or attribute-based call name, or an empty string when the target has no supported name.
+    """
     func = node.func
     if isinstance(func, ast.Name):
         return func.id
@@ -150,6 +194,15 @@ def _python_call_name(node: ast.Call) -> str:
 
 
 def _expr_uses_name(expr: ast.AST, name: str) -> bool:
+    """Determine whether an AST expression references a specified name.
+    
+    Parameters:
+    	expr (ast.AST): The expression to inspect.
+    	name (str): The identifier to search for.
+    
+    Returns:
+    	bool: `true` if the expression references the name, `false` otherwise.
+    """
     for node in ast.walk(expr):
         if isinstance(node, ast.Name) and node.id == name:
             return True
@@ -165,6 +218,12 @@ class CFGFusionEngine:
         *,
         classic: Any | None = None,
     ) -> None:
+        """Initialize the fusion engine with a code graph and optional classic dataflow engine.
+        
+        Parameters:
+        	graph (CodeGraph): Code graph used to resolve call edges and source information.
+        	classic (Any | None): Optional dataflow engine used to expand active taints.
+        """
         self._graph = graph
         if classic is None:
             from .classic_dataflow import ClassicDataflowEngine
@@ -177,7 +236,16 @@ class CFGFusionEngine:
         edge: CodeEdge,
         active_taints: set[str],
     ) -> list[ParamBinding]:
-        """Infer callee parameters tainted by ``active_taints`` at this call."""
+        """
+        Infer which callee parameters receive tainted values across a call edge.
+        
+        Parameters:
+            edge (CodeEdge): Call-graph edge connecting the caller and callee.
+            active_taints (set[str]): Tainted caller values to propagate.
+        
+        Returns:
+            list[ParamBinding]: Bindings between active caller taints and callee parameters.
+        """
         if not active_taints or edge.relation.value != "calls":
             return []
 
@@ -202,6 +270,7 @@ class CFGFusionEngine:
 
     @staticmethod
     def _normalize_language(language: str) -> str:
+        """Normalize a language name for internal dispatch."""
         lang = (language or "python").lower()
         if lang == "c#":
             return "c_sharp"
@@ -212,7 +281,16 @@ class CFGFusionEngine:
         active_taints: set[str],
         callee_params: list[dict[str, Any]],
     ) -> list[ParamBinding]:
-        """Name-match or positional fallback when CFG is unavailable."""
+        """
+        Infer taint bindings by matching taint names to callee parameters or using the first parameter as a positional fallback.
+        
+        Parameters:
+        	active_taints (set[str]): Taint names to bind.
+        	callee_params (list[dict[str, Any]]): Callee parameter metadata.
+        
+        Returns:
+        	list[ParamBinding]: Inferred taint-to-parameter bindings.
+        """
         bindings: list[ParamBinding] = []
         param_names = [p["name"] for p in callee_params]
         for taint in active_taints:
@@ -245,6 +323,18 @@ class CFGFusionEngine:
         active_taints: set[str],
         callee_params: list[dict[str, Any]],
     ) -> list[ParamBinding]:
+        """Map tainted Python call arguments to the corresponding callee parameters.
+        
+        Parameters:
+            caller_id (str): Identifier of the caller function.
+            callee_id (str): Identifier of the callee function.
+            edge (CodeEdge): Call-graph edge containing the call expression.
+            active_taints (set[str]): Taints active in the caller.
+            callee_params (list[dict[str, Any]]): Callee parameter metadata indexed by position.
+        
+        Returns:
+            list[ParamBinding]: Extracted taint bindings, or heuristic bindings when precise analysis is unavailable.
+        """
         caller_file, _, caller_label = _split_node_id(caller_id)
         _, _, callee_label = _split_node_id(callee_id)
         source = self._graph.source_registry.get(caller_file)
@@ -305,6 +395,20 @@ class CFGFusionEngine:
         callee_params: list[dict[str, Any]],
         language: str,
     ) -> list[ParamBinding]:
+        """
+        Map tainted caller arguments to the corresponding callee parameters for a Tree-sitter-supported language.
+        
+        Parameters:
+            caller_id (str): Identifier of the caller function.
+            callee_id (str): Identifier of the callee function.
+            edge (CodeEdge): Call-graph edge connecting the caller and callee.
+            active_taints (set[str]): Taint names active in the caller.
+            callee_params (list[dict[str, Any]]): Callee parameter metadata indexed by argument position.
+            language (str): Source language used to parse the caller.
+        
+        Returns:
+            list[ParamBinding]: Extracted argument-to-parameter bindings, or heuristic bindings when precise analysis is unavailable.
+        """
         caller_file, _, caller_label = _split_node_id(caller_id)
         _, _, callee_label = _split_node_id(callee_id)
         source = self._graph.source_registry.get(caller_file)
@@ -359,6 +463,14 @@ class CFGFusionEngine:
 
 
 def _split_node_id(node_id: str) -> tuple[str, str, str]:
+    """Split a node identifier into its file path, qualified path, and label.
+    
+    Parameters:
+    	node_id (str): Node identifier containing an optional ``::`` separator.
+    
+    Returns:
+    	tuple[str, str, str]: The file path, qualified file path, and node label.
+    """
     if "::" not in node_id:
         return node_id, "", node_id
     file_path, label = node_id.split("::", 1)
@@ -366,6 +478,15 @@ def _split_node_id(node_id: str) -> tuple[str, str, str]:
 
 
 def _find_python_function(tree: ast.Module, label: str) -> ast.FunctionDef | None:
+    """Locate a top-level function or class method by its label.
+    
+    Parameters:
+        tree (ast.Module): Parsed Python module to search.
+        label (str): Function name or class-qualified method name.
+    
+    Returns:
+        ast.FunctionDef | None: The matching function definition, or None if no match is found.
+    """
     if "." in label:
         class_name, method_name = label.rsplit(".", 1)
         for node in tree.body:
@@ -387,6 +508,7 @@ def _find_python_calls(
     call_label: str,
     callee_label: str,
 ) -> list[ast.Call]:
+    """Find Python call expressions that match a callee label or its qualified name."""
     short = callee_label.split(".")[-1]
     matches: list[ast.Call] = []
     for node in ast.walk(func_node):
@@ -401,10 +523,28 @@ def _find_python_calls(
 
 
 def _arg_carries_taint(arg: ast.AST, taint_name: str) -> bool:
+    """Determine whether an expression references a tainted name.
+    
+    Parameters:
+    	arg (ast.AST): The expression to inspect.
+    	taint_name (str): The name associated with the taint.
+    
+    Returns:
+    	bool: `true` if the expression references the tainted name, `false` otherwise.
+    """
     return _expr_uses_name(arg, taint_name)
 
 
 def _dedupe_bindings(bindings: list[ParamBinding]) -> list[ParamBinding]:
+    """
+    Remove duplicate bindings with the same caller taint and callee parameter.
+    
+    Parameters:
+    	bindings (list[ParamBinding]): Bindings to deduplicate.
+    
+    Returns:
+    	list[ParamBinding]: Bindings containing only the first occurrence of each caller-taint and callee-parameter pair.
+    """
     seen: set[tuple[str, str]] = set()
     unique: list[ParamBinding] = []
     for binding in bindings:
@@ -417,10 +557,30 @@ def _dedupe_bindings(bindings: list[ParamBinding]) -> list[ParamBinding]:
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
+    """
+    Extract the UTF-8 source text represented by a Tree-sitter node.
+    
+    Parameters:
+    	node (Node): The node whose source span identifies the text to extract.
+    	source_bytes (bytes): The source file contents as UTF-8 encoded bytes.
+    
+    Returns:
+    	str: The decoded source text for the node.
+    """
     return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
 
 def _find_treesitter_function(root: Node, label: str, source_bytes: bytes) -> Node | None:
+    """Locate a Tree-sitter function or class method by its label.
+    
+    Parameters:
+        root (Node): Root node of the syntax tree to search.
+        label (str): Function name or fully qualified class-and-method label.
+        source_bytes (bytes): Source text used to resolve node names.
+    
+    Returns:
+        Node | None: The matching function node, or None if no match is found.
+    """
     if "." in label:
         class_name, method_name = label.rsplit(".", 1)
         class_node = _find_named_child(root, {"class_declaration", "class"}, class_name, source_bytes)
@@ -437,6 +597,17 @@ def _find_named_child(
     name: str,
     source_bytes: bytes,
 ) -> Node | None:
+    """Find a named descendant node matching one of the specified node types.
+    
+    Parameters:
+    	root (Node): The node whose descendants to search.
+    	node_types (set[str]): Node types eligible for matching.
+    	name (str): The expected name of the node.
+    	source_bytes (bytes): Source bytes used to extract node names.
+    
+    Returns:
+    	Node | None: The matching node, or `None` if no match is found.
+    """
     stack = [root]
     while stack:
         node = stack.pop()
@@ -454,6 +625,18 @@ def _find_treesitter_calls(
     callee_label: str,
     source_bytes: bytes,
 ) -> list[Node]:
+    """
+    Find Tree-sitter call nodes within a function that target the specified callee.
+    
+    Parameters:
+    	func_node (Node): The function node to search.
+    	call_label (str): The fully qualified caller-side call label.
+    	callee_label (str): The callee label to match.
+    	source_bytes (bytes): The source used to resolve call names.
+    
+    Returns:
+    	list[Node]: Matching call nodes.
+    """
     short = callee_label.split(".")[-1]
     matches: list[Node] = []
     stack = [func_node]
@@ -468,6 +651,15 @@ def _find_treesitter_calls(
 
 
 def _treesitter_call_name(node: Node, source_bytes: bytes) -> str:
+    """Extract the target name from a Tree-sitter call node.
+    
+    Parameters:
+    	node (Node): Tree-sitter call node to inspect.
+    	source_bytes (bytes): Source bytes used to resolve the node text.
+    
+    Returns:
+    	str: The call target name, or an empty string when no target is present.
+    """
     func = node.child_by_field_name("function") or node.child_by_field_name("name")
     if func is not None:
         return _node_text(func, source_bytes)
@@ -475,6 +667,7 @@ def _treesitter_call_name(node: Node, source_bytes: bytes) -> str:
 
 
 def _treesitter_call_arguments(node: Node) -> list[Node]:
+    """Return the argument nodes for a Tree-sitter call node, excluding delimiters."""
     args_node = node.child_by_field_name("arguments")
     if args_node is None:
         return []
@@ -486,6 +679,16 @@ def _treesitter_call_arguments(node: Node) -> list[Node]:
 
 
 def _treesitter_expr_uses_name(node: Node, name: str, source_bytes: bytes) -> bool:
+    """Determine whether a Tree-sitter expression contains an identifier with the given name.
+    
+    Parameters:
+        node (Node): The root node of the expression to inspect.
+        name (str): The identifier name to find.
+        source_bytes (bytes): The source bytes used to extract identifier text.
+    
+    Returns:
+        bool: `true` if the expression contains the specified identifier, `false` otherwise.
+    """
     stack = [node]
     while stack:
         current = stack.pop()

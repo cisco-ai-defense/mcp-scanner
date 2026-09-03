@@ -53,6 +53,11 @@ class ClassicDataflowSummary:
     engine: str = "python"
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the dataflow summary to a dictionary.
+        
+        Returns:
+        	dict[str, Any]: A dictionary containing the summary's parameter sets, dead-code information, and analysis engine.
+        """
         return {
             "parameter_influenced": sorted(self.parameter_influenced),
             "parameter_live": sorted(self.parameter_live),
@@ -64,6 +69,15 @@ class ClassicDataflowSummary:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ClassicDataflowSummary:
+        """
+        Reconstruct a dataflow summary from a serialized mapping.
+        
+        Parameters:
+        	data (dict[str, Any]): Serialized summary fields.
+        
+        Returns:
+        	ClassicDataflowSummary: The reconstructed dataflow summary.
+        """
         return cls(
             parameter_influenced=set(data.get("parameter_influenced") or []),
             parameter_live=set(data.get("parameter_live") or []),
@@ -75,6 +89,15 @@ class ClassicDataflowSummary:
 
 
 def _normalize_language(language: str) -> str:
+    """
+    Normalize a language name for internal analysis dispatch.
+    
+    Parameters:
+        language (str): Language name to normalize.
+    
+    Returns:
+        str: The lowercase language name, with `"c#"` converted to `"c_sharp"` and missing values defaulting to `"python"`.
+    """
     lang = (language or "python").lower()
     if lang == "c#":
         return "c_sharp"
@@ -82,6 +105,14 @@ def _normalize_language(language: str) -> str:
 
 
 def _treesitter_parse_language(language: str) -> str:
+    """Map a language name to the Tree-sitter parser language.
+    
+    Parameters:
+    	language (str): Language name to normalize.
+    
+    Returns:
+    	str: The normalized parser language, mapping TSX to TypeScript.
+    """
     lang = _normalize_language(language)
     if lang == "tsx":
         return "typescript"
@@ -89,10 +120,30 @@ def _treesitter_parse_language(language: str) -> str:
 
 
 def _node_text(node: Node, source_bytes: bytes) -> str:
+    """
+    Extract the source text covered by a Tree-sitter node.
+    
+    Parameters:
+    	node (Node): The node whose source range is extracted.
+    	source_bytes (bytes): The source content containing the node.
+    
+    Returns:
+    	str: The UTF-8 decoded text spanning the node.
+    """
     return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
 
 def _expr_uses_any(expr: ast.AST, names: set[str]) -> bool:
+    """
+    Determine whether an expression references any name from a given set.
+    
+    Parameters:
+    	expr (ast.AST): The expression to inspect.
+    	names (set[str]): Names to search for.
+    
+    Returns:
+    	bool: `true` if the expression references a listed name, `false` otherwise.
+    """
     for node in ast.walk(expr):
         if isinstance(node, ast.Name) and node.id in names:
             return True
@@ -100,6 +151,17 @@ def _expr_uses_any(expr: ast.AST, names: set[str]) -> bool:
 
 
 def _treesitter_expr_uses_any(node: Node, names: set[str], source_bytes: bytes) -> bool:
+    """
+    Determine whether a Tree-sitter expression uses any of the specified names.
+    
+    Parameters:
+        node (Node): Root node of the expression to inspect.
+        names (set[str]): Names to search for.
+        source_bytes (bytes): Source bytes used to obtain identifier text.
+    
+    Returns:
+        bool: `true` if the expression contains an identifier in `names`, `false` otherwise.
+    """
     stack = [node]
     while stack:
         current = stack.pop()
@@ -110,6 +172,15 @@ def _treesitter_expr_uses_any(node: Node, names: set[str], source_bytes: bytes) 
 
 
 def _treesitter_target_name(node: Node, source_bytes: bytes) -> str | None:
+    """Return the identifier name represented by a Tree-sitter assignment target.
+    
+    Parameters:
+    	node (Node): Tree-sitter node representing the assignment target.
+    	source_bytes (bytes): Source bytes used to extract the target's text.
+    
+    Returns:
+    	str | None: The target identifier name, or `None` when the node does not represent a named target.
+    """
     if node.type == "identifier":
         return _node_text(node, source_bytes)
     name = node.child_by_field_name("name")
@@ -124,6 +195,15 @@ def _treesitter_target_name(node: Node, source_bytes: bytes) -> str | None:
 
 
 def _treesitter_value_node(node: Node) -> Node | None:
+    """
+    Identify the value expression associated with a Tree-sitter assignment node.
+    
+    Parameters:
+        node (Node): Tree-sitter node containing an assigned value.
+    
+    Returns:
+        Node | None: The value expression node, or `None` when no value is present.
+    """
     value = node.child_by_field_name("value") or node.child_by_field_name("right")
     if value is not None:
         return value
@@ -147,7 +227,16 @@ def _treesitter_value_node(node: Node) -> Node | None:
 def _iter_treesitter_assignments(
     func_node: Node, source_bytes: bytes
 ) -> list[tuple[str, Node]]:
-    """Return ``(target_name, value_node)`` pairs from a function body."""
+    """
+    Collects simple assignment targets and their associated value nodes from a Tree-sitter function subtree.
+    
+    Parameters:
+        func_node (Node): Root node of the function subtree.
+        source_bytes (bytes): Source text used to resolve assignment target names.
+    
+    Returns:
+        list[tuple[str, Node]]: Pairs containing each target name and its assigned value node.
+    """
     pairs: list[tuple[str, Node]] = []
     stack = [func_node]
     while stack:
@@ -186,7 +275,15 @@ def _iter_treesitter_assignments(
 
 
 def collect_assignment_aliases(func_node: ast.AST, root: str) -> set[str]:
-    """Transitively collect simple assignment aliases of ``root``."""
+    """
+    Collect variables assigned from the root variable within a function.
+    
+    Parameters:
+        root (str): The variable whose assignment aliases are collected.
+    
+    Returns:
+        set[str]: The root variable and all transitively derived assignment aliases.
+    """
     aliases = {root}
     changed = True
     while changed:
@@ -210,7 +307,17 @@ def collect_treesitter_assignment_aliases(
     source_bytes: bytes,
     root: str,
 ) -> set[str]:
-    """Transitively collect simple assignment aliases of ``root``."""
+    """
+    Collect variables transitively assigned from a root variable in a Tree-sitter function.
+    
+    Parameters:
+    	func_node (Node): The function node whose assignments are analyzed.
+    	source_bytes (bytes): The source bytes containing the function.
+    	root (str): The variable from which aliases are derived.
+    
+    Returns:
+    	set[str]: The root variable and variables assigned from it.
+    """
     aliases = {root}
     changed = True
     while changed:
@@ -229,6 +336,15 @@ def _run_reaching_definitions(
     func_node: ast.FunctionDef | ast.AsyncFunctionDef,
     parameter_names: list[str],
 ) -> ReachingDefinitionsAnalysis:
+    """Run reaching-definitions analysis for a Python function.
+    
+    Parameters:
+    	parser (PythonParser): Parser used to construct the function's control-flow graph.
+    	func_node (ast.FunctionDef | ast.AsyncFunctionDef): Function to analyze.
+    	parameter_names (list[str]): Names of the function parameters used to initialize reaching definitions.
+    
+    Returns:
+    	ReachingDefinitionsAnalysis: Completed analysis with use-def chains."""
     analysis = ReachingDefinitionsAnalysis(parser, parameter_names)
     analysis.build_cfg_for_function(func_node)
 
@@ -248,6 +364,17 @@ def _run_liveness(
     func_node: ast.FunctionDef | ast.AsyncFunctionDef,
     parameter_names: list[str],
 ) -> LivenessAnalyzer:
+    """
+    Build and run liveness analysis for a Python function.
+    
+    Parameters:
+    	parser (PythonParser): Parser associated with the function's source.
+    	func_node (ast.FunctionDef | ast.AsyncFunctionDef): Function to analyze.
+    	parameter_names (list[str]): Names of the function parameters.
+    
+    Returns:
+    	LivenessAnalyzer: Completed liveness analysis for the function.
+    """
     analysis = LivenessAnalyzer(parser, parameter_names)
     analysis.build_cfg_for_function(func_node)
     analysis.analyze_liveness()
@@ -259,6 +386,17 @@ def _run_available_expressions(
     func_node: ast.FunctionDef | ast.AsyncFunctionDef,
     parameter_names: list[str],
 ) -> AvailableExpressionsAnalyzer:
+    """
+    Build and run available-expression analysis for a Python function.
+    
+    Parameters:
+    	parser (PythonParser): Parser used to construct the function's control-flow graph.
+    	func_node (ast.FunctionDef | ast.AsyncFunctionDef): Function to analyze.
+    	parameter_names (list[str]): Names of the function parameters.
+    
+    Returns:
+    	AvailableExpressionsAnalyzer: Completed available-expression analysis.
+    """
     analysis = AvailableExpressionsAnalyzer(parser, parameter_names)
     analysis.build_cfg_for_function(func_node)
     analysis.analyze_available_exprs()
@@ -271,7 +409,18 @@ def analyze_python_function(
     func_node: ast.FunctionDef | ast.AsyncFunctionDef,
     parameter_names: list[str],
 ) -> ClassicDataflowSummary:
-    """Run classic dataflow analyses for one Python function."""
+    """
+    Run classic dataflow analyses for a Python function.
+    
+    Parameters:
+    	source (str): Source code containing the function.
+    	file_path (str): Path associated with the source code.
+    	func_node (ast.FunctionDef | ast.AsyncFunctionDef): Function syntax node to analyze.
+    	parameter_names (list[str]): Names of the function parameters.
+    
+    Returns:
+    	ClassicDataflowSummary: Dataflow results for the function.
+    """
     parser = PythonParser(Path(file_path), source)
     reaching = _run_reaching_definitions(parser, func_node, parameter_names)
     liveness = _run_liveness(parser, func_node, parameter_names)
@@ -301,7 +450,17 @@ def analyze_treesitter_function(
     parameter_names: list[str],
     source_bytes: bytes,
 ) -> ClassicDataflowSummary:
-    """Run classic dataflow trio for one tree-sitter function."""
+    """Analyze dataflow for a Tree-sitter function.
+    
+    Parameters:
+    	language (str): The language used to parse the function.
+    	func_node (Node): The Tree-sitter node representing the function.
+    	parameter_names (list[str]): Names of the function parameters.
+    	source_bytes (bytes): Source bytes containing the function.
+    
+    Returns:
+    	ClassicDataflowSummary: Dataflow results, including parameter influence, liveness, available expressions, and dead assignments.
+    """
     reaching, liveness, available = analyze_treesitter_classic(
         language, func_node, parameter_names, source_bytes
     )
@@ -326,6 +485,7 @@ class ClassicDataflowEngine:
     """Cache and expose classic dataflow facts for graph nodes."""
 
     def __init__(self, graph: CodeGraph) -> None:
+        """Initialize a dataflow engine for the specified code graph."""
         self._graph = graph
         self._cache: dict[str, ClassicDataflowSummary] = {}
         self._python_trees: dict[str, ast.Module] = {}
@@ -342,6 +502,15 @@ class ClassicDataflowEngine:
                 node.metadata["classic_dataflow"] = summary.to_dict()
 
     def get_summary(self, node_id: str) -> ClassicDataflowSummary | None:
+        """
+        Retrieve or compute the classic dataflow summary for a graph node.
+        
+        Parameters:
+            node_id (str): Identifier of the function node whose summary is requested.
+        
+        Returns:
+            ClassicDataflowSummary | None: The cached, stored, or newly computed summary; `None` if the node, source, parser, function, or supported language is unavailable.
+        """
         if node_id in self._cache:
             return self._cache[node_id]
 
@@ -387,6 +556,19 @@ class ClassicDataflowEngine:
         source: str,
         params: list[str],
     ) -> ClassicDataflowSummary | None:
+        """Analyze a Python function's source and return its dataflow summary.
+
+        Parameters:
+            caller_file (str): Path of the file containing the function.
+            caller_label (str): Function label used to locate the function in the source.
+            source (str): Python source code containing the function.
+            params (list[str]): Parameter names to use for the analysis; inferred
+                from the function when empty.
+
+        Returns:
+            ClassicDataflowSummary | None: The function's dataflow summary, or
+            ``None`` if the source is invalid or the function cannot be found.
+        """
         tree = self._python_tree(caller_file, source)
         if tree is None:
             return None
@@ -419,6 +601,11 @@ class ClassicDataflowEngine:
         source: str,
         params: list[str],
     ) -> ClassicDataflowSummary | None:
+        """Analyze a Tree-sitter function and return its dataflow summary.
+
+        Returns the summary when parsing and function resolution succeed, or
+        ``None`` otherwise.
+        """
         parsed = self._treesitter_root(language, caller_file, source)
         if parsed is None:
             return None
@@ -454,6 +641,16 @@ class ClassicDataflowEngine:
 
     @staticmethod
     def _treesitter_param_names(func_node: Node, source_bytes: bytes) -> list[str]:
+        """
+        Extract parameter names from a Tree-sitter function node.
+        
+        Parameters:
+            func_node (Node): Tree-sitter node representing the function.
+            source_bytes (bytes): Source bytes used to decode parameter names.
+        
+        Returns:
+            list[str]: Parameter names, excluding ``self`` and ``this``.
+        """
         params_node = func_node.child_by_field_name("parameters") or func_node.child_by_field_name(
             "formal_parameters"
         )
@@ -486,7 +683,15 @@ class ClassicDataflowEngine:
         func_node: ast.AST,
         root: str,
     ) -> set[str]:
-        """Return assignment aliases of ``root`` within a Python function."""
+        """
+        Collect assignment aliases derived from a root variable in a Python function.
+        
+        Parameters:
+            root (str): The variable whose assignment aliases are collected.
+        
+        Returns:
+            set[str]: Aliases of `root`, restricted to parameter-influenced variables when analysis results are available.
+        """
         summary = self.get_summary(node_id)
         aliases = collect_assignment_aliases(func_node, root)
         if summary:
@@ -526,7 +731,15 @@ class ClassicDataflowEngine:
         source_bytes: bytes,
         active_taints: set[str],
     ) -> set[str]:
-        """Expand active taints for tree-sitter functions."""
+        """
+        Expand tainted variables with their assignment aliases in a Tree-sitter function.
+        
+        Parameters:
+        	active_taints (set[str]): Variables currently identified as tainted.
+        
+        Returns:
+        	set[str]: The active taints together with variables assigned from them.
+        """
         expanded = set(active_taints)
         for taint in active_taints:
             expanded.update(
@@ -535,7 +748,17 @@ class ClassicDataflowEngine:
         return expanded
 
     def is_live_at_line(self, node_id: str, var: str, line: int) -> bool:
-        """True when a parameter-influenced variable is live at ``line``."""
+        """
+        Determine whether a variable is considered live at a source line.
+        
+        Parameters:
+            node_id (str): Identifier of the function node being analyzed.
+            var (str): Variable whose liveness is queried.
+            line (int): Source line to check.
+        
+        Returns:
+            bool: `True` when no summary exists, the variable is not parameter-influenced, or it is live at the line; `False` for dead variables and dead assignment lines.
+        """
         summary = self.get_summary(node_id)
         if summary is None:
             return True

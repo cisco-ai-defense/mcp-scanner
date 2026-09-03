@@ -24,6 +24,11 @@ class AlignmentCacheEntry:
 
     @property
     def mismatch_detected(self) -> bool:
+        """Indicates whether the cached alignment result detected a mismatch.
+        
+        Returns:
+        	bool: `True` if the result indicates a mismatch, `False` otherwise.
+        """
         return bool(self.result.get("mismatch_detected"))
 
 
@@ -36,6 +41,7 @@ class AlignmentResultCache:
     _store: Dict[str, AlignmentCacheEntry] = field(default_factory=dict)
 
     def clear(self) -> None:
+        """Remove all entries from the cache."""
         self._store.clear()
 
     def key_for(
@@ -44,14 +50,39 @@ class AlignmentResultCache:
         *,
         prompt_builder: AlignmentPromptBuilder,
     ) -> str:
+        """
+        Generate a cache key for a function context and its alignment analysis evidence.
+        
+        Parameters:
+        	func_context (FunctionContext): The function context used to generate the analysis evidence.
+        	prompt_builder (AlignmentPromptBuilder): The builder used to produce the analysis evidence.
+        
+        Returns:
+        	str: A cache key containing the cache version, model, function name, and evidence digest.
+        """
         evidence = prompt_builder.build_analysis_content(func_context)
         digest = hashlib.sha256(evidence.encode("utf-8")).hexdigest()
         return f"{self.version}:{self.model}:{func_context.name}:{digest}"
 
     def get(self, cache_key: str) -> Optional[AlignmentCacheEntry]:
+        """Retrieve a cached alignment result by key.
+        
+        Parameters:
+        	cache_key (str): The key identifying the cached result.
+        
+        Returns:
+        	(Optional[AlignmentCacheEntry]): The cached entry, or `None` if no entry matches the key.
+        """
         return self._store.get(cache_key)
 
     def put(self, cache_key: str, result: Dict[str, Any]) -> None:
+        """
+        Store a copy of an alignment result under the specified cache key.
+        
+        Parameters:
+        	cache_key (str): Key used to retrieve the cached result.
+        	result (Dict[str, Any]): Alignment result to cache.
+        """
         self._store[cache_key] = AlignmentCacheEntry(
             result=json.loads(json.dumps(result))
         )

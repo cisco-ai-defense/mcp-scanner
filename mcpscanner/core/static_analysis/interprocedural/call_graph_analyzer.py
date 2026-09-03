@@ -53,6 +53,7 @@ def _dynamic_inner_callee_calls_to_skip(func_node: ast.AST) -> set[int]:
 
 
 def _call_expression_name(node: ast.Call) -> str:
+    """Return a dotted name for a call expression when statically known."""
     func = node.func
     if isinstance(func, ast.Name):
         return func.id
@@ -359,13 +360,13 @@ class CallGraphAnalyzer:
         caller_name: str,
         analyzer: PythonParser,
     ) -> None:
-        """Extract calls from a single function.
-
+        """Record calls found within a function in the call graph.
+        
         Args:
-            file_path: File path
-            func_node: Function AST node
-            caller_name: Full caller name
-            analyzer: Python analyzer
+            file_path: Path of the file containing the function.
+            func_node: Abstract syntax tree node for the function.
+            caller_name: Fully qualified name of the calling function.
+            analyzer: Parser used to derive names from call expressions.
         """
         # Walk the function body to find calls
         skip_calls = _dynamic_inner_callee_calls_to_skip(func_node)
@@ -386,14 +387,15 @@ class CallGraphAnalyzer:
                 self.call_graph.add_call(caller_name, callee_name)
 
     def _resolve_call_target(self, file_path: Path, call_name: str) -> str | None:
-        """Resolve a function call to its full qualified name.
-
+        """
+        Resolve a call name to its fully qualified function name.
+        
         Args:
-            file_path: File where call occurs
-            call_name: Function call name (could be 'func' or 'obj.method')
-
+            file_path: Path of the file containing the call.
+            call_name: Called function or method name.
+        
         Returns:
-            Full qualified name or None
+            The fully qualified function name, or `None` when no matching function is found.
         """
         # Handle method calls (e.g., 'processor.process' or 'DataProcessor.process')
         if "." in call_name:

@@ -251,6 +251,17 @@ def test_call_edges_without_superseded_external() -> None:
 
 
 def _handler_node_id(nodes: dict) -> str:
+    """Find the identifier of the handler node.
+    
+    Parameters:
+    	nodes (dict): Graph nodes keyed by their identifiers.
+    
+    Returns:
+    	str: The identifier of the node labeled `handler` or `Handler`.
+    
+    Raises:
+    	AssertionError: If no handler node is found.
+    """
     for node_id, node in nodes.items():
         label = node.label.split(".")[-1]
         if label in {"handler", "Handler"}:
@@ -259,6 +270,15 @@ def _handler_node_id(nodes: dict) -> str:
 
 
 def _assert_handler_resolves_run(graph) -> None:
+    """
+    Verify that the handler has a resolved call edge targeting a `run` method.
+    
+    Parameters:
+    	graph: Code graph whose handler-originating call edges are inspected.
+    
+    Raises:
+    	AssertionError: If the handler has no resolved call edges or none targets a `run` method.
+    """
     handler_id = _handler_node_id(graph.nodes)
     call_edges = [
         e
@@ -282,6 +302,13 @@ def _assert_handler_resolves_run(graph) -> None:
 def test_fixpoint_cross_function_factory_dispatch(
     tmp_path: Path, language: str
 ) -> None:
+    """
+    Verify that factory-based method dispatch resolves to `FileWorker.run` across supported languages.
+    
+    Parameters:
+    	tmp_path (Path): Temporary directory for the generated source file.
+    	language (str): Supported programming language whose dispatch snippet is analyzed.
+    """
     snippet = _CROSS_FUNCTION_SNIPPETS.get(language)
     assert snippet is not None, f"missing snippet for {language}"
     ext = _EXT_FOR_LANG[language]
@@ -297,7 +324,9 @@ def test_fixpoint_cross_function_factory_dispatch(
 
 
 def test_fixpoint_cross_function_taint_reaches_sink(tmp_path: Path) -> None:
-    """Fixpoint-resolved dispatch should carry taint through factory to os.remove."""
+    """
+    Verifies that taint propagates through factory-based dynamic dispatch to `os.remove`.
+    """
     sample = tmp_path / "server.py"
     sample.write_text(
         """

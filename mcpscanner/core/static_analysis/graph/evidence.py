@@ -13,10 +13,25 @@ class EvidenceFormatter:
     """Render deterministic graph evidence for alignment prompts."""
 
     def __init__(self, graph: CodeGraph, *, max_snippet_chars: int = 400) -> None:
+        """Initialize an evidence formatter for a code graph.
+        
+        Parameters:
+        	graph (CodeGraph): Code graph used to retrieve source information.
+        	max_snippet_chars (int): Maximum number of characters included in source snippets.
+        """
         self._graph = graph
         self._max_snippet_chars = max_snippet_chars
 
     def _snippet_for(self, node_id: str) -> str | None:
+        """
+        Retrieve a source-line snippet for a graph node.
+        
+        Parameters:
+        	node_id (str): Identifier of the node whose source line to retrieve.
+        
+        Returns:
+        	str | None: The truncated source-line snippet, an empty string when the line is unavailable, or `None` when the node or source metadata is missing.
+        """
         node = self._graph.nodes.get(node_id)
         if not node or not node.source_file:
             return None
@@ -31,6 +46,15 @@ class EvidenceFormatter:
         return snippet
 
     def format_slice(self, slice_: GraphSlice) -> str:
+        """
+        Format a graph slice as deterministic evidence text.
+        
+        Parameters:
+        	slice_ (GraphSlice): Graph slice containing the entry, nodes, hop limit, and edges.
+        
+        Returns:
+        	str: Formatted graph-slice evidence, including node details, available snippets, and call edges.
+        """
         lines = [
             "CODE GRAPH SLICE (deterministic static analysis)",
             f"Entry: {slice_.entry_id}",
@@ -62,6 +86,15 @@ class EvidenceFormatter:
         return "\n".join(lines)
 
     def format_sinks(self, result: SinkAnalysisResult) -> str:
+        """
+        Format sink-analysis results as deterministic evidence text.
+        
+        Parameters:
+        	result (SinkAnalysisResult): Sink-analysis result containing the detected sink hits.
+        
+        Returns:
+        	str: Formatted sink evidence, or a message indicating that no catalogued sinks were reached.
+        """
         if not result.hits:
             return "SINK ANALYSIS: no catalogued sinks reached."
 
@@ -79,4 +112,14 @@ class EvidenceFormatter:
         slice_: GraphSlice,
         sink_result: SinkAnalysisResult,
     ) -> str:
+        """
+        Combine graph-slice evidence and sink-analysis results into a single text report.
+        
+        Parameters:
+        	slice_ (GraphSlice): Graph slice to format.
+        	sink_result (SinkAnalysisResult): Sink-analysis result to format.
+        
+        Returns:
+        	str: Combined evidence report.
+        """
         return f"{self.format_slice(slice_)}\n\n{self.format_sinks(sink_result)}"

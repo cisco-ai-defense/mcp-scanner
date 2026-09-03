@@ -32,6 +32,15 @@ _TS_LANGS = frozenset(
 
 
 def module_id_for(path: str) -> str:
+    """
+    Return the normalized absolute path used as a module identifier.
+    
+    Parameters:
+    	path (str): The module path to normalize.
+    
+    Returns:
+    	str: The resolved absolute path.
+    """
     return str(Path(path).resolve())
 
 
@@ -45,6 +54,14 @@ class CrossFileSymbolResolver:
         language: str,
         function_nodes: dict[str, Any] | None = None,
     ) -> None:
+        """
+        Initialize a cross-file symbol resolver for the provided source files.
+        
+        Parameters:
+        	files (dict[Path, str]): Source files mapped to their paths.
+        	language (str): Source language used for semantic indexing.
+        	function_nodes (dict[str, Any] | None): Optional mapping of known function identifiers to function nodes.
+        """
         self._files = {p.resolve(): src for p, src in files.items()}
         self._language = language
         self._function_nodes = function_nodes or {}
@@ -59,17 +76,31 @@ class CrossFileSymbolResolver:
         self._build_semantic_index()
 
     def set_program_facts(self, facts: ProgramFacts | None) -> None:
+        """Set the program facts used by the resolver."""
         self._program_facts = facts
 
     @property
     def files(self) -> dict[Path, str]:
+        """Provide the source files indexed by the resolver.
+        
+        Returns:
+            dict[Path, str]: A mapping of file paths to their source contents.
+        """
         return self._files
 
     @property
     def import_map(self) -> dict[str, str]:
+        """Return the mapping from import names to normalized file paths."""
         return self._import_map
 
     def _build_import_map(self) -> dict[str, str]:
+        """
+        Builds module-name mappings for the indexed files.
+        
+        Returns:
+            dict[str, str]: A mapping from recognized module names and paths to
+            normalized file paths.
+        """
         mapping: dict[str, str] = {}
         for path in self._files:
             rel = path.name
@@ -86,6 +117,7 @@ class CrossFileSymbolResolver:
         return mapping
 
     def _build_semantic_index(self) -> None:
+        """Build semantic indexes for all stored source files and finalize wildcard exports."""
         for path, source in self._files.items():
             file_key = str(path)
             if self._language == "python":
@@ -114,6 +146,7 @@ class CrossFileSymbolResolver:
             return
 
     def _index_treesitter_file(self, path: Path, source: str, file_key: str) -> None:
+        """Index a Tree-sitter-supported source file for semantic, import, and export information."""
         lang = self._language
         if lang == "tsx":
             lang = "tsx"
@@ -142,6 +175,16 @@ class CrossFileSymbolResolver:
             return
 
     def _parse_python_import_bindings(self, source: str, file_key: str) -> dict[str, str]:
+        """
+        Parse Python import statements into local symbol bindings.
+        
+        Parameters:
+        	source (str): Python source code to analyze.
+        	file_key (str): Identifier of the file containing the source.
+        
+        Returns:
+        	dict[str, str]: Mapping from local names to resolved module or symbol targets.
+        """
         bindings: dict[str, str] = {}
         try:
             tree = ast.parse(source)
@@ -176,6 +219,16 @@ class CrossFileSymbolResolver:
         return bindings
 
     def _parse_python_export_bindings(self, source: str, file_key: str) -> dict[str, str]:
+        """
+        Parse public Python declarations and re-exported symbols into export bindings.
+        
+        Parameters:
+        	source (str): Python source code to analyze.
+        	file_key (str): Normalized identifier for the source file.
+        
+        Returns:
+        	dict[str, str]: Mapping of local export names to resolved symbol identifiers.
+        """
         exports: dict[str, str] = {}
         try:
             tree = ast.parse(source)
@@ -208,9 +261,26 @@ class CrossFileSymbolResolver:
     def _parse_ts_import_bindings(
         self, root: Node, source_bytes: bytes, file_key: str
     ) -> dict[str, str]:
+        """
+        Extract local bindings from TypeScript import declarations in a parsed source file.
+        
+        Parameters:
+            root (Node): Root node of the parsed syntax tree.
+            source_bytes (bytes): Source contents used to read import paths and identifiers.
+            file_key (str): Path of the file containing the imports.
+        
+        Returns:
+            dict[str, str]: Mapping from local binding names to resolved target files or exported symbols.
+        """
         bindings: dict[str, str] = {}
 
         def visit(node: Node) -> None:
+            """
+            Collect import bindings from a syntax-tree node and its descendants.
+            
+            Parameters:
+            	node (Node): Syntax-tree node to inspect.
+            """
             if node.type == "import_statement":
                 source_node = node.child_by_field_name("source")
                 if source_node is None:
@@ -255,9 +325,22 @@ class CrossFileSymbolResolver:
     def _parse_ts_export_bindings(
         self, root: Node, source_bytes: bytes, file_key: str
     ) -> dict[str, str]:
+        """Parse TypeScript export declarations and map exported names to their source symbols.
+        
+        Parameters:
+            root (Node): Root of the parsed syntax tree.
+            source_bytes (bytes): Source content used to extract import paths and symbol names.
+            file_key (str): Identifier of the file containing the exports.
+        
+        Returns:
+            dict[str, str]: Mapping of local export names to resolved source symbol identifiers.
+        """
         exports: dict[str, str] = {}
 
         def visit(node: Node) -> None:
+            """
+            Collect export bindings and wildcard export targets from a syntax-tree node.
+            """
             if node.type == "export_statement":
                 source_node = next(
                     (child for child in node.children if child.type == "string"),
@@ -313,6 +396,16 @@ class CrossFileSymbolResolver:
         return exports
 
     def _exports_for_file(self, file_key: str, *, _visited: set[str] | None = None) -> dict[str, str]:
+        """
+        Collect the symbols exported by a file, including symbols from wildcard exports.
+        
+        Parameters:
+            file_key (str): The normalized key identifying the file.
+            _visited (set[str] | None): Files already visited while resolving recursive exports.
+        
+        Returns:
+            dict[str, str]: A mapping from exported symbol names to their bindings.
+        """
         visited = _visited or set()
         if file_key in visited:
             return {}
@@ -336,6 +429,16 @@ class CrossFileSymbolResolver:
                 self._export_bindings[file_key] = self._exports_for_file(file_key)
 
     def resolve_import_target(self, import_path: str, *, importer: str = "") -> str | None:
+        """
+        Resolve an import path to a known source file.
+        
+        Parameters:
+            import_path (str): Module or file path to resolve.
+            importer (str): Path of the importing file, used to resolve relative imports.
+        
+        Returns:
+            str | None: The resolved source-file path, or `None` when no matching file is found.
+        """
         cleaned = import_path.strip().strip("'\"")
         if cleaned in self._import_map:
             return self._import_map[cleaned]
@@ -354,6 +457,15 @@ class CrossFileSymbolResolver:
         return None
 
     def _resolve_relative_import(self, import_path: str, importer: str) -> str | None:
+        """Resolve a relative import path to a known source file.
+        
+        Parameters:
+        	import_path (str): Import path relative to the importing file or directory.
+        	importer (str): Path of the importing file or base directory.
+        
+        Returns:
+        	str | None: The resolved source-file path, or `None` if no matching file exists.
+        """
         importer_path = Path(importer)
         if importer_path.is_file():
             base_dir = importer_path.parent
@@ -396,6 +508,16 @@ class CrossFileSymbolResolver:
         return None
 
     def _resolve_binding_chain(self, binding: str, *, depth: int = 0) -> str:
+        """
+        Resolve a symbol binding through re-export chains.
+        
+        Parameters:
+        	binding (str): Binding in the form of a target file and symbol.
+        	depth (int): Current recursion depth used to limit chain traversal.
+        
+        Returns:
+        	str: The final resolved binding, or the original binding when resolution is incomplete.
+        """
         if depth > 6 or "::" not in binding:
             return binding
         target_file, symbol = binding.split("::", 1)
@@ -414,6 +536,15 @@ class CrossFileSymbolResolver:
         return self._resolve_binding_chain(next_binding, depth=depth + 1)
 
     def _resolve_imported_symbol(self, caller_file: str, local_name: str) -> str | None:
+        """Resolve a caller's local import binding to its target symbol.
+        
+        Parameters:
+        	caller_file (str): Path of the file containing the local binding.
+        	local_name (str): Name used to reference the imported symbol.
+        
+        Returns:
+        	str | None: The resolved symbol identifier, or `None` if no binding exists.
+        """
         binding = self._import_bindings.get(caller_file, {}).get(local_name)
         if not binding:
             return None
@@ -426,6 +557,15 @@ class CrossFileSymbolResolver:
         binding: str,
         known_functions: set[str],
     ) -> str | None:
+        """Match a resolved binding to a unique known function identifier.
+        
+        Parameters:
+        	binding (str): File-qualified symbol binding to match.
+        	known_functions (set[str]): Known function identifiers.
+        
+        Returns:
+        	str | None: The matching function identifier, or `None` when no unique match exists.
+        """
         if "::" not in binding:
             return None
         target_file, symbol = binding.split("::", 1)
@@ -447,6 +587,14 @@ class CrossFileSymbolResolver:
         return None
 
     def _semantic_for_file(self, file_key: str) -> TypeAnalyzer | TreeSitterSemanticAnalyzer | None:
+        """Retrieve the semantic analyzer associated with a source file.
+        
+        Parameters:
+            file_key (str): Normalized identifier of the source file.
+        
+        Returns:
+            TypeAnalyzer | TreeSitterSemanticAnalyzer | None: The file's semantic analyzer, or `None` when no analyzer is available.
+        """
         return self._py_types.get(file_key) or self._ts_semantic.get(file_key)
 
     def _source_for_file(self, caller_file: str) -> str | None:
@@ -458,7 +606,16 @@ class CrossFileSymbolResolver:
         callee_label: str,
         known_functions: set[str],
     ) -> DispatchResult:
-        """Resolve one or more callee targets for a call site."""
+        """Resolve the possible callee targets for a call site.
+        
+        Parameters:
+            caller_id (str): Identifier of the function containing the call.
+            callee_label (str): Label identifying the called function or dynamic call.
+            known_functions (set[str]): Function identifiers available for resolution.
+        
+        Returns:
+            DispatchResult: Possible dispatch targets and their resolution metadata.
+        """
         caller_file = caller_id.split("::", 1)[0] if "::" in caller_id else ""
         caller_label = caller_id.split("::", 1)[-1] if "::" in caller_id else caller_id
         source = self._source_for_file(caller_file)
@@ -514,6 +671,21 @@ class CrossFileSymbolResolver:
         source: str | None,
         semantic: TypeAnalyzer | TreeSitterSemanticAnalyzer | None,
     ) -> DispatchResult:
+        """
+        Resolve a statically labeled callee and use virtual dispatch when appropriate.
+        
+        Parameters:
+            caller_id (str): Identifier of the calling function.
+            callee_label (str): Label identifying the called target.
+            known_functions (set[str]): Known function identifiers.
+            caller_file (str): Source file containing the caller.
+            caller_label (str): Label identifying the caller.
+            source (str | None): Source text containing the call.
+            semantic (TypeAnalyzer | TreeSitterSemanticAnalyzer | None): Semantic information for dispatch resolution.
+        
+        Returns:
+            DispatchResult: Resolved dispatch targets, or an empty result when no target can be resolved.
+        """
         resolved, provenance, confidence, context = self.resolve_callee(
             caller_id,
             callee_label,
@@ -555,7 +727,18 @@ class CrossFileSymbolResolver:
         *,
         _skip_dynamic: bool = False,
     ) -> tuple[str, Provenance, float, str | None]:
-        """Return (resolved_id, provenance, confidence, call_context)."""
+        """
+        Resolve a callee label to a known function identifier or an external target.
+        
+        Parameters:
+            caller_id (str): Identifier of the function containing the call.
+            callee_label (str): Label identifying the called function or method.
+            known_functions (set[str]): Function identifiers available for resolution.
+            _skip_dynamic (bool): Whether to bypass dynamic dispatch resolution.
+        
+        Returns:
+            tuple[str, Provenance, float, str | None]: The resolved identifier, resolution provenance, confidence score, and optional call context.
+        """
         context: str | None = None
         caller_file = caller_id.split("::", 1)[0] if "::" in caller_id else ""
         caller_label = caller_id.split("::", 1)[-1] if "::" in caller_id else caller_id
@@ -662,7 +845,12 @@ class CrossFileSymbolResolver:
         return f"external::{callee_label}", Provenance.INFERRED, 0.75, None
 
     def import_edges(self) -> list[CodeEdge]:
-        """Derive IMPORTS edges from parsed binding maps (not line re-parsing)."""
+        """Derive IMPORTS edges from parsed binding maps (not line re-parsing).
+
+        Returns:
+            list[CodeEdge]: Import edges with the importing module as the source
+            and the resolved target module as the target.
+        """
         edges: list[CodeEdge] = []
         seen: set[tuple[str, str]] = set()
         known_files = {str(path) for path in self._files}
