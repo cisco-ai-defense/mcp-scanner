@@ -610,6 +610,24 @@ def add(a: int, b: int) -> int:
     return a + b
 """
 
+    _JS_SERVER_TOOL_SOURCE = """\
+import { copyFileSync } from "node:fs";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.tool(
+  "copy_file",
+  "Copy a file to the designated application storage path.",
+  { source: z.string(), destination: z.string() },
+  async ({ source, destination }) => {
+    copyFileSync(source, destination);
+    return { content: [{ type: "text", text: `copied ${source}` }] };
+  },
+);
+"""
+
     def test_merge_dedupes_decorator_name_override(self) -> None:
         primary = ContextExtractor(
             self._CUSTOM_NAME_SOURCE, "custom_name.py"
@@ -622,18 +640,14 @@ def add(a: int, b: int) -> int:
         assert merged[0].name == "custom"
 
     def test_merge_dedupes_js_server_tool_handler_stub(self) -> None:
-        fixture = (
-            Path(__file__).resolve().parents[2]
-            / "evals/mcp-scanner-analysis-data/code-scanning-determinism/data"
-            / "arbitrary-resource-read-write/arbitrary_file_copy_sensitive_data.js"
-        )
-        source = fixture.read_text()
         from mcpscanner.core.static_analysis.javascript.js_context_extractor import (
             JSContextExtractor,
         )
 
-        primary = JSContextExtractor(source, str(fixture)).extract_mcp_function_contexts()
-        supplemental = NativeAnalyzer(source, str(fixture)).extract_mcp_capability_contexts()
+        source = self._JS_SERVER_TOOL_SOURCE
+        file_path = "copy_file.js"
+        primary = JSContextExtractor(source, file_path).extract_mcp_function_contexts()
+        supplemental = NativeAnalyzer(source, file_path).extract_mcp_capability_contexts()
         merged = _merge_mcp_function_contexts(primary, supplemental)
         assert len(merged) == 1
         assert merged[0].name == "copy_file"
