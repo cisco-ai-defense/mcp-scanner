@@ -1033,7 +1033,10 @@ class NativeAnalyzer:
 
     def _ts_get_node_text(self, node: "Node") -> str:
         """Get text content of a tree-sitter node."""
-        return self.source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+        node_text = getattr(node, "text", None)
+        if node_text is not None:
+            return node_text.decode("utf-8")
+        return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
     def _ts_get_function_name(self, node: "Node") -> str:
         """Extract function name from tree-sitter node."""

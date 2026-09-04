@@ -26,7 +26,10 @@ This analyzer:
 4. Uses LLM to detect semantic mismatches between description and implementation
 """
 
+import asyncio
 import os
+import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -34,6 +37,7 @@ from typing import Any, Dict, List, Optional, Union
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
+from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.path_safety import filter_safe_paths, safe_resolve_root
 from ...static_analysis.context_extractor import ContextExtractor, FunctionContext
 from ...static_analysis.native_analyzer import NativeAnalyzer
@@ -46,7 +50,13 @@ from .alignment import AlignmentOrchestrator
 
 
 def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
-    """Dedupe key for merged MCP contexts."""
+    """Dedupe key for merged MCP contexts.
+
+    Decorator hits from ContextExtractor and NativeAnalyzer can disagree on
+    ``name`` when ``@mcp.tool(name="custom")`` overrides the function name.
+    For decorated functions at a real source line, dedupe on line + decorators
+    only. Unresolved stubs (``line_number == 0``) still include ``name``.
+    """
     decs = tuple(ctx.decorator_types)
     if decs and ctx.line_number > 0:
         return ("decorator", ctx.line_number, decs)
@@ -74,7 +84,12 @@ def _merge_mcp_function_contexts(
     primary: List[FunctionContext],
     supplemental: List[FunctionContext],
 ) -> List[FunctionContext]:
-    """Merge MCP contexts from primary and supplemental extractors."""
+    """Merge MCP contexts from ContextExtractor and NativeAnalyzer.
+
+    NativeAnalyzer's Gap 8 pass finds programmatic registrations even when
+    the primary extractor already surfaced decorator-based tools in the
+    same file.
+    """
     seen = {_context_dedupe_key(ctx) for ctx in primary}
     merged = list(primary)
     for ctx in supplemental:
@@ -88,17 +103,35 @@ def _merge_mcp_function_contexts(
     return merged
 
 
+_SEVERITY_DISPLAY_ORDER = (
+    "HIGH",
+    "MEDIUM",
+    "LOW",
+    "INFO",
+    "SAFE",
+    "ERROR",
+    "UNKNOWN",
+)
+
+
+def _relative_parts(file_path: Path, root: Path) -> tuple[str, ...]:
+    """Return ``file_path``'s path components relative to ``root``.
+
+    Skip/hidden heuristics must only consider directories *inside* the
+    scanned tree. Using the absolute ``Path.parts`` would also inspect
+    ancestors of ``root`` (e.g. a hidden ``TMPDIR`` such as
+    ``/Users/me/.cache/T/...``) and wrongly drop every file. Falls back to
+    the absolute parts only if ``file_path`` is somehow not under ``root``.
+    """
+    try:
+        return file_path.relative_to(root).parts
+    except ValueError:  # pragma: no cover - rglob results stay under root
+        return file_path.parts
+
+
 @dataclass(slots=True)
 class _AcceptedFile:
-    """A capability-file that survived the byte-level prefilter.
-
-    Carries both the raw bytes (used by the prefilter regex) and the
-    UTF-8-decoded text (used by tree-sitter / Python AST / LLM
-    pipelines) so the rest of the directory pipeline can avoid
-    reopening the same file. Without this cache every accepted file
-    was read three times — once by the prefilter, once by the
-    call-graph builder, and once by ``_analyze_file``.
-    """
+    """A capability-file that survived the byte-level prefilter."""
 
     path: str
     source_bytes: bytes
@@ -142,46 +175,136 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         # not only the ones that triggered a SecurityFinding.
         self.analyzed_functions: List[Dict[str, Any]] = []
 
+        # Counts failures that prevent a file/scan from reaching the
+        # orchestrator at all (read errors, AST/context-extraction crashes,
+        # or a top-level crash in analyze()). The orchestrator only records
+        # per-function LLM-stage errors via ``skipped_error``; without this
+        # counter a wholesale extraction failure would surface zero findings
+        # and be misreported as a clean ("is_safe=True") package by the
+        # package scanners. ``analysis_scan_status`` reads it to downgrade
+        # such scans to ``error``.
+        self.analysis_errors: int = 0
+
         self.logger.debug(
             "BehavioralCodeAnalyzer initialized with alignment verification"
         )
+
+    @staticmethod
+    def _describe_scan_target(content: str) -> tuple[str, str]:
+        """Classify ``content`` as a directory/file/inline scan target."""
+        if os.path.isdir(content):
+            return "directory", sanitize_log_value(content)
+        if os.path.isfile(content):
+            return "file", sanitize_log_value(content)
+        return "inline", f"<source:{len(content)}b>"
+
+    def _log_scan_start(
+        self,
+        *,
+        scan_mode: str,
+        scan_target: str,
+        tool_label: str,
+    ) -> None:
+        """Emit the start-of-scan INFO line."""
+        self.logger.info(
+            "behavioral scan start mode=%s target=%s tool=%s",
+            scan_mode,
+            scan_target,
+            tool_label,
+        )
+
+    def _format_severity_fields(
+        self, findings: List[SecurityFinding]
+    ) -> tuple[str, int]:
+        """Build the ``sev_<NAME>=N`` rollup and return ``(fields, non_safe)``."""
+        severity_counts: Counter[str] = Counter(
+            (getattr(f, "severity", "") or "UNKNOWN") for f in findings
+        )
+        non_safe_total = sum(v for k, v in severity_counts.items() if k != "SAFE")
+        ordered_keys = [s for s in _SEVERITY_DISPLAY_ORDER if s in severity_counts]
+        ordered_keys += [
+            s for s in severity_counts if s not in _SEVERITY_DISPLAY_ORDER
+        ]
+        sev_fields = " ".join(
+            f"sev_{key}={severity_counts[key]}" for key in ordered_keys
+        )
+        return sev_fields, non_safe_total
+
+    def _log_scan_summary(
+        self,
+        *,
+        scan_mode: str,
+        scan_target: str,
+        tool_label: str,
+        findings: List[SecurityFinding],
+        scan_ms: int,
+    ) -> None:
+        """Emit the end-of-scan rollup + delegate the alignment summary."""
+        sev_fields, non_safe_total = self._format_severity_fields(findings)
+        self.logger.info(
+            "behavioral scan done mode=%s target=%s findings=%d non_safe=%d "
+            "analyzed_functions=%d duration_ms=%d %s",
+            scan_mode,
+            scan_target,
+            len(findings),
+            non_safe_total,
+            len(self.analyzed_functions),
+            scan_ms,
+            sev_fields,
+        )
+        try:
+            self.alignment_orchestrator.log_summary(
+                scope=f"{scan_mode}:{tool_label}",
+            )
+        except Exception:  # pragma: no cover - logging must never raise
+            pass
 
     async def analyze(
         self, content: str, context: Dict[str, Any]
     ) -> List[SecurityFinding]:
         """Analyze MCP tool source code for docstring/behavior mismatches.
 
-        The returned list contains a ``SecurityFinding`` for **every** MCP
-        tool/function the scan considered, not only the ones that produced
-        a concrete mismatch. Safe tools are surfaced as findings with
-        ``severity == "SAFE"`` and ``threat_category == ""`` so SDK callers
-        can enumerate every scanned tool from the return value alone,
-        without having to read the legacy ``analyzed_functions``
-        side-channel attribute. This makes ``analyze()`` self-describing:
-        callers should classify each entry by ``finding.severity`` rather
-        than by ``len(findings) == 0``, since the latter no longer means
-        "all safe" — it means "nothing was scannable".
+        Returns one ``SecurityFinding`` per scanned MCP tool/function.
+        Tools with no detected mismatch are returned with
+        ``severity == "SAFE"`` and ``threat_category == ""``.
 
         Args:
             content: File path to a source file/directory OR raw source
-                code string. The directory case walks every supported
-                language (see ``_find_source_files``).
+                code string.
             context: Analysis context with ``tool_name``, ``file_path``,
                 etc.
 
         Returns:
             List of ``SecurityFinding`` objects covering every scanned
-            tool: concrete severities (``HIGH``/``MEDIUM``/``LOW``/
-            ``INFO``) for detected mismatches, and ``severity="SAFE"``
-            (with ``threat_category=""``) for tools that came back clean.
-            Empty list only when no functions were extractable at all
-            (parse failure, empty source, unsupported language across
-            every file).
+            tool. Empty when no functions were extractable at all.
         """
+        scan_mode: str = "unknown"
+        scan_target: str = "-"
+        tool_label: str = "-"
+        scan_start = time.perf_counter()
+        # Reset cross-call state *before* anything that can raise, so a
+        # failure between calls doesn't leave stale ``analyzed_functions``
+        # behind for the next caller.
+        self.analyzed_functions = []
+        self.analysis_errors = 0
         try:
             all_findings = []
-            # Reset per-call so consumers see only tools from this invocation.
-            self.analyzed_functions = []
+            self.alignment_orchestrator.reset_stats()
+
+            # ``_describe_scan_target`` issues two ``os.path.is*`` syscalls;
+            # those can block for seconds on network mounts. Offload them
+            # so the event loop stays responsive.
+            scan_mode, scan_target = await asyncio.to_thread(
+                self._describe_scan_target, content
+            )
+            tool_label = sanitize_log_value(
+                context.get("tool_name") or context.get("file_path") or "<inline>"
+            )
+            self._log_scan_start(
+                scan_mode=scan_mode,
+                scan_target=scan_target,
+                tool_label=tool_label,
+            )
 
             # Check if content is a directory
             if os.path.isdir(content):
@@ -192,27 +315,20 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     f"Found {len(source_files)} source file(s) to analyze"
                 )
 
-                # =====================================================
-                # Gap 7 — Discovery / Analysis phase split
-                # =====================================================
-                # Phase 1: cheap byte-level prefilter. Skip files that
-                # contain none of the recognized MCP marker tokens —
-                # they can't host a tool/prompt/resource and we don't
-                # want them in the call graph either.
-                #
-                # Phase 2: load the survivors, partition them by
-                # language, and build the call graph ONLY for those
-                # files. This keeps cross-file enrichment intact for
-                # capability handlers while skipping unrelated source
-                # files entirely. On a 500-file repo with 3 MCP files
-                # this turns 500 parses + 500 call-graph entries into
-                # 3 parses + 3 call-graph entries.
-                # =====================================================
                 capability_files = self._prefilter_capability_files(source_files)
-                self.logger.debug(
-                    f"Prefilter: {len(capability_files)} of "
-                    f"{len(source_files)} files contain MCP markers"
+                self.logger.info(
+                    "behavioral prefilter scanned=%d kept=%d",
+                    len(source_files),
+                    len(capability_files),
                 )
+
+                if source_files and not capability_files:
+                    self.logger.warning(
+                        "behavioral no_mcp_capabilities scanned=%d dir=%s "
+                        "reason=no_mcp_capability_markers",
+                        len(source_files),
+                        sanitize_log_value(content),
+                    )
 
                 # Partition files by language family
                 python_files: List[_AcceptedFile] = []
@@ -224,6 +340,18 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     elif ext in self._EXT_TO_TS_LANGUAGE:
                         lang = self._EXT_TO_TS_LANGUAGE[ext]
                         ts_files_by_lang.setdefault(lang, []).append(accepted)
+
+                if capability_files:
+                    lang_counts = {
+                        "python": len(python_files),
+                        **{lang: len(files) for lang, files in sorted(ts_files_by_lang.items())},
+                    }
+                    lang_fields = " ".join(
+                        f"lang_{lang}={n}" for lang, n in lang_counts.items() if n
+                    )
+                    self.logger.info(
+                        "behavioral languages %s", lang_fields
+                    )
 
                 # Build Python call graph
                 py_call_graph_analyzer: Optional[CallGraphAnalyzer] = None
@@ -238,10 +366,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 total_size = 0
                 for accepted in capability_files:
                     try:
-                        # Cache hit: use the bytes we already read in
-                        # the prefilter pass. Falls back to ``getsize``
-                        # only when the prefilter saw a read error and
-                        # left ``source_bytes`` empty.
                         if accepted.source_bytes:
                             file_size = len(accepted.source_bytes)
                         else:
@@ -258,10 +382,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                                 f"Large file detected: {accepted.path} ({file_size:,} bytes)"
                             )
 
-                        # Reuse the cached text: we already paid for
-                        # the read + decode in the prefilter, so don't
-                        # open/read/decode the file again just to feed
-                        # the call-graph builder.
                         if accepted.source_text:
                             source_code = accepted.source_text
                         else:
@@ -316,11 +436,23 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     else:
                         file_cga = None
 
+                    file_start = time.perf_counter()
                     file_findings = await self._analyze_file(
                         accepted.path,
                         context,
                         file_cga,
                         cached_source=accepted.source_text or None,
+                    )
+                    file_ms = int((time.perf_counter() - file_start) * 1000)
+                    non_safe = sum(
+                        1 for f in file_findings if getattr(f, "severity", "") != "SAFE"
+                    )
+                    self.logger.info(
+                        "behavioral file done path=%s findings=%d non_safe=%d duration_ms=%d",
+                        sanitize_log_value(accepted.path),
+                        len(file_findings),
+                        non_safe,
+                        file_ms,
                     )
                     all_findings.extend(file_findings)
 
@@ -392,17 +524,28 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 all_findings = await self._analyze_source_code(content, context)
 
-            self.logger.debug(
-                f"Behavioural analysis complete: {len(all_findings)} finding(s) detected"
+            self._backfill_analyzed_functions_from_findings(all_findings)
+            self._log_scan_summary(
+                scan_mode=scan_mode,
+                scan_target=scan_target,
+                tool_label=tool_label,
+                findings=all_findings,
+                scan_ms=int((time.perf_counter() - scan_start) * 1000),
             )
             return all_findings
 
         except Exception as e:
-            self.logger.error(f"Behavioural analysis failed: {e}", exc_info=True)
+            self.analysis_errors += 1
+            self.logger.error(
+                "behavioral scan failed mode=%s target=%s error_type=%s error=%s",
+                scan_mode,
+                scan_target,
+                type(e).__name__,
+                truncate(e),
+                exc_info=True,
+            )
             return []
 
-    # Maps file extensions to tree-sitter language identifiers used by
-    # TreeSitterCallGraphAnalyzer. Python is handled separately via CallGraphAnalyzer.
     _EXT_TO_TS_LANGUAGE = {
         ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
         ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
@@ -431,10 +574,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """
         source_files = []
         path = Path(directory)
-        # Resolve the scan root once; every candidate is checked against this
-        # canonical path so symlinks that point outside the scan root are
-        # rejected before the analyzer ever opens the file. See
-        # mcpscanner/utils/path_safety.py for the rationale.
         resolved_root = safe_resolve_root(directory)
 
         extensions = self._PYTHON_EXTENSIONS | set(self._EXT_TO_TS_LANGUAGE.keys())
@@ -442,11 +581,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         candidates: List[Path] = []
         for ext in extensions:
             for source_file in path.rglob(f"*{ext}"):
-                file_str = str(source_file)
+                # Inspect only components below the scan root; an absolute
+                # ``parts`` would treat a hidden ancestor dir (e.g. a dotted
+                # TMPDIR) as reason to skip every file, silently emptying
+                # the scan.
+                rel_parts = _relative_parts(source_file, path)
                 if (
-                    "__pycache__" not in file_str
-                    and "node_modules" not in file_str
-                    and not any(part.startswith(".") for part in source_file.parts)
+                    "__pycache__" not in rel_parts
+                    and "node_modules" not in rel_parts
+                    and not any(part.startswith(".") for part in rel_parts)
                 ):
                     candidates.append(source_file)
 
@@ -461,24 +604,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     def _prefilter_capability_files(
         self, source_files: List[str]
     ) -> List[_AcceptedFile]:
-        """Phase 1 of Gap 7's discovery / analysis split.
-
-        Returns the subset of ``source_files`` that contain at least
-        one MCP marker token, *along with the bytes and text we just
-        read* so the rest of the directory pipeline can avoid reopening
-        the same file. Uses
-        :py:meth:`NativeAnalyzer._has_mcp_markers` so the marker list
-        stays consistent with the per-file capability extractor.
-
-        Files larger than ``MAX_FILE_SIZE_BYTES`` are still passed
-        through (the size cap is applied later in
-        ``_analyze_file``); the prefilter only short-circuits files
-        whose source has no MCP marker token at all.
-
-        On read error we fall back to a no-cache placeholder so
-        downstream still gets a chance to surface the proper error;
-        the call sites tolerate empty-string source.
-        """
+        """Return the subset of ``source_files`` that contain MCP markers."""
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
         accepted: List[_AcceptedFile] = []
@@ -486,8 +612,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             try:
                 file_size = os.path.getsize(src_file)
                 if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
-                    # Honor the same hard cap the analyzer enforces: don't
-                    # pre-read multi-megabyte files just to prefilter them.
                     self.logger.debug(
                         f"Prefilter skipping huge file: {src_file} "
                         f"({file_size:,} bytes)"
@@ -497,8 +621,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     source_bytes = f.read()
             except OSError as e:
                 self.logger.debug(f"Prefilter could not read {src_file}: {e}")
-                # Pass-through on read errors so downstream still sees
-                # the file (the analyzer will surface a proper error).
                 accepted.append(
                     _AcceptedFile(path=src_file, source_bytes=b"", source_text="")
                 )
@@ -533,8 +655,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         candidates: List[Path] = []
         for py_file in path.rglob("*.py"):
-            if "__pycache__" not in str(py_file) and not any(
-                part.startswith(".") for part in py_file.parts
+            rel_parts = _relative_parts(py_file, path)
+            if "__pycache__" not in rel_parts and not any(
+                part.startswith(".") for part in rel_parts
             ):
                 candidates.append(py_file)
 
@@ -545,6 +668,41 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             python_files.append(str(py_file))
 
         return sorted(python_files)
+
+    def _backfill_analyzed_functions_from_findings(
+        self, findings: List[SecurityFinding]
+    ) -> None:
+        """Ensure ``analyzed_functions`` covers every tool in ``findings``.
+
+        ``analyze()`` now returns one ``SecurityFinding`` per scanned tool, so
+        the findings list is authoritative. Some callers (notably the CLI
+        ``--raw`` formatter) still enumerate ``analyzed_functions``; backfill
+        from findings when extraction did not populate that side-channel.
+        """
+        seen = {
+            (entry.get("source_file"), entry.get("name"))
+            for entry in self.analyzed_functions
+        }
+        for finding in findings:
+            details = finding.details or {}
+            name = details.get("function_name")
+            if not name:
+                continue
+            source_file = details.get("source_file") or "unknown"
+            key = (source_file, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            decorator = details.get("decorator_type") or "unknown"
+            self.analyzed_functions.append(
+                {
+                    "name": name,
+                    "decorator_types": [decorator],
+                    "line_number": details.get("line_number", 0),
+                    "source_file": source_file,
+                    "docstring": "",
+                }
+            )
 
     async def _analyze_file(
         self,
@@ -562,14 +720,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             file_path: Path to source file
             context: Analysis context
             cross_file_analyzer: Optional cross-file analyzer (Python or tree-sitter)
-            cached_source: Pre-read source text. When the directory
-                pipeline has already read the file in
-                ``_prefilter_capability_files`` we pass the bytes back
-                in here to avoid a third read of the same file.
+            cached_source: Pre-read source text when the caller already
+                holds the file contents.
 
         Returns:
             List of SecurityFinding objects
         """
+        analyze_start = time.perf_counter()
         try:
             if cached_source is not None:
                 source_code = cached_source
@@ -588,10 +745,26 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 if finding.details:
                     finding.details["source_file"] = file_path
 
+            self.logger.debug(
+                "behavioral _analyze_file ok path=%s findings=%d source_length=%d "
+                "duration_ms=%d",
+                sanitize_log_value(file_path),
+                len(findings),
+                len(source_code),
+                int((time.perf_counter() - analyze_start) * 1000),
+            )
             return findings
 
         except Exception as e:
-            self.logger.error(f"Failed to analyze {file_path}: {e}")
+            self.analysis_errors += 1
+            self.logger.error(
+                "behavioral _analyze_file failed path=%s duration_ms=%d "
+                "error_type=%s error=%s",
+                sanitize_log_value(file_path),
+                int((time.perf_counter() - analyze_start) * 1000),
+                type(e).__name__,
+                truncate(e),
+            )
             return []
 
     async def _analyze_source_code(
@@ -599,32 +772,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     ) -> List[SecurityFinding]:
         """Analyze source code for docstring/behavior mismatches.
 
-        Supports Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby,
-        Rust, and PHP. Only functions that are exposed as MCP capabilities
-        (``tool``/``prompt``/``resource``) are analyzed and returned —
-        plain helper functions defined in the same file are intentionally
-        excluded so the analyzer reflects the *MCP surface* of the server,
-        not every callable in the source. Capability detection:
-
-        - Python: ``@<obj>.tool`` / ``.prompt`` / ``.resource`` decorators
-          (via ``ContextExtractor``), with a NativeAnalyzer fallback that
-          still filters by decorator name when ``ContextExtractor`` fails.
-        - Non-Python: SDK registration call sites such as
-          ``server.tool('name', schema, handler)``,
-          ``server.registerTool({...}, handler)``, etc.
-          (via ``CapabilityDetector(NativeAnalyzer).extract_mcp_capability_contexts()``).
-
         Args:
             source_code: Source code to analyze
             context: Analysis context with file_path
 
         Returns:
-            List of security findings — one per registered MCP capability,
-            either a concrete threat finding or a ``SAFE`` finding if no
-            mismatch was detected.
+            List of security findings.
         """
-        from mcpscanner.core.static_analysis import CapabilityDetector
-
         file_path = context.get("file_path", "unknown")
         findings = []
         func_contexts = []
@@ -635,15 +789,17 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         is_js_ts = file_ext in {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
 
         def _detect_capabilities(analyzer: NativeAnalyzer) -> List[FunctionContext]:
-            # Use the new capability detector directly so the legacy
-            # deprecation shim on NativeAnalyzer doesn't fire on every
-            # behavioral scan; the FunctionContext shape is unchanged.
+            from mcpscanner.core.static_analysis import CapabilityDetector
+
             return CapabilityDetector(analyzer).extract_mcp_capability_contexts(
                 cross_file_analyzer=context.get("cross_file_analyzer")
             )
 
         try:
             if is_python:
+                # Primary ContextExtractor for standard @mcp.tool decorators;
+                # always merge NativeAnalyzer so Gap 8 programmatic registrations
+                # in the same file are not shadowed by decorator hits.
                 func_contexts: List[FunctionContext] = []
                 extractor_failed = False
                 try:
@@ -656,7 +812,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 except Exception as e:
                     extractor_failed = True
                     self.logger.debug(
-                        f"ContextExtractor failed for {file_path}: {e}, using CapabilityDetector"
+                        f"ContextExtractor failed for {file_path}: {e}, using NativeAnalyzer"
                     )
 
                 native_contexts: List[FunctionContext] = []
@@ -675,9 +831,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         f"CapabilityDetector failed for {file_path}: {e}"
                     )
                 if extractor_failed and native_failed:
-                    self.logger.debug(
-                        f"Both ContextExtractor and CapabilityDetector failed for {file_path}"
-                    )
+                    self.analysis_errors += 1
                 func_contexts = _merge_mcp_function_contexts(
                     func_contexts, native_contexts
                 )
@@ -689,7 +843,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 js_contexts: List[FunctionContext] = []
                 js_failed = False
                 try:
-                    from ...static_analysis.javascript.js_context_extractor import (
+                    from mcpscanner.core.static_analysis.javascript.js_context_extractor import (
                         JSContextExtractor,
                     )
 
@@ -724,10 +878,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
 
             else:
-                # Try CapabilityDetector for unknown file types (NativeAnalyzer
-                # detects the language). Same capability-only contract as the
-                # JS/TS branch.
-                self.logger.debug(f"Unknown file type {file_path}, trying CapabilityDetector")
+                self.logger.debug(
+                    f"Unknown file type {file_path}, trying CapabilityDetector"
+                )
                 native_analyzer = NativeAnalyzer(source_code, file_path)
                 func_contexts = _detect_capabilities(native_analyzer)
                 if func_contexts:
@@ -763,8 +916,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         func_context, file_path, context["cross_file_analyzer"]
                     )
 
-            # Use batched analysis for efficiency (reduces LLM calls)
-            # Batch size of 5 functions per LLM request
+            # Batch alignment checks to reduce LLM round-trips; the
+            # default batch size mirrors ``context['batch_size']``.
             use_batching = context.get("use_batching", True)
             batch_size = context.get("batch_size", 5)
 
@@ -808,40 +961,51 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         if finding:
                             findings.append(finding)
 
-            # Emit a SAFE SecurityFinding for every scanned function that
-            # didn't produce a concrete mismatch. This lifts safe-tool
-            # enumeration into the documented analyze() return contract
-            # instead of forcing SDK callers to read the legacy
-            # analyzed_functions side-channel attribute. Callers should
-            # classify entries by finding.severity (SAFE vs HIGH/MEDIUM/
-            # LOW/INFO) rather than by len(findings)==0.
-            #
-            # Only synthesize SAFE rows when analysis completed without
-            # raising — if alignment_orchestrator throws and we fall
-            # through to the except block below, findings is partial and
-            # we MUST NOT claim the rest are safe (we just don't know).
             funcs_with_findings = {
                 (f.details or {}).get("function_name")
                 for f in findings
                 if (f.details or {}).get("source_file") == file_path
             }
             funcs_with_findings.discard(None)
+            errored_funcs = set(
+                getattr(
+                    self.alignment_orchestrator, "errored_function_names", set()
+                )
+            )
             for fc in func_contexts:
                 name = getattr(fc, "name", None)
                 if not name or name in funcs_with_findings:
                     continue
                 decorator_types = getattr(fc, "decorator_types", None) or []
+                # An errored function is "unknown", not "safe". Synthesise
+                # an UNKNOWN-severity record (the only non-SAFE level the
+                # SecurityFinding framework accepts here) so the reporter
+                # doesn't claim we successfully analysed something we
+                # never did.
+                if name in errored_funcs:
+                    findings.append(
+                        SecurityFinding(
+                            severity="UNKNOWN",
+                            summary="Alignment check did not complete; finding is inconclusive",
+                            threat_category="",
+                            analyzer="Behavioral",
+                            details={
+                                "function_name": name,
+                                "decorator_type": (
+                                    decorator_types[0] if decorator_types else "unknown"
+                                ),
+                                "line_number": getattr(fc, "line_number", 0),
+                                "source_file": file_path,
+                                "no_findings": False,
+                                "analysis_status": "errored",
+                            },
+                        )
+                    )
+                    continue
                 findings.append(
                     SecurityFinding(
                         severity="SAFE",
-                        # Match phrasing already used by report/CLI helpers
-                        # so safe-row UX stays consistent end-to-end.
                         summary="No behavioral mismatches detected",
-                        # threat_category intentionally empty: SAFE
-                        # findings don't belong in threat-name aggregates
-                        # (set comprehensions like
-                        # {f.threat_category for f in findings if
-                        # f.threat_category} naturally filter them out).
                         threat_category="",
                         analyzer="Behavioral",
                         details={
@@ -851,17 +1015,28 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                             ),
                             "line_number": getattr(fc, "line_number", 0),
                             "source_file": file_path,
-                            # Marker so consumers can distinguish synthesized
-                            # SAFE rows from real findings without relying on
-                            # severity alone (other analyzers may also emit
-                            # SAFE-severity findings in the future).
                             "no_findings": True,
                         },
                     )
                 )
 
         except Exception as e:
-            self.logger.error(f"Analysis failed for {file_path}: {e}", exc_info=True)
+            # This swallow-and-return is the pipeline's last resort: context
+            # extraction (NativeAnalyzer / ContextExtractor) or batch
+            # alignment crashed for the whole file. Because we return the
+            # (likely empty) findings list rather than re-raising, the
+            # counted ``except`` in ``_analyze_file`` never sees it — so we
+            # must record the failure here, otherwise a wholesale extraction
+            # crash would surface zero findings and be misreported as a
+            # clean (``is_safe=True``) package.
+            self.analysis_errors += 1
+            self.logger.error(
+                "behavioral _analyze_source_code failed path=%s error_type=%s error=%s",
+                sanitize_log_value(file_path),
+                type(e).__name__,
+                truncate(e),
+                exc_info=True,
+            )
 
         return findings
 
