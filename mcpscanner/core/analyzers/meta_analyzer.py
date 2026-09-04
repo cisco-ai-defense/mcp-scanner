@@ -36,7 +36,6 @@ Requirements:
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
 import os
@@ -49,6 +48,11 @@ from litellm import acompletion
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
+from ...utils.analyzer_errors import (
+    ErrorKind,
+    classify_analyzer_error,
+    retry_transient_async,
+)
 from ...utils.logging_config import get_logger
 from .base import SecurityFinding
 
@@ -497,29 +501,41 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
         if self._aws_profile_name:
             api_params["aws_profile_name"] = self._aws_profile_name
 
-        last_exception: Optional[Exception] = None
-        for attempt in range(self._max_retries + 1):
-            try:
-                response = await acompletion(**api_params, drop_params=True)
-                content: str = response.choices[0].message.content or ""
-                return content
-            except Exception as e:
-                last_exception = e
-                error_msg = str(e).lower()
-                is_retryable = any(
-                    kw in error_msg
-                    for kw in ["timeout", "tls", "connection", "network", "rate limit", "throttle", "429", "503", "504"]
-                )
-                if attempt < self._max_retries and is_retryable:
-                    delay = (2 ** attempt) * self._rate_limit_delay
-                    self._logger.warning("Meta-analysis LLM request failed (attempt %d): %s", attempt + 1, e)
-                    await asyncio.sleep(delay)
-                else:
-                    break
+        from mcpscanner.utils.llm_request_params import apply_model_constraints
 
-        if last_exception is not None:
-            raise last_exception
-        raise RuntimeError("All retries exhausted")
+        apply_model_constraints(self._model, api_params)
+        max_attempts = self._max_retries + 1
+
+        async def operation() -> str:
+            response = await acompletion(**api_params, drop_params=True)
+            return response.choices[0].message.content or ""
+
+        async def on_retry(
+            exc: BaseException, attempt: int, delay: float
+        ) -> None:
+            self._logger.warning(
+                "Meta-analysis LLM request failed (transient, attempt %d): %s; "
+                "retrying in %.1fs",
+                attempt,
+                exc,
+                delay,
+            )
+
+        try:
+            return await retry_transient_async(
+                operation,
+                max_attempts=max_attempts,
+                base_delay=self._rate_limit_delay,
+                model=self._model,
+                on_retry=on_retry,
+            )
+        except Exception as e:
+            kind = classify_analyzer_error(e, context="llm", model=self._model)
+            if kind is ErrorKind.FINAL:
+                self._logger.error(
+                    "Meta-analysis LLM request failed (final error): %s", e
+                )
+            raise
 
     def _parse_response(
         self, response: str, original_findings: List[SecurityFinding]

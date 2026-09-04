@@ -2,9 +2,12 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.uv]
+required-version = ">=0.8.17"
+
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.8.1"
+version = "4.8.4"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
@@ -119,7 +122,7 @@ mcp-scanner-api = "mcpscanner.server:main"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "--maxfail=1"
+addopts = "--maxfail=1 -m \"not slow\""
 filterwarnings = [
     # Silence Pydantic deprecation/future warnings across all tests
     #"ignore::DeprecationWarning:pydantic.*",
@@ -132,6 +135,7 @@ filterwarnings = [
 ]
 markers = [
     "integration: mark for tests that hit external services (run with -m integration)",
+    "slow: mark test as slow (perf benchmarks, large fixtures); skipped by default for fast iteration",
 ]
 
 [tool.setuptools.packages.find]

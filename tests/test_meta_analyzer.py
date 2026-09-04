@@ -715,6 +715,26 @@ class TestAnalyzeFindings:
         assert "Benign" in result.false_positives[0]["false_positive_reason"]
 
 
+class TestMetaAnalyzerLLMRequestShape:
+    """GPT-5.x models need apply_model_constraints before acompletion."""
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.meta_analyzer.acompletion")
+    async def test_make_llm_request_applies_gpt5_constraints(self, mock_completion):
+        mock_completion.return_value = _mock_llm_response({"false_positives": []})
+        analyzer = MetaAnalyzer(
+            _make_config(llm_model="openai/gpt-5.6-terra")
+        )
+        await analyzer._make_llm_request("system", "user")
+
+        kwargs = mock_completion.call_args.kwargs
+        assert kwargs["drop_params"] is True
+        assert kwargs["model"] == "openai/gpt-5.6-terra"
+        assert kwargs["temperature"] == 1
+        assert "max_completion_tokens" in kwargs
+        assert "max_tokens" not in kwargs
+
+
 # ---------------------------------------------------------------------------
 # apply_meta_analysis — strict FP-only filtering
 # ---------------------------------------------------------------------------

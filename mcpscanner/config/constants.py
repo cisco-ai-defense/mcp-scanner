@@ -134,9 +134,20 @@ class MCPScannerConstants:
     PROMPT_LENGTH_THRESHOLD: int = int(
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
     )
+    # Hard cap for alignment prompts sent to the LLM. Keep below
+    # PROMPT_LENGTH_THRESHOLD so Bedrock/Haiku is not fed truncated input.
+    ALIGNMENT_MAX_PROMPT_CHARS: int = int(
+        os.getenv("MCP_SCANNER_ALIGNMENT_MAX_PROMPT_CHARS", "68000")
+    )
     LLM_MAX_RETRIES: int = int(os.getenv("MCP_SCANNER_LLM_MAX_RETRIES", "3"))
     LLM_RETRY_BASE_DELAY: float = float(
         os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0")
+    )
+    # Batch alignment parse retries re-prompt on unparseable JSON. Only the
+    # first attempt uses the full LLM_MAX_RETRIES API budget; later attempts
+    # use a single provider call so parse retries do not multiply API retries.
+    LLM_BATCH_PARSE_MAX_ATTEMPTS: int = int(
+        os.getenv("MCP_SCANNER_LLM_BATCH_PARSE_MAX_ATTEMPTS", "2")
     )
     # Above this duration a single LLM round-trip is logged at WARNING so
     # operators can spot regional / quota / model-warming issues without

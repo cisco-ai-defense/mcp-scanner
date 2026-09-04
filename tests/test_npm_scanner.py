@@ -1475,7 +1475,7 @@ def test_js_analyzer_extract_failure_marks_scan_error(tmp_path, monkeypatch):
     genuinely clean package."""
     from mcpscanner.core.analyzers.behavioral import js_code_analyzer as jmod
     from mcpscanner.core.pypi_scanner import analysis_scan_status
-    from mcpscanner.core.static_analysis import javascript as jsstatic
+    from mcpscanner.core.static_analysis import native_analyzer as namod
 
     # Keep analyzer construction cheap and offline.
     monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
@@ -1483,11 +1483,11 @@ def test_js_analyzer_extract_failure_marks_scan_error(tmp_path, monkeypatch):
     js_file = tmp_path / "server.ts"
     js_file.write_text("export const handler = async () => 42;\n")
 
-    def boom(self):
+    def boom(self, *args, **kwargs):
         raise RuntimeError("tree-sitter unavailable")
 
     monkeypatch.setattr(
-        jsstatic.JSContextExtractor, "extract_mcp_function_contexts", boom
+        namod.NativeAnalyzer, "extract_mcp_capability_contexts", boom
     )
 
     analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
