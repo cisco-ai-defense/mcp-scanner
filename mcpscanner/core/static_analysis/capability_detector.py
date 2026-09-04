@@ -3227,6 +3227,39 @@ class CapabilityDetector:
                     positional.append(("schema", None))
                 continue
 
+            if child.type == "value_argument":
+                key_node = None
+                value_node = None
+                for sub in child.children:
+                    if sub.type == "identifier":
+                        key_node = sub
+                    elif sub.type not in ("=", ",", "(", ")"):
+                        value_node = sub
+                if key_node is not None and value_node is not None:
+                    key = self._ts_get_node_text(key_node)
+                    if key == "name":
+                        stripped = self._ts_extract_string_literal_text(value_node)
+                        if stripped is not None:
+                            positional.append(("string", stripped))
+                    elif key in ("handler", "execute", "fn", "callback"):
+                        if value_node.type == "callable_reference":
+                            for ref_sub in value_node.children:
+                                if ref_sub.type == "identifier":
+                                    positional.append(
+                                        (
+                                            "ref",
+                                            self._ts_get_node_text(ref_sub),
+                                        )
+                                    )
+                                    break
+                        elif value_node.type == "identifier":
+                            positional.append(
+                                ("ref", self._ts_get_node_text(value_node))
+                            )
+                        elif value_node.type in func_types:
+                            positional.append(("inline", value_node))
+                continue
+
             if child.type == "unary_expression":
                 for sub in child.children:
                     if sub.type in ("composite_literal", "literal_value"):

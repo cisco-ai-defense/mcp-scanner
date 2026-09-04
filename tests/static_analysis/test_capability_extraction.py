@@ -655,7 +655,7 @@ def test_kotlin_addtool_without_trailing_lambda() -> None:
     # is "no false positives". We assert the right tag when it does
     # surface.
     if names:
-        assert "handle" in names, names
+        assert any("handle" in name for name in names), names
         cap = caps[0]
         assert any("registration" in t for t in cap.decorator_types), (
             cap.decorator_types

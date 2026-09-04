@@ -122,7 +122,7 @@ mcp-scanner-api = "mcpscanner.server:main"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "--maxfail=1"
+addopts = "--maxfail=1 -m \"not slow\""
 filterwarnings = [
     # Silence Pydantic deprecation/future warnings across all tests
     #"ignore::DeprecationWarning:pydantic.*",

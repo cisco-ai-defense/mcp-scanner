@@ -52,6 +52,7 @@ def collect_import_targets(stmt: str, out: Dict[str, List[str]]) -> None:
     m = re.match(
         r"""^import\s+(.*?)\s+from\s+['"]([^'"]+)['"]""",
         stmt,
+        re.DOTALL,
     )
     if m:
         clause = m.group(1).strip()

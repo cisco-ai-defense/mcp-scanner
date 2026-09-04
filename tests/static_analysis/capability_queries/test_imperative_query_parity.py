@@ -13,9 +13,12 @@ fixtures.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from tree_sitter import Language, Parser
 
+from mcpscanner.core.static_analysis import capability_detector as cd
 from mcpscanner.core.static_analysis import capability_queries as cq
 from mcpscanner.core.static_analysis.capability_detector import (
     CapabilityDetector,
@@ -379,19 +382,12 @@ def test_instances_parity(language, fixture_name, filename):
     _, root, _ = _parse(language, source)
 
     imports = analyzer._ts_extract_imports(root)
-    # ``_collect_mcp_instances`` runs Stage 1 + Stage 2; we run the
-    # full pipeline twice — once with the query bundle force-disabled
-    # — and compare. Caching the two results requires resetting the
-    # loader's bundle map between runs.
-    loader = cq.get_loader()
-    saved = loader._bundles
-    try:
-        loader._bundles = {language: None}
+    # Force the imperative path: ``bundle()`` treats ``None`` as a cache
+    # miss and reloads, so patch the detector's ``get_bundle`` hook
+    # instead of poisoning the loader cache.
+    with patch.object(cd, "get_bundle", return_value=None):
         imp_trusted = detector._collect_mcp_instances(root, imports)
-        loader._bundles = {}
-        qry_trusted = detector._collect_mcp_instances(root, imports)
-    finally:
-        loader._bundles = saved
+    qry_trusted = detector._collect_mcp_instances(root, imports)
 
     assert imp_trusted == qry_trusted, (
         f"{language}: trusted-receiver mismatch\n"

@@ -212,25 +212,25 @@ class CapabilityQueryLoader:
         if sub is None:
             return None
 
-        cached = self._bundles.get(sub)
+        cached = self._bundles.get(language)
         if cached is not None:
             return cached
 
         with self._lock:
-            cached = self._bundles.get(sub)
+            cached = self._bundles.get(language)
             if cached is not None:
                 return cached
 
-            bundle = self._load_bundle(sub)
+            bundle = self._load_bundle(sub, language)
             # Empty bundles (no ``.scm`` files at all) still get
             # cached so we don't re-stat the directory on every call.
-            self._bundles[sub] = bundle
+            self._bundles[language] = bundle
             return bundle
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
-    def _load_bundle(self, sub: str) -> Optional[QueryBundle]:
+    def _load_bundle(self, sub: str, language: str) -> Optional[QueryBundle]:
         from tree_sitter import Query  # local import: keeps optional deps lazy
 
         directory = self._root / sub
@@ -238,16 +238,16 @@ class CapabilityQueryLoader:
             return None
 
         try:
-            ts_language = self._language_factory(sub)
+            ts_language = self._language_factory(language)
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug(
                 "capability_queries: could not load tree-sitter language for %s: %s",
-                sub,
+                language,
                 exc,
             )
             return None
 
-        bundle = QueryBundle(language=sub)
+        bundle = QueryBundle(language=language)
         compiled_any = False
         for name in QUERY_NAMES:
             scm_path = directory / f"{name}.scm"

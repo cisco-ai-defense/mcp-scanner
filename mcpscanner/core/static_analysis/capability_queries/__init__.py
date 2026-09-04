@@ -45,8 +45,8 @@ from .loader import (
 
 __all__ = [
     "CapabilityQueryLoader",
-    "QueryBundle",
     "QUERY_NAMES",
+    "QueryBundle",
     "SUPPORTED_LANGUAGES",
     "get_bundle",
     "get_loader",

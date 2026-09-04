@@ -108,11 +108,16 @@ def test_bundle_exposes_expected_queries(language, expected_present):
 
 
 def test_tsx_aliases_to_typescript_directory():
-    """``.tsx`` resolves to the TypeScript bundle so JSX-flavoured TS
-    files don't fall back to the imperative walker by accident."""
+    """``.tsx`` resolves to the TypeScript query directory with the TSX grammar.
+
+    JSX-flavoured files must not fall back to the imperative walker, but
+  their bundle is compiled with ``language_tsx()`` rather than sharing the
+  ``typescript`` bundle object.
+    """
     loader = CapabilityQueryLoader()
     ts = loader.bundle("typescript")
     tsx = loader.bundle("tsx")
     assert ts is not None and tsx is not None
-    # Same compiled queries — the loader maps both to the same dir.
-    assert ts is tsx
+    assert ts is not tsx
+    assert ts.registrations is not None
+    assert tsx.registrations is not None

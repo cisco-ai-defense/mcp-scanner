@@ -42,6 +42,43 @@ _REGISTRY_LOCK = threading.Lock()
 _DEFAULTS_REGISTERED = False
 
 
+_REQUIRED_ADAPTER_ATTRS = (
+    "LANGUAGE",
+    "SDK_MODULE_PREFIXES",
+    "TRUSTED_NAMESPACES",
+    "ANNOTATION_IDENTIFIERS",
+)
+
+
+def _validate_adapter_contract(adapter: LanguageAdapter) -> None:
+    """Reject adapters that do not satisfy :class:`LanguageAdapter`."""
+    if not isinstance(adapter, LanguageAdapter):
+        raise TypeError(
+            f"adapter {adapter!r} does not implement LanguageAdapter"
+        )
+    missing = [
+        attr
+        for attr in _REQUIRED_ADAPTER_ATTRS
+        if not hasattr(adapter, attr)
+    ]
+    if missing:
+        raise TypeError(
+            f"adapter {type(adapter).__name__} is missing required "
+            f"LanguageAdapter attributes: {', '.join(missing)}"
+        )
+    for method_name in (
+        "parse_import_alias",
+        "parse_import_target",
+        "tree_sitter_language",
+        "extract_with_native_parser",
+    ):
+        if not callable(getattr(adapter, method_name, None)):
+            raise TypeError(
+                f"adapter {type(adapter).__name__} is missing callable "
+                f"{method_name}()"
+            )
+
+
 def register_adapter(adapter: LanguageAdapter) -> None:
     """Register ``adapter`` under its ``LANGUAGE`` identifier.
 
@@ -51,10 +88,7 @@ def register_adapter(adapter: LanguageAdapter) -> None:
     during normal startup. Tests that need to swap an adapter should
     call :py:func:`unregister_adapter` first.
     """
-    if not hasattr(adapter, "LANGUAGE"):
-        raise TypeError(
-            f"adapter {adapter!r} does not declare a LANGUAGE class attribute"
-        )
+    _validate_adapter_contract(adapter)
     language = adapter.LANGUAGE
     with _REGISTRY_LOCK:
         existing = LANGUAGE_REGISTRY.get(language)
@@ -86,7 +120,8 @@ def get_adapter(language: str) -> Optional[LanguageAdapter]:
     subsequent calls are O(1) dict lookups.
     """
     _ensure_default_adapters_registered()
-    return LANGUAGE_REGISTRY.get(language)
+    with _REGISTRY_LOCK:
+        return LANGUAGE_REGISTRY.get(language)
 
 
 def supported_languages() -> Tuple[str, ...]:
@@ -96,7 +131,8 @@ def supported_languages() -> Tuple[str, ...]:
     drive parametrized tests or capability menus.
     """
     _ensure_default_adapters_registered()
-    return tuple(sorted(LANGUAGE_REGISTRY.keys()))
+    with _REGISTRY_LOCK:
+        return tuple(sorted(LANGUAGE_REGISTRY.keys()))
 
 
 def _ensure_default_adapters_registered() -> None:

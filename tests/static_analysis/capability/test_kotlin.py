@@ -91,8 +91,8 @@ def test_addtool_without_trailing_lambda() -> None:
     analyzer = NativeAnalyzer(NO_TRAILING_LAMBDA, "no_lambda.kt")
     caps = analyzer.extract_mcp_capability_contexts()
     names = names_of(caps)
-    if names:
-        assert "handle" in names, names
-        assert any(
-            "registration" in t for t in caps[0].decorator_types
-        ), caps[0].decorator_types
+    assert names, "expected a capability for handler = ::handle registration"
+    assert any("handle" in name for name in names), names
+    assert any(
+        "registration" in t for t in caps[0].decorator_types
+    ), caps[0].decorator_types
