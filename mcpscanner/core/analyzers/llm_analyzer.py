@@ -20,7 +20,6 @@ This module contains the LLM analyzer class for analyzing MCP tools using any LL
 via LiteLLM to detect malicious content and data exfiltration risks.
 """
 
-import asyncio
 import json
 import secrets
 from typing import Any, Dict, List, Optional
@@ -29,6 +28,12 @@ from litellm import acompletion
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
 from ...threats.threats import LLM_THREAT_MAPPING
+from ...utils.analyzer_errors import (
+    ErrorKind,
+    build_infrastructure_error_finding,
+    classify_analyzer_error,
+    retry_transient_async,
+)
 from .base import BaseAnalyzer, SecurityFinding
 
 
@@ -417,9 +422,14 @@ class LLMAnalyzer(BaseAnalyzer):
         except Exception as e:
             self.logger.error(f"LLM analysis failed for {tool_name}: {str(e)}")
             self.logger.error(f"Full traceback for {tool_name}:", exc_info=True)
-            # Return empty findings list - don't pollute results with error states
-            # The error is logged above for debugging purposes
-            return []
+            return [
+                build_infrastructure_error_finding(
+                    analyzer_name="LLM",
+                    subject=tool_name,
+                    error=e,
+                    model=self._model,
+                )
+            ]
 
     def _parse_tool_content(
         self, content: str, context: Optional[Dict[str, Any]] = None
@@ -478,102 +488,69 @@ class LLMAnalyzer(BaseAnalyzer):
         Raises:
             Exception: If all retries are exhausted
         """
-        last_exception = None
+        from mcpscanner.utils.llm_request_params import apply_model_constraints
 
-        for attempt in range(self._max_retries + 1):
-            try:
-                self.logger.debug(
-                    f"LLM API attempt {attempt + 1}/{self._max_retries + 1} for {context}"
+        max_attempts = self._max_retries + 1
+
+        async def operation() -> Any:
+            self.logger.debug(
+                "LLM API request for %s (max_attempts=%d)",
+                context,
+                max_attempts,
+            )
+            request_params = {
+                "model": self._model,
+                "messages": messages,
+                "max_tokens": self._max_tokens,
+                "temperature": self._temperature,
+                "timeout": self._llm_timeout,
+            }
+            apply_model_constraints(self._model, request_params)
+
+            if self._api_key:
+                request_params["api_key"] = self._api_key
+            if self._base_url:
+                request_params["api_base"] = self._base_url
+            if self._api_version:
+                request_params["api_version"] = self._api_version
+            if self._aws_region:
+                request_params["aws_region_name"] = self._aws_region
+            if self._aws_session_token:
+                request_params["aws_session_token"] = self._aws_session_token
+            if self._aws_profile_name:
+                request_params["aws_profile_name"] = self._aws_profile_name
+
+            return await acompletion(**request_params, drop_params=True)
+
+        async def on_retry(
+            exc: BaseException, attempt: int, delay: float
+        ) -> None:
+            self.logger.warning(
+                "LLM API transient error for %s, retrying in %.1fs "
+                "(attempt %d/%d): %s",
+                context,
+                delay,
+                attempt,
+                max_attempts,
+                exc,
+            )
+
+        try:
+            return await retry_transient_async(
+                operation,
+                max_attempts=max_attempts,
+                base_delay=self._rate_limit_delay,
+                model=self._model,
+                on_retry=on_retry,
+            )
+        except Exception as e:
+            kind = classify_analyzer_error(e, context="llm", model=self._model)
+            if kind is ErrorKind.FINAL:
+                self.logger.error("LLM API final error for %s: %s", context, e)
+            else:
+                self.logger.error(
+                    "LLM API transient error for %s, retries exhausted: %s",
+                    context,
+                    e,
                 )
-
-                # Build request parameters with per-request configuration
-                request_params = {
-                    "model": self._model,
-                    "messages": messages,
-                    "max_tokens": self._max_tokens,
-                    "temperature": self._temperature,
-                    "timeout": self._llm_timeout,
-                }
-
-                # Add API key if set (works for OpenAI, Anthropic, and Bedrock API keys)
-                # For Bedrock: api_key can be a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK)
-                # If not set, Bedrock will use AWS credentials (profile/IAM role)
-                if self._api_key:
-                    request_params["api_key"] = self._api_key
-
-                # Add base URL if configured (for Azure OpenAI or custom endpoints)
-                if self._base_url:
-                    request_params["api_base"] = self._base_url
-
-                # Add API version if configured (required for Azure OpenAI)
-                if self._api_version:
-                    request_params["api_version"] = self._api_version
-
-                # Add AWS region for Bedrock
-                if self._aws_region:
-                    request_params["aws_region_name"] = self._aws_region
-
-                # Add AWS session token for temporary credentials
-                if self._aws_session_token:
-                    request_params["aws_session_token"] = self._aws_session_token
-
-                # Add AWS profile for credential resolution
-                if self._aws_profile_name:
-                    request_params["aws_profile_name"] = self._aws_profile_name
-
-                response = await acompletion(**request_params)
-                return response
-
-            except Exception as e:
-                last_exception = e
-                error_msg = str(e).lower()
-
-                # Check for AWS/Bedrock specific errors (only for Bedrock models)
-                is_bedrock_model = self._model and "bedrock/" in self._model
-                if is_bedrock_model and any(
-                    keyword in error_msg
-                    for keyword in [
-                        "bedrockexception",
-                        "throttlingexception",
-                    ]
-                ):
-                    self.logger.error(
-                        f"AWS Bedrock error for {context}: {e}. "
-                        "Check AWS credentials, region, and Bedrock model access."
-                    )
-                    if attempt < self._max_retries:
-                        delay = (2**attempt) * self._rate_limit_delay
-                        self.logger.warning(
-                            f"Retrying AWS Bedrock request in {delay}s "
-                            f"(attempt {attempt + 1}/{self._max_retries + 1})"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        break
-
-                # Check if it's a rate limiting error
-                if any(
-                    keyword in error_msg
-                    for keyword in ["rate limit", "quota", "too many requests", "429"]
-                ):
-                    if attempt < self._max_retries:
-                        # Exponential backoff: 2^attempt * base_delay
-                        delay = (2**attempt) * self._rate_limit_delay
-                        self.logger.warning(
-                            f"Rate limit hit for {context}, retrying in {delay}s (attempt {attempt + 1}/{self._max_retries + 1})"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        self.logger.error(
-                            f"Rate limit exceeded for {context}, no more retries"
-                        )
-                        break
-                else:
-                    # For non-rate-limit errors, don't retry
-                    self.logger.error(f"LLM API error for {context}: {e}")
-                    break
-
-        # If we get here, all retries failed
-        raise last_exception
+            raise

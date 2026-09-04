@@ -119,6 +119,67 @@ def _create_auth_with_headers(
         return Auth.custom(custom_headers)
 
 
+def _package_scan_to_tool_results(
+    *,
+    scan_results: dict,
+    pkg_spec: str,
+    ecosystem_label: str,
+) -> list:
+    """Render a package scanner JSON payload into the per-tool result shape
+    the report generator consumes. Shared between the ``pypi-scan`` and
+    ``npm-scan`` CLI handlers so the two flows stay aligned."""
+    scan_status = scan_results.get("scan_status", "completed")
+    is_safe = scan_results.get("is_safe")
+
+    if scan_status == "error" or is_safe is None:
+        message = scan_results.get("error") or (
+            f"{ecosystem_label} package scan of {pkg_spec} could not be completed"
+        )
+        return [
+            {
+                "tool_name": pkg_spec,
+                "tool_description": message,
+                "status": "error",
+                "is_safe": None,
+                "findings": {},
+            }
+        ]
+
+    out: list = []
+    for finding in scan_results.get("findings", []):
+        analyzer_name = (finding.get("analyzer", "unknown") or "unknown") + "_analyzer"
+        out.append(
+            {
+                "tool_name": (
+                    (finding.get("details") or {}).get("function_name", pkg_spec)
+                ),
+                "tool_description": finding.get("summary", ""),
+                "status": "completed",
+                "is_safe": False,
+                "findings": {
+                    analyzer_name: {
+                        "severity": finding.get("severity", "UNKNOWN"),
+                        "threat_summary": finding.get("summary", ""),
+                        "threat_names": [finding.get("threat_category", "UNKNOWN")],
+                        "total_findings": 1,
+                        "mcp_taxonomies": [],
+                    }
+                },
+            }
+        )
+    if not out:
+        out.append(
+            {
+                "tool_name": pkg_spec,
+                "tool_description": f"{ecosystem_label} package scan of {pkg_spec}",
+                "status": "completed",
+                "is_safe": True,
+                "findings": {},
+            }
+        )
+    return out
+
+
 def _build_config(
     selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None
 ) -> Config:
@@ -177,6 +238,57 @@ def _build_config(
     return Config(**config_params)
 
 
+def _finding_threat_vuln_classification(finding: Any) -> Optional[str]:
+    """Per-finding THREAT/VULNERABILITY label used for CLI output filtering."""
+    details = finding.details or {}
+    classification = details.get("threat_vulnerability_classification")
+    if classification:
+        return str(classification).upper()
+    if getattr(finding, "severity", "") in {"HIGH", "MEDIUM", "LOW"} and getattr(
+        finding, "threat_category", ""
+    ):
+        return "THREAT"
+    return None
+
+
+def _behavioral_findings_for_cli(func_findings: List[Any]) -> List[Any]:
+    """When a tool has both THREAT and VULNERABILITY rows, keep THREAT rows only."""
+    threat_rows = [
+        f for f in func_findings if _finding_threat_vuln_classification(f) == "THREAT"
+    ]
+    if threat_rows:
+        return threat_rows
+    return func_findings
+
+
+def _infer_behavioral_threat_classification(
+    func_findings: List[Any], max_severity: str
+) -> Optional[str]:
+    """Return THREAT/VULNERABILITY classification for CLI filtering.
+
+    When a tool has multiple findings, prefer ``THREAT`` if any row is
+    classified as a threat so VULNERABILITY rows do not hide real threats
+    in the non-raw CLI filter.
+    """
+    cli_findings = _behavioral_findings_for_cli(func_findings)
+    classifications: List[str] = []
+    for finding in cli_findings:
+        classification = _finding_threat_vuln_classification(finding)
+        if classification:
+            classifications.append(classification)
+
+    if any(c == "THREAT" for c in classifications):
+        return "THREAT"
+    if classifications:
+        return classifications[0]
+
+    if max_severity in {"HIGH", "MEDIUM", "LOW"} and any(
+        getattr(f, "threat_category", "") for f in cli_findings
+    ):
+        return "THREAT"
+    return None
+
+
 def _build_behavioral_results(
     analyzer: Any,
     findings: List[Any],
@@ -184,28 +296,11 @@ def _build_behavioral_results(
 ) -> List[Dict[str, Any]]:
     """Build tool-style result dicts for every function analyzed by the behavioral analyzer.
 
-    The behavioral analyzer only emits a ``SecurityFinding`` when it detects a
-    docstring/behavior mismatch, which means functions that come back clean
-    would otherwise be invisible in the scan output. This helper uses
-    ``analyzer.analyzed_functions`` to ensure the returned list contains one
-    entry per tool discovered during the scan — safe tools (no findings) and
-    unsafe tools (with findings) alike.
-
-    Args:
-        analyzer: A ``BehavioralCodeAnalyzer`` instance that has just completed
-            an ``analyze()`` call. Its ``analyzed_functions`` attribute is used
-            to enumerate every function the scan visited.
-        findings: The list of ``SecurityFinding`` objects returned by
-            ``analyzer.analyze(...)``.
-        source_path: The original path that was scanned (file or directory).
-
-    Returns:
-        A list of result dictionaries matching the structure produced elsewhere
-        for tool scan results. Each dictionary exposes ``tool_name``,
-        ``tool_description``, ``status``, ``is_safe`` and ``findings``.
+    ``analyze()`` returns one ``SecurityFinding`` per scanned MCP tool (including
+    SAFE rows). Findings are the authoritative enumeration; ``analyzed_functions``
+    is merged in when present so legacy side-channel data still surfaces tools
+    that somehow lack a finding row.
     """
-    # Group findings by (source_file, function_name) so multi-file scans with
-    # identically named functions don't collide on a single result entry.
     findings_by_key: Dict[tuple, List[Any]] = {}
     for finding in findings:
         details = finding.details or {}
@@ -215,35 +310,39 @@ def _build_behavioral_results(
 
     severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
     results: List[Dict[str, Any]] = []
-    seen_keys: set = set()
 
-    # Iterate over every function the analyzer processed so that safe tools
-    # appear in the output even when no finding was produced for them.
     analyzed_functions = getattr(analyzer, "analyzed_functions", []) or []
+    tool_keys: List[tuple] = []
+    seen_keys: set = set()
+    for key in findings_by_key:
+        if key not in seen_keys:
+            tool_keys.append(key)
+            seen_keys.add(key)
     for analyzed in analyzed_functions:
         func_name = analyzed.get("name", "unknown")
         source_file = analyzed.get("source_file", source_path)
         key = (source_file, func_name)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
+        if key not in seen_keys:
+            tool_keys.append(key)
+            seen_keys.add(key)
 
+    for source_file, func_name in tool_keys:
         display_name = (
             os.path.basename(source_file)
             if source_file and source_file != source_path
             else source_path
         )
-
-        func_findings = findings_by_key.get(key, [])
+        func_findings = findings_by_key.get((source_file, func_name), [])
 
         if func_findings:
+            cli_findings = _behavioral_findings_for_cli(func_findings)
             max_severity = max(
-                (f.severity for f in func_findings),
+                (f.severity for f in cli_findings),
                 key=lambda s: severity_order.get(s, 0),
             )
 
             mcp_taxonomies: List[Dict[str, Any]] = []
-            for finding in func_findings:
+            for finding in cli_findings:
                 taxonomy = getattr(finding, "mcp_taxonomy", None)
                 if not taxonomy:
                     continue
@@ -257,25 +356,18 @@ def _build_behavioral_results(
                 if taxonomy_key not in existing_keys:
                     mcp_taxonomies.append(taxonomy)
 
-            threat_vuln_classification = None
-            if func_findings[0].details:
-                threat_vuln_classification = func_findings[0].details.get(
-                    "threat_vulnerability_classification"
-                )
-
-            # Derive is_safe from severity instead of hardcoding False.
-            # Analyzers can now emit SAFE-severity findings for tools that
-            # came back clean (see BehavioralCodeAnalyzer.analyze docstring);
-            # those rows must NOT be filtered out downstream as unsafe.
+            threat_vuln_classification = _infer_behavioral_threat_classification(
+                func_findings, max_severity
+            )
             is_safe_row = max_severity == "SAFE"
 
             analyzer_finding: Dict[str, Any] = {
                 "severity": max_severity,
-                "threat_summary": func_findings[0].summary,
+                "threat_summary": cli_findings[0].summary,
                 "threat_names": sorted(
-                    {f.threat_category for f in func_findings if f.threat_category}
+                    {f.threat_category for f in cli_findings if f.threat_category}
                 ),
-                "total_findings": len(func_findings),
+                "total_findings": len(cli_findings),
                 "source_file": source_file,
                 "mcp_taxonomies": mcp_taxonomies,
             }
@@ -294,9 +386,6 @@ def _build_behavioral_results(
                 }
             )
         else:
-            # No mismatch detected for this tool — still surface it as a safe
-            # result so the scan output enumerates ALL tools that were found,
-            # not only the ones flagged as malicious.
             results.append(
                 {
                     "tool_name": func_name,
@@ -315,52 +404,6 @@ def _build_behavioral_results(
                     },
                 }
             )
-
-    # Surface any findings that didn't match a recorded analyzed function
-    # (defensive: should be rare, but guarantees no finding is dropped).
-    for (src_file, func_name), func_findings in findings_by_key.items():
-        if (src_file, func_name) in seen_keys:
-            continue
-        seen_keys.add((src_file, func_name))
-
-        max_severity = max(
-            (f.severity for f in func_findings),
-            key=lambda s: severity_order.get(s, 0),
-        )
-        display_name = (
-            os.path.basename(src_file)
-            if src_file and src_file != source_path
-            else source_path
-        )
-        mcp_taxonomies = []
-        for finding in func_findings:
-            taxonomy = getattr(finding, "mcp_taxonomy", None)
-            if taxonomy and taxonomy not in mcp_taxonomies:
-                mcp_taxonomies.append(taxonomy)
-
-        results.append(
-            {
-                "tool_name": func_name,
-                "tool_description": f"MCP function from {display_name}",
-                "status": "completed",
-                # Same severity-derived semantics as the inventory loop
-                # above: a stray SAFE finding must not be misreported as
-                # unsafe and dropped by the downstream THREAT filter.
-                "is_safe": max_severity == "SAFE",
-                "findings": {
-                    "behavioral_analyzer": {
-                        "severity": max_severity,
-                        "threat_summary": func_findings[0].summary,
-                        "threat_names": sorted(
-                            {f.threat_category for f in func_findings if f.threat_category}
-                        ),
-                        "total_findings": len(func_findings),
-                        "source_file": src_file,
-                        "mcp_taxonomies": mcp_taxonomies,
-                    }
-                },
-            }
-        )
 
     if not results:
         results.append(
@@ -1186,6 +1229,102 @@ async def main():
         ],
         default="summary",
         help="Output format (default: %(default)s)",
+    )
+
+    # PyPI package scan subcommand (Docker-sandboxed by default)
+    p_pypi = subparsers.add_parser(
+        "pypi-scan",
+        help="Download and scan a PyPI package in a Docker sandbox",
+    )
+    p_pypi.add_argument("package", help="PyPI package name (e.g., flask)")
+    p_pypi.add_argument(
+        "--version", help="Specific package version (default: latest)"
+    )
+    p_pypi.add_argument(
+        "--output", "-o", help="Save scan results to a file"
+    )
+    p_pypi.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_pypi.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_pypi.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_pypi.add_argument(
+        "--format",
+        choices=[
+            "raw", "summary", "detailed", "by_tool",
+            "by_analyzer", "by_severity", "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+    p_pypi.add_argument(
+        "--rebuild-image",
+        action="store_true",
+        help="Force rebuild of the Docker scanner image",
+    )
+    p_pypi.add_argument(
+        "--no-docker",
+        action="store_true",
+        help=(
+            "Run the PyPI scan locally without Docker. Intended for SDK / CI "
+            "environments where Docker is unavailable; archives are size-capped "
+            "and extracted via tarfile data filter. The package's own code is "
+            "never executed, but local mode is a weaker sandbox than Docker."
+        ),
+    )
+
+    # npm package scan subcommand (Docker-sandboxed by default; --no-docker
+    # opt-in for SDK environments).
+    p_npm = subparsers.add_parser(
+        "npm-scan",
+        help="Download and scan an npm package in a Docker sandbox",
+    )
+    p_npm.add_argument(
+        "package",
+        help="npm package name (supports @scope/name, e.g. @modelcontextprotocol/server-everything)",
+    )
+    p_npm.add_argument(
+        "--version", help="Specific package version (default: latest)"
+    )
+    p_npm.add_argument(
+        "--output", "-o", help="Save scan results to a file"
+    )
+    p_npm.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_npm.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_npm.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_npm.add_argument(
+        "--format",
+        choices=[
+            "raw", "summary", "detailed", "by_tool",
+            "by_analyzer", "by_severity", "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+    p_npm.add_argument(
+        "--rebuild-image",
+        action="store_true",
+        help="Force rebuild of the npm Docker scanner image",
+    )
+    p_npm.add_argument(
+        "--no-docker",
+        action="store_true",
+        help=(
+            "Run the npm scan locally without Docker. Intended for SDK / CI "
+            "environments where Docker is unavailable; tarballs are size-capped "
+            "and extracted via tarfile data filter. The package's JS is never "
+            "executed (only parsed), but local mode is a weaker sandbox than Docker."
+        ),
     )
 
     # vulnerable-package subcommand - scan Python dependencies for known vulnerabilities
@@ -2079,8 +2218,8 @@ async def main():
             results = _build_behavioral_results(analyzer, findings, source_path)
 
             # Filter out VULNERABILITY findings — only surface THREATS — while
-            # always keeping safe results so every analyzed tool remains
-            # visible in the output.
+            # always keeping safe results so every analyzed tool remains visible.
+            # Applies to both formatted and ``--raw`` JSON output.
             filtered_results = []
             for result in results:
                 if result.get("is_safe", False):
@@ -2105,6 +2244,134 @@ async def main():
                     json.dump(results, f, indent=2)
                 if args.verbose:
                     print(f"Results saved to {args.output}")
+
+        elif args.cmd == "pypi-scan":
+            from mcpscanner.core.pypi_scanner import (
+                DockerNotAvailableError,
+                LLMNotConfiguredError,
+                PyPIPackageScanner,
+                PyPIScanError,
+            )
+
+            use_docker = not getattr(args, "no_docker", False)
+            try:
+                scanner = PyPIPackageScanner(use_docker=use_docker)
+                if use_docker and getattr(args, "rebuild_image", False):
+                    scanner.build_image(force=True)
+
+                if use_docker:
+                    scan_results = scanner.scan_package(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+                else:
+                    scan_results = await scanner.scan_package_async(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+
+                pkg_spec = args.package
+                if getattr(args, "version", None):
+                    pkg_spec = f"{args.package}=={args.version}"
+
+                results = _package_scan_to_tool_results(
+                    scan_results=scan_results,
+                    pkg_spec=pkg_spec,
+                    ecosystem_label="PyPI",
+                )
+
+                if any(
+                    row.get("status") == "error" or row.get("is_safe") is None
+                    for row in results
+                ):
+                    print(
+                        "Scan Error: package scan could not be completed reliably",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+
+                if args.output:
+                    with open(args.output, "w", encoding="utf-8") as f:
+                        json.dump(results, f, indent=2)
+                    if args.verbose:
+                        print(f"Results saved to {args.output}")
+
+            except DockerNotAvailableError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            except LLMNotConfiguredError as e:
+                print(f"Config Error: {e}", file=sys.stderr)
+                sys.exit(2)
+            except PyPIScanError as e:
+                print(f"Scan Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.cmd == "npm-scan":
+            from mcpscanner.core.npm_scanner import (
+                NPMPackageScanner,
+                NPMScanError,
+            )
+            from mcpscanner.core.pypi_scanner import (
+                DockerNotAvailableError,
+                LLMNotConfiguredError,
+            )
+
+            use_docker = not getattr(args, "no_docker", False)
+            try:
+                scanner = NPMPackageScanner(use_docker=use_docker)
+                if use_docker and getattr(args, "rebuild_image", False):
+                    scanner.build_image(force=True)
+
+                if use_docker:
+                    scan_results = scanner.scan_package(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+                else:
+                    scan_results = await scanner.scan_package_async(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+
+                pkg_spec = args.package
+                if getattr(args, "version", None):
+                    pkg_spec = f"{args.package}@{args.version}"
+
+                results = _package_scan_to_tool_results(
+                    scan_results=scan_results,
+                    pkg_spec=pkg_spec,
+                    ecosystem_label="npm",
+                )
+
+                if any(
+                    row.get("status") == "error" or row.get("is_safe") is None
+                    for row in results
+                ):
+                    print(
+                        "Scan Error: package scan could not be completed reliably",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+
+                if args.output:
+                    with open(args.output, "w", encoding="utf-8") as f:
+                        json.dump(results, f, indent=2)
+                    if args.verbose:
+                        print(f"Results saved to {args.output}")
+
+            except DockerNotAvailableError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            except LLMNotConfiguredError as e:
+                print(f"Config Error: {e}", file=sys.stderr)
+                sys.exit(2)
+            except NPMScanError as e:
+                print(f"Scan Error: {e}", file=sys.stderr)
+                sys.exit(1)
 
         elif args.cmd == "vulnerable-package":
             import os
@@ -2342,6 +2609,16 @@ async def main():
             server_label = f"vulnerable-package:{args.scan_path}"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "pypi-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}=={args.version}"
+            server_label = f"pypi:{pkg_spec}"
+        elif hasattr(args, "cmd") and args.cmd == "npm-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}@{args.version}"
+            server_label = f"npm:{pkg_spec}"
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
             server_label = f"behavioral:{args.source_path}"
         elif args.stdio_command:
@@ -2463,6 +2740,16 @@ async def main():
             server_label = "well-known-configs"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "pypi-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}=={args.version}"
+            server_label = f"pypi:{pkg_spec}"
+        elif hasattr(args, "cmd") and args.cmd == "npm-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}@{args.version}"
+            server_label = f"npm:{pkg_spec}"
         elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
             server_label = f"vulnerable-package:{args.scan_path}"
 
