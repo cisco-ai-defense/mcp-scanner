@@ -60,6 +60,16 @@ def _build_security_flags(func_context: FunctionContext) -> List[str]:
     return flags
 
 
+def _registration_context_section(func_context: FunctionContext) -> str:
+    """Return the registration/decorator context block for alignment prompts."""
+    raw_ctx = ""
+    if func_context.dataflow_summary:
+        raw_ctx = func_context.dataflow_summary.get("raw_decorator_context") or ""
+    if raw_ctx.strip():
+        return f"\n**REGISTRATION / DECORATOR CONTEXT:**\n{raw_ctx}\n"
+    return ""
+
+
 class AlignmentPromptBuilder:
     """Builds comprehensive prompts for semantic alignment verification.
 
@@ -141,9 +151,6 @@ class AlignmentPromptBuilder:
         end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
 
         docstring = func_context.docstring or "No docstring provided"
-        raw_ctx = ""
-        if func_context.dataflow_summary:
-            raw_ctx = func_context.dataflow_summary.get("raw_decorator_context") or ""
         # Build the analysis content using list accumulation for efficiency
         content_parts = []
 
@@ -156,10 +163,7 @@ class AlignmentPromptBuilder:
 - Docstring/Description: {docstring}
 """
         )
-        if raw_ctx.strip():
-            content_parts.append(
-                f"\n**REGISTRATION / DECORATOR CONTEXT:**\n{raw_ctx}\n"
-            )
+        content_parts.append(_registration_context_section(func_context))
 
         content_parts.append(
             f"""
@@ -479,6 +483,9 @@ Parameter Flow Tracking:
                 f"**Decorator:** {func_context.decorator_types[0] if func_context.decorator_types else 'unknown'}\n"
             )
             all_content.append(f"**Docstring:** {docstring}\n")
+            reg_ctx = _registration_context_section(func_context)
+            if reg_ctx:
+                all_content.append(reg_ctx)
             all_content.append(
                 f"**Parameters:** {json.dumps(func_context.parameters)}\n"
             )

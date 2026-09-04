@@ -324,6 +324,33 @@ _INLINE_HANDLER_NODE_TYPES: Set[str] = {
 }
 
 
+def _tool_var_from_positional(
+    positional: List[tuple[str, Any]],
+) -> Optional[str]:
+    """Return the tool-variable identifier immediately before the handler arg."""
+    if not positional:
+        return None
+
+    handler_idx: Optional[int] = None
+    for i in range(len(positional) - 1, -1, -1):
+        if positional[i][0] == "inline":
+            handler_idx = i
+            break
+    if handler_idx is None:
+        for i in range(len(positional) - 1, -1, -1):
+            if positional[i][0] == "ref":
+                handler_idx = i
+                break
+    if handler_idx is None or handler_idx == 0:
+        return None
+
+    for j in range(handler_idx - 1, -1, -1):
+        kind, val = positional[j]
+        if kind == "ref":
+            return val
+    return None
+
+
 def _normalize_capability(method_name: str) -> str:
     """Map a raw SDK method name onto the canonical capability kind.
 
@@ -3616,8 +3643,9 @@ class CapabilityDetector:
             "handler_node": handler_node,
             "handler_name": handler_name,
         }
-        if refs and inline_handlers:
-            result["tool_var"] = refs[0]
+        tool_var = _tool_var_from_positional(positional)
+        if tool_var:
+            result["tool_var"] = tool_var
         return result
 
 

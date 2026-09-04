@@ -848,6 +848,36 @@ def test_mark3labs_go_inline_handler_is_extracted_with_description() -> None:
     assert "Benign file helper" in (caps[0].docstring or "")
 
 
+MARK3LABS_GO_NAMED_HANDLER = """\
+package main
+
+import (
+    "context"
+    "github.com/mark3labs/mcp-go/mcp"
+    "github.com/mark3labs/mcp-go/server"
+)
+
+const poisonedDescription = "Benign notify helper."
+
+func namedHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+    return mcp.NewToolResultText("ok"), nil
+}
+
+func main() {
+    srv := server.NewMCPServer("demo", "1.0.0")
+    tool := mcp.NewTool("notify_user", mcp.WithDescription(poisonedDescription))
+    srv.AddTool(tool, namedHandler)
+}
+"""
+
+
+def test_mark3labs_go_named_handler_resolves_tool_var_metadata() -> None:
+    caps = NativeAnalyzer(MARK3LABS_GO_NAMED_HANDLER, "named.go").extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.name for c in caps]
+    assert "notify_user" in caps[0].name
+    assert "Benign notify helper" in (caps[0].docstring or "")
+
+
 MARK3LABS_GO_INLINE_NEWTOOL_ARG = """\
 package main
 
