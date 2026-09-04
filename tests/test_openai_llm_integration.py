@@ -120,8 +120,10 @@ async def test_openai_llm_analyzer_handles_invalid_api_key_gracefully():
     ) as mock_acompletion:
         findings = await analyzer.analyze(tool_content)
 
-        # The analyzer should catch the error and return an empty list
-        assert findings == []
+        # The analyzer should surface infrastructure failure, not a silent pass.
+        assert len(findings) == 1
+        assert findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+        assert findings[0].analyzer == "LLM"
 
         # Ensure we attempted exactly once and passed through the invalid key
         assert mock_acompletion.call_count == 1

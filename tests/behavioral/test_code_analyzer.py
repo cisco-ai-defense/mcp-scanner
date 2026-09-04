@@ -620,3 +620,45 @@ def add(a: int, b: int) -> int:
         merged = _merge_mcp_function_contexts(primary, supplemental)
         assert len(merged) == 1
         assert merged[0].name == "custom"
+
+
+class TestAnalyzedFunctionsBackfill:
+    """When findings exist but ``analyzed_functions`` was not populated during
+    extraction, ``analyze()`` must backfill before returning."""
+
+    @pytest.mark.asyncio
+    async def test_backfill_from_findings_when_side_channel_empty(self):
+        config = Config(llm_provider_api_key="test-key")
+        analyzer = BehavioralCodeAnalyzer(config)
+        assert analyzer.analyzed_functions == []
+
+        mcp_code = '''
+import mcp
+
+@mcp.tool()
+def echo(text: str) -> str:
+    """Echo input."""
+    return text
+'''
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(mcp_code)
+            f.flush()
+            temp_path = f.name
+
+        try:
+            with patch.object(
+                analyzer.alignment_orchestrator,
+                "check_alignment_batch",
+                new_callable=AsyncMock,
+            ) as mock_batch:
+                mock_batch.return_value = []
+                findings = await analyzer.analyze(
+                    temp_path, {"file_path": temp_path}
+                )
+
+            assert len(findings) >= 1
+            assert len(analyzer.analyzed_functions) >= 1
+            names = {entry["name"] for entry in analyzer.analyzed_functions}
+            assert "echo" in names
+        finally:
+            os.unlink(temp_path)
