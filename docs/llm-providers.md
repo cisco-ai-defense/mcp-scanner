@@ -138,21 +138,40 @@ export MCP_SCANNER_LLM_MODEL="gemini/gemini-pro"
 
 ### AWS Bedrock
 
+Bedrock support requires `boto3`, which is shipped as an optional extra:
+
+```bash
+pip install "cisco-ai-mcp-scanner[bedrock]"
+```
+
+`bedrock/*` models can authenticate three ways, in priority order:
+
+1. **AWS credential chain (IAM role / SSO / profile / session token)** — the
+   recommended option. **No `MCP_SCANNER_LLM_API_KEY` is required**; the
+   analyzer activates automatically for `bedrock/*` models and litellm signs
+   requests with your standard AWS credentials. Do **not** set a placeholder
+   API key — it would be sent to Bedrock and rejected.
+2. **Bedrock bearer token** via `AWS_BEARER_TOKEN_BEDROCK`.
+3. **Bedrock API key** via `MCP_SCANNER_LLM_API_KEY`.
+
+**Environment setup (IAM / SSO — no API key):**
+```bash
+# Valid AWS credentials available via the standard chain (IAM role / SSO /
+# `aws configure` profile). No MCP_SCANNER_LLM_API_KEY needed.
+export AWS_REGION="eu-central-1"
+export MCP_SCANNER_LLM_MODEL="bedrock/eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+mcp-scanner --analyzers llm static --tools tools.json
+```
+
 ```python
+# IAM / credential-chain auth — no api key
 config = Config(
-    llm_provider_api_key="your-aws-access-key-id",
     llm_model="bedrock/anthropic.claude-v2",
+    aws_region_name="us-east-1",
     llm_temperature=0.1,
     llm_max_tokens=1000,
 )
-```
-
-**Environment setup:**
-```bash
-export AWS_ACCESS_KEY_ID="your-aws-access-key-id"
-export AWS_SECRET_ACCESS_KEY="your-aws-secret-access-key"
-export AWS_REGION="us-east-1"
-export MCP_SCANNER_LLM_MODEL="bedrock/anthropic.claude-v2"
 ```
 
 ### Ollama (Local Models)
