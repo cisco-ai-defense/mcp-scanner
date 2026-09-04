@@ -505,6 +505,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 all_findings = await self._analyze_source_code(content, context)
 
+            self._backfill_analyzed_functions_from_findings(all_findings)
             self._log_scan_summary(
                 scan_mode=scan_mode,
                 scan_target=scan_target,
@@ -648,6 +649,41 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             python_files.append(str(py_file))
 
         return sorted(python_files)
+
+    def _backfill_analyzed_functions_from_findings(
+        self, findings: List[SecurityFinding]
+    ) -> None:
+        """Ensure ``analyzed_functions`` covers every tool in ``findings``.
+
+        ``analyze()`` now returns one ``SecurityFinding`` per scanned tool, so
+        the findings list is authoritative. Some callers (notably the CLI
+        ``--raw`` formatter) still enumerate ``analyzed_functions``; backfill
+        from findings when extraction did not populate that side-channel.
+        """
+        seen = {
+            (entry.get("source_file"), entry.get("name"))
+            for entry in self.analyzed_functions
+        }
+        for finding in findings:
+            details = finding.details or {}
+            name = details.get("function_name")
+            if not name:
+                continue
+            source_file = details.get("source_file") or "unknown"
+            key = (source_file, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            decorator = details.get("decorator_type") or "unknown"
+            self.analyzed_functions.append(
+                {
+                    "name": name,
+                    "decorator_types": [decorator],
+                    "line_number": details.get("line_number", 0),
+                    "source_file": source_file,
+                    "docstring": "",
+                }
+            )
 
     async def _analyze_file(
         self,
