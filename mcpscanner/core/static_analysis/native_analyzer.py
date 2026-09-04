@@ -277,7 +277,9 @@ def _extract_list_tools_descriptions(source: str, handler_text: str) -> Dict[str
     out: Dict[str, str] = {}
     if not handler_text:
         return out
-    # Single-tool and multi-tool object literals: name + description fields.
+    # Best-effort split on top-level ``},{`` boundaries. Nested objects
+    # before a tool boundary can confuse this heuristic; it only feeds
+    # docstring text, not security-critical metadata.
     tool_blocks = _re.split(r"\}\s*,\s*\{", handler_text)
     for block in tool_blocks:
         name_m = _re.search(r'(?i)\bname\s*:\s*["\']([^"\']+)["\']', block)
@@ -879,7 +881,7 @@ class NativeAnalyzer:
     FUNCTION_NODE_TYPES = {
         "javascript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
         "typescript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
-        "go": {"function_declaration", "method_declaration", "func_literal"},
+        "go": {"function_declaration", "method_declaration"},
         "java": {"method_declaration", "constructor_declaration"},
         "kotlin": {"function_declaration", "secondary_constructor", "primary_constructor", "lambda_literal", "anonymous_function"},
         "swift": {"function_declaration", "initializer_declaration"},
@@ -2236,10 +2238,11 @@ class NativeAnalyzer:
         self, reg: Dict[str, Any], root: "Node"
     ) -> None:
         """Fill registered name/description from Go ``NewTool`` variables etc."""
-        source_text = self.source_bytes.decode("utf-8", errors="replace")
         snippet = reg.get("registration_snippet") or ""
         if not reg.get("description"):
-            reg["description"] = _extract_description_from_text(source_text, snippet)
+            reg["description"] = _extract_description_from_text(
+                self.source_code, snippet
+            )
 
         tool_var = reg.get("tool_var")
         if tool_var:
@@ -2249,19 +2252,48 @@ class NativeAnalyzer:
             if meta.get("description") and not reg.get("description"):
                 reg["description"] = meta["description"]
 
-    def _ts_resolve_tool_variable_metadata(
-        self, var_name: str, root: "Node"
-    ) -> Dict[str, Optional[str]]:
-        """Resolve ``tool := mcp.NewTool("name", WithDescription(...))`` metadata."""
-        out: Dict[str, Optional[str]] = {"name": None, "description": None}
-        source_text = self.source_bytes.decode("utf-8", errors="replace")
+    def _ts_build_tool_variable_metadata_index(
+        self, root: "Node"
+    ) -> Dict[str, Dict[str, Optional[str]]]:
+        """Build ``var_name -> {name, description}`` for Go tool variables."""
+        cache_key = id(root)
+        cached = getattr(self, "_tool_var_metadata_cache", None)
+        if cached is None:
+            cached = {}
+            self._tool_var_metadata_cache = cached
+        if cache_key in cached:
+            return cached[cache_key]
+
+        index: Dict[str, Dict[str, Optional[str]]] = {}
+        source_text = self.source_code
+
+        def record(var_name: str, call_node: "Node", call_text: str) -> None:
+            entry = index.setdefault(
+                var_name, {"name": None, "description": None}
+            )
+            name = self._ts_first_string_literal_in_args(
+                call_node.child_by_field_name("arguments")
+                if call_node.type == "call_expression"
+                else None
+            )
+            if name and not entry["name"]:
+                entry["name"] = name
+            desc = _extract_description_from_text(source_text, call_text)
+            if desc and not entry["description"]:
+                entry["description"] = desc
 
         def visit(node: "Node") -> None:
-            if out["name"] and out["description"]:
-                return
-            if node.type in ("short_var_declaration", "var_declaration", "assignment_statement"):
-                left = node.child_by_field_name("left") or node.child_by_field_name("name")
-                right = node.child_by_field_name("right") or node.child_by_field_name("value")
+            if node.type in (
+                "short_var_declaration",
+                "var_declaration",
+                "assignment_statement",
+            ):
+                left = node.child_by_field_name("left") or node.child_by_field_name(
+                    "name"
+                )
+                right = node.child_by_field_name("right") or node.child_by_field_name(
+                    "value"
+                )
                 if left is None or right is None:
                     expr_lists = [
                         c for c in node.children if c.type == "expression_list"
@@ -2270,8 +2302,6 @@ class NativeAnalyzer:
                         left, right = expr_lists[0], expr_lists[1]
                 if left is not None and right is not None:
                     for lhs_name in self._ts_expression_list_names(left):
-                        if lhs_name != var_name:
-                            continue
                         call_text = self._ts_get_node_text(right)
                         call_node = right
                         if right.type == "expression_list":
@@ -2280,21 +2310,20 @@ class NativeAnalyzer:
                                     call_node = ch
                                     call_text = self._ts_get_node_text(ch)
                                     break
-                        name = self._ts_first_string_literal_in_args(
-                            call_node.child_by_field_name("arguments")
-                            if call_node.type == "call_expression"
-                            else None
-                        )
-                        if name:
-                            out["name"] = name
-                        desc = _extract_description_from_text(source_text, call_text)
-                        if desc:
-                            out["description"] = desc
+                        record(lhs_name, call_node, call_text)
             for child in node.children:
                 visit(child)
 
         visit(root)
-        return out
+        cached[cache_key] = index
+        return index
+
+    def _ts_resolve_tool_variable_metadata(
+        self, var_name: str, root: "Node"
+    ) -> Dict[str, Optional[str]]:
+        """Resolve ``tool := mcp.NewTool("name", WithDescription(...))`` metadata."""
+        index = self._ts_build_tool_variable_metadata_index(root)
+        return index.get(var_name, {"name": None, "description": None})
 
     def _postprocess_capability_contexts(
         self,
@@ -2303,7 +2332,7 @@ class NativeAnalyzer:
         registrations: List[Dict[str, Any]],
     ) -> List[FunctionContext]:
         """Merge ListTools metadata into CallTool handlers; normalize flows."""
-        source_text = self.source_bytes.decode("utf-8", errors="replace")
+        source_text = self.source_code
         list_tool_descs: Dict[str, str] = {}
 
         for reg in registrations:
@@ -2317,24 +2346,8 @@ class NativeAnalyzer:
                     _extract_list_tools_descriptions(source_text, handler_text)
                 )
 
-        has_call_tool_handler = any(
-            "<low_level>.call_tool" in (c.decorator_types or [])
-            for c in contexts
-        )
-
         filtered: List[FunctionContext] = []
         for ctx in contexts:
-            if has_call_tool_handler and "<low_level>.list_tools" in (
-                ctx.decorator_types or []
-            ):
-                # Drop anonymous ListTools metadata handlers only; keep
-                # named handlers like ``listToolsHandler`` for tests and
-                # servers that split list/call across symbols.
-                if ctx.name in ("<anonymous>", "<unresolved>") or (
-                    ctx.name.startswith("<") and "Handler" not in ctx.name
-                ):
-                    continue
-
             if not ctx.docstring:
                 if ctx.name in list_tool_descs:
                     ctx.docstring = list_tool_descs[ctx.name]
@@ -2862,6 +2875,7 @@ class NativeAnalyzer:
                 m = _re.search(
                     r'^\s*(?:import\s+)?(?:([\w]+)\s+)?"[^"]*(?:modelcontextprotocol|mark3labs/mcp-go)[^"]*"',
                     stmt,
+                    _re.MULTILINE,
                 )
                 if m:
                     alias = m.group(1)
@@ -3020,6 +3034,21 @@ class NativeAnalyzer:
                 or "newmcpserver" in method.lower()
             )
         )
+
+    def _ts_is_new_tool_factory_call(self, expr_node: "Node") -> bool:
+        """Recognize ``mcp.NewTool(...)``-style tool factory calls."""
+        if expr_node.type != "call_expression":
+            return False
+        callee = expr_node.child_by_field_name("function")
+        if callee is None:
+            for child in expr_node.children:
+                if child.is_named:
+                    callee = child
+                    break
+        if callee is None:
+            return False
+        method = self._ts_get_node_text(callee).strip().rsplit(".", 1)[-1]
+        return method.lower() == "newtool"
 
     def _ts_call_method_name(self, call_node: "Node") -> Optional[str]:
         """Return the method name from a ``<expr>.method(...)`` call, or None.
@@ -3285,6 +3314,17 @@ class NativeAnalyzer:
                         if name is None and obj_name:
                             name = obj_name
                         break
+                continue
+
+            # Inline factory call (Go ``AddTool(mcp.NewTool("name", ...), handler)``).
+            if child.type == "call_expression" and name is None:
+                if self._ts_is_new_tool_factory_call(child):
+                    lit = self._ts_first_string_literal_in_args(
+                        child.child_by_field_name("arguments")
+                    )
+                    if lit:
+                        name = lit
+                continue
 
         handler_node = inline_handler
         handler_name: Optional[str] = None
@@ -3957,8 +3997,12 @@ class NativeAnalyzer:
             # ES6 imports
             if node.type == "import_statement":
                 imports.append(self._ts_get_node_text(node))
-            # Go import blocks / specs
-            elif node.type in ("import_declaration", "import_spec"):
+            # Go import blocks / specs — record individual specs only so
+            # alias detection does not depend on the first import in a
+            # multi-import ``import (...)`` block.
+            elif node.type == "import_spec":
+                imports.append(self._ts_get_node_text(node))
+            elif node.type == "import_declaration" and self.language != "go":
                 imports.append(self._ts_get_node_text(node))
             # Rust use declarations
             elif node.type == "use_declaration":

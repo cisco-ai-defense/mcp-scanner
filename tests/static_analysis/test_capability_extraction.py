@@ -830,8 +830,15 @@ impl Demo {
 
 def test_lowlevel_ts_call_tool_inherits_list_tools_description() -> None:
     caps = NativeAnalyzer(LOWLEVEL_TS_LIST_CALL, "demo.ts").extract_mcp_capability_contexts()
-    assert len(caps) == 1, [c.name for c in caps]
-    assert "Benign helper" in (caps[0].docstring or "")
+    call_caps = [
+        c for c in caps if "<low_level>.call_tool" in (c.decorator_types or [])
+    ]
+    assert len(call_caps) == 1, [c.name for c in caps]
+    assert "Benign helper" in (call_caps[0].docstring or "")
+    list_caps = [
+        c for c in caps if "<low_level>.list_tools" in (c.decorator_types or [])
+    ]
+    assert len(list_caps) == 1, [c.name for c in caps]
 
 
 def test_mark3labs_go_inline_handler_is_extracted_with_description() -> None:
@@ -839,6 +846,34 @@ def test_mark3labs_go_inline_handler_is_extracted_with_description() -> None:
     assert len(caps) == 1, [c.name for c in caps]
     assert caps[0].name == "create_file"
     assert "Benign file helper" in (caps[0].docstring or "")
+
+
+MARK3LABS_GO_INLINE_NEWTOOL_ARG = """\
+package main
+
+import (
+    "context"
+    "github.com/mark3labs/mcp-go/mcp"
+    "github.com/mark3labs/mcp-go/server"
+)
+
+func main() {
+    srv := server.NewMCPServer("demo", "1.0.0")
+    srv.AddTool(
+        mcp.NewTool("inline_notify", mcp.WithDescription("Inline notify helper.")),
+        func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+            return mcp.NewToolResultText("ok"), nil
+        },
+    )
+}
+"""
+
+
+def test_mark3labs_go_addtool_with_inline_newtool_arg() -> None:
+    caps = NativeAnalyzer(MARK3LABS_GO_INLINE_NEWTOOL_ARG, "inline.go").extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.name for c in caps]
+    assert caps[0].name == "inline_notify"
+    assert "Inline notify helper" in (caps[0].docstring or "")
 
 
 def test_rust_tool_attribute_description_is_wired() -> None:

@@ -35,6 +35,20 @@ from .....config.constants import MCPScannerConstants
 from ....static_analysis.context_extractor import FunctionContext
 
 
+def _build_security_flags(func_context: FunctionContext) -> List[str]:
+    """Collect static security indicator labels from a function context."""
+    flags: List[str] = []
+    if getattr(func_context, "has_file_operations", False):
+        flags.append("FILE_OPS")
+    if getattr(func_context, "has_network_operations", False):
+        flags.append("NETWORK_OPS")
+    if getattr(func_context, "has_subprocess_calls", False):
+        flags.append("SUBPROCESS")
+    if getattr(func_context, "has_eval_exec", False):
+        flags.append("EVAL/EXEC")
+    return flags
+
+
 class AlignmentPromptBuilder:
     """Builds comprehensive prompts for semantic alignment verification.
 
@@ -205,15 +219,7 @@ Parameter Flow Tracking:
             content_parts.append("".join(param_parts))
 
         # Static security indicators from AST analysis
-        security_flags = []
-        if getattr(func_context, "has_file_operations", False):
-            security_flags.append("FILE_OPS")
-        if getattr(func_context, "has_network_operations", False):
-            security_flags.append("NETWORK_OPS")
-        if getattr(func_context, "has_subprocess_calls", False):
-            security_flags.append("SUBPROCESS")
-        if getattr(func_context, "has_eval_exec", False):
-            security_flags.append("EVAL/EXEC")
+        security_flags = _build_security_flags(func_context)
         if security_flags:
             content_parts.append(
                 f"\n**STATIC SECURITY INDICATORS:** {', '.join(security_flags)}\n"
@@ -477,15 +483,7 @@ Parameter Flow Tracking:
                 all_content.append(f"**Function Calls:** {', '.join(calls)}\n")
 
             # Security flags
-            security_flags = []
-            if getattr(func_context, 'has_file_operations', False):
-                security_flags.append("FILE_OPS")
-            if getattr(func_context, 'has_network_operations', False):
-                security_flags.append("NETWORK_OPS")
-            if getattr(func_context, 'has_subprocess_calls', False):
-                security_flags.append("SUBPROCESS")
-            if getattr(func_context, 'has_eval_exec', False):
-                security_flags.append("EVAL/EXEC")
+            security_flags = _build_security_flags(func_context)
             if security_flags:
                 all_content.append(f"**Security Flags:** {', '.join(security_flags)}\n")
 
