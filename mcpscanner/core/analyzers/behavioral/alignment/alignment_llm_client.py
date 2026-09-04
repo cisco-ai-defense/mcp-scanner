@@ -26,7 +26,6 @@ The client manages:
 - Response retrieval
 """
 
-import asyncio
 import itertools
 import logging
 import time
@@ -35,6 +34,13 @@ from litellm import acompletion
 
 from .....config.config import Config
 from .....config.constants import MCPScannerConstants
+from .....utils.analyzer_errors import (
+    ERROR_KIND_FINAL,
+    ERROR_KIND_TRANSIENT,
+    ErrorKind,
+    classify_analyzer_error,
+    retry_transient_async,
+)
 from .....utils.log_format import ERROR_TRUNCATE, RESPONSE_DEBUG_MAX, truncate
 
 
@@ -162,11 +168,16 @@ class AlignmentLLMClient:
                 self._llm_timeout,
             )
 
-    async def verify_alignment(self, prompt: str) -> str:
+    async def verify_alignment(
+        self, prompt: str, *, max_retries: int | None = None
+    ) -> str:
         """Send alignment verification prompt to LLM with retry logic.
 
         Args:
             prompt: Comprehensive prompt with alignment verification evidence
+            max_retries: Override ``LLM_MAX_RETRIES`` (minimum 1). Use ``1`` for
+                parse re-prompts so batch parse retries do not multiply API
+                retry budgets.
 
         Returns:
             LLM response (JSON string)
@@ -185,66 +196,88 @@ class AlignmentLLMClient:
             self._model,
         )
 
-        # Check against configurable threshold
-        if prompt_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
+        # Alignment prompts are hard-capped by the prompt builder; warn if we
+        # still exceed the alignment budget (builder bug or manual prompt).
+        alignment_cap = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        if prompt_length > alignment_cap:
             self.logger.warning(
                 "LLM request_id=%d large_prompt prompt_length=%d threshold=%d model=%s "
                 "-- may be truncated by the model",
                 request_id,
                 prompt_length,
-                MCPScannerConstants.PROMPT_LENGTH_THRESHOLD,
+                alignment_cap,
                 self._model,
             )
 
-        # Retry logic with exponential backoff (configurable via constants)
-        max_retries = MCPScannerConstants.LLM_MAX_RETRIES
+        configured = MCPScannerConstants.LLM_MAX_RETRIES
+        if max_retries is None:
+            max_retries = configured
+        if max_retries < 1:
+            raise ValueError("max_retries must be >= 1")
+
         base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
         verify_start = time.perf_counter()
+        attempts_used = 0
 
-        for attempt in range(max_retries):
-            try:
-                response = await self._make_llm_request(prompt, request_id, attempt + 1)
-                total_ms = int((time.perf_counter() - verify_start) * 1000)
-                self.logger.info(
-                    "LLM request_id=%d ok provider=%s model=%s attempts=%d duration_ms=%d "
-                    "prompt_length=%d response_length=%d",
-                    request_id,
-                    self._provider,
-                    self._model,
-                    attempt + 1,
-                    total_ms,
-                    prompt_length,
-                    len(response) if response else 0,
-                )
-                return response
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2**attempt)
-                    self.logger.warning(
-                        "LLM request_id=%d retry attempt=%d/%d error_type=%s "
-                        "error=%s backoff_s=%.1f model=%s",
-                        request_id,
-                        attempt + 1,
-                        max_retries,
-                        type(e).__name__,
-                        truncate(e, ERROR_TRUNCATE),
-                        delay,
-                        self._model,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    total_ms = int((time.perf_counter() - verify_start) * 1000)
-                    self.logger.error(
-                        "LLM request_id=%d failed attempts=%d duration_ms=%d "
-                        "error_type=%s error=%s model=%s",
-                        request_id,
-                        max_retries,
-                        total_ms,
-                        type(e).__name__,
-                        truncate(e, ERROR_TRUNCATE),
-                        self._model,
-                    )
-                    raise
+        async def operation() -> str:
+            nonlocal attempts_used
+            attempts_used += 1
+            return await self._make_llm_request(prompt, request_id, attempts_used)
+
+        async def on_retry(
+            exc: BaseException, attempt: int, delay: float
+        ) -> None:
+            self.logger.warning(
+                "LLM request_id=%d retry attempt=%d/%d error_kind=%s "
+                "error_type=%s error=%s backoff_s=%.1f model=%s",
+                request_id,
+                attempt,
+                max_retries,
+                ERROR_KIND_TRANSIENT,
+                type(exc).__name__,
+                truncate(exc, ERROR_TRUNCATE),
+                delay,
+                self._model,
+            )
+
+        try:
+            response = await retry_transient_async(
+                operation,
+                max_attempts=max_retries,
+                base_delay=base_delay,
+                model=self._model,
+                on_retry=on_retry,
+            )
+            total_ms = int((time.perf_counter() - verify_start) * 1000)
+            self.logger.info(
+                "LLM request_id=%d ok provider=%s model=%s attempts=%d duration_ms=%d "
+                "prompt_length=%d response_length=%d",
+                request_id,
+                self._provider,
+                self._model,
+                attempts_used,
+                total_ms,
+                prompt_length,
+                len(response) if response else 0,
+            )
+            return response
+        except Exception as e:
+            kind = classify_analyzer_error(e, context="llm", model=self._model)
+            total_ms = int((time.perf_counter() - verify_start) * 1000)
+            error_kind = ERROR_KIND_FINAL if kind is ErrorKind.FINAL else ERROR_KIND_TRANSIENT
+            self.logger.error(
+                "LLM request_id=%d failed%s attempts=%d duration_ms=%d "
+                "error_kind=%s error_type=%s error=%s model=%s",
+                request_id,
+                "_final" if kind is ErrorKind.FINAL else "",
+                attempts_used or 1,
+                total_ms,
+                error_kind,
+                type(e).__name__,
+                truncate(e, ERROR_TRUNCATE),
+                self._model,
+            )
+            raise
 
     async def _make_llm_request(
         self, prompt: str, request_id: int = 0, attempt: int = 1
@@ -284,6 +317,9 @@ class AlignmentLLMClient:
                 "temperature": self._temperature,
                 "timeout": self._llm_timeout,
             }
+            from mcpscanner.utils.llm_request_params import apply_model_constraints
+
+            apply_model_constraints(self._model, request_params)
 
             if self._api_key:
                 request_params["api_key"] = self._api_key
@@ -315,7 +351,7 @@ class AlignmentLLMClient:
                 self._temperature,
                 self._max_tokens,
             )
-            response = await acompletion(**request_params)
+            response = await acompletion(**request_params, drop_params=True)
 
             # Extract content from response
             content = response.choices[0].message.content
