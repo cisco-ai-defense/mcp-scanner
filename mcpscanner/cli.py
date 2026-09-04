@@ -238,6 +238,57 @@ def _build_config(
     return Config(**config_params)
 
 
+def _finding_threat_vuln_classification(finding: Any) -> Optional[str]:
+    """Per-finding THREAT/VULNERABILITY label used for CLI output filtering."""
+    details = finding.details or {}
+    classification = details.get("threat_vulnerability_classification")
+    if classification:
+        return str(classification).upper()
+    if getattr(finding, "severity", "") in {"HIGH", "MEDIUM", "LOW"} and getattr(
+        finding, "threat_category", ""
+    ):
+        return "THREAT"
+    return None
+
+
+def _behavioral_findings_for_cli(func_findings: List[Any]) -> List[Any]:
+    """When a tool has both THREAT and VULNERABILITY rows, keep THREAT rows only."""
+    threat_rows = [
+        f for f in func_findings if _finding_threat_vuln_classification(f) == "THREAT"
+    ]
+    if threat_rows:
+        return threat_rows
+    return func_findings
+
+
+def _infer_behavioral_threat_classification(
+    func_findings: List[Any], max_severity: str
+) -> Optional[str]:
+    """Return THREAT/VULNERABILITY classification for CLI filtering.
+
+    When a tool has multiple findings, prefer ``THREAT`` if any row is
+    classified as a threat so VULNERABILITY rows do not hide real threats
+    in the non-raw CLI filter.
+    """
+    cli_findings = _behavioral_findings_for_cli(func_findings)
+    classifications: List[str] = []
+    for finding in cli_findings:
+        classification = _finding_threat_vuln_classification(finding)
+        if classification:
+            classifications.append(classification)
+
+    if any(c == "THREAT" for c in classifications):
+        return "THREAT"
+    if classifications:
+        return classifications[0]
+
+    if max_severity in {"HIGH", "MEDIUM", "LOW"} and any(
+        getattr(f, "threat_category", "") for f in cli_findings
+    ):
+        return "THREAT"
+    return None
+
+
 def _build_behavioral_results(
     analyzer: Any,
     findings: List[Any],
@@ -245,28 +296,11 @@ def _build_behavioral_results(
 ) -> List[Dict[str, Any]]:
     """Build tool-style result dicts for every function analyzed by the behavioral analyzer.
 
-    The behavioral analyzer only emits a ``SecurityFinding`` when it detects a
-    docstring/behavior mismatch, which means functions that come back clean
-    would otherwise be invisible in the scan output. This helper uses
-    ``analyzer.analyzed_functions`` to ensure the returned list contains one
-    entry per tool discovered during the scan — safe tools (no findings) and
-    unsafe tools (with findings) alike.
-
-    Args:
-        analyzer: A ``BehavioralCodeAnalyzer`` instance that has just completed
-            an ``analyze()`` call. Its ``analyzed_functions`` attribute is used
-            to enumerate every function the scan visited.
-        findings: The list of ``SecurityFinding`` objects returned by
-            ``analyzer.analyze(...)``.
-        source_path: The original path that was scanned (file or directory).
-
-    Returns:
-        A list of result dictionaries matching the structure produced elsewhere
-        for tool scan results. Each dictionary exposes ``tool_name``,
-        ``tool_description``, ``status``, ``is_safe`` and ``findings``.
+    ``analyze()`` returns one ``SecurityFinding`` per scanned MCP tool (including
+    SAFE rows). Findings are the authoritative enumeration; ``analyzed_functions``
+    is merged in when present so legacy side-channel data still surfaces tools
+    that somehow lack a finding row.
     """
-    # Group findings by (source_file, function_name) so multi-file scans with
-    # identically named functions don't collide on a single result entry.
     findings_by_key: Dict[tuple, List[Any]] = {}
     for finding in findings:
         details = finding.details or {}
@@ -276,35 +310,39 @@ def _build_behavioral_results(
 
     severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
     results: List[Dict[str, Any]] = []
-    seen_keys: set = set()
 
-    # Iterate over every function the analyzer processed so that safe tools
-    # appear in the output even when no finding was produced for them.
     analyzed_functions = getattr(analyzer, "analyzed_functions", []) or []
+    tool_keys: List[tuple] = []
+    seen_keys: set = set()
+    for key in findings_by_key:
+        if key not in seen_keys:
+            tool_keys.append(key)
+            seen_keys.add(key)
     for analyzed in analyzed_functions:
         func_name = analyzed.get("name", "unknown")
         source_file = analyzed.get("source_file", source_path)
         key = (source_file, func_name)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
+        if key not in seen_keys:
+            tool_keys.append(key)
+            seen_keys.add(key)
 
+    for source_file, func_name in tool_keys:
         display_name = (
             os.path.basename(source_file)
             if source_file and source_file != source_path
             else source_path
         )
-
-        func_findings = findings_by_key.get(key, [])
+        func_findings = findings_by_key.get((source_file, func_name), [])
 
         if func_findings:
+            cli_findings = _behavioral_findings_for_cli(func_findings)
             max_severity = max(
-                (f.severity for f in func_findings),
+                (f.severity for f in cli_findings),
                 key=lambda s: severity_order.get(s, 0),
             )
 
             mcp_taxonomies: List[Dict[str, Any]] = []
-            for finding in func_findings:
+            for finding in cli_findings:
                 taxonomy = getattr(finding, "mcp_taxonomy", None)
                 if not taxonomy:
                     continue
@@ -318,25 +356,18 @@ def _build_behavioral_results(
                 if taxonomy_key not in existing_keys:
                     mcp_taxonomies.append(taxonomy)
 
-            threat_vuln_classification = None
-            if func_findings[0].details:
-                threat_vuln_classification = func_findings[0].details.get(
-                    "threat_vulnerability_classification"
-                )
-
-            # Derive is_safe from severity instead of hardcoding False.
-            # Analyzers can now emit SAFE-severity findings for tools that
-            # came back clean (see BehavioralCodeAnalyzer.analyze docstring);
-            # those rows must NOT be filtered out downstream as unsafe.
+            threat_vuln_classification = _infer_behavioral_threat_classification(
+                func_findings, max_severity
+            )
             is_safe_row = max_severity == "SAFE"
 
             analyzer_finding: Dict[str, Any] = {
                 "severity": max_severity,
-                "threat_summary": func_findings[0].summary,
+                "threat_summary": cli_findings[0].summary,
                 "threat_names": sorted(
-                    {f.threat_category for f in func_findings if f.threat_category}
+                    {f.threat_category for f in cli_findings if f.threat_category}
                 ),
-                "total_findings": len(func_findings),
+                "total_findings": len(cli_findings),
                 "source_file": source_file,
                 "mcp_taxonomies": mcp_taxonomies,
             }
@@ -355,9 +386,6 @@ def _build_behavioral_results(
                 }
             )
         else:
-            # No mismatch detected for this tool — still surface it as a safe
-            # result so the scan output enumerates ALL tools that were found,
-            # not only the ones flagged as malicious.
             results.append(
                 {
                     "tool_name": func_name,
@@ -376,52 +404,6 @@ def _build_behavioral_results(
                     },
                 }
             )
-
-    # Surface any findings that didn't match a recorded analyzed function
-    # (defensive: should be rare, but guarantees no finding is dropped).
-    for (src_file, func_name), func_findings in findings_by_key.items():
-        if (src_file, func_name) in seen_keys:
-            continue
-        seen_keys.add((src_file, func_name))
-
-        max_severity = max(
-            (f.severity for f in func_findings),
-            key=lambda s: severity_order.get(s, 0),
-        )
-        display_name = (
-            os.path.basename(src_file)
-            if src_file and src_file != source_path
-            else source_path
-        )
-        mcp_taxonomies = []
-        for finding in func_findings:
-            taxonomy = getattr(finding, "mcp_taxonomy", None)
-            if taxonomy and taxonomy not in mcp_taxonomies:
-                mcp_taxonomies.append(taxonomy)
-
-        results.append(
-            {
-                "tool_name": func_name,
-                "tool_description": f"MCP function from {display_name}",
-                "status": "completed",
-                # Same severity-derived semantics as the inventory loop
-                # above: a stray SAFE finding must not be misreported as
-                # unsafe and dropped by the downstream THREAT filter.
-                "is_safe": max_severity == "SAFE",
-                "findings": {
-                    "behavioral_analyzer": {
-                        "severity": max_severity,
-                        "threat_summary": func_findings[0].summary,
-                        "threat_names": sorted(
-                            {f.threat_category for f in func_findings if f.threat_category}
-                        ),
-                        "total_findings": len(func_findings),
-                        "source_file": src_file,
-                        "mcp_taxonomies": mcp_taxonomies,
-                    }
-                },
-            }
-        )
 
     if not results:
         results.append(
@@ -2236,8 +2218,8 @@ async def main():
             results = _build_behavioral_results(analyzer, findings, source_path)
 
             # Filter out VULNERABILITY findings — only surface THREATS — while
-            # always keeping safe results so every analyzed tool remains
-            # visible in the output.
+            # always keeping safe results so every analyzed tool remains visible.
+            # Applies to both formatted and ``--raw`` JSON output.
             filtered_results = []
             for result in results:
                 if result.get("is_safe", False):
