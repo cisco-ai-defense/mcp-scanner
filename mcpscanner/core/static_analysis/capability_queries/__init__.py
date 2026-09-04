@@ -44,10 +44,10 @@ from .loader import (
 )
 
 __all__ = [
-    "CapabilityQueryLoader",
     "QUERY_NAMES",
-    "QueryBundle",
     "SUPPORTED_LANGUAGES",
+    "CapabilityQueryLoader",
+    "QueryBundle",
     "get_bundle",
     "get_loader",
 ]
