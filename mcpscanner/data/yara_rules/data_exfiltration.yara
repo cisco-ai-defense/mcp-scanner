@@ -23,8 +23,13 @@ rule data_exfiltration{
         // Suspicious domain patterns in descriptions
         $suspicious_domains = /\b(attacker|evil|malware|collect|exfil|steal|hack|malicious|c2|command-?and-?control)\.(com|net|org|io|xyz)\b/i
 
-        // External endpoint patterns
-        $external_endpoints = /\b(external\s+(endpoint|server|api|service)|remote\s+(server|endpoint|api|storage)|third[- ]party\s+(server|service))\b/i
+        // External endpoint patterns. Requires a transfer/leak verb in
+        // proximity to the endpoint phrase so generic mentions of
+        // "remote server" / "external service" in legitimate descriptions
+        // (e.g. "the remote server does not install anything") do not
+        // trigger this rule on their own. The verb set mirrors
+        // `$upload_external` and adds explicit malice-flag words.
+        $external_endpoints = /\b(upload|send|post|transmit|forward|sync|backup|store|save|push|export|transfer|stream|share|relay|exfiltrat|leak|ship|dispatch)(s|ed|ing)?\s+([^.\n]{0,40}\s+)?(to\s+|into\s+|via\s+|through\s+|towards?\s+)?(an?\s+|the\s+|some\s+)?(external\s+(endpoint|server|api|service)|remote\s+(server|endpoint|api|storage)|third[- ]party\s+(server|service))\b/i
 
         // Data collection to remote
         $remote_collection = /\b(collect|gather|aggregate|compile|harvest)(s|ing|ed)?\s+(and\s+)?(send|upload|transmit|forward|sync|store)/i

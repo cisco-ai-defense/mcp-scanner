@@ -1304,6 +1304,20 @@ class CapabilityDetector:
                     f"{self.file_path}: {e}"
                 )
                 continue
+            for dec in node.decorator_list or []:
+                if not isinstance(dec, ast.Call):
+                    continue
+                for kw in dec.keywords:
+                    if kw.arg is None:
+                        continue
+                    if kw.arg == "name" and isinstance(kw.value, ast.Constant):
+                        ctx.name = str(kw.value.value)
+                    elif (
+                        kw.arg == "description"
+                        and isinstance(kw.value, ast.Constant)
+                        and not (ctx.docstring or "").strip()
+                    ):
+                        ctx.docstring = str(kw.value.value)
             contexts.append(ctx)
 
         # Gap 8: programmatic registrations.
@@ -3145,7 +3159,9 @@ class CapabilityDetector:
                 continue
 
             # Inline function expression / arrow function / lambda.
-            if inline_handler is None and child.type in func_types:
+            # When multiple inline handlers are passed (e.g. MCP SDK
+            # middleware + handler), the last one is the tool handler.
+            if child.type in func_types:
                 inline_handler = child
                 continue
 

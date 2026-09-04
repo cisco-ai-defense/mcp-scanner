@@ -21,9 +21,14 @@ any tree-sitter parsed language, enabling full dataflow analysis
 across TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, and PHP.
 """
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 from tree_sitter import Node
+
+from ....utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -158,8 +163,9 @@ class TreeSitterCFGBuilder:
     
     def build(self, function_node: Node) -> TreeSitterCFG:
         """Build CFG from a function AST node."""
+        build_start = time.perf_counter()
         self.cfg = TreeSitterCFG()
-        
+
         # Create entry node
         self.cfg.entry = self.cfg.create_node(function_node, "ENTRY")
         
@@ -184,7 +190,15 @@ class TreeSitterCFGBuilder:
                 self.cfg.add_edge(self.cfg.entry, self.cfg.exit)
         else:
             self.cfg.add_edge(self.cfg.entry, self.cfg.exit)
-        
+
+        logger.debug(
+            "static_cfg treesitter built language=%s function_type=%s nodes=%d "
+            "duration_us=%d",
+            self.language,
+            function_node.type,
+            len(self.cfg.nodes),
+            int((time.perf_counter() - build_start) * 1_000_000),
+        )
         return self.cfg
     
     def _get_function_body(self, node: Node) -> Optional[Node]:

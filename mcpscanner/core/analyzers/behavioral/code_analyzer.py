@@ -45,6 +45,49 @@ from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 
 
+def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
+    """Dedupe key for merged MCP contexts."""
+    decs = tuple(ctx.decorator_types)
+    if decs and ctx.line_number > 0:
+        return ("decorator", ctx.line_number, decs)
+    return ("full", ctx.name, ctx.line_number, decs)
+
+
+def _is_duplicate_native_registration_stub(
+    primary: FunctionContext,
+    supplemental: FunctionContext,
+) -> bool:
+    """Skip NativeAnalyzer handler stubs already captured by JSContextExtractor."""
+    if primary.name != supplemental.name:
+        return False
+    primary_doc = (primary.docstring or "").strip()
+    supplemental_doc = (supplemental.docstring or "").strip()
+    if primary_doc and not supplemental_doc:
+        return True
+    supplemental_decs = tuple(supplemental.decorator_types or ())
+    if primary_doc and "<registration>.tool" in supplemental_decs:
+        return True
+    return False
+
+
+def _merge_mcp_function_contexts(
+    primary: List[FunctionContext],
+    supplemental: List[FunctionContext],
+) -> List[FunctionContext]:
+    """Merge MCP contexts from primary and supplemental extractors."""
+    seen = {_context_dedupe_key(ctx) for ctx in primary}
+    merged = list(primary)
+    for ctx in supplemental:
+        key = _context_dedupe_key(ctx)
+        if key in seen:
+            continue
+        if any(_is_duplicate_native_registration_stub(p, ctx) for p in primary):
+            continue
+        seen.add(key)
+        merged.append(ctx)
+    return merged
+
+
 @dataclass(slots=True)
 class _AcceptedFile:
     """A capability-file that survived the byte-level prefilter.
@@ -601,7 +644,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         try:
             if is_python:
-                # Try primary ContextExtractor first (for MCP-decorated functions)
+                func_contexts: List[FunctionContext] = []
+                extractor_failed = False
                 try:
                     extractor = ContextExtractor(source_code, file_path)
                     func_contexts = extractor.extract_mcp_function_contexts()
@@ -610,41 +654,73 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                             f"Found {len(func_contexts)} MCP functions in {file_path}"
                         )
                 except Exception as e:
+                    extractor_failed = True
                     self.logger.debug(
-                        f"ContextExtractor failed for {file_path}: {e}, using NativeAnalyzer"
+                        f"ContextExtractor failed for {file_path}: {e}, using CapabilityDetector"
                     )
-                    func_contexts = []
 
-                # Fallback to CapabilityDetector, but only for *MCP capabilities*.
-                # The previous implementation called
-                # ``extract_all_function_contexts()`` here, which surfaced
-                # every helper in the file as if it were a tool — see the
-                # bug where ``_validate`` / ``_coerce`` showed up alongside
-                # the real registered handler. The capability-aware
-                # variant returns an empty list when no decorator-tagged
-                # function is found, which is what callers expect.
-                if not func_contexts:
-                    self.logger.debug(
-                        f"No MCP functions found in {file_path}, using CapabilityDetector fallback"
-                    )
+                native_contexts: List[FunctionContext] = []
+                native_failed = False
+                try:
                     native_analyzer = NativeAnalyzer(source_code, file_path)
-                    func_contexts = _detect_capabilities(native_analyzer)
-                    if func_contexts:
+                    native_contexts = _detect_capabilities(native_analyzer)
+                    if native_contexts:
                         self.logger.debug(
-                            f"CapabilityDetector extracted {len(func_contexts)} MCP capabilities from {file_path}"
+                            f"CapabilityDetector extracted {len(native_contexts)} MCP "
+                            f"capabilities from {file_path}"
                         )
+                except Exception as e:
+                    native_failed = True
+                    self.logger.debug(
+                        f"CapabilityDetector failed for {file_path}: {e}"
+                    )
+                if extractor_failed and native_failed:
+                    self.logger.debug(
+                        f"Both ContextExtractor and CapabilityDetector failed for {file_path}"
+                    )
+                func_contexts = _merge_mcp_function_contexts(
+                    func_contexts, native_contexts
+                )
 
             elif is_js_ts:
-                # Use CapabilityDetector for TypeScript/JavaScript, restricted to
-                # functions registered via ``server.tool(...)`` / ``.prompt(...)``
-                # / ``.resource(...)``. Plain helpers in the same file are
-                # excluded.
-                self.logger.debug(f"Using CapabilityDetector for JS/TS file: {file_path}")
-                native_analyzer = NativeAnalyzer(source_code, file_path)
-                func_contexts = _detect_capabilities(native_analyzer)
+                self.logger.debug(
+                    f"Using JSContextExtractor + CapabilityDetector for: {file_path}"
+                )
+                js_contexts: List[FunctionContext] = []
+                js_failed = False
+                try:
+                    from ...static_analysis.javascript.js_context_extractor import (
+                        JSContextExtractor,
+                    )
+
+                    js_contexts = JSContextExtractor(
+                        source_code, file_path
+                    ).extract_mcp_function_contexts()
+                except Exception as e:
+                    js_failed = True
+                    self.logger.debug(
+                        f"JSContextExtractor failed for {file_path}: {e}"
+                    )
+
+                native_contexts: List[FunctionContext] = []
+                native_failed = False
+                try:
+                    native_analyzer = NativeAnalyzer(source_code, file_path)
+                    native_contexts = _detect_capabilities(native_analyzer)
+                except Exception as e:
+                    native_failed = True
+                    self.logger.debug(
+                        f"CapabilityDetector failed for {file_path}: {e}"
+                    )
+
+                if js_failed and native_failed:
+                    self.logger.debug(
+                        f"Both JSContextExtractor and CapabilityDetector failed for {file_path}"
+                    )
+                func_contexts = _merge_mcp_function_contexts(js_contexts, native_contexts)
                 if func_contexts:
                     self.logger.debug(
-                        f"CapabilityDetector extracted {len(func_contexts)} MCP capabilities from {file_path}"
+                        f"Extracted {len(func_contexts)} MCP capabilities from {file_path}"
                     )
 
             else:

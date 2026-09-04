@@ -30,8 +30,23 @@ rule credential_harvesting{
         //// All Content-key based credential patterns
         ////////////////////////////////////////////////
 
-        // API credentials and authentication tokens
-        $api_credentials = /\b([Aa][Pp][Ii][\_\-]?[Kk][Ee][Yy].*[A-Za-z0-9]{16,512}|[Bb]earer\s+[A-Za-z0-9\-_]{16,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{48})/
+        // API credentials and authentication tokens.
+        //
+        // The first alternative previously used `.*` between the apikey
+        // marker and the 16+ alnum tail, which let it pair the literal
+        // word "apiKey" in any JSON-Schema parameter description with
+        // any 16+ alnum string anywhere on the same line — JSON Schema
+        // keywords like `additionalProperties`, `exclusiveMinimum`,
+        // and `patternProperties` are 16+ alnum chars, so essentially
+        // every tool that takes an apiKey parameter false-flagged.
+        //
+        // The new pattern requires the credential value to be adjacent
+        // (≤24 non-alphanumeric chars: `:`, `=`, quotes, whitespace) to
+        // the apikey marker, which is how real credential expressions
+        // are written (e.g. `API_KEY="sk-..."`, `apiKey: ghp_…`,
+        // `OPENAI_API_KEY=…`). Provider-specific tokens (AKIA, ghp_,
+        // sk-, Bearer) keep their own dedicated alternatives.
+        $api_credentials = /\b[Aa][Pp][Ii][\_\-]?[Kk][Ee][Yy][^A-Za-z0-9\n]{1,24}[A-Za-z0-9_\-]{16,512}|[Bb]earer\s+[A-Za-z0-9\-_]{16,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{48}/
 
         // SSH keys, certificates and credential file content (consolidated)
         $key_certificate_content = /(-----BEGIN (RSA |OPENSSH |EC |DSA |CERTIFICATE|PRIVATE KEY|ENCRYPTED PRIVATE KEY)-----|ssh-(rsa|ed25519)\s+[A-Za-z0-9+\/=]{8})/
