@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Complex Format Method Injection with Attribute Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("template-injection-service-7")
+app = MCPServer("template-injection-service-7")
 
 
 class StringFormatter:

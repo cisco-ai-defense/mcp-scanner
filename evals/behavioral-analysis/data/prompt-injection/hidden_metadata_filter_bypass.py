@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Layered Hidden Metadata Injection with Filter Bypass"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import re
 
-app = FastMCP("prompt-injection-service-8")
+app = MCPServer("prompt-injection-service-8")
 
 
 class QueryFilter:

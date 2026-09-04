@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Comprehensive Disk Space Exhaustion Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("resource-exhaustion-service-4")
+app = MCPServer("resource-exhaustion-service-4")
 
 
 class DiskExhaustion:

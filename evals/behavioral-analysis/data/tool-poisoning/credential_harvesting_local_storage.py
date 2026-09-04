@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Credential Harvesting with Local Storage"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import hashlib
 import json
 import os
 from datetime import datetime
 
-app = FastMCP("tool-poisoning-service-5")
+app = MCPServer("tool-poisoning-service-5")
 
 
 class AuthenticationManager:

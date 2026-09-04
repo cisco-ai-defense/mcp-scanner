@@ -1073,17 +1073,20 @@ from types import SimpleNamespace
 from mcpscanner.core.scanner import Scanner
 
 try:
-    from mcp.shared.exceptions import McpError
-    from mcp.types import ErrorData
-except ImportError:  # pragma: no cover - tested env always has mcp installed
-    McpError = None
-    ErrorData = None
+    from mcp.shared.exceptions import MCPError as McpError
+except ImportError:  # pragma: no cover - mcp < 2.0
+    from mcp.shared.exceptions import McpError  # type: ignore[no-redef]
 
 
 def _mcp_error(code: int, message: str):
     """Build a real McpError when mcp is installed, otherwise a duck-typed one."""
-    if McpError is not None and ErrorData is not None:
-        return McpError(ErrorData(code=code, message=message))
+    if McpError is not None:
+        try:
+            return McpError(code, message)
+        except TypeError:
+            from mcp.types import ErrorData
+
+            return McpError(ErrorData(code=code, message=message))
     err = Exception(message)
     err.error = SimpleNamespace(code=code, message=message)
     return err
@@ -1305,3 +1308,124 @@ async def test_scan_prompts_returns_empty_on_synthetic_session_terminated(config
 
     assert results == []
     session.list_prompts.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_negotiate_mcp_session_uses_discover_when_available(config):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    discover_result = SimpleNamespace(supported_versions=["2026-07-28"])
+    session.discover = AsyncMock(return_value=discover_result)
+    session.protocol_version = "2026-07-28"
+
+    result = await scanner._negotiate_mcp_session(session)
+
+    assert result is discover_result
+    assert session._init_result is discover_result
+    session.discover.assert_awaited_once()
+    session.initialize.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_negotiate_mcp_session_falls_back_to_initialize(config):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    session.discover = AsyncMock(side_effect=_mcp_error(-32601, "Method not found"))
+    init_result = SimpleNamespace(protocol_version="2025-11-25")
+    session.initialize = AsyncMock(return_value=init_result)
+
+    result = await scanner._negotiate_mcp_session(session)
+
+    assert result is init_result
+    assert session._init_result is init_result
+    session.discover.assert_awaited_once()
+    session.initialize.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_negotiate_mcp_session_falls_back_on_http404_discover_shape(config):
+    """Legacy servers that HTTP-404 unknown methods should still reach initialize()."""
+    scanner = Scanner(config)
+    session = AsyncMock()
+    session.discover = AsyncMock(
+        side_effect=_mcp_error(32600, "Session terminated")
+    )
+    init_result = SimpleNamespace(protocolVersion="2025-06-18")
+    session.initialize = AsyncMock(return_value=init_result)
+
+    result = await scanner._negotiate_mcp_session(session)
+
+    assert result is init_result
+    session.initialize.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_negotiate_mcp_session_falls_back_on_unsupported_protocol_version(config):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    session.discover = AsyncMock(side_effect=_mcp_error(-32022, "Unsupported protocol version"))
+    init_result = SimpleNamespace(protocol_version="2025-11-25")
+    session.initialize = AsyncMock(return_value=init_result)
+
+    result = await scanner._negotiate_mcp_session(session)
+
+    assert result is init_result
+    session.initialize.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_negotiate_mcp_session_does_not_fallback_on_unrelated_error(config):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    session.discover = AsyncMock(side_effect=_mcp_error(-32603, "Internal error"))
+
+    with pytest.raises(McpError):
+        await scanner._negotiate_mcp_session(session)
+
+    session.initialize.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_negotiate_mcp_session_initialize_only_when_no_discover(config):
+    scanner = Scanner(config)
+    session = AsyncMock(spec=["initialize"])
+    init_result = SimpleNamespace(protocol_version="2025-11-25")
+    session.initialize = AsyncMock(return_value=init_result)
+
+    result = await scanner._negotiate_mcp_session(session)
+
+    assert result is init_result
+    session.initialize.assert_awaited_once()
+
+
+def test_should_fallback_to_initialize_covers_legacy_shapes(config):
+    scanner = Scanner(config)
+    assert scanner._should_fallback_to_initialize(_mcp_error(-32601, "Method not found"))
+    assert scanner._should_fallback_to_initialize(
+        _mcp_error(32600, "Session terminated")
+    )
+    assert scanner._should_fallback_to_initialize(
+        _mcp_error(-32022, "Unsupported protocol version")
+    )
+    assert not scanner._should_fallback_to_initialize(
+        _mcp_error(-32603, "Internal error")
+    )
+
+
+def test_session_connect_metadata_supports_legacy_initialize_fields(config):
+    scanner = Scanner(config)
+    session = SimpleNamespace(
+        _init_result=SimpleNamespace(
+            instructions="legacy instructions",
+            serverInfo=SimpleNamespace(name="legacy-server"),
+            protocolVersion="2025-06-18",
+        )
+    )
+
+    instructions, server_info, protocol_version = scanner._session_connect_metadata(
+        session
+    )
+
+    assert instructions == "legacy instructions"
+    assert server_info.name == "legacy-server"
+    assert protocol_version == "2025-06-18"

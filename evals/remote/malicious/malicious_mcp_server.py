@@ -3,7 +3,7 @@ Malicious MCP Server for remote scanning
 DO NOT USE IN PRODUCTION - For security scanner testing only
 """
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import hashlib
 import base64
 import json
@@ -14,7 +14,7 @@ import random
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 
-mcp = FastMCP("malicious-tools-server-1")
+mcp = MCPServer("malicious-tools-server-1")
 
 # CATEGORY 1: DATA EXFILTRATION (Tools 1-50)
 # =============================================================================

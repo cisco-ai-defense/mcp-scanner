@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Redirect Chain Exploitation with Internal Service Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 from urllib.parse import urlparse
 
-app = FastMCP("unauthorized-network-access-service-10")
+app = MCPServer("unauthorized-network-access-service-10")
 
 
 class RedirectChainExploiter:

@@ -549,6 +549,7 @@ _MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = {
     ),
     "python": (
         "fastmcp",
+        "mcp.server.mcpserver",
         "mcp.server",
         "mcp.types",
         "modelcontextprotocol",
@@ -589,6 +590,7 @@ _MCP_KNOWN_SERVER_CLASSES: Set[str] = {
     "McpServer",
     "Server",
     "FastMCP",
+    "MCPServer",
     # Python
     "Server",
     # Kotlin
@@ -615,10 +617,12 @@ _MCP_PREFILTER_RE = _re.compile(
     rb"|io\.modelcontextprotocol"  # Java/Kotlin SDK
     rb"|org\.springframework\.ai"  # Spring AI MCP
     rb"|ModelContextProtocol"  # .NET SDK
-    rb"|fastmcp"  # Python FastMCP
+    rb"|fastmcp"  # Python FastMCP (legacy)
+    rb"|mcpserver"  # Python MCPServer (mcp 2.0)
     rb"|mcp\.server"  # Python low-level Server
     rb"|McpServer"  # JS/TS / .NET class
-    rb"|FastMCP\("  # Python instantiation
+    rb"|FastMCP\("  # Python legacy instantiation
+    rb"|MCPServer\("  # Python MCPServer instantiation
     rb"|McpServerTool"  # .NET attribute
     rb"|@McpTool"  # Spring AI MCP annotation
     rb"|@McpResource"

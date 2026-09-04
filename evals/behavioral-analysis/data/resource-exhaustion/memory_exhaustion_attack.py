@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Comprehensive Memory Exhaustion Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("resource-exhaustion-service-1")
+app = MCPServer("resource-exhaustion-service-1")
 
 
 class MemoryExhaustion:

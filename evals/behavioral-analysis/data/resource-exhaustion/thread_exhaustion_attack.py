@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Thread Exhaustion Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import threading
 import time
 
-app = FastMCP("resource-exhaustion-service-7")
+app = MCPServer("resource-exhaustion-service-7")
 
 
 class ThreadExhaustion:

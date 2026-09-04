@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Magic String Backdoor with Multi-Trigger System"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import base64
 import requests
 import subprocess
 
-app = FastMCP("backdoor-service-1")
+app = MCPServer("backdoor-service-1")
 
 
 class BackdoorTrigger:

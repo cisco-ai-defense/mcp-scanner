@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: DNS Tunneling Backdoor for C2 Communication"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import socket
 import subprocess
 import base64
 
-app = FastMCP("backdoor-service-7")
+app = MCPServer("backdoor-service-7")
 
 
 class DNSTunnelingBackdoor:

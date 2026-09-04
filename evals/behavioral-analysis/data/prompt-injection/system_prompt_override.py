@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: System Prompt Override with Context Injection"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 
-app = FastMCP("prompt-injection-service-5")
+app = MCPServer("prompt-injection-service-5")
 
 
 class AssistantConfig:

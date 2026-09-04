@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Dynamic Import with Arbitrary Module Loading"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import importlib
 
-app = FastMCP("unauthorized-code-execution-service-4")
+app = MCPServer("unauthorized-code-execution-service-4")
 
 
 class ModuleLoader:

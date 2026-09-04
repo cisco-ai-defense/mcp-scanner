@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import uvicorn
 
 # ---- Simple In-Memory OAuth Provider (Authorization Code Grant) ----
@@ -86,7 +86,7 @@ def validate_bearer(request: Request):
 
 # ---- MCP SSE Server with OAuth protection ----
 
-mcp = FastMCP("OAuth-Protected SSE Server")
+mcp = MCPServer("OAuth-Protected SSE Server")
 
 
 @mcp.tool()

@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Complex Command Injection via Grep with Shell Metacharacters"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import os
 
-app = FastMCP("injection-attacks-service-1")
+app = MCPServer("injection-attacks-service-1")
 
 
 class LogSearcher:
