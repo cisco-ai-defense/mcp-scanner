@@ -156,6 +156,22 @@ class TestValidateBatchMarkdownFallbackValidatesItems:
         assert out[1]["mismatch_detected"] is False
         assert out[1].get(_UNANALYSED_KEY) is not True
 
+    def test_json_object_wrapper_results_array(self):
+        """Bedrock json_object mode returns a dict, not a bare array."""
+        v = AlignmentResponseValidator()
+        resp = (
+            '{"results": ['
+            '{"mismatch_detected": false},'
+            '{"mismatch_detected": true, "threat_name": "DATA EXFILTRATION", "summary": "leak"}'
+            "]}"
+        )
+        out = v.validate_batch(resp, expected_count=2)
+        assert out is not None and len(out) == 2
+        assert out[0]["mismatch_detected"] is False
+        assert out[0].get(_UNANALYSED_KEY) is not True
+        assert out[1]["mismatch_detected"] is True
+        assert out[1].get(_UNANALYSED_KEY) is not True
+
 
 # ---------------------------------------------------------------------------
 # P0.3 — analyze() error path must NOT raise UnboundLocalError
@@ -288,7 +304,8 @@ class TestBatchFallbackCleanRetryNotFlaggedErrored:
             raise RuntimeError("batch boom")
 
         orch.prompt_builder = SimpleNamespace(
-            build_batch_prompt=_build_batch,
+            build_batch_analysis_content=_build_batch,
+            wrap_batch_prompt=lambda _b, body: body,
             build_prompt=lambda _c: "p",
         )
 
@@ -330,7 +347,8 @@ class TestBatchFallbackCleanRetryNotFlaggedErrored:
             raise RuntimeError("per-fn boom")
 
         orch.prompt_builder = SimpleNamespace(
-            build_batch_prompt=_build_batch,
+            build_batch_analysis_content=_build_batch,
+            wrap_batch_prompt=lambda _b, body: body,
             build_prompt=_build_one,
         )
 
@@ -371,7 +389,8 @@ class TestBatchPaddingRoutesToErrored:
         orch = AlignmentOrchestrator(_cfg())
 
         orch.prompt_builder = SimpleNamespace(
-            build_batch_prompt=lambda _b: "p",
+            build_batch_analysis_content=lambda _b: "body",
+            wrap_batch_prompt=lambda _b, body: "p",
             build_prompt=lambda _c: "p",
         )
 
@@ -424,7 +443,8 @@ class TestValidatorStripsAdversarialSentinel:
     async def test_orchestrator_treats_stripped_dict_as_clean(self, monkeypatch):
         orch = AlignmentOrchestrator(_cfg())
         orch.prompt_builder = SimpleNamespace(
-            build_batch_prompt=lambda _b: "p",
+            build_batch_analysis_content=lambda _b: "body",
+            wrap_batch_prompt=lambda _b, body: "p",
             build_prompt=lambda _c: "p",
         )
 
@@ -456,7 +476,8 @@ class TestStatsPartitioningInvariant:
     async def test_invariant_holds_for_mixed_batch(self, monkeypatch):
         orch = AlignmentOrchestrator(_cfg())
         orch.prompt_builder = SimpleNamespace(
-            build_batch_prompt=lambda _b: "p",
+            build_batch_analysis_content=lambda _b: "body",
+            wrap_batch_prompt=lambda _b, body: "p",
             build_prompt=lambda _c: "p",
         )
 
@@ -506,7 +527,8 @@ class TestStatsPartitioningInvariant:
         the per-function fallback and still leave the invariant intact."""
         orch = AlignmentOrchestrator(_cfg())
         orch.prompt_builder = SimpleNamespace(
-            build_batch_prompt=lambda _b: "p",
+            build_batch_analysis_content=lambda _b: "body",
+            wrap_batch_prompt=lambda _b, body: "p",
             build_prompt=lambda _c: "p",
         )
 

@@ -34,6 +34,17 @@ from typing import Any, Dict, List, Optional
 from .....config.constants import MCPScannerConstants
 from ....static_analysis.context_extractor import FunctionContext
 
+# Worst-case suffixes reserved when budgeting total prompt size.
+_ANALYSIS_TRUNCATION_SUFFIX = (
+    "\n\n... (analysis evidence truncated to fit model context budget)\n"
+)
+_TEMPLATE_TRUNCATION_SUFFIX = (
+    "\n\n... (alignment instructions truncated to fit model context budget)\n"
+)
+_MIN_ANALYSIS_CHARS = 500
+# Newlines joining template, prefix, delimiter tags, and analysis body.
+_PROMPT_FRAME_CHARS = 5
+
 
 class AlignmentPromptBuilder:
     """Builds comprehensive prompts for semantic alignment verification.
@@ -402,20 +413,114 @@ Parameter Flow Tracking:
             )
 
         # Wrap the untrusted content with randomized delimiters
-        prompt = f"""{self._template}
-
-{start_tag}
-{analysis_content}
-{end_tag}
-"""
-        prompt = prompt.strip()
-        self.logger.debug(
-            "prompt built function=%s prompt_length=%d analysis_content_length=%d",
-            func_context.name,
-            len(prompt),
-            len(analysis_content),
+        prompt = self._assemble_prompt(
+            template=self._template,
+            analysis_content=analysis_content,
+            start_tag=start_tag,
+            end_tag=end_tag,
+            log_label=f"function={func_context.name}",
         )
         return prompt
+
+    def build_batch_analysis_content(
+        self, func_contexts: List[FunctionContext]
+    ) -> str:
+        """Build deterministic batch body (no random delimiters).
+
+        Reused across batch parse retries; only delimiter tags change.
+        """
+        all_content = []
+        all_content.append(
+            f"Analyze the following {len(func_contexts)} functions for security threats.\n"
+        )
+        all_content.append("For EACH function, provide a separate JSON analysis.\n")
+        all_content.append(
+            'Return a JSON object with a "results" array containing one object per function in the same order.\n\n'
+        )
+
+        for idx, func_context in enumerate(func_contexts):
+            docstring = func_context.docstring or "No docstring provided"
+
+            all_content.append(
+                f"=== FUNCTION {idx + 1} of {len(func_contexts)} ===\n"
+            )
+            all_content.append(f"**Function Name:** {func_context.name}\n")
+            all_content.append(f"**Line:** {func_context.line_number}\n")
+            all_content.append(
+                f"**Decorator:** {func_context.decorator_types[0] if func_context.decorator_types else 'unknown'}\n"
+            )
+            all_content.append(f"**Docstring:** {docstring}\n")
+            all_content.append(
+                f"**Parameters:** {json.dumps(func_context.parameters)}\n"
+            )
+            all_content.append(
+                f"**Return Type:** {func_context.return_type or 'Not specified'}\n"
+            )
+
+            if func_context.function_calls:
+                calls = [c.get("name", "?") for c in func_context.function_calls[:10]]
+                all_content.append(f"**Function Calls:** {', '.join(calls)}\n")
+
+            security_flags = []
+            if getattr(func_context, "has_file_operations", False):
+                security_flags.append("FILE_OPS")
+            if getattr(func_context, "has_network_operations", False):
+                security_flags.append("NETWORK_OPS")
+            if getattr(func_context, "has_subprocess_calls", False):
+                security_flags.append("SUBPROCESS")
+            if getattr(func_context, "has_eval_exec", False):
+                security_flags.append("EVAL/EXEC")
+            if security_flags:
+                all_content.append(
+                    f"**Security Flags:** {', '.join(security_flags)}\n"
+                )
+
+            source = getattr(func_context, "source", "")
+            if source:
+                if len(source) > 2000:
+                    source = source[:2000] + "\n... (truncated)"
+                all_content.append(f"**Source Code:**\n```\n{source}\n```\n")
+
+            all_content.append("\n")
+
+        return "".join(all_content)
+
+    def wrap_batch_prompt(
+        self,
+        func_contexts: List[FunctionContext],
+        analysis_content: str,
+    ) -> str:
+        """Wrap pre-built batch content with fresh anti-injection delimiters."""
+        random_id = secrets.token_hex(16)
+        start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
+        end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
+
+        batch_instructions = """
+IMPORTANT: You are analyzing MULTIPLE functions. Return a JSON OBJECT with a "results" array containing one analysis object per function.
+
+Example response format for 3 functions:
+```json
+{
+  "results": [
+    {"function_index": 0, "function_name": "func1", "mismatch_detected": false},
+    {"function_index": 1, "function_name": "func2", "mismatch_detected": true, "threat_name": "DATA EXFILTRATION", "severity": "HIGH", "description_claims": "...", "actual_behavior": "...", "security_implications": "..."},
+    {"function_index": 2, "function_name": "func3", "mismatch_detected": false}
+  ]
+}
+```
+
+For each function with mismatch_detected=true, include all required fields (threat_name, severity, description_claims, actual_behavior, security_implications).
+For functions with no issues, just include function_index, function_name, and mismatch_detected=false.
+
+"""
+        return self._assemble_prompt(
+            template=self._template,
+            prefix=batch_instructions,
+            analysis_content=analysis_content,
+            start_tag=start_tag,
+            end_tag=end_tag,
+            log_label=f"batch_functions={len(func_contexts)}",
+        )
 
     def build_batch_prompt(self, func_contexts: List[FunctionContext]) -> str:
         """Build a batched prompt for analyzing multiple functions in one LLM call.
@@ -426,86 +531,80 @@ Parameter Flow Tracking:
         Returns:
             Formatted prompt string with all functions
         """
-        # Generate random delimiter tags
-        random_id = secrets.token_hex(16)
-        start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
-        end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
+        analysis_content = self.build_batch_analysis_content(func_contexts)
+        return self.wrap_batch_prompt(func_contexts, analysis_content)
 
-        # Build content for all functions
-        all_content = []
-        all_content.append(f"Analyze the following {len(func_contexts)} functions for security threats.\n")
-        all_content.append("For EACH function, provide a separate JSON analysis.\n")
-        all_content.append("Return a JSON array with one object per function in the same order.\n\n")
+    def _assemble_prompt(
+        self,
+        *,
+        template: str,
+        analysis_content: str,
+        start_tag: str,
+        end_tag: str,
+        log_label: str,
+        prefix: str = "",
+    ) -> str:
+        """Build the final prompt and enforce the alignment context budget."""
+        # Budget the *total* prompt against ALIGNMENT_MAX_PROMPT_CHARS (hard cap
+        # for Bedrock/Haiku), not the softer PROMPT_LENGTH_THRESHOLD warning.
+        # The markdown template alone is ~72 KiB, so it may need truncation too.
+        max_total = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        frame_overhead = (
+            len(prefix) + len(start_tag) + len(end_tag) + _PROMPT_FRAME_CHARS
+        )
+        reserved_for_analysis = _MIN_ANALYSIS_CHARS + len(_ANALYSIS_TRUNCATION_SUFFIX)
+        max_template_len = max(0, max_total - frame_overhead - reserved_for_analysis)
 
-        for idx, func_context in enumerate(func_contexts):
-            docstring = func_context.docstring or "No docstring provided"
-            
-            all_content.append(f"=== FUNCTION {idx + 1} of {len(func_contexts)} ===\n")
-            all_content.append(f"**Function Name:** {func_context.name}\n")
-            all_content.append(f"**Line:** {func_context.line_number}\n")
-            all_content.append(f"**Decorator:** {func_context.decorator_types[0] if func_context.decorator_types else 'unknown'}\n")
-            all_content.append(f"**Docstring:** {docstring}\n")
-            all_content.append(f"**Parameters:** {json.dumps(func_context.parameters)}\n")
-            all_content.append(f"**Return Type:** {func_context.return_type or 'Not specified'}\n")
+        template_used = template
+        if len(template) > max_template_len:
+            allow = max(0, max_template_len - len(_TEMPLATE_TRUNCATION_SUFFIX))
+            template_used = template[:allow] + _TEMPLATE_TRUNCATION_SUFFIX
+            self.logger.warning(
+                "prompt template truncated label=%s template_length=%d "
+                "max_template=%d budget=%d",
+                log_label,
+                len(template),
+                max_template_len,
+                max_total,
+            )
 
-            # Add key security indicators
-            if func_context.function_calls:
-                calls = [c.get("name", "?") for c in func_context.function_calls[:10]]
-                all_content.append(f"**Function Calls:** {', '.join(calls)}\n")
+        fixed_overhead = len(template_used) + frame_overhead
+        max_analysis = max(
+            _MIN_ANALYSIS_CHARS,
+            max_total - fixed_overhead - len(_ANALYSIS_TRUNCATION_SUFFIX),
+        )
+        original_analysis_len = len(analysis_content)
+        if original_analysis_len > max_analysis:
+            self.logger.warning(
+                "prompt truncated label=%s analysis_length=%d max_analysis=%d "
+                "budget=%d",
+                log_label,
+                original_analysis_len,
+                max_analysis,
+                max_total,
+            )
+            analysis_content = analysis_content[:max_analysis] + _ANALYSIS_TRUNCATION_SUFFIX
 
-            # Security flags
-            security_flags = []
-            if getattr(func_context, 'has_file_operations', False):
-                security_flags.append("FILE_OPS")
-            if getattr(func_context, 'has_network_operations', False):
-                security_flags.append("NETWORK_OPS")
-            if getattr(func_context, 'has_subprocess_calls', False):
-                security_flags.append("SUBPROCESS")
-            if getattr(func_context, 'has_eval_exec', False):
-                security_flags.append("EVAL/EXEC")
-            if security_flags:
-                all_content.append(f"**Security Flags:** {', '.join(security_flags)}\n")
+        prompt = f"""{template_used}
 
-            # Add source code (truncated if too long)
-            source = getattr(func_context, 'source', '')
-            if source:
-                if len(source) > 2000:
-                    source = source[:2000] + "\n... (truncated)"
-                all_content.append(f"**Source Code:**\n```\n{source}\n```\n")
-
-            all_content.append("\n")
-
-        analysis_content = "".join(all_content)
-
-        # Build the prompt with batch instructions
-        batch_instructions = """
-IMPORTANT: You are analyzing MULTIPLE functions. Return a JSON ARRAY with one analysis object per function.
-
-Example response format for 3 functions:
-```json
-[
-  {"function_index": 0, "function_name": "func1", "mismatch_detected": false},
-  {"function_index": 1, "function_name": "func2", "mismatch_detected": true, "threat_name": "DATA EXFILTRATION", "severity": "HIGH", "description_claims": "...", "actual_behavior": "...", "security_implications": "..."},
-  {"function_index": 2, "function_name": "func3", "mismatch_detected": false}
-]
-```
-
-For each function with mismatch_detected=true, include all required fields (threat_name, severity, description_claims, actual_behavior, security_implications).
-For functions with no issues, just include function_index, function_name, and mismatch_detected=false.
-
-"""
-        prompt = f"""{self._template}
-
-{batch_instructions}
-
-{start_tag}
+{prefix}{start_tag}
 {analysis_content}
 {end_tag}
 """
         prompt = prompt.strip()
+        if len(prompt) > max_total:
+            self.logger.warning(
+                "prompt exceeds alignment cap after assembly label=%s "
+                "prompt_length=%d budget=%d -- hard truncating",
+                log_label,
+                len(prompt),
+                max_total,
+            )
+            prompt = prompt[:max_total]
+
         self.logger.debug(
-            "prompt batch built functions=%d prompt_length=%d analysis_content_length=%d",
-            len(func_contexts),
+            "prompt built label=%s prompt_length=%d analysis_content_length=%d",
+            log_label,
             len(prompt),
             len(analysis_content),
         )
