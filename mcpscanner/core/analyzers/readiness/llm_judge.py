@@ -37,20 +37,13 @@ from typing import Any, Dict, List, Optional
 
 from ....config.constants import MCPScannerConstants
 from ....utils.analyzer_errors import build_infrastructure_error_finding
+from ....utils.lazy_litellm import (
+    acompletion,
+    is_litellm_available as _litellm_is_available,
+    litellm_import_error as _litellm_error_reason,
+)
 from ....utils.logging_config import get_logger
 from ..base import SecurityFinding
-
-# Try to import litellm
-_litellm_available = False
-_litellm_import_error: Optional[str] = None
-
-try:
-    from litellm import acompletion
-
-    _litellm_available = True
-except ImportError as e:
-    _litellm_import_error = str(e)
-    acompletion = None  # type: ignore
 
 
 # Readiness-specific threat categories
@@ -141,7 +134,7 @@ class ReadinessLLMJudge:
         Returns:
             True if the LLM judge can be used, False otherwise.
         """
-        if not _litellm_available:
+        if not _litellm_is_available():
             return False
 
         # Require API key to be set
@@ -154,8 +147,8 @@ class ReadinessLLMJudge:
         Returns:
             Human-readable explanation or None if available.
         """
-        if not _litellm_available:
-            return f"litellm not installed: {_litellm_import_error}"
+        if not _litellm_is_available():
+            return f"litellm not installed: {_litellm_error_reason()}"
 
         if not self.api_key:
             return (
