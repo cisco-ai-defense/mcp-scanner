@@ -67,6 +67,18 @@ def _flow_param_name(flow: Dict[str, Any]) -> Optional[str]:
     return flow.get("parameter_name") or flow.get("parameter")
 
 
+def _merge_unique_preserve_order(*sequences: List[str]) -> List[str]:
+    """Merge string lists deduplicating while keeping first-seen order stable."""
+    seen: set[str] = set()
+    merged: List[str] = []
+    for sequence in sequences:
+        for item in sequence:
+            if item not in seen:
+                seen.add(item)
+                merged.append(item)
+    return merged
+
+
 def _enrich_function_context_from_supplemental(
     primary: FunctionContext,
     supplemental: FunctionContext,
@@ -106,10 +118,10 @@ def _enrich_function_context_from_supplemental(
             continue
         if sflow.get("reaches_external"):
             flow["reaches_external"] = True
-        pri_calls = set(flow.get("reaches_calls") or [])
-        sup_calls = set(sflow.get("reaches_calls") or [])
-        if sup_calls:
-            flow["reaches_calls"] = list(pri_calls | sup_calls)
+        flow["reaches_calls"] = _merge_unique_preserve_order(
+            list(flow.get("reaches_calls") or []),
+            list(sflow.get("reaches_calls") or []),
+        )
 
     if supplemental.dataflow_summary:
         pri_summary = dict(primary.dataflow_summary or {})
@@ -119,9 +131,9 @@ def _enrich_function_context_from_supplemental(
             pval = dict(pri_pf.get(pname) or {})
             if sval.get("reaches_external"):
                 pval["reaches_external"] = True
-            pval["reaches_calls"] = list(
-                set(pval.get("reaches_calls") or [])
-                | set(sval.get("reaches_calls") or [])
+            pval["reaches_calls"] = _merge_unique_preserve_order(
+                list(pval.get("reaches_calls") or []),
+                list(sval.get("reaches_calls") or []),
             )
             pri_pf[pname] = pval
         pri_summary["param_flows"] = pri_pf

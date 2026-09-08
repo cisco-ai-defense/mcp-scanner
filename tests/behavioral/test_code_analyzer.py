@@ -31,6 +31,7 @@ from mcpscanner.core.analyzers.behavioral.code_analyzer import (
     BehavioralCodeAnalyzer,
     _AcceptedFile,
     _merge_mcp_function_contexts,
+    _merge_unique_preserve_order,
 )
 from mcpscanner.core.static_analysis.context_extractor import ContextExtractor
 from mcpscanner.core.static_analysis.native_analyzer import NativeAnalyzer
@@ -655,6 +656,13 @@ def run(cmd: str) -> str:
             if (f.get("parameter_name") or f.get("parameter")) == "cmd"
         )
         assert flow.get("reaches_external") is True
+
+    def test_merge_unique_preserve_order_is_stable(self) -> None:
+        assert _merge_unique_preserve_order(["helper", "sink"], ["sink", "other"]) == [
+            "helper",
+            "sink",
+            "other",
+        ]
 
 
 class TestDelegatedShellBehavioralPath:
