@@ -115,3 +115,26 @@ def test_analyze_directory_passes_cross_file_analyzer(
 
     assert cross_file_seen, "expected at least one extraction pass"
     assert any(cross_file_seen), "cross_file_analyzer was never passed"
+
+
+def test_build_directory_call_graphs_enforces_aggregate_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Untrusted packages must not load unbounded files into call-graph memory."""
+    for idx in range(jmod._JS_CALL_GRAPH_MAX_FILES + 5):
+        path = tmp_path / f"file-{idx}.ts"
+        path.write_text(
+            "export const x = 1;\n"
+            if idx
+            else 'import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";\n'
+            'const server = new McpServer({ name: "demo", version: "1.0" });\n'
+        )
+
+    monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
+    analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
+    files = analyzer._find_js_files(str(tmp_path))
+    call_graphs = analyzer._build_directory_call_graphs(files)
+
+    assert analyzer._call_graph_partial is True
+    assert "typescript" in call_graphs
+    assert len(call_graphs["typescript"].files) <= jmod._JS_CALL_GRAPH_MAX_FILES

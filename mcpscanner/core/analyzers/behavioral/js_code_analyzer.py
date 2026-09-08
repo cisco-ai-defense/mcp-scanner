@@ -59,6 +59,10 @@ _SKIP_DIRS = frozenset(
     {"node_modules", "dist", "build", "out", ".git", ".next", ".turbo", "coverage"}
 )
 
+# Aggregate budgets for directory-wide JS/TS call-graph construction.
+_JS_CALL_GRAPH_MAX_FILES = 200
+_JS_CALL_GRAPH_MAX_TOTAL_BYTES = MCPScannerConstants.MAX_FILE_SIZE_BYTES * 50
+
 # Keep in sync with ``BehavioralCodeAnalyzer._EXT_TO_TS_LANGUAGE`` for JS/TS.
 _EXT_TO_TS_LANGUAGE = {
     ".js": "javascript",
@@ -94,6 +98,8 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         # ``analysis_scan_status`` reads it to downgrade such scans to
         # ``error`` instead of reporting ``is_safe=True``.
         self.analysis_errors = 0
+        self._source_cache: Dict[str, str] = {}
+        self._call_graph_partial = False
         self.logger.debug(
             "JSBehavioralCodeAnalyzer initialised with alignment orchestrator"
         )
@@ -114,6 +120,8 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
             confirms.
         """
         self.analysis_errors = 0
+        self._source_cache = {}
+        self._call_graph_partial = False
         try:
             if os.path.isdir(content):
                 return await self._analyze_directory(content, context)
@@ -143,6 +151,9 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
             "js behavioural scan root=%s files=%d", directory, len(files)
         )
         call_graphs = self._build_directory_call_graphs(files)
+        if self._call_graph_partial:
+            context = context.copy()
+            context["call_graph_partial"] = True
         findings: List[SecurityFinding] = []
         for path in files:
             file_context = context.copy()
@@ -168,8 +179,12 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                     file_size,
                 )
                 return []
-            with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
-                source_code = fh.read()
+            if file_path in self._source_cache:
+                source_code = self._source_cache[file_path]
+            else:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+                    source_code = fh.read()
+                self._source_cache[file_path] = source_code
         except OSError as e:
             self.analysis_errors += 1
             self.logger.warning(
@@ -222,9 +237,21 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
 
         ``NativeAnalyzer`` needs these to resolve imported endpoint tables
         (``tool.alias`` loops backed by ``api.endpoints`` in sibling modules).
+        Enforces aggregate file and byte budgets so untrusted packages cannot
+        exhaust memory before behavioural analysis begins.
         """
         analyzers: Dict[str, TreeSitterCallGraphAnalyzer] = {}
+        files_added = 0
+        total_bytes = 0
         for path in files:
+            if files_added >= _JS_CALL_GRAPH_MAX_FILES:
+                self._call_graph_partial = True
+                self.logger.warning(
+                    "js behavioural call_graph budget_exceeded files=%d limit=%d",
+                    files_added,
+                    _JS_CALL_GRAPH_MAX_FILES,
+                )
+                break
             lang = self._language_for_path(path)
             if not lang:
                 continue
@@ -237,8 +264,20 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                         file_size,
                     )
                     continue
-                with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                    source_code = fh.read()
+                if total_bytes + file_size > _JS_CALL_GRAPH_MAX_TOTAL_BYTES:
+                    self._call_graph_partial = True
+                    self.logger.warning(
+                        "js behavioural call_graph byte_budget_exceeded bytes=%d limit=%d",
+                        total_bytes,
+                        _JS_CALL_GRAPH_MAX_TOTAL_BYTES,
+                    )
+                    break
+                if path in self._source_cache:
+                    source_code = self._source_cache[path]
+                else:
+                    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                        source_code = fh.read()
+                    self._source_cache[path] = source_code
             except OSError as e:
                 self.logger.warning(
                     "js behavioural call_graph read_failed file=%s error=%s",
@@ -250,6 +289,8 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
             if lang not in analyzers:
                 analyzers[lang] = TreeSitterCallGraphAnalyzer(lang)
             analyzers[lang].add_file(Path(path), source_code)
+            files_added += 1
+            total_bytes += file_size
 
         for lang, analyzer in analyzers.items():
             try:
