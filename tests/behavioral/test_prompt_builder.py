@@ -182,11 +182,18 @@ class TestPromptBuilder:
 class TestAlignmentPromptBuilderContent:
     """Unit tests for single-function prompt content."""
 
-    def test_build_prompt_uses_parameter_name_and_security_flags(self) -> None:
+    def test_build_prompt_uses_parameter_name_and_security_flags(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mcpscanner.config.constants import MCPScannerConstants
         from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
             AlignmentPromptBuilder,
         )
         from mcpscanner.core.static_analysis.context_extractor import FunctionContext
+
+        monkeypatch.setattr(
+            MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 200_000
+        )
 
         ctx = FunctionContext(
             name="execute_shell_command",

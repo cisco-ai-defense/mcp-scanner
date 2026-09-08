@@ -225,6 +225,7 @@ class TestLLMAnalyzer:
             call_args[1]["model"] == analyzer._model
         )  # Use actual model from analyzer
         assert call_args[1]["temperature"] == 0.1
+        assert call_args[1]["drop_params"] is True
         assert len(call_args[1]["messages"]) == 2
 
     @pytest.mark.asyncio
@@ -234,15 +235,21 @@ class TestLLMAnalyzer:
         config = Config(llm_provider_api_key="test-api-key")
         analyzer = LLMAnalyzer(config)
 
-        # Mock API failure
-        mock_completion.side_effect = Exception("API rate limit exceeded")
+        # Mock API failure (final error — no retries)
+        mock_completion.side_effect = Exception("401 Unauthorized: invalid api key")
 
         content = "Test content"
         context = {"tool_name": "test_tool"}
 
         findings = await analyzer.analyze(content, context)
 
-        assert len(findings) == 0
+        assert len(findings) == 1
+        finding = findings[0]
+        assert finding.analyzer == "LLM"
+        assert finding.threat_category == "ANALYZER INFRASTRUCTURE"
+        assert finding.severity == "INFO"
+        assert finding.details["error_kind"] == "final"
+        assert "test_tool" in finding.details["subject"]
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
@@ -322,3 +329,30 @@ class TestLLMAnalyzer:
         # Check severity - all severities come from threats.py mapping
         severities = {v.severity for v in findings}
         assert "HIGH" in severities
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
+    async def test_make_llm_request_passes_drop_params_for_gpt5(self, mock_completion):
+        """GPT-5.x models reject unsupported params; drop_params must be set."""
+        config = Config(
+            llm_provider_api_key="test-api-key",
+            llm_model="openai/gpt-5.6-terra",
+        )
+        analyzer = LLMAnalyzer(config)
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "{}"
+        mock_completion.return_value = mock_response
+
+        await analyzer._make_llm_request(
+            messages=[{"role": "user", "content": "hi"}],
+            context="gpt5 drop_params",
+        )
+
+        mock_completion.assert_called_once()
+        kwargs = mock_completion.call_args.kwargs
+        assert kwargs["drop_params"] is True
+        assert kwargs["model"] == "openai/gpt-5.6-terra"
+        assert kwargs["temperature"] == 1
+        assert "max_completion_tokens" in kwargs
+        assert "max_tokens" not in kwargs

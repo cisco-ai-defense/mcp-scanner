@@ -134,9 +134,20 @@ class MCPScannerConstants:
     PROMPT_LENGTH_THRESHOLD: int = int(
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
     )
+    # Hard cap for alignment prompts sent to the LLM. Keep below
+    # PROMPT_LENGTH_THRESHOLD so Bedrock/Haiku is not fed truncated input.
+    ALIGNMENT_MAX_PROMPT_CHARS: int = int(
+        os.getenv("MCP_SCANNER_ALIGNMENT_MAX_PROMPT_CHARS", "68000")
+    )
     LLM_MAX_RETRIES: int = int(os.getenv("MCP_SCANNER_LLM_MAX_RETRIES", "3"))
     LLM_RETRY_BASE_DELAY: float = float(
         os.getenv("MCP_SCANNER_LLM_RETRY_BASE_DELAY", "1.0")
+    )
+    # Batch alignment parse retries re-prompt on unparseable JSON. Only the
+    # first attempt uses the full LLM_MAX_RETRIES API budget; later attempts
+    # use a single provider call so parse retries do not multiply API retries.
+    LLM_BATCH_PARSE_MAX_ATTEMPTS: int = int(
+        os.getenv("MCP_SCANNER_LLM_BATCH_PARSE_MAX_ATTEMPTS", "2")
     )
     # Above this duration a single LLM round-trip is logged at WARNING so
     # operators can spot regional / quota / model-warming issues without
@@ -250,6 +261,53 @@ class MCPScannerConstants:
         ext.strip()
         for ext in os.getenv("MCP_SCANNER_VT_EXCLUSION_EXTENSIONS", "").split(",")
         if ext.strip()
+    )
+
+    # PyPI Docker Scanner Configuration
+    DOCKER_IMAGE_NAME: str = os.getenv(
+        "MCP_SCANNER_DOCKER_IMAGE_NAME", "mcp-scanner-pypi"
+    )
+    DOCKER_IMAGE_TAG: str = os.getenv(
+        "MCP_SCANNER_DOCKER_IMAGE_TAG", "latest"
+    )
+    PYPI_SCAN_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_PYPI_SCAN_TIMEOUT", "300")
+    )
+
+    # npm Docker Scanner Configuration. Image is built from
+    # mcpscanner/docker/Dockerfile.npm and entrypoint_npm.py.
+    NPM_DOCKER_IMAGE_NAME: str = os.getenv(
+        "MCP_SCANNER_NPM_DOCKER_IMAGE_NAME", "mcp-scanner-npm"
+    )
+    NPM_DOCKER_IMAGE_TAG: str = os.getenv(
+        "MCP_SCANNER_NPM_DOCKER_IMAGE_TAG", "latest"
+    )
+    NPM_SCAN_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_NPM_SCAN_TIMEOUT", "300")
+    )
+    NPM_REGISTRY_URL: str = os.getenv(
+        "MCP_SCANNER_NPM_REGISTRY_URL", "https://registry.npmjs.org"
+    )
+    PYPI_INDEX_URL: str = os.getenv(
+        "MCP_SCANNER_PYPI_INDEX_URL", "https://pypi.org/pypi"
+    )
+
+    # Local (no-Docker) package-archive safety limits. Used by
+    # mcpscanner.core.package_sandbox to bound zip-bomb / traversal /
+    # symlink attacks when SDK users opt out of Docker isolation. Raise
+    # via env if you legitimately need to scan very large packages, but
+    # understand that local mode is *not* a strong sandbox.
+    PACKAGE_ARCHIVE_MAX_BYTES: int = int(
+        os.getenv("MCP_SCANNER_PACKAGE_ARCHIVE_MAX_BYTES", str(50 * 1024 * 1024))
+    )
+    PACKAGE_EXTRACTED_MAX_BYTES: int = int(
+        os.getenv("MCP_SCANNER_PACKAGE_EXTRACTED_MAX_BYTES", str(200 * 1024 * 1024))
+    )
+    PACKAGE_EXTRACTED_MAX_FILES: int = int(
+        os.getenv("MCP_SCANNER_PACKAGE_EXTRACTED_MAX_FILES", "10000")
+    )
+    PACKAGE_DOWNLOAD_TIMEOUT: int = int(
+        os.getenv("MCP_SCANNER_PACKAGE_DOWNLOAD_TIMEOUT", "60")
     )
 
     # Vulnerable Package Configuration

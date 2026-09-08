@@ -36,6 +36,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ....config.constants import MCPScannerConstants
+from ....utils.analyzer_errors import build_infrastructure_error_finding
 from ....utils.logging_config import get_logger
 from ..base import SecurityFinding
 
@@ -218,8 +219,14 @@ class ReadinessLLMJudge:
             findings = self._results_to_findings(result, tool_name)
         except Exception as e:
             self.logger.error(f"LLM readiness evaluation failed for {tool_name}: {e}")
-            # Don't add error findings - just log and return empty
-            # This prevents polluting results when LLM is temporarily unavailable
+            return [
+                build_infrastructure_error_finding(
+                    analyzer_name="READINESS-LLM",
+                    subject=tool_name,
+                    error=e,
+                    model=self.model,
+                )
+            ]
 
         return findings
 
@@ -253,7 +260,11 @@ class ReadinessLLMJudge:
         if self.api_base:
             request_params["api_base"] = self.api_base
 
-        response = await acompletion(**request_params)
+        from mcpscanner.utils.llm_request_params import apply_model_constraints
+
+        apply_model_constraints(self.model, request_params)
+
+        response = await acompletion(**request_params, drop_params=True)
 
         # Parse response
         content = response.choices[0].message.content

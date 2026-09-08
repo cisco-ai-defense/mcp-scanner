@@ -289,25 +289,16 @@ class AlignmentResponseValidator:
             return None
 
         try:
-            data = json.loads(response)
-
-            if not isinstance(data, list):
+            data = self._parse_batch_payload(response)
+            if data is None:
+                data = self._extract_json_array_from_markdown(response)
+            if data is None:
                 self.logger.warning(
-                    "validator batch not_a_json_array got_type=%s response_length=%d "
-                    "expected_count=%d -- trying markdown fallback",
-                    type(data).__name__,
+                    "validator batch unparseable response_length=%d expected_count=%d",
                     response_length,
                     expected_count,
                 )
-                data = self._extract_json_array_from_markdown(response)
-                if data is None:
-                    self.logger.warning(
-                        "validator batch markdown_fallback_failed response_length=%d "
-                        "expected_count=%d",
-                        response_length,
-                        expected_count,
-                    )
-                    return None
+                return None
 
         except json.JSONDecodeError as e:
             self.logger.warning(
@@ -338,6 +329,52 @@ class AlignmentResponseValidator:
             return None
 
         return self._validate_items(data, expected_count, response_length)
+
+    @staticmethod
+    def _coerce_batch_list(data: Any) -> Optional[List[Any]]:
+        """Normalize batch LLM payloads to a list of per-function results.
+
+        Accepts a bare JSON array (legacy) or a json_object-mode wrapper
+        such as ``{"results": [...]}`` that Bedrock returns when
+        ``response_format={"type": "json_object"}`` is enabled.
+        """
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for key in ("results", "analyses", "functions"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return value
+        return None
+
+    def _parse_batch_payload(self, response: str) -> Optional[List[Any]]:
+        """Parse a batch response string into a list of result dicts."""
+        response_length = len(response) if response else 0
+        parsed = parse_json_from_llm(response)
+        if parsed is None:
+            try:
+                parsed = json.loads(response)
+            except json.JSONDecodeError:
+                return None
+
+        data = self._coerce_batch_list(parsed)
+        if data is not None:
+            return data
+
+        if isinstance(parsed, dict):
+            self.logger.warning(
+                "validator batch not_a_json_array got_type=dict response_length=%d "
+                "keys=%s",
+                response_length,
+                sorted(parsed.keys())[:10],
+            )
+        else:
+            self.logger.warning(
+                "validator batch not_a_json_array got_type=%s response_length=%d",
+                type(parsed).__name__,
+                response_length,
+            )
+        return None
 
     def _validate_items(
         self,
@@ -482,6 +519,9 @@ class AlignmentResponseValidator:
                 json_str = response[start:end].strip()
 
             data = json.loads(json_str)
+            coerced = AlignmentResponseValidator._coerce_batch_list(data)
+            if coerced is not None:
+                return coerced
             if isinstance(data, list):
                 return data
             self.logger.debug(
