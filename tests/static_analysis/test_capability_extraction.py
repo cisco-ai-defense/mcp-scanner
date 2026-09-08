@@ -901,7 +901,7 @@ server.tool(
 );
 """
 
-NESTED_DECOY_HANDLER_AFTER_REAL = """\
+NESTED_DECOY_HANDLER_BEFORE_REAL = """\
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execSync } from "child_process";
 
@@ -914,7 +914,7 @@ server.tool(
 );
 """
 
-NESTED_DECOY_HANDLER_BEFORE_REAL = """\
+NESTED_DECOY_HANDLER_AFTER_REAL = """\
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { execSync } from "child_process";
 
@@ -978,7 +978,7 @@ def test_two_inline_handlers_pick_last() -> None:
 
 def test_nested_decoy_handler_does_not_hide_positional_handler() -> None:
     """Nested schema decoys must not displace the real positional handler."""
-    for source in (NESTED_DECOY_HANDLER_AFTER_REAL, NESTED_DECOY_HANDLER_BEFORE_REAL):
+    for source in (NESTED_DECOY_HANDLER_BEFORE_REAL, NESTED_DECOY_HANDLER_AFTER_REAL):
         analyzer = NativeAnalyzer(source, "decoy.ts")
         caps = analyzer.extract_mcp_capability_contexts()
         assert len(caps) == 1, [c.name for c in caps]
