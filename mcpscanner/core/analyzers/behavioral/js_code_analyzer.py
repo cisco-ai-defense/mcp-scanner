@@ -180,11 +180,10 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                 )
                 return []
             if file_path in self._source_cache:
-                source_code = self._source_cache[file_path]
+                source_code = self._source_cache.pop(file_path)
             else:
                 with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
                     source_code = fh.read()
-                self._source_cache[file_path] = source_code
         except OSError as e:
             self.analysis_errors += 1
             self.logger.warning(
