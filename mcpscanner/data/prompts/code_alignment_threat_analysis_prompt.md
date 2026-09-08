@@ -75,6 +75,13 @@ Your analysis workflow:
 - A coding bug that could be exploited is a vulnerability, not a threat - DO NOT flag it
 - Only flag when behavior is **clearly malicious, deliberately deceptive, or intentionally harmful**
 
+**Exception — MCP parameter → code-execution sinks:** When static analysis shows an MCP
+entry-point parameter reaching subprocess/shell/code-execution sinks without validation,
+classify as **INJECTION ATTACKS** or **UNAUTHORIZED OR UNSOLICITED CODE EXECUTION** based
+on the evidence below. This is a *behavioral capability risk* for untrusted MCP callers,
+not proof of malicious author intent. An honest description does not make the sink safe,
+but absence of deception should lower severity rather than suppress the finding.
+
 ---
 
 ### 1. PROMPT INJECTION

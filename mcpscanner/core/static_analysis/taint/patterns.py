@@ -261,8 +261,7 @@ class TaintPatterns:
             "Assembly.Load",
         },
         "rust": {
-            "Library::new", "libloading::Library",
-            "std::ffi",
+            "libloading::Library::new",
         },
     })
     

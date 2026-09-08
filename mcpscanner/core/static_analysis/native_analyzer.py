@@ -4087,26 +4087,77 @@ class NativeAnalyzer:
                 index[f"{cls_name}.{meth_name}"] = meth_node
         return index
 
-    def _py_build_instance_class_map(
-        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]
-    ) -> Dict[str, str]:
-        """Map local instance variables to their constructor class names."""
-        mapping: Dict[str, str] = {}
-        for child in ast.walk(node):
-            if not isinstance(child, ast.Assign):
+    def _py_find_enclosing_class(
+        self,
+        tree: ast.AST,
+        func_node: Union[ast.FunctionDef, ast.AsyncFunctionDef],
+    ) -> Optional[str]:
+        """Return the class name directly enclosing ``func_node``, if any."""
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef):
                 continue
-            for target in child.targets:
-                if not isinstance(target, ast.Name):
-                    continue
-                if not isinstance(child.value, ast.Call):
-                    continue
-                callee = child.value.func
-                if isinstance(callee, ast.Name):
-                    mapping[target.id] = callee.id
-                elif isinstance(callee, ast.Attribute) and isinstance(
-                    callee.value, ast.Name
+            for stmt in cls.body:
+                if stmt is func_node:
+                    return cls.name
+        return None
+
+    def _py_build_instance_class_map(
+        self,
+        node: Union[ast.FunctionDef, ast.AsyncFunctionDef],
+        *,
+        enclosing_class: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Map local instance variables to constructor class names in-scope only."""
+        mapping: Dict[str, str] = {}
+        if enclosing_class:
+            mapping["self"] = enclosing_class
+            mapping["cls"] = enclosing_class
+
+        def record_assign(target: ast.expr, value: ast.expr) -> None:
+            if not isinstance(target, ast.Name):
+                return
+            if not isinstance(value, ast.Call):
+                return
+            callee = value.func
+            if isinstance(callee, ast.Name):
+                mapping[target.id] = callee.id
+            elif isinstance(callee, ast.Attribute) and isinstance(
+                callee.value, ast.Name
+            ):
+                mapping[target.id] = f"{callee.value.id}.{callee.attr}"
+
+        def walk_stmts(stmts: List[ast.stmt]) -> None:
+            for stmt in stmts:
+                if isinstance(
+                    stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
                 ):
-                    mapping[target.id] = f"{callee.value.id}.{callee.attr}"
+                    continue
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        record_assign(target, stmt.value)
+                elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+                    record_assign(stmt.target, stmt.value)
+                elif isinstance(stmt, ast.If):
+                    walk_stmts(stmt.body)
+                    walk_stmts(stmt.orelse)
+                elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+                    walk_stmts(stmt.body)
+                    walk_stmts(stmt.orelse)
+                elif isinstance(stmt, ast.While):
+                    walk_stmts(stmt.body)
+                    walk_stmts(stmt.orelse)
+                elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                    walk_stmts(stmt.body)
+                elif isinstance(stmt, ast.Try):
+                    walk_stmts(stmt.body)
+                    walk_stmts(stmt.orelse)
+                    for handler in stmt.handlers:
+                        walk_stmts(handler.body)
+                elif isinstance(stmt, ast.Match):
+                    for case in stmt.cases:
+                        walk_stmts(case.body)
+
+        walk_stmts(node.body)
         return mapping
 
     def _py_collect_call_refs(
@@ -4130,6 +4181,13 @@ class NativeAnalyzer:
         """Resolve a call reference to a same-file function/method node."""
         if ref in index:
             return ref, index[ref]
+        if ref.startswith(("self.", "cls.")):
+            root_name, attr = ref.split(".", 1)
+            cls = instance_map.get(root_name)
+            if cls:
+                qualified = f"{cls}.{attr}"
+                if qualified in index:
+                    return qualified, index[qualified]
         if "." in ref:
             base, attr = ref.rsplit(".", 1)
             if base in instance_map:
@@ -4199,23 +4257,35 @@ class NativeAnalyzer:
         if not index:
             return
 
-        instance_map = self._py_build_instance_class_map(handler_node)
+        enclosing_class = self._py_find_enclosing_class(tree, handler_node)
+        instance_map = self._py_build_instance_class_map(
+            handler_node, enclosing_class=enclosing_class
+        )
+        handler_key = (
+            f"{enclosing_class}.{handler_node.name}"
+            if enclosing_class
+            else handler_node.name
+        )
         visited: Set[str] = set()
         reachable: List[
             Tuple[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]
         ] = []
+        call_edges: Dict[str, Set[str]] = {}
         frontier: List[
-            Tuple[Union[ast.FunctionDef, ast.AsyncFunctionDef], int]
-        ] = [(handler_node, 0)]
+            Tuple[Union[ast.FunctionDef, ast.AsyncFunctionDef], int, str]
+        ] = [(handler_node, 0, handler_key)]
 
         while frontier:
-            node, depth = frontier.pop()
+            node, depth, caller_key = frontier.pop()
             if depth >= 3:
                 continue
-            local_instances = (
-                instance_map
+            node_class = (
+                enclosing_class
                 if node is handler_node
-                else self._py_build_instance_class_map(node)
+                else self._py_find_enclosing_class(tree, node)
+            )
+            local_instances = self._py_build_instance_class_map(
+                node, enclosing_class=node_class
             )
             for ref in self._py_collect_call_refs(node):
                 resolved = self._py_resolve_indexed_call(
@@ -4224,6 +4294,8 @@ class NativeAnalyzer:
                 if resolved is None:
                     continue
                 resolved_key, target = resolved
+                if caller_key:
+                    call_edges.setdefault(caller_key, set()).add(resolved_key)
                 if resolved_key in visited:
                     continue
                 if (
@@ -4233,7 +4305,7 @@ class NativeAnalyzer:
                     continue
                 visited.add(resolved_key)
                 reachable.append((resolved_key, target))
-                frontier.append((target, depth + 1))
+                frontier.append((target, depth + 1, resolved_key))
 
         if not reachable:
             return
@@ -4265,14 +4337,25 @@ class NativeAnalyzer:
             if any(ops.values()):
                 dangerous_refs.add(resolved_key)
 
+        dangerous = set(dangerous_refs)
+        changed = True
+        while changed:
+            changed = False
+            for caller, callees in call_edges.items():
+                if caller in dangerous:
+                    continue
+                if any(callee in dangerous for callee in callees):
+                    dangerous.add(caller)
+                    changed = True
+
         ctx.reachable_functions = reachable_names
 
-        if dangerous_refs:
+        if dangerous:
             for flow in ctx.parameter_flows:
                 reaches = flow.get("reaches_calls") or []
                 for call in reaches:
                     if self._py_call_ref_matches_dangerous(
-                        str(call), dangerous_refs, instance_map
+                        str(call), dangerous, instance_map
                     ):
                         flow["reaches_external"] = True
                         break
@@ -4403,7 +4486,8 @@ class NativeAnalyzer:
         docstring = self._ts_extract_docstring(node)
         anno_description = self._parse_description_from_annotations(node)
         if anno_description:
-            docstring = anno_description if not docstring else anno_description
+            if not docstring:
+                docstring = anno_description
 
         # Extract decorators from AST (TypeScript)
         decorator_types = self._ts_extract_decorators(node)
@@ -4778,6 +4862,13 @@ class NativeAnalyzer:
         fn = self._ts_enclosing_function(use_node)
         if fn is None:
             return set()
+        cache = getattr(self, "_shadowed_names_cache", None)
+        if cache is None:
+            cache = {}
+            self._shadowed_names_cache = cache
+        cache_key = (id(fn), use_node.start_byte // 64)
+        if cache_key in cache:
+            return cache[cache_key]
         shadowed: Set[str] = set()
         for param in self._ts_extract_parameters(fn):
             name = param.get("name")
@@ -4808,7 +4899,67 @@ class NativeAnalyzer:
                 collect_bindings(child)
 
         collect_bindings(fn)
+        cache[cache_key] = shadowed
         return shadowed
+
+    def _ts_visible_sink_aliases_at(self, use_node: "Node") -> Dict[str, str]:
+        """Sink aliases visible at ``use_node`` without nested-scope bleed."""
+        fn = self._ts_enclosing_function(use_node)
+        if fn is None:
+            return {}
+        cache = getattr(self, "_visible_alias_cache", None)
+        if cache is None:
+            cache = {}
+            self._visible_alias_cache = cache
+        cache_key = (id(fn), use_node.start_byte // 64)
+        if cache_key in cache:
+            return cache[cache_key]
+
+        visible: Dict[str, str] = {}
+        use_byte = use_node.start_byte
+        sink_category_for = self._ts_sink_category_for_language()
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
+        nested_scope_types = func_types | class_types
+        root = self._ts_root(use_node)
+
+        def collect_alias(binding_node: "Node") -> None:
+            target = binding_node.child_by_field_name("name")
+            if target is None:
+                target = binding_node.child_by_field_name("left")
+            value = binding_node.child_by_field_name("value")
+            if value is None:
+                value = binding_node.child_by_field_name("right")
+            if (
+                target is not None
+                and value is not None
+                and target.type == "identifier"
+            ):
+                cat = self._ts_alias_value_category(value, sink_category_for)
+                if cat:
+                    visible[self._ts_get_node_text(target)] = cat
+
+        def walk_scope(node: "Node") -> None:
+            if node.start_byte >= use_byte:
+                return
+            if node.type in ("variable_declarator", "assignment_expression"):
+                collect_alias(node)
+            for child in node.children:
+                if (
+                    child.type in nested_scope_types
+                    and child is not fn
+                    and not self._ts_node_contains(child, use_node)
+                ):
+                    continue
+                walk_scope(child)
+
+        for child in root.children:
+            if child is fn:
+                break
+            walk_scope(child)
+        walk_scope(fn)
+        cache[cache_key] = visible
+        return visible
 
     def _ts_sync_param_flow_summary(self, ctx: FunctionContext) -> None:
         """Keep ``dataflow_summary['param_flows']`` aligned with ``parameter_flows``."""
@@ -4933,11 +5084,13 @@ class NativeAnalyzer:
 
         # Bounded BFS over local callees (depth 3 covers handler -> helper
         # -> sink-wrapper without walking the whole transitive graph).
+        handler_key = ctx.name
         visited: Set[str] = set()
         reachable: List[Tuple[str, "Node"]] = []
-        frontier: List[Tuple["Node", int]] = [(handler_node, 0)]
+        call_edges: Dict[str, Set[str]] = {}
+        frontier: List[Tuple["Node", int, str]] = [(handler_node, 0, handler_key)]
         while frontier:
-            node, depth = frontier.pop()
+            node, depth, caller_key = frontier.pop()
             if depth >= 3:
                 continue
             for ref in callee_refs(node):
@@ -4947,13 +5100,15 @@ class NativeAnalyzer:
                 if resolved is None:
                     continue
                 resolved_key, target = resolved
+                if caller_key:
+                    call_edges.setdefault(caller_key, set()).add(resolved_key)
                 if resolved_key in visited:
                     continue
                 if target.start_byte == handler_node.start_byte:
                     continue
                 visited.add(resolved_key)
                 reachable.append((resolved_key, target))
-                frontier.append((target, depth + 1))
+                frontier.append((target, depth + 1, resolved_key))
 
         if not reachable:
             return
@@ -4985,23 +5140,34 @@ class NativeAnalyzer:
             if any(ops.values()):
                 dangerous_refs.add(resolved_key)
 
+        dangerous = set(dangerous_refs)
+        changed = True
+        while changed:
+            changed = False
+            for caller, callees in call_edges.items():
+                if caller in dangerous:
+                    continue
+                if any(callee in dangerous for callee in callees):
+                    dangerous.add(caller)
+                    changed = True
+
         ctx.reachable_functions = reachable_names
 
         # A tainted parameter that flows into a dangerous callee reaches a
         # security-relevant external operation, even though the sink itself
         # lives in the callee. Reflect that so downstream analysis sees the
         # parameter -> sink data flow.
-        if dangerous_refs:
+        if dangerous:
             for flow in ctx.parameter_flows:
                 reaches = flow.get("reaches_calls") or []
                 for call in reaches:
                     norm = self._ts_normalize_call_ref(str(call))
-                    if norm in dangerous_refs:
+                    if norm in dangerous:
                         flow["reaches_external"] = True
                         break
                     if any(
                         norm.endswith("." + dref) or dref.endswith("." + norm)
-                        for dref in dangerous_refs
+                        for dref in dangerous
                     ):
                         flow["reaches_external"] = True
                         break
@@ -5437,30 +5603,30 @@ class NativeAnalyzer:
         network_sinks = sinks.get("network", set())
         deser_sinks = sinks.get("deserialization", set())
 
-        # Resolve locally-aliased sinks (``const e = promisify(exec)``) so a
-        # call through the alias is still attributed to the right category.
-        alias_map = self._ts_build_sink_alias_map(self._ts_root(node))
-
-        def matches_sink(func_text: str, sink_set: set) -> bool:
+        def matches_sink(func_text: str, sink_set: set, category: str) -> bool:
             """Check if function text matches any sink pattern."""
-            # Normalize the function text
             normalized = func_text.replace("::", ".").replace("->", ".")
             parts = normalized.split(".")
             func_name = parts[-1] if parts else normalized
-            
+
+            if self.language == "rust" and category == "eval":
+                for sink in sink_set:
+                    sink_normalized = sink.replace("::", ".").replace("->", ".")
+                    if normalized == sink_normalized:
+                        return True
+                    if normalized.endswith("." + sink_normalized):
+                        return True
+                return False
+
             for sink in sink_set:
-                # Normalize sink pattern too
                 sink_normalized = sink.replace("::", ".").replace("->", ".")
                 sink_parts = sink_normalized.split(".")
                 sink_func = sink_parts[-1] if sink_parts else sink_normalized
-                
-                # Exact match (normalized)
+
                 if normalized == sink_normalized:
                     return True
-                # Function name match
                 if func_name == sink_func:
                     return True
-                # Partial match (sink pattern in function text)
                 if sink_normalized in normalized:
                     return True
             return False
@@ -5479,29 +5645,26 @@ class NativeAnalyzer:
                     func_text = self._ts_get_node_text(n)
                 
                 # Check against sink patterns
-                if matches_sink(func_text, command_sinks):
+                if matches_sink(func_text, command_sinks, "command"):
                     has_subprocess = True
-                if matches_sink(func_text, sql_sinks):
+                if matches_sink(func_text, sql_sinks, "sql"):
                     has_sql = True
-                if matches_sink(func_text, eval_sinks):
+                if matches_sink(func_text, eval_sinks, "eval"):
                     has_eval = True
-                if matches_sink(func_text, file_sinks):
+                if matches_sink(func_text, file_sinks, "file"):
                     has_file = True
-                if matches_sink(func_text, network_sinks):
+                if matches_sink(func_text, network_sinks, "network"):
                     has_network = True
-                if matches_sink(func_text, deser_sinks):
+                if matches_sink(func_text, deser_sinks, "deserialization"):
                     has_deserialization = True
 
-                # Check against locally-aliased sinks (``execAsync`` from
-                # ``const execAsync = promisify(exec)``), matched by leaf name
-                # only when the alias is not shadowed by a local parameter or
-                # earlier declaration in the enclosing function.
-                if alias_map:
+                visible_aliases = self._ts_visible_sink_aliases_at(n)
+                if visible_aliases:
                     leaf = func_text.replace("::", ".").split(".")[-1].strip()
                     leaf = leaf.split("(")[0]
                     shadowed = self._ts_shadowed_names_at(n)
                     if leaf not in shadowed:
-                        alias_cat = alias_map.get(leaf)
+                        alias_cat = visible_aliases.get(leaf)
                         if alias_cat == "command":
                             has_subprocess = True
                         elif alias_cat == "eval":
