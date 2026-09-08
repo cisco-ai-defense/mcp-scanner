@@ -98,6 +98,10 @@ class CrossFileAnalyzer:
     """
 
     def __init__(self) -> None:
+        """Initialize the deprecated cross-file analyzer and its analysis state.
+        
+        Raises a ``DeprecationWarning`` recommending ``CallGraphAnalyzer``.
+        """
         warnings.warn(
             "CrossFileAnalyzer is deprecated; use CallGraphAnalyzer instead.",
             DeprecationWarning,

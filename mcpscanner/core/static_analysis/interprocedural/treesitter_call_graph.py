@@ -57,7 +57,16 @@ _MCP_DECORATOR_RE = re.compile(
 
 
 def _qualified_name_matches(func_full: str, call_name: str) -> bool:
-    """Return True when ``call_name`` refers to ``func_full`` (``path::Class.method``)."""
+    """
+    Determine whether a call name matches a fully qualified function name.
+    
+    Parameters:
+        func_full (str): Fully qualified function name, optionally including a file path.
+        call_name (str): Function or method name used at the call site.
+    
+    Returns:
+        bool: `True` if the names match, `False` otherwise.
+    """
     qualified = func_full.split("::", 1)[-1] if "::" in func_full else func_full
     short = call_name.split(".")[-1]
     return (
@@ -241,7 +250,10 @@ class TreeSitterCallGraphAnalyzer:
             return False
     
     def _extract_functions(self, file_path: Path, root: Node, source_bytes: bytes, class_name: str = "") -> None:
-        """Extract function definitions from AST."""
+        """Extract function definitions from an abstract syntax tree and add them to the call graph.
+        
+        Functions defined within classes are recorded with qualified names. Functions marked with supported MCP decorators or attributes are recorded as entry points.
+        """
         func_types = self.FUNCTION_TYPES.get(self.language, set())
         class_types = {"class_declaration", "class", "struct_item", "impl_item", "object_declaration"}
         container_types = {
@@ -288,9 +300,28 @@ class TreeSitterCallGraphAnalyzer:
     
     @staticmethod
     def _node_text(node: Node, source_bytes: bytes) -> str:
+        """Extract the source text represented by a syntax tree node.
+        
+        Parameters:
+        	node (Node): Syntax tree node whose source range is extracted.
+        	source_bytes (bytes): Source file contents containing the node.
+        
+        Returns:
+        	str: UTF-8 decoded source text for the node.
+        """
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
     def _decorator_texts_for_function(self, node: Node, source_bytes: bytes) -> list[str]:
+        """Collect decorator and attribute text associated with a function node.
+
+        Parameters:
+            node (Node): Function syntax node whose annotations are inspected.
+            source_bytes (bytes): Source bytes used to extract annotation text.
+
+        Returns:
+            list[str]: Text of decorators, attributes, and modifiers associated
+            with the function.
+        """
         annotation_types = {
             "decorator",
             "attribute_list",
@@ -357,6 +388,15 @@ class TreeSitterCallGraphAnalyzer:
         return texts
 
     def _is_mcp_entry_point(self, node: Node, source_bytes: bytes) -> bool:
+        """Determine whether a function has an MCP entry-point decorator or annotation.
+        
+        Parameters:
+            node (Node): The function syntax-tree node to inspect.
+            source_bytes (bytes): The source text containing the function.
+        
+        Returns:
+            bool: `True` if the function has an MCP entry-point marker, `False` otherwise.
+        """
         for text in self._decorator_texts_for_function(node, source_bytes):
             if _MCP_DECORATOR_RE.search(text):
                 return True
@@ -439,7 +479,16 @@ class TreeSitterCallGraphAnalyzer:
         visit(root)
 
     def _get_function_name(self, node: Node, source_bytes: bytes) -> str:
-        """Get function name from AST node."""
+        """
+        Extract the function name represented by an AST node.
+        
+        Parameters:
+        	node (Node): AST node representing the function.
+        	source_bytes (bytes): Source bytes used to read the function name.
+        
+        Returns:
+        	str: The declared or variable-assigned function name, or "<anonymous>" when no name is available.
+        """
         name_node = node.child_by_field_name("name")
         if name_node:
             return source_bytes[name_node.start_byte:name_node.end_byte].decode("utf-8")
@@ -518,7 +567,15 @@ class TreeSitterCallGraphAnalyzer:
         current_func: str = "",
         class_name: str = "",
     ) -> None:
-        """Extract function calls from AST."""
+        """Extract function-call relationships from an abstract syntax tree and add them to the call graph.
+        
+        Parameters:
+        	file_path (Path): Path of the file containing the syntax tree.
+        	root (Node): Root node of the syntax tree or subtree to traverse.
+        	source_bytes (bytes): Source bytes used to resolve function and call names.
+        	current_func (str): Fully qualified name of the function currently being traversed.
+        	class_name (str): Name of the enclosing class, if applicable.
+        """
         func_types = self.FUNCTION_TYPES.get(self.language, set())
         call_types = self.CALL_TYPES.get(self.language, set())
 
@@ -567,7 +624,16 @@ class TreeSitterCallGraphAnalyzer:
                 )
     
     def _get_call_name(self, node: Node, source_bytes: bytes) -> str:
-        """Get the name of a function call."""
+        """
+        Extract the qualified name used to identify a function call.
+        
+        Parameters:
+        	node (Node): The syntax tree node representing the call.
+        	source_bytes (bytes): Source code bytes used to recover call-name text.
+        
+        Returns:
+        	str: The function, method, or qualified call name, or an empty string when no name can be identified.
+        """
         if node.type == "member_call_expression":
             obj = node.child_by_field_name("object")
             name = node.child_by_field_name("name")
@@ -614,6 +680,15 @@ class TreeSitterCallGraphAnalyzer:
     
     @staticmethod
     def _first_call_argument_name(node: Node, source_bytes: bytes) -> str | None:
+        """Extract the name of the first identifier argument from a call node.
+        
+        Parameters:
+        	node (Node): The syntax tree node representing the call.
+        	source_bytes (bytes): The source bytes used to decode the identifier text.
+        
+        Returns:
+        	str | None: The first identifier argument name, or `None` when no identifier argument is present.
+        """
         args = node.child_by_field_name("arguments") or node.child_by_field_name(
             "argument_list"
         )
@@ -633,7 +708,15 @@ class TreeSitterCallGraphAnalyzer:
         return None
 
     def _resolve_call(self, file_path: Path, call_name: str) -> Optional[str]:
-        """Resolve a call to its full qualified name."""
+        """Resolve a call name to a matching fully qualified function name.
+        
+        Parameters:
+            file_path (Path): Path of the file containing the call.
+            call_name (str): Name of the called function.
+        
+        Returns:
+            Optional[str]: The matching function name, preferring a function from the same file; otherwise, `None` when no unique match exists.
+        """
         same_file: list[str] = []
         all_matches: list[str] = []
         for func_name in self.call_graph.functions:
@@ -652,7 +735,15 @@ class TreeSitterCallGraphAnalyzer:
         return None
     
     def get_reachable_functions(self, start_func: str) -> List[str]:
-        """Get all functions reachable from a starting function."""
+        """
+        Determine which functions can be reached from a starting function.
+        
+        Parameters:
+            start_func (str): Fully qualified name of the function from which traversal begins.
+        
+        Returns:
+            List[str]: Names of the starting function and all functions reachable through call edges.
+        """
         reachable = set()
         to_visit = [start_func]
         visited = set()

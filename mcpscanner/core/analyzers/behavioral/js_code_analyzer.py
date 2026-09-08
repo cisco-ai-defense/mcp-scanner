@@ -40,5 +40,6 @@ class JSBehavioralCodeAnalyzer(BehavioralCodeAnalyzer):
     """
 
     def __init__(self, config: Config):
+        """Initialize the JavaScript/TypeScript behavioral analyzer with the provided configuration."""
         super().__init__(config)
         self.name = "Behavioural (JS)"

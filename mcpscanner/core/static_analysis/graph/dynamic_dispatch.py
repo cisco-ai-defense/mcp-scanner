@@ -27,7 +27,15 @@ _APPLY_RE = re.compile(r"^([\w$.]+)\.(call|apply|bind)\(")
 
 
 def _normalize_receiver(expr: str) -> str | None:
-    """Unwrap ``(worker as any)`` / ``(worker)`` to a bare identifier."""
+    """
+    Normalize a receiver expression to its bare identifier.
+    
+    Parameters:
+        expr (str): Receiver expression, optionally wrapped in parentheses or a TypeScript cast.
+    
+    Returns:
+        str | None: The bare identifier, or `None` if the expression has another form.
+    """
     text = expr.strip()
     match = _TS_CAST_RECEIVER_RE.match(text)
     if match:
@@ -41,7 +49,15 @@ def _normalize_receiver(expr: str) -> str | None:
 
 
 def _parse_bracket_call(label: str) -> tuple[str | None, str | None, str] | None:
-    """Parse ``receiver[key]`` including TypeScript cast receivers."""
+    """
+    Parse bracket-based dynamic call syntax and classify the key as literal or variable.
+    
+    Parameters:
+    	label (str): A receiver bracket expression, such as ``receiver[key]``.
+    
+    Returns:
+    	tuple[str | None, str | None, str] | None: The normalized receiver, literal method name when present, and call kind; ``None`` when the expression is unsupported.
+    """
     match = _BRACKET_CALL_RE.match(label)
     if not match:
         return None
@@ -54,11 +70,28 @@ def _parse_bracket_call(label: str) -> tuple[str | None, str | None, str] | None
 
 
 def is_dynamic_call_label(callee_label: str) -> bool:
+    """
+    Determine whether a callee label contains recognized dynamic-call syntax.
+    
+    Parameters:
+    	callee_label (str): Callee label to inspect.
+    
+    Returns:
+    	bool: `true` if the label contains recognized dynamic-call syntax, `false` otherwise.
+    """
     return bool(_DYNAMIC_CALL_RE.search(callee_label))
 
 
 def parse_dynamic_call(callee_label: str) -> tuple[str | None, str | None, str] | None:
-    """Return ``(receiver, method, kind)`` when parseable."""
+    """
+    Parse a dynamic call label into its receiver, method, and call kind.
+    
+    Parameters:
+    	callee_label (str): The call label to classify.
+    
+    Returns:
+    	tuple[str | None, str | None, str] | None: The receiver, method when available, and dynamic call kind; `(None, None, "unknown")` for recognized but unparsable syntax; `None` for ordinary call labels.
+    """
     label = callee_label.strip()
     if label.endswith("()"):
         label = label[:-2]
@@ -112,7 +145,20 @@ def resolve_dynamic_dispatch(
     program_facts: ProgramFacts | None = None,
     caller_node_id: str | None = None,
 ) -> DispatchResult:
-    """Full semantic dispatch for dynamic and virtual call labels."""
+    """
+    Resolve a dynamic or virtual call label using semantic dispatch information.
+    
+    Parameters:
+        callee_label (str): The called expression to classify and resolve.
+        source (str | None): Source code containing the call.
+        caller_label (str): Label identifying the calling function or context.
+        caller_file (str): File containing the caller.
+        known_functions (set[str]): Known function names available for dispatch.
+        caller_node_id (str | None): Optional identifier of the caller's syntax node.
+    
+    Returns:
+        DispatchResult: Resolved dispatch targets and associated metadata, or an empty result when the label is unsupported or source is unavailable.
+    """
     parsed = parse_dynamic_call(callee_label)
     if parsed is None:
         return DispatchResult()
@@ -151,7 +197,19 @@ def resolve_virtual_dispatch(
     program_facts: ProgramFacts | None = None,
     caller_node_id: str | None = None,
 ) -> DispatchResult:
-    """Virtual dispatch for static-looking ``receiver.method`` calls."""
+    """
+    Resolve virtual dispatch for receiver-method call labels.
+    
+    Parameters:
+        callee_label (str): Static-looking receiver-method call label.
+        source (str | None): Source text containing the call.
+        caller_label (str): Label identifying the calling function.
+        caller_file (str): Path of the file containing the caller.
+    
+    Returns:
+        DispatchResult: Resolved virtual-dispatch targets, or an empty result when
+            the source is unavailable or the callee label contains no dot.
+    """
     if source is None or "." not in callee_label:
         return DispatchResult()
     engine = SemanticDispatchEngine.for_file(
@@ -177,6 +235,21 @@ def resolve_python_dynamic_call(
     program_facts: ProgramFacts | None = None,
     caller_node_id: str | None = None,
 ) -> DispatchResult:
+    """
+    Resolve a Python dynamic call using available program and semantic information.
+    
+    Parameters:
+    	callee_label (str): Label describing the called expression.
+    	source (str): Source code containing the call.
+    	caller_label (str): Label identifying the calling function.
+    	known_functions (set[str]): Known function names used during dispatch resolution.
+    	caller_file (str): File containing the caller.
+    	program_facts (ProgramFacts | None): Optional program facts used for resolution.
+    	caller_node_id (str | None): Optional identifier of the caller's graph node.
+    
+    Returns:
+    	DispatchResult: Dispatch resolution results for the Python call.
+    """
     return resolve_dynamic_dispatch(
         callee_label,
         language="python",
@@ -200,7 +273,19 @@ def resolve_dynamic_call(
     source: str | None = None,
     caller_label: str = "",
 ) -> tuple[str, float, str] | None:
-    """Backward-compatible single-target resolver."""
+    """
+    Resolve a dynamic call to its primary target.
+    
+    Parameters:
+    	callee_label (str): Label identifying the dynamic call.
+    	caller_file (str): File containing the call site.
+    	language (str): Language of the call expression.
+    	source (str | None): Source text containing the call, when available.
+    	caller_label (str): Label identifying the caller.
+    
+    Returns:
+    	tuple[str, float, str] | None: The primary target's node ID, confidence, and context, or `None` when no target is found.
+    """
     result = resolve_dynamic_dispatch(
         callee_label,
         language=language,
@@ -217,6 +302,14 @@ def resolve_dynamic_call(
 
 
 def _python_call_label(node: ast.Call) -> str | None:
+    """Return the source-style label for a Python call's function expression.
+    
+    Parameters:
+    	node (ast.Call): The call expression to unparse.
+    
+    Returns:
+    	str | None: The unparsed function label, or `None` if the expression cannot be unparsed.
+    """
     try:
         return ast.unparse(node.func)
     except (AttributeError, TypeError, ValueError):

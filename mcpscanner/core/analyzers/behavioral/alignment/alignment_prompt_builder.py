@@ -54,6 +54,15 @@ _SECTION_HEADER_RE = re.compile(r"\n\*\*[^*\n][^\n]*\n")
 
 
 def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """
+    Merge overlapping or adjacent character ranges into consolidated ranges.
+    
+    Parameters:
+    	ranges (list[tuple[int, int]]): Character ranges represented by start and end offsets.
+    
+    Returns:
+    	list[tuple[int, int]]: Sorted, merged ranges, or an empty list when no ranges are provided.
+    """
     if not ranges:
         return []
     sorted_ranges = sorted(ranges)
@@ -68,7 +77,15 @@ def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
 
 
 def _split_preserved_sections(analysis_content: str) -> tuple[str, str]:
-    """Separate deterministic graph blocks so truncation cannot drop them."""
+    """
+    Separate preserved evidence sections from the remaining analysis content.
+    
+    Parameters:
+        analysis_content (str): Analysis text containing optional graph or dataflow sections.
+    
+    Returns:
+        tuple[str, str]: The analysis content without preserved sections and the concatenated preserved sections.
+    """
     if not any(header in analysis_content for header in _PRESERVED_SECTION_HEADERS):
         return analysis_content, ""
 
@@ -100,7 +117,16 @@ def _split_preserved_sections(analysis_content: str) -> tuple[str, str]:
 
 
 def _cap_preserved_sections(preserved: str, max_preserved: int) -> str:
-    """Shrink preserved graph blocks; drop classic dataflow before sink hints."""
+    """
+    Limit preserved evidence sections to the specified character count, prioritizing sink hints and graph evidence over classic dataflow.
+    
+    Parameters:
+        preserved (str): Preserved evidence sections to cap.
+        max_preserved (int): Maximum number of characters to retain.
+    
+    Returns:
+        str: Evidence sections within the character limit, with a truncation marker when content is shortened.
+    """
     if len(preserved) <= max_preserved:
         return preserved
 
@@ -149,7 +175,17 @@ def _truncate_analysis_preserving_graph(
     preserved: str,
     max_analysis: int,
 ) -> str:
-    """Truncate non-graph analysis text; graph blocks are appended intact."""
+    """
+    Truncate analysis content to the specified character limit while prioritizing preserved graph evidence.
+    
+    Parameters:
+    	main (str): Ordinary analysis content subject to truncation.
+    	preserved (str): Graph-related evidence retained when possible.
+    	max_analysis (int): Maximum length of the combined analysis content.
+    
+    Returns:
+    	str: Analysis content within the requested limit, including a truncation marker when content is shortened.
+    """
     preserved = preserved or ""
     if len(main) + len(preserved) <= max_analysis:
         return main + preserved
@@ -228,17 +264,19 @@ class AlignmentPromptBuilder:
         max_string_literals: Optional[int] = None,
         max_reaches_calls: Optional[int] = None,
     ):
-        """Initialize the alignment prompt builder.
-
-        Args:
-            max_operations: Maximum operations to show per parameter (default: from env or 10)
-            max_calls: Maximum function calls to show (default: from env or 20)
-            max_assignments: Maximum assignments to show (default: from env or 15)
-            max_cross_file_calls: Maximum cross-file calls to show (default: from env or 10)
-            max_reachable_files: Maximum reachable files to show (default: from env or 5)
-            max_constants: Maximum constants to show (default: from env or 10)
-            max_string_literals: Maximum string literals to show (default: from env or 15)
-            max_reaches_calls: Maximum reaches calls to show (default: from env or 10)
+        """
+        Initialize the alignment prompt builder with optional evidence-size limits.
+        
+        Parameters:
+            max_operations (Optional[int]): Maximum operations to include per parameter.
+            max_calls (Optional[int]): Maximum function calls to include.
+            max_assignments (Optional[int]): Maximum assignments to include.
+            max_cross_file_calls (Optional[int]): Maximum cross-file calls to include.
+            max_reachable_files (Optional[int]): Maximum reachable files to include.
+            max_constants (Optional[int]): Maximum constants to include.
+            max_string_literals (Optional[int]): Maximum string literals to include.
+            max_reaches_calls (Optional[int]): Maximum reached calls to include.
+        
         """
         self.logger = logging.getLogger(__name__)
         full_template = self._load_template()
@@ -273,6 +311,14 @@ class AlignmentPromptBuilder:
 
     @staticmethod
     def _format_graph_evidence_section(func_context: FunctionContext) -> str:
+        """Format available code-graph and dataflow evidence for an alignment prompt.
+        
+        Parameters:
+        	func_context (FunctionContext): Function context containing static-analysis evidence.
+        
+        Returns:
+        	str: Labeled graph evidence, classic dataflow, and sink hints, or an empty string when none are available.
+        """
         summary = func_context.dataflow_summary or {}
         parts: list[str] = []
 
@@ -300,7 +346,15 @@ class AlignmentPromptBuilder:
         return "".join(parts)
 
     def build_analysis_content(self, func_context: FunctionContext) -> str:
-        """Build deterministic alignment evidence (no random delimiters)."""
+        """
+        Build deterministic evidence describing a function's behavior for alignment verification.
+        
+        Parameters:
+        	func_context (FunctionContext): Function metadata and static-analysis results used to construct the evidence.
+        
+        Returns:
+        	str: Formatted analysis evidence without randomized prompt delimiters.
+        """
         docstring = func_context.docstring or "No docstring provided"
 
         # Build the analysis content using list accumulation for efficiency
@@ -591,13 +645,14 @@ Parameter Flow Tracking:
         return "".join(content_parts)
 
     def build_prompt(self, func_context: FunctionContext) -> str:
-        """Build comprehensive alignment verification prompt.
-
-        Args:
-            func_context: Complete function context with dataflow analysis
-
+        """
+        Build an alignment-verification prompt for a function context.
+        
+        Parameters:
+        	func_context (FunctionContext): Function metadata and analysis evidence used to construct the prompt.
+        
         Returns:
-            Formatted prompt string with evidence
+        	str: The assembled prompt containing the verification template and function evidence.
         """
         random_id = secrets.token_hex(16)
         start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
@@ -624,9 +679,14 @@ Parameter Flow Tracking:
     def build_batch_analysis_content(
         self, func_contexts: List[FunctionContext]
     ) -> str:
-        """Build deterministic batch body (no random delimiters).
-
-        Reused across batch parse retries; only delimiter tags change.
+        """
+        Build deterministic analysis content for a batch of functions.
+        
+        Parameters:
+        	func_contexts (List[FunctionContext]): Function contexts to include in the batch analysis.
+        
+        Returns:
+        	str: Formatted analysis content containing metadata, security indicators, source code, and graph evidence for each function.
         """
         all_content = []
         all_content.append(
@@ -841,6 +901,16 @@ For functions with no issues, just include function_index, function_name, and mi
                 )
 
         def _build(template_body: str, body: str) -> str:
+            """
+            Assemble the template and analysis content with the configured prompt delimiters.
+            
+            Parameters:
+            	template_body (str): Template guidance to include.
+            	body (str): Analysis content to wrap.
+            
+            Returns:
+            	str: The assembled prompt with surrounding whitespace removed.
+            """
             return (
                 f"""{template_body}
 

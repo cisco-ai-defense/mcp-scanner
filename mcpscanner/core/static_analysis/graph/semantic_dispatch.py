@@ -18,6 +18,14 @@ from ..semantic.type_analyzer import TypeAnalyzer
 from .models import Provenance
 
 def _function_body_node(func: Node) -> Node | None:
+    """Return the body node associated with a Tree-sitter function node.
+    
+    Parameters:
+    	func (Node): Function node whose body should be located.
+    
+    Returns:
+    	Node | None: The function body node, or `None` when no supported body field is present.
+    """
     return (
         func.child_by_field_name("body")
         or func.child_by_field_name("body_statement")
@@ -43,6 +51,15 @@ def _record_call_binding(
 
 
 def _treesitter_var_name(node: Node, source_bytes: bytes) -> str | None:
+    """Extract a variable name from a Tree-sitter syntax node.
+    
+    Parameters:
+    	node (Node): Syntax node that may represent a variable.
+    	source_bytes (bytes): Source bytes containing the node text.
+    
+    Returns:
+    	str | None: The variable name, or `None` when the node has no supported name.
+    """
     if node.type == "identifier":
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
     if node.type == "variable_name":
@@ -54,6 +71,16 @@ def _treesitter_var_name(node: Node, source_bytes: bytes) -> str | None:
 
 
 def _class_from_ruby_new_call(node: Node, source_bytes: bytes) -> str | None:
+    """
+    Extract the class name from a Ruby-style `.new` call.
+    
+    Parameters:
+    	node (Node): The Tree-sitter call node to inspect.
+    	source_bytes (bytes): Source text used to decode the receiver and method names.
+    
+    Returns:
+    	str | None: The receiver's class name when the node represents a call to `new`; otherwise, `None`.
+    """
     if node.type not in _TS_CALL_TYPES:
         return None
     receiver = node.child_by_field_name("receiver")
@@ -69,6 +96,15 @@ def _class_from_ruby_new_call(node: Node, source_bytes: bytes) -> str | None:
 
 
 def _class_from_new_node(node: Node, source_bytes: bytes) -> str | None:
+    """Extracts the constructed class name from a supported Tree-sitter object-creation node.
+    
+    Parameters:
+    	node (Node): The Tree-sitter node to inspect.
+    	source_bytes (bytes): The source text containing the node.
+    
+    Returns:
+    	str | None: The class name, or `None` when the node is not a supported object-creation expression or has no identifiable constructor.
+    """
     if node.type not in ("new_expression", "object_creation_expression"):
         return None
     ctor = (
@@ -128,6 +164,12 @@ class DispatchResult:
 
     @property
     def provenance(self) -> Provenance:
+        """
+        Classify the confidence level of the dispatch targets.
+        
+        Returns:
+        	Provenance: `EXTRACTED` for one highly confident target, `INFERRED` when all targets meet the inference threshold, or `AMBIGUOUS` otherwise.
+        """
         if not self.targets:
             return Provenance.AMBIGUOUS
         if len(self.targets) == 1 and self.targets[0].confidence >= 0.95:
@@ -137,6 +179,12 @@ class DispatchResult:
         return Provenance.AMBIGUOUS
 
     def primary(self) -> DispatchTarget | None:
+        """
+        Selects the highest-confidence dispatch target.
+        
+        Returns:
+        	DispatchTarget | None: The target with the greatest confidence, or `None` if no targets are available.
+        """
         if not self.targets:
             return None
         return max(self.targets, key=lambda t: t.confidence)
@@ -150,6 +198,15 @@ class TypeHierarchy:
     methods: dict[str, set[str]] = field(default_factory=dict)
 
     def all_bases(self, class_name: str) -> set[str]:
+        """
+        Return all transitive base classes for a class.
+        
+        Parameters:
+        	class_name (str): The class whose base classes should be resolved.
+        
+        Returns:
+        	set[str]: The names of all direct and indirect base classes.
+        """
         seen: set[str] = set()
         stack = list(self.bases.get(class_name, []))
         while stack:
@@ -161,6 +218,15 @@ class TypeHierarchy:
         return seen
 
     def all_subtypes(self, class_name: str) -> set[str]:
+        """
+        Return all transitive subtypes of a class.
+        
+        Parameters:
+            class_name (str): The class whose subtypes to find.
+        
+        Returns:
+            set[str]: The class names of all descendants in the inheritance hierarchy.
+        """
         children: dict[str, set[str]] = defaultdict(set)
         for child, parents in self.bases.items():
             for parent in parents:
@@ -176,7 +242,16 @@ class TypeHierarchy:
         return seen
 
     def resolve_virtual(self, static_type: str, method: str) -> set[str]:
-        """Return concrete class names that may implement ``method``."""
+        """
+        Find class names that may implement a method for a static class type.
+        
+        Parameters:
+        	static_type (str): The class used as the starting point for dispatch.
+        	method (str): The method name to resolve.
+        
+        Returns:
+        	set[str]: Class names that define the method or have no recorded methods, including related subtypes and base classes.
+        """
         candidates = {static_type} | self.all_subtypes(static_type) | self.all_bases(static_type)
         out: set[str] = set()
         for cls in candidates:
@@ -195,10 +270,20 @@ class FunctionSemanticState:
     string_consts: dict[str, str] = field(default_factory=dict)
 
     def union_alias(self, left: str, right: str) -> None:
+        """Links two variable names as aliases in both directions."""
         self.aliases[left].add(right)
         self.aliases[right].add(left)
 
     def classes_for(self, var: str, seed: dict[str, str]) -> set[str]:
+        """Resolve all possible instance classes associated with a variable and its aliases.
+        
+        Parameters:
+        	var (str): Variable name to resolve.
+        	seed (dict[str, str]): External variable-to-class mappings.
+        
+        Returns:
+        	set[str]: Possible instance class names.
+        """
         seen_vars: set[str] = set()
         stack = [var]
         classes: set[str] = set()
@@ -215,6 +300,15 @@ class FunctionSemanticState:
 
 
 def build_python_hierarchy(source: str) -> TypeHierarchy:
+    """
+    Build a type hierarchy from top-level Python class definitions.
+    
+    Parameters:
+    	source (str): Python source code to analyze.
+    
+    Returns:
+    	TypeHierarchy: A hierarchy containing direct named bases and methods for each top-level class. Returns an empty hierarchy when the source contains a syntax error.
+    """
     hierarchy = TypeHierarchy()
     try:
         tree = ast.parse(source)
@@ -234,12 +328,39 @@ def build_python_hierarchy(source: str) -> TypeHierarchy:
 
 
 def build_treesitter_hierarchy(language: str, root: Node, source_bytes: bytes) -> TypeHierarchy:
+    """
+    Build a type hierarchy from a Tree-sitter syntax tree.
+    
+    Parameters:
+    	language (str): The source language represented by the syntax tree.
+    	root (Node): The root node of the parsed syntax tree.
+    	source_bytes (bytes): The source text used to extract class, base, and method names.
+    
+    Returns:
+    	TypeHierarchy: The classes, inheritance relationships, and declared methods found in the syntax tree.
+    """
     hierarchy = TypeHierarchy()
 
     def text(node: Node) -> str:
+        """
+        Extract the UTF-8 source text covered by a syntax tree node.
+        
+        Parameters:
+        	node (Node): Syntax tree node whose source span should be extracted.
+        
+        Returns:
+        	str: The decoded source text for the node.
+        """
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
     def visit(node: Node, current_class: str | None = None) -> None:
+        """
+        Populate the type hierarchy with classes, inheritance relationships, and methods found in a syntax tree node.
+        
+        Parameters:
+        	node (Node): Syntax tree node to traverse.
+        	current_class (str | None): Enclosing class name during recursive traversal.
+        """
         if node.type in ("class_declaration", "class"):
             name_node = node.child_by_field_name("name")
             if name_node is None:
@@ -283,6 +404,16 @@ def _python_function_state(
     *,
     seed_instances: dict[str, str],
 ) -> FunctionSemanticState:
+    """
+    Builds semantic state for a Python function from assignments and seeded instance facts.
+    
+    Parameters:
+    	func (ast.FunctionDef | ast.AsyncFunctionDef): The function whose local facts are analyzed.
+    	seed_instances (dict[str, str]): Initial mappings from variable names to possible instance classes.
+    
+    Returns:
+    	FunctionSemanticState: The inferred instance classes, aliases, and string constants.
+    """
     state = FunctionSemanticState()
     for node in ast.walk(func):
         if isinstance(node, ast.Assign):
@@ -322,12 +453,38 @@ def _treesitter_function_state(
     *,
     seed_instances: dict[str, str],
 ) -> FunctionSemanticState:
+    """
+    Infer instance classes, aliases, and string constants from a Tree-sitter function body.
+    
+    Parameters:
+    	func (Node): The Tree-sitter function node to analyze.
+    	source_bytes (bytes): The source text containing the function.
+    	seed_instances (dict[str, str]): Known variable-to-class mappings to include in the resulting state.
+    
+    Returns:
+    	FunctionSemanticState: The semantic facts inferred from the function and supplied seed instances.
+    """
     state = FunctionSemanticState()
 
     def text(node: Node) -> str:
+        """
+        Extract the UTF-8 source text covered by a syntax tree node.
+        
+        Parameters:
+        	node (Node): Syntax tree node whose source span should be extracted.
+        
+        Returns:
+        	str: The decoded source text for the node.
+        """
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
     def walk(node: Node) -> None:
+        """
+        Collect semantic facts from supported Tree-sitter declarations and assignments.
+        
+        The traversal records inferred instance classes, aliases, and string constants in
+        the surrounding function state.
+        """
         if node.type in ("lexical_declaration", "variable_declaration"):
             for child in node.children:
                 if child.type != "variable_declarator":
@@ -409,6 +566,17 @@ def _match_qualified_methods(
     known_functions: set[str],
     caller_file: str,
 ) -> list[str]:
+    """
+    Match qualified method names against known functions, prioritizing functions from the caller's file.
+    
+    Parameters:
+    	qualified_names (set[str]): Qualified method names to resolve.
+    	known_functions (set[str]): Known function identifiers.
+    	caller_file (str): File containing the calling function.
+    
+    Returns:
+    	list[str]: Deduplicated matching function identifiers.
+    """
     matches: list[str] = []
     for qualified in qualified_names:
         short = qualified.split(".")[-1]
@@ -427,6 +595,17 @@ def _match_qualified_methods(
 
 
 def _confidence_for_target(count: int, *, literal_method: bool, virtual: bool) -> float:
+    """
+    Assign a confidence score to a resolved dispatch target.
+    
+    Parameters:
+    	count (int): Number of candidate targets.
+    	literal_method (bool): Whether the method name is known literally.
+    	virtual (bool): Whether virtual dispatch contributed to the resolution.
+    
+    Returns:
+    	float: Confidence score based on candidate count and resolution characteristics.
+    """
     if count == 1:
         if literal_method:
             return 1.0
@@ -452,6 +631,20 @@ class SemanticDispatchEngine:
         program_facts: ProgramFacts | None = None,
         caller_node_id: str | None = None,
     ) -> None:
+        """
+        Initialize semantic dispatch analysis context.
+        
+        Parameters:
+            language (str): Language of the source code.
+            source (str): Source code containing the caller.
+            known_functions (set[str]): Function identifiers available for target matching.
+            caller_file (str): Path of the file containing the caller.
+            hierarchy (TypeHierarchy): Class inheritance and method information.
+            seed_instances (dict[str, str]): Initial mappings from variables to instance classes.
+            semantic (TypeAnalyzer | TreeSitterSemanticAnalyzer | None): Optional language-specific semantic analyzer.
+            program_facts (ProgramFacts | None): Optional cross-function facts for propagation.
+            caller_node_id (str | None): Optional graph node identifier for the caller.
+        """
         self.language = language
         self.source = source
         self.known_functions = known_functions
@@ -474,6 +667,21 @@ class SemanticDispatchEngine:
         program_facts: ProgramFacts | None = None,
         caller_node_id: str | None = None,
     ) -> SemanticDispatchEngine:
+        """
+        Create a semantic dispatch engine configured for a source file.
+        
+        Parameters:
+        	language (str): Source language identifier.
+        	source (str): Source code used to build the type hierarchy.
+        	known_functions (set[str]): Known function identifiers available for target matching.
+        	caller_file (str): Path of the file containing the call site.
+        	semantic (TypeAnalyzer | TreeSitterSemanticAnalyzer | None): Optional semantic analyzer providing seeded instance-to-class mappings.
+        	program_facts (ProgramFacts | None): Optional cross-function facts used during dispatch.
+        	caller_node_id (str | None): Optional caller function node identifier.
+        
+        Returns:
+        	SemanticDispatchEngine: An engine initialized with the source file's hierarchy and semantic facts.
+        """
         seed = semantic.instance_to_class.copy() if semantic else {}
         if language == "python":
             hierarchy = build_python_hierarchy(source)
@@ -504,6 +712,19 @@ class SemanticDispatchEngine:
         method: str | None,
         kind: str,
     ) -> DispatchResult:
+        """
+        Resolve a call site to possible semantic dispatch targets.
+        
+        Parameters:
+        	caller_label (str): Label identifying the calling function.
+        	callee_label (str): Label identifying the called expression.
+        	receiver (str | None): Receiver variable or expression, if available.
+        	method (str | None): Statically known method name, if available.
+        	kind (str): Call kind used to determine dispatch behavior.
+        
+        Returns:
+        	DispatchResult: Matching dispatch targets with confidence and resolution context.
+        """
         state = self._function_state(caller_label)
         if state is None:
             return DispatchResult()
@@ -527,6 +748,16 @@ class SemanticDispatchEngine:
         caller_label: str,
         callee_label: str,
     ) -> DispatchResult:
+        """
+        Resolve a method call through the receiver's inferred class hierarchy.
+        
+        Parameters:
+        	caller_label (str): Identifier of the function containing the call.
+        	callee_label (str): Receiver-and-method label in the form `receiver.method`.
+        
+        Returns:
+        	DispatchResult: Candidate method targets resolved through virtual dispatch, or an empty result when the label or caller cannot be resolved.
+        """
         if "." not in callee_label:
             return DispatchResult()
         receiver, method = callee_label.split(".", 1)
@@ -568,6 +799,17 @@ class SemanticDispatchEngine:
         callee_label: str,
         kind: str,
     ) -> str | None:
+        """Resolve a dynamically supplied method name from propagated string constants.
+
+        Parameters:
+            state (FunctionSemanticState): Semantic facts available in the caller function.
+            receiver (str): Receiver associated with the dynamic call.
+            callee_label (str): Label describing the dynamic call expression.
+            kind (str): Dynamic-call syntax used to supply the method name.
+
+        Returns:
+            str | None: The resolved method name, or None when no string constant is available.
+        """
         if callee_label.endswith("()"):
             callee_label = callee_label[:-2]
         if kind == "bracket_variable":
@@ -602,6 +844,20 @@ class SemanticDispatchEngine:
         from_const: bool = False,
         virtual: bool = False,
     ) -> DispatchResult:
+        """
+        Resolve a method on an inferred receiver class.
+        
+        Parameters:
+            state (FunctionSemanticState): Semantic facts for the enclosing function.
+            receiver (str): Receiver variable whose possible classes are resolved.
+            method (str): Method name to resolve.
+            kind (str): Dispatch kind used to describe the resolution context.
+            from_const (bool): Whether the method name came from a propagated string constant.
+            virtual (bool): Whether to include implementations from virtual subtypes.
+        
+        Returns:
+            DispatchResult: Matching method targets with confidence and resolution context.
+        """
         classes = state.classes_for(receiver, self.seed_instances)
         if not classes and self.semantic:
             cls = self.semantic.instance_to_class.get(receiver)
@@ -642,6 +898,17 @@ class SemanticDispatchEngine:
         receiver: str,
         kind: str,
     ) -> DispatchResult:
+        """
+        Resolve all known methods for the possible classes of a receiver when the method name is unavailable.
+        
+        Parameters:
+        	state (FunctionSemanticState): Semantic facts used to infer the receiver's possible classes.
+        	receiver (str): Receiver variable whose possible classes determine the candidate methods.
+        	kind (str): Dispatch kind associated with the resolution request.
+        
+        Returns:
+        	DispatchResult: Candidate method targets with bounded dynamic-dispatch confidence, or an empty result when the receiver classes or matching methods cannot be determined.
+        """
         classes = state.classes_for(receiver, self.seed_instances)
         if not classes:
             return DispatchResult()
@@ -669,6 +936,16 @@ class SemanticDispatchEngine:
 
 
 def _find_python_function(tree: ast.Module, label: str) -> ast.FunctionDef | None:
+    """
+    Locate a top-level Python function or a method within a top-level class.
+    
+    Parameters:
+        tree (ast.Module): Parsed Python module to search.
+        label (str): Function name or class-qualified method name.
+    
+    Returns:
+        ast.FunctionDef | None: The matching function node, or `None` if no match is found.
+    """
     if "." in label:
         class_name, method_name = label.rsplit(".", 1)
         for node in tree.body:
@@ -685,6 +962,16 @@ def _find_python_function(tree: ast.Module, label: str) -> ast.FunctionDef | Non
 
 
 def _find_treesitter_function(root: Node, label: str, source_bytes: bytes) -> Node | None:
+    """Locate a function or class method by label in a Tree-sitter syntax tree.
+    
+    Parameters:
+        root (Node): Root node of the syntax tree to search.
+        label (str): Function name or class-qualified method label.
+        source_bytes (bytes): Source code used to read declaration names.
+    
+    Returns:
+        Node | None: The matching function node, or `None` when no match is found.
+    """
     def text(node: Node) -> str:
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
@@ -751,6 +1038,17 @@ class ProgramFacts:
     strings: dict[str, dict[str, str]] = field(default_factory=lambda: defaultdict(dict))
 
     def add_instance(self, func_id: str, var: str, class_name: str) -> bool:
+        """
+        Record a possible instance class for a variable within a function.
+        
+        Parameters:
+        	func_id (str): Identifier of the function containing the variable.
+        	var (str): Variable associated with the instance class.
+        	class_name (str): Possible class of the variable.
+        
+        Returns:
+        	bool: `True` if the class was added, `False` if it was already recorded.
+        """
         bucket = self.instances[func_id][var]
         if class_name in bucket:
             return False
@@ -758,18 +1056,44 @@ class ProgramFacts:
         return True
 
     def add_string(self, func_id: str, var: str, value: str) -> bool:
+        """
+        Record a string fact for a function.
+        
+        Parameters:
+            func_id (str): Identifier of the function associated with the fact.
+            var (str): Variable whose value is being recorded.
+            value (str): String value associated with the variable.
+        
+        Returns:
+            bool: `true` if the recorded value changed, `false` if it was already recorded.
+        """
         if self.strings[func_id].get(var) == value:
             return False
         self.strings[func_id][var] = value
         return True
 
     def merge_into_state(self, func_id: str, state: FunctionSemanticState) -> None:
+        """Merge propagated instance-class and string-constant facts for a function into its semantic state.
+        
+        Parameters:
+            func_id (str): Identifier of the function whose facts should be merged.
+            state (FunctionSemanticState): State to update with the stored facts.
+        """
         for var, classes in self.instances.get(func_id, {}).items():
             state.instance_classes.setdefault(var, set()).update(classes)
         for var, value in self.strings.get(func_id, {}).items():
             state.string_consts.setdefault(var, value)
 
     def absorb_summary(self, summary: FunctionSummary) -> bool:
+        """
+        Add a function summary's instance-class and string-constant facts to the program facts.
+        
+        Parameters:
+        	summary (FunctionSummary): Summary containing facts to incorporate.
+        
+        Returns:
+        	bool: `True` if the program facts changed, `False` otherwise.
+        """
         changed = False
         for var, classes in summary.instance_classes.items():
             for cls in classes:
@@ -785,6 +1109,16 @@ class ProgramFacts:
         summaries: dict[str, FunctionSummary],
         graph: Any,
     ) -> bool:
+        """
+        Propagate function summaries and returned facts across call relationships.
+        
+        Parameters:
+            summaries (dict[str, FunctionSummary]): Function summaries keyed by function node ID.
+            graph (Any): Call graph containing `CALLS` relationships.
+        
+        Returns:
+            bool: `True` if propagation adds new facts, `False` otherwise.
+        """
         from .models import Relation
 
         changed = False
@@ -813,6 +1147,17 @@ class ProgramFacts:
 
 
 def callee_name_matches(binding_name: str, callee_short: str, callee_node_id: str) -> bool:
+    """
+    Determine whether a call binding name identifies a callee.
+    
+    Parameters:
+        binding_name (str): Name recorded for the call binding.
+        callee_short (str): Short name of the callee.
+        callee_node_id (str): Qualified identifier of the callee.
+    
+    Returns:
+        bool: `true` if the binding name matches the callee identifier, `false` otherwise.
+    """
     label = callee_node_id.split("::", 1)[-1]
     return (
         binding_name == callee_short
@@ -828,6 +1173,17 @@ def build_function_summaries(
     language: str,
     source_registry: dict[str, str],
 ) -> dict[str, FunctionSummary]:
+    """
+    Build function summaries for graph nodes with available source code.
+    
+    Parameters:
+    	graph (Any): Graph containing function nodes identified by file path and label.
+    	language (str): Source language used to parse the functions.
+    	source_registry (dict[str, str]): Mapping of file paths to source code.
+    
+    Returns:
+    	dict[str, FunctionSummary]: Mapping of function node IDs to extracted summaries.
+    """
     summaries: dict[str, FunctionSummary] = {}
     for node_id, node in graph.nodes.items():
         if node.kind != "function" or "::" not in node_id:
@@ -854,6 +1210,18 @@ def _extract_function_summary(
     language: str,
     source: str,
 ) -> FunctionSummary | None:
+    """
+    Build a semantic summary for a function from its source code.
+    
+    Parameters:
+        node_id (str): Identifier of the function node.
+        label (str): Function or method label used to locate the function.
+        language (str): Source language.
+        source (str): Complete source code containing the function.
+    
+    Returns:
+        FunctionSummary | None: The extracted function summary, or `None` if the source cannot be parsed, the language is unsupported, or the function cannot be located.
+    """
     summary = FunctionSummary(node_id=node_id)
     if language == "python":
         try:
@@ -889,6 +1257,15 @@ def _extract_function_summary(
 
 
 def _python_call_name(node: ast.Call) -> str | None:
+    """
+    Extract the called function or method name from a Python call node.
+    
+    Parameters:
+    	node (ast.Call): The call expression to inspect.
+    
+    Returns:
+    	str | None: The function or method name, or `None` when the call target has no direct name.
+    """
     func = node.func
     if isinstance(func, ast.Name):
         return func.id
@@ -898,6 +1275,15 @@ def _python_call_name(node: ast.Call) -> str | None:
 
 
 def _python_call_bindings(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[CallSiteBinding]:
+    """
+    Extracts variables assigned from recognized function or method calls within a Python function.
+    
+    Parameters:
+    	func (ast.FunctionDef | ast.AsyncFunctionDef): The function whose call-result assignments are analyzed.
+    
+    Returns:
+    	list[CallSiteBinding]: The call-site bindings found in simple and annotated assignments.
+    """
     bindings: list[CallSiteBinding] = []
     for node in ast.walk(func):
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
@@ -915,6 +1301,14 @@ def _python_call_bindings(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[
 
 
 def _python_return_classes(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Collect class names constructed by return statements in a Python function.
+    
+    Parameters:
+    	func (ast.FunctionDef | ast.AsyncFunctionDef): Function definition to inspect.
+    
+    Returns:
+    	set[str]: Class names used as direct call targets in returned expressions.
+    """
     classes: set[str] = set()
     for node in ast.walk(func):
         if not isinstance(node, ast.Return) or node.value is None:
@@ -925,6 +1319,15 @@ def _python_return_classes(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[
 
 
 def _python_return_strings(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """
+    Collect string literals returned directly by a Python function.
+    
+    Parameters:
+    	func (ast.FunctionDef | ast.AsyncFunctionDef): The function whose return statements are inspected.
+    
+    Returns:
+    	set[str]: String values found in direct return expressions.
+    """
     strings: set[str] = set()
     for node in ast.walk(func):
         if isinstance(node, ast.Return) and isinstance(node.value, ast.Constant):
@@ -934,6 +1337,15 @@ def _python_return_strings(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[
 
 
 def _treesitter_call_name(node: Node, source_bytes: bytes) -> str | None:
+    """Extract the called function or method name from a Tree-sitter call node.
+    
+    Parameters:
+    	node (Node): Tree-sitter node representing a call expression.
+    	source_bytes (bytes): Source text containing the node.
+    
+    Returns:
+    	str | None: The unqualified function or method name, or `None` when the call has no identifiable callee.
+    """
     method = node.child_by_field_name("method")
     if method is not None:
         return source_bytes[method.start_byte : method.end_byte].decode("utf-8")
@@ -945,12 +1357,36 @@ def _treesitter_call_name(node: Node, source_bytes: bytes) -> str | None:
 
 
 def _treesitter_call_bindings(func: Node, source_bytes: bytes) -> list[CallSiteBinding]:
+    """Extract deduplicated bindings for variables assigned the results of function calls.
+    
+    Parameters:
+    	func (Node): Tree-sitter function node whose body is inspected.
+    	source_bytes (bytes): Source bytes used to recover variable and callee names.
+    
+    Returns:
+    	list[CallSiteBinding]: Unique variable-to-callee bindings found in the function body.
+    """
     bindings: list[CallSiteBinding] = []
 
     def text(node: Node) -> str:
+        """
+        Extract the UTF-8 source text covered by a syntax tree node.
+        
+        Parameters:
+        	node (Node): Syntax tree node whose source span should be extracted.
+        
+        Returns:
+        	str: The decoded source text for the node.
+        """
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
     def walk(node: Node) -> None:
+        """
+        Collects variable bindings created by call expressions in a syntax tree.
+        
+        Parameters:
+            node (Node): Syntax-tree node whose subtree is traversed.
+        """
         if node.type in (
             "lexical_declaration",
             "variable_declaration",
@@ -1040,12 +1476,33 @@ _TS_CALL_TYPES = frozenset(
 
 
 def _treesitter_return_classes(func: Node, source_bytes: bytes) -> set[str]:
+    """Collects classes constructed or returned by a Tree-sitter function.
+    
+    Parameters:
+    	func (Node): The function node to inspect.
+    	source_bytes (bytes): The source text containing the function.
+    
+    Returns:
+    	set[str]: Class names identified in return expressions and supported constructor calls.
+    """
     classes: set[str] = set()
 
     def text(node: Node) -> str:
+        """
+        Extract the UTF-8 source text covered by a syntax tree node.
+        
+        Parameters:
+        	node (Node): Syntax tree node whose source span should be extracted.
+        
+        Returns:
+        	str: The decoded source text for the node.
+        """
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
     def walk(node: Node) -> None:
+        """
+        Collect classes returned by traversing a Tree-sitter syntax subtree.
+        """
         if node.type in ("return_statement", "return"):
             for child in node.children:
                 cls = _class_from_new_node(child, source_bytes)
@@ -1075,12 +1532,36 @@ def _treesitter_return_classes(func: Node, source_bytes: bytes) -> set[str]:
 
 
 def _treesitter_return_strings(func: Node, source_bytes: bytes) -> set[str]:
+    """Collect string literals returned by a Tree-sitter function.
+    
+    Parameters:
+    	func (Node): Tree-sitter node representing the function.
+    	source_bytes (bytes): Source text containing the function.
+    
+    Returns:
+    	set[str]: String literals found in return statements.
+    """
     strings: set[str] = set()
 
     def text(node: Node) -> str:
+        """
+        Extract the UTF-8 source text covered by a syntax tree node.
+        
+        Parameters:
+        	node (Node): Syntax tree node whose source span should be extracted.
+        
+        Returns:
+        	str: The decoded source text for the node.
+        """
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
     def walk(node: Node) -> None:
+        """
+        Collect string literals found in return statements within an AST subtree.
+        
+        Parameters:
+        	node (Node): Root node of the subtree to traverse.
+        """
         if node.type in ("return_statement", "return"):
             for child in node.children:
                 if child.type in ("string", "encapsed_string"):

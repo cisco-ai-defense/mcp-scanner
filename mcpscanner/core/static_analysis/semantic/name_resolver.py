@@ -88,6 +88,13 @@ class NameResolver:
     """
 
     def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None):
+        """
+        Initialize the name resolver with a language analyzer and optional MCP parameter names.
+        
+        Parameters:
+            analyzer (BaseParser): Language-specific analyzer.
+            parameter_names (list[str] | None): MCP entry-point parameter names used to track parameter-influenced variables.
+        """
         warnings.warn(
             "NameResolver is unused in production; prefer CallGraphAnalyzer + code graph.",
             DeprecationWarning,

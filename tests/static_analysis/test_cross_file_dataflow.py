@@ -12,6 +12,14 @@ from mcpscanner.core.static_analysis.context_extractor import FunctionContext
 
 
 def _minimal_context(name: str = "handler") -> FunctionContext:
+    """Create a minimal tool function context for testing.
+    
+    Parameters:
+        name (str): Name assigned to the function context.
+    
+    Returns:
+        FunctionContext: A context with empty analysis data and a single ``path`` parameter.
+    """
     return FunctionContext(
         name=name,
         decorator_types=["tool"],
@@ -47,6 +55,16 @@ class _FakeCallGraph:
         return ["/tmp/x.py::helper"]
 
     def analyze_parameter_flow_across_files(self, _entry: str, _params: list[str]):
+        """
+        Summarize parameter flow across files for an entry function.
+        
+        Parameters:
+            _entry (str): Entry function to analyze.
+            _params (list[str]): Parameters whose flow should be analyzed.
+        
+        Returns:
+            dict: An analysis summary containing cross-file flows, the number of involved files, and parameter-influenced functions.
+        """
         return {
             "cross_file_flows": [],
             "total_files_involved": 1,
