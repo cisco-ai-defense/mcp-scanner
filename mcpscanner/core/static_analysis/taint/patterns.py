@@ -270,7 +270,9 @@ class TaintPatterns:
             "pathlib.Path.open", "pathlib.Path.read_text", "pathlib.Path.read_bytes",
             "pathlib.Path.write_text", "pathlib.Path.write_bytes",
             "shutil.copy", "shutil.copy2", "shutil.copyfile", "shutil.move",
+            "shutil.rmtree",
             "os.remove", "os.unlink", "os.rmdir", "os.makedirs",
+            "os.symlink", "os.chmod", "os.chown",
             "tarfile.open", "zipfile.ZipFile",
         },
         "javascript": {

@@ -182,7 +182,7 @@ class TestAnalyzeUnboundScanModeRegression:
     """``analyze`` must remain total when reset_stats raises."""
 
     @pytest.mark.asyncio
-    async def test_reset_stats_raises_returns_empty(self, caplog, monkeypatch):
+    async def test_reset_stats_raises_returns_infrastructure_finding(self, caplog, monkeypatch):
         from mcpscanner.utils.logging_config import get_logger
 
         analyzer = BehavioralCodeAnalyzer(_cfg())
@@ -200,7 +200,9 @@ class TestAnalyzeUnboundScanModeRegression:
         with caplog.at_level(logging.ERROR):
             result = await analyzer.analyze("/nonexistent/path", {"tool_name": "t"})
 
-        assert result == []
+        assert len(result) == 1
+        assert result[0].threat_category == "ANALYZER INFRASTRUCTURE"
+        assert result[0].analyzer == "Behavioral"
         # The error handler logged the failure with the pre-initialised
         # sentinel values (``mode=unknown target=-``), confirming neither
         # variable was unbound.
@@ -251,8 +253,8 @@ class TestErroredFunctionSurfacedAsError:
         # A single function takes the non-batched path inside
         # ``_analyze_source_code``; stub just ``check_alignment``.
         async def _stub_check_alignment(func_context):
-            analyzer.alignment_orchestrator.errored_function_names.add(
-                func_context.name
+            analyzer.alignment_orchestrator.errored_function_keys.add(
+                (str(py), func_context.name)
             )
             return None
 
@@ -285,6 +287,53 @@ class TestErroredFunctionSurfacedAsError:
         assert len(my) == 1, f"expected one finding, got {findings!r}"
         assert my[0].severity == "UNKNOWN"
         assert (my[0].details or {}).get("analysis_status") == "errored"
+
+
+class TestErroredFunctionKeysScopedPerFile:
+    """Same-named functions in different files must not share errored state."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_files_do_not_cross_contaminate_errored_keys(
+        self, tmp_path, monkeypatch
+    ):
+        analyzer = BehavioralCodeAnalyzer(_cfg())
+
+        async def _stub_check_alignment(func_context):
+            if func_context.source_file.endswith("bad.py"):
+                analyzer.alignment_orchestrator._mark_errored(func_context)
+            return None
+
+        monkeypatch.setattr(
+            analyzer.alignment_orchestrator,
+            "check_alignment",
+            _stub_check_alignment,
+        )
+
+        good = tmp_path / "good.py"
+        bad = tmp_path / "bad.py"
+        source = (
+            "from mcp.server.fastmcp import FastMCP\n"
+            'mcp = FastMCP("test")\n'
+            "@mcp.tool()\n"
+            "def handler(x: str) -> str:\n"
+            '    """Doc."""\n'
+            "    return x\n"
+        )
+        good.write_text(source, encoding="utf-8")
+        bad.write_text(source, encoding="utf-8")
+
+        findings = await analyzer.analyze(
+            str(tmp_path),
+            {"file_path": str(tmp_path), "file_concurrency": 2},
+        )
+
+        by_file = {}
+        for finding in findings:
+            if (finding.details or {}).get("function_name") != "handler":
+                continue
+            by_file[(finding.details or {}).get("source_file")] = finding.severity
+        assert by_file[str(good)] == "SAFE"
+        assert by_file[str(bad)] == "UNKNOWN"
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +638,8 @@ class TestAnalyzedFunctionsResetOnEarlyFailure:
         analyzer.alignment_orchestrator.reset_stats = _boom  # type: ignore[method-assign]
 
         result = await analyzer.analyze("/nonexistent", {"tool_name": "t"})
-        assert result == []
+        assert len(result) == 1
+        assert result[0].threat_category == "ANALYZER INFRASTRUCTURE"
         assert analyzer.analyzed_functions == [], (
             "stale analyzed_functions should be cleared even when the "
             "scan body bails before populating it"

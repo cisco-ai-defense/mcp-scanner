@@ -221,6 +221,47 @@ class MCPScannerConstants:
     BEHAVIORAL_MAX_REACHES_CALLS: int = int(
         os.getenv("MCP_SCANNER_BEHAVIORAL_MAX_REACHES_CALLS", "10")
     )
+    BEHAVIORAL_LLM_BATCH_CONCURRENCY: int = max(
+        1,
+        int(os.getenv("MCP_SCANNER_BEHAVIORAL_LLM_BATCH_CONCURRENCY", "3")),
+    )
+    BEHAVIORAL_FILE_CONCURRENCY: int = max(
+        1,
+        int(os.getenv("MCP_SCANNER_BEHAVIORAL_FILE_CONCURRENCY", "4")),
+    )
+
+    # Optional per-scan alignment cache (stable evidence key, not delimiters).
+    # Off by default so determinism eval repeats always call the LLM.
+    ALIGNMENT_CACHE_ENABLED: bool = os.getenv(
+        "MCP_SCANNER_ALIGNMENT_CACHE", "0"
+    ).lower() in ("1", "true", "yes")
+
+    # Deterministic code graph layer (graph evidence always passed to LLM).
+    # Enabled by default; set MCP_SCANNER_CODE_GRAPH=0 to disable.
+    CODE_GRAPH_ENABLED: bool = os.getenv(
+        "MCP_SCANNER_CODE_GRAPH", "1"
+    ).lower() not in ("0", "false", "no")
+
+    # Optional on-disk cache directory for per-file CodeGraph partials.
+    CODE_GRAPH_CACHE_DIR: str = os.getenv("MCP_SCANNER_CODE_GRAPH_CACHE", "")
+
+    # Summary-based call-graph fixpoint iterations (cross-function const/points-to).
+    CODE_GRAPH_FIXPOINT_ROUNDS: int = max(
+        0,
+        int(os.getenv("MCP_SCANNER_CODE_GRAPH_FIXPOINT_ROUNDS", "3")),
+    )
+
+    # Optional local source tree for behavioral analysis during live MCP server scans.
+    BEHAVIORAL_SOURCE_PATH: str = os.getenv("MCP_SCANNER_BEHAVIORAL_SOURCE_PATH", "")
+
+    # HTTP behavioral source endpoint is opt-in and confined to this root.
+    BEHAVIORAL_SOURCE_API_ENABLED: bool = os.getenv(
+        "MCP_SCANNER_ENABLE_BEHAVIORAL_SOURCE_API", "false"
+    ).lower() in ("true", "1", "yes")
+    BEHAVIORAL_SOURCE_API_ROOT: str = os.getenv(
+        "MCP_SCANNER_BEHAVIORAL_SOURCE_API_ROOT",
+        os.getenv("MCP_SCANNER_BEHAVIORAL_SOURCE_PATH", ""),
+    )
 
     # VirusTotal Configuration
     ENV_VIRUSTOTAL_API_KEY: str = os.getenv(

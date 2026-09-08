@@ -32,6 +32,7 @@ from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.auth import Auth, AuthType
 from mcpscanner.core.mcp_models import StdioServer
 from mcpscanner.core.result import PromptScanResult, ResourceScanResult
+from mcpscanner.core.analyzers.meta_analyzer import build_meta_audit_payload
 from mcpscanner.core.exceptions import (
     MCPConnectionError,
     MCPAuthenticationError,
@@ -1305,3 +1306,362 @@ async def test_scan_prompts_returns_empty_on_synthetic_session_terminated(config
 
     assert results == []
     session.list_prompts.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_scan_remote_server_tool_runs_behavioral_finalize(config):
+    """Single-tool remote scans must attach behavioral source findings like bulk scans."""
+    mock_session = AsyncMock()
+    mock_tool = MCPTool(name="safe_tool", description="tool", parameters=[])
+    mock_session.list_tools.return_value = type("ToolList", (), {"tools": [mock_tool]})()
+
+    tool_result = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+
+    scanner = Scanner(config)
+    scanner._behavioral_analyzer = MagicMock()
+    with (
+        patch.object(
+            scanner,
+            "_get_mcp_session",
+            AsyncMock(return_value=(AsyncMock(), mock_session)),
+        ),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+        patch.object(scanner, "_analyze_tool", AsyncMock(return_value=tool_result)),
+        patch.object(
+            scanner,
+            "_finalize_single_tool_scan",
+            AsyncMock(return_value=tool_result),
+        ) as mock_finalize,
+    ):
+        result = await scanner.scan_remote_server_tool(
+            "https://test-server.com",
+            "safe_tool",
+            analyzers=[AnalyzerEnum.API, AnalyzerEnum.BEHAVIORAL],
+            source_path="/tmp/server-src",
+        )
+
+    assert result is tool_result
+    mock_finalize.assert_awaited_once_with(
+        tool_result,
+        [AnalyzerEnum.API, AnalyzerEnum.BEHAVIORAL],
+        source_path="/tmp/server-src",
+    )
+
+
+@pytest.mark.asyncio
+async def test_scan_stdio_server_tool_runs_behavioral_finalize(config):
+    """Single-tool stdio scans must attach behavioral source findings like bulk scans."""
+    mock_session = AsyncMock()
+    mock_tool = MCPTool(name="safe_tool", description="tool", parameters=[])
+    mock_session.list_tools.return_value = type("ToolList", (), {"tools": [mock_tool]})()
+
+    tool_result = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+    server_config = StdioServer(command="python", args=["server.py"])
+
+    scanner = Scanner(config)
+    scanner._behavioral_analyzer = MagicMock()
+    with (
+        patch.object(
+            scanner,
+            "_get_stdio_session",
+            AsyncMock(return_value=(AsyncMock(), mock_session)),
+        ),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+        patch.object(scanner, "_analyze_tool", AsyncMock(return_value=tool_result)),
+        patch.object(
+            scanner,
+            "_finalize_single_tool_scan",
+            AsyncMock(return_value=tool_result),
+        ) as mock_finalize,
+    ):
+        result = await scanner.scan_stdio_server_tool(
+            server_config,
+            "safe_tool",
+            analyzers=[AnalyzerEnum.API, AnalyzerEnum.BEHAVIORAL],
+            source_path="/tmp/server-src",
+        )
+
+    assert result is tool_result
+    mock_finalize.assert_awaited_once_with(
+        tool_result,
+        [AnalyzerEnum.API, AnalyzerEnum.BEHAVIORAL],
+        source_path="/tmp/server-src",
+    )
+
+
+@pytest.mark.asyncio
+async def test_finalize_single_tool_scan_merges_orphan_behavioral_findings(config):
+    scanner = Scanner(config)
+    primary = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+    orphan_finding = SecurityFinding(
+        analyzer="Behavioral",
+        severity="HIGH",
+        summary="orphan behavioral finding",
+        threat_category="MALICIOUS_CODE",
+        details={"function_name": "other_tool"},
+    )
+    orphan_bucket = ToolScanResult(
+        tool_name="__behavioral_source__",
+        tool_description="Behavioral source scan",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[orphan_finding],
+    )
+
+    async def fake_finalize(results, analyzers, source_path=None):
+        return [results[0], orphan_bucket]
+
+    with patch.object(
+        scanner, "_finalize_tool_scan_results", side_effect=fake_finalize
+    ):
+        merged = await scanner._finalize_single_tool_scan(
+            primary,
+            [AnalyzerEnum.BEHAVIORAL],
+            source_path="/tmp/src",
+        )
+
+    assert merged.tool_name == "safe_tool"
+    assert merged.findings == [orphan_finding]
+
+
+@pytest.mark.asyncio
+async def test_finalize_single_tool_scan_merges_orphan_meta_filtered(config):
+    """Orphan behavioral meta-filtered findings must fold into the primary result."""
+    scanner = Scanner(config)
+    primary = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META],
+        findings=[],
+    )
+    dropped = SecurityFinding(
+        analyzer="Behavioral",
+        severity="SAFE",
+        summary="filtered orphan",
+        threat_category="",
+        details={"function_name": "other_tool"},
+    )
+    orphan_bucket = ToolScanResult(
+        tool_name="__behavioral_source__",
+        tool_description="Behavioral source scan",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META],
+        findings=[],
+    )
+    orphan_bucket.meta_filtered_findings = [dropped]
+
+    async def fake_finalize(results, analyzers, source_path=None):
+        return [results[0], orphan_bucket]
+
+    with patch.object(
+        scanner, "_finalize_tool_scan_results", side_effect=fake_finalize
+    ):
+        merged = await scanner._finalize_single_tool_scan(
+            primary,
+            [AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META],
+            source_path="/tmp/src",
+        )
+
+    assert merged.meta_filtered_findings == [dropped]
+
+
+@pytest.mark.asyncio
+async def test_finalize_single_tool_scan_merged_meta_audit_payload(config):
+    """Merged orphan meta drops must surface in the derived meta_analysis audit."""
+    scanner = Scanner(config)
+    primary = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META],
+        findings=[],
+    )
+    primary_drop = SecurityFinding(
+        analyzer="Behavioral",
+        severity="SAFE",
+        summary="primary filtered",
+        threat_category="",
+        details={"function_name": "safe_tool", "meta_reason": "benign"},
+    )
+    orphan_drop = SecurityFinding(
+        analyzer="Behavioral",
+        severity="SAFE",
+        summary="orphan filtered",
+        threat_category="",
+        details={"function_name": "other_tool", "meta_reason": "benign"},
+    )
+    orphan_bucket = ToolScanResult(
+        tool_name="__behavioral_source__",
+        tool_description="Behavioral source scan",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META],
+        findings=[],
+    )
+    orphan_bucket.meta_filtered_findings = [orphan_drop]
+
+    async def fake_finalize(results, analyzers, source_path=None):
+        primary_result = results[0]
+        primary_result.meta_filtered_findings = [primary_drop]
+        return [primary_result, orphan_bucket]
+
+    with patch.object(
+        scanner, "_finalize_tool_scan_results", side_effect=fake_finalize
+    ):
+        merged = await scanner._finalize_single_tool_scan(
+            primary,
+            [AnalyzerEnum.BEHAVIORAL, AnalyzerEnum.META],
+            source_path="/tmp/src",
+        )
+
+    audit = build_meta_audit_payload(merged.meta_filtered_findings)
+    assert audit is not None
+    assert audit["filtered_count"] == 2
+    summaries = {item["summary"] for item in audit["filtered_findings"]}
+    assert summaries == {"primary filtered", "orphan filtered"}
+
+
+@pytest.mark.asyncio
+async def test_scan_remote_server_tool_attaches_behavioral_findings_e2e(config):
+    """Single-tool remote scans must attach behavioral findings without mocking finalize."""
+    behavioral_finding = SecurityFinding(
+        analyzer="Behavioral",
+        severity="HIGH",
+        summary="behavioral mismatch",
+        threat_category="MALICIOUS_CODE",
+        details={"function_name": "safe_tool"},
+    )
+    mock_session = AsyncMock()
+    mock_tool = MCPTool(name="safe_tool", description="tool", parameters=[])
+    mock_session.list_tools.return_value = type("ToolList", (), {"tools": [mock_tool]})()
+
+    tool_result = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+
+    scanner = Scanner(config)
+    behavioral = MagicMock()
+    behavioral.analyze = AsyncMock(return_value=[behavioral_finding])
+    scanner._behavioral_analyzer = behavioral
+
+    with (
+        patch.object(
+            scanner,
+            "_get_mcp_session",
+            AsyncMock(return_value=(AsyncMock(), mock_session)),
+        ),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+        patch.object(scanner, "_analyze_tool", AsyncMock(return_value=tool_result)),
+    ):
+        result = await scanner.scan_remote_server_tool(
+            "https://test-server.com",
+            "safe_tool",
+            analyzers=[AnalyzerEnum.BEHAVIORAL],
+            source_path="/tmp/server-src",
+        )
+
+    assert behavioral_finding in result.findings
+    behavioral.analyze.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scan_stdio_server_tool_attaches_behavioral_findings_e2e(config):
+    """Single-tool stdio scans must attach behavioral findings without mocking finalize."""
+    behavioral_finding = SecurityFinding(
+        analyzer="Behavioral",
+        severity="HIGH",
+        summary="behavioral mismatch",
+        threat_category="MALICIOUS_CODE",
+        details={"function_name": "safe_tool"},
+    )
+    mock_session = AsyncMock()
+    mock_tool = MCPTool(name="safe_tool", description="tool", parameters=[])
+    mock_session.list_tools.return_value = type("ToolList", (), {"tools": [mock_tool]})()
+
+    tool_result = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+    server_config = StdioServer(command="python", args=["server.py"])
+
+    scanner = Scanner(config)
+    behavioral = MagicMock()
+    behavioral.analyze = AsyncMock(return_value=[behavioral_finding])
+    scanner._behavioral_analyzer = behavioral
+
+    with (
+        patch.object(
+            scanner,
+            "_get_stdio_session",
+            AsyncMock(return_value=(AsyncMock(), mock_session)),
+        ),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+        patch.object(scanner, "_analyze_tool", AsyncMock(return_value=tool_result)),
+    ):
+        result = await scanner.scan_stdio_server_tool(
+            server_config,
+            "safe_tool",
+            analyzers=[AnalyzerEnum.BEHAVIORAL],
+            source_path="/tmp/server-src",
+        )
+
+    assert behavioral_finding in result.findings
+    behavioral.analyze.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_attach_behavioral_source_routes_unmatched_to_orphan_bucket(config):
+    """Unmatched behavioral findings must land in __behavioral_source__."""
+    scanner = Scanner(config)
+    primary = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+    orphan_finding = SecurityFinding(
+        analyzer="Behavioral",
+        severity="HIGH",
+        summary="unmatched handler",
+        threat_category="MALICIOUS_CODE",
+        details={"function_name": "other_handler"},
+    )
+    behavioral = MagicMock()
+    behavioral.analyze = AsyncMock(return_value=[orphan_finding])
+    scanner._behavioral_analyzer = behavioral
+
+    results = await scanner._attach_behavioral_source_findings(
+        [primary],
+        [AnalyzerEnum.BEHAVIORAL],
+        source_path="/tmp/src",
+    )
+
+    orphan = next(r for r in results if r.tool_name == "__behavioral_source__")
+    assert orphan.findings == [orphan_finding]
+    assert primary.findings == []

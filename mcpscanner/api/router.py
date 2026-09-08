@@ -36,9 +36,12 @@ from ..core.models import (
     SpecificPromptScanRequest,
     SpecificResourceScanRequest,
     SpecificInstructionsScanRequest,
+    BehavioralSourceScanRequest,
     ToolScanResult,
 )
+from ..config.constants import MCPScannerConstants
 from ..core.report_generator import ReportGenerator, results_to_json
+from ..utils.path_safety import require_confined_path, resolve_confined_api_root
 from ..core.result import (
     ScanResult,
     PromptScanResult,
@@ -71,6 +74,60 @@ def get_scanner() -> ScannerFactory:
     raise NotImplementedError(
         "This dependency must be overridden in the main application."
     )
+
+
+def _behavioral_source_api_gate() -> str:
+    """Validate behavioral source API is enabled and return the configured root."""
+    if not MCPScannerConstants.BEHAVIORAL_SOURCE_API_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Behavioral source API is disabled. Set "
+                "MCP_SCANNER_ENABLE_BEHAVIORAL_SOURCE_API=true to enable it."
+            ),
+        )
+
+    api_root = (MCPScannerConstants.BEHAVIORAL_SOURCE_API_ROOT or "").strip()
+    if not api_root:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Behavioral source API requires MCP_SCANNER_BEHAVIORAL_SOURCE_API_ROOT "
+                "(or MCP_SCANNER_BEHAVIORAL_SOURCE_PATH) to confine readable paths."
+            ),
+        )
+    try:
+        return resolve_confined_api_root(api_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _behavioral_api_path_not_found(findings: List[Any]) -> bool:
+    """Return True when the behavioral analyzer reported a missing confined path."""
+    if len(findings) != 1:
+        return False
+    finding = findings[0]
+    if getattr(finding, "threat_category", "") != "ANALYZER INFRASTRUCTURE":
+        return False
+    details = getattr(finding, "details", None) or {}
+    return details.get("error_type") == "FileNotFoundError"
+
+
+def _resolve_scanner_factory(request: Request) -> ScannerFactory:
+    """Resolve ``get_scanner`` after API gates so disabled mounts do not 500."""
+    override = request.app.dependency_overrides.get(get_scanner)
+    if override is not None:
+        return override()
+    try:
+        return get_scanner()
+    except NotImplementedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Behavioral source API requires the host application to register "
+                "a scanner factory via app.dependency_overrides[get_scanner]."
+            ),
+        ) from exc
 
 
 def _build_meta_analysis_audit(scanner_result: Any) -> Optional[Dict[str, Any]]:
@@ -1016,4 +1073,91 @@ async def scan_instructions_endpoint(
         logger.error(f"Unexpected error in instructions scan: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Error scanning instructions: {str(e)}"
+        )
+
+
+@router.post("/scan-behavioral-source", tags=["Scanning"])
+async def scan_behavioral_source_endpoint(
+    request: BehavioralSourceScanRequest,
+    http_request: Request,
+    api_root: str = Depends(_behavioral_source_api_gate),
+):
+    """Run behavioral source-code analysis on a local file or directory.
+
+    Host applications must set ``app.dependency_overrides[get_scanner]`` when this
+    endpoint is enabled (see ``mcpscanner.api.api``). Place the service behind
+    network/auth controls; it reads arbitrary files under the configured API root.
+    """
+    logger.debug(
+        "Starting behavioral source scan - path: %s api_root: %s",
+        request.source_path,
+        api_root,
+    )
+
+    try:
+        try:
+            confined_str = require_confined_path(request.source_path, api_root)
+        except ValueError as exc:
+            logger.error("Invalid behavioral source path: %s", exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        scanner_factory = _resolve_scanner_factory(http_request)
+        scanner = scanner_factory([AnalyzerEnum.BEHAVIORAL])
+        if not scanner._behavioral_analyzer:
+            logger.error(
+                "Behavioral source scan rejected: LLM credentials not configured"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Behavioral analyzer requires LLM credentials in scanner configuration",
+            )
+
+        analyzer = scanner._behavioral_analyzer
+        findings = await analyzer.analyze(
+            confined_str,
+            context={"file_path": confined_str, "api_confined_scan": True},
+        )
+        if _behavioral_api_path_not_found(findings):
+            logger.error(
+                "Behavioral source path not found under API root: %s",
+                request.source_path,
+            )
+            raise HTTPException(
+                status_code=404,
+                detail=f"Path not found under API root: {request.source_path}",
+            )
+        analyzed_functions = getattr(analyzer, "analyzed_functions", 0)
+        logger.debug(
+            "Behavioral source scan completed - path: %s finding_count=%d analyzed_functions=%s",
+            confined_str,
+            len(findings),
+            analyzed_functions,
+        )
+        return {
+            "source_path": confined_str,
+            "finding_count": len(findings),
+            "analyzed_functions": analyzed_functions,
+            "findings": [
+                {
+                    "severity": f.severity,
+                    "summary": f.summary,
+                    "analyzer": f.analyzer,
+                    "threat_category": f.threat_category,
+                    "details": f.details,
+                }
+                for f in findings
+            ],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Unexpected error in behavioral source scan path=%s: %s",
+            request.source_path,
+            e,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error scanning behavioral source: {str(e)}",
         )

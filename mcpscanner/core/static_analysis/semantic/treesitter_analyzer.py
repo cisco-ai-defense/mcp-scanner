@@ -162,7 +162,7 @@ class TreeSitterSemanticAnalyzer:
         elif node.type in ("class_declaration", "class", "struct_item", "impl_item"):
             self._visit_class(node)
         elif node.type in ("variable_declarator", "short_var_declaration", "let_declaration",
-                          "assignment", "property_declaration", "var_spec"):
+                          "lexical_declaration", "assignment", "property_declaration", "var_spec"):
             self._visit_assignment(node)
         else:
             for child in node.children:
@@ -241,6 +241,12 @@ class TreeSitterSemanticAnalyzer:
     
     def _visit_assignment(self, node: Node) -> None:
         """Visit assignment and track taint."""
+        if node.type == "lexical_declaration":
+            for child in node.children:
+                if child.type == "variable_declarator":
+                    self._visit_assignment(child)
+            return
+
         # Get target
         target = node.child_by_field_name("left") or node.child_by_field_name("name")
         value = node.child_by_field_name("right") or node.child_by_field_name("value")
@@ -268,8 +274,17 @@ class TreeSitterSemanticAnalyzer:
                 self.param_influenced.add(target_name)
             
             # Track class instantiation
-            if value and value.type in ("call_expression", "new_expression", "object_creation_expression"):
+            if value and value.type in (
+                "call_expression",
+                "new_expression",
+                "object_creation_expression",
+            ):
                 func = value.child_by_field_name("function") or value.child_by_field_name("type")
+                if func is None and value.type == "new_expression":
+                    for child in value.children:
+                        if child.type in ("identifier", "type_identifier"):
+                            func = child
+                            break
                 if func:
                     class_name = self._get_text(func)
                     self.instance_to_class[target_name] = class_name
