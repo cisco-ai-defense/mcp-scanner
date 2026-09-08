@@ -4838,11 +4838,18 @@ class NativeAnalyzer:
         )
 
     @staticmethod
+    def _ts_scope_lookup_key(fn: "Node", use_node: "Node") -> tuple[int, int, int]:
+        """Stable cache key for per-call-site TS scope lookups."""
+        return (fn.start_byte, fn.end_byte, use_node.start_byte)
+
+    @staticmethod
     def _ts_node_contains(ancestor: "Node", descendant: "Node") -> bool:
         """Return True if ``descendant`` is nested under ``ancestor``."""
+        if ancestor is None or descendant is None:
+            return False
         cur = descendant
         while cur is not None:
-            if cur is ancestor:
+            if _is_same_ts_node(cur, ancestor):
                 return True
             cur = cur.parent
         return False
@@ -4866,7 +4873,7 @@ class NativeAnalyzer:
         if cache is None:
             cache = {}
             self._shadowed_names_cache = cache
-        cache_key = (id(fn), use_node.start_byte // 64)
+        cache_key = self._ts_scope_lookup_key(fn, use_node)
         if cache_key in cache:
             return cache[cache_key]
         shadowed: Set[str] = set()
@@ -4892,7 +4899,7 @@ class NativeAnalyzer:
             for child in n.children:
                 if (
                     child.type in nested_scope_types
-                    and child is not fn
+                    and not _is_same_ts_node(child, fn)
                     and not self._ts_node_contains(child, use_node)
                 ):
                     continue
@@ -4911,7 +4918,7 @@ class NativeAnalyzer:
         if cache is None:
             cache = {}
             self._visible_alias_cache = cache
-        cache_key = (id(fn), use_node.start_byte // 64)
+        cache_key = self._ts_scope_lookup_key(fn, use_node)
         if cache_key in cache:
             return cache[cache_key]
 
@@ -4947,14 +4954,14 @@ class NativeAnalyzer:
             for child in node.children:
                 if (
                     child.type in nested_scope_types
-                    and child is not fn
+                    and not _is_same_ts_node(child, fn)
                     and not self._ts_node_contains(child, use_node)
                 ):
                     continue
                 walk_scope(child)
 
         for child in root.children:
-            if child is fn:
+            if _is_same_ts_node(child, fn):
                 break
             walk_scope(child)
         walk_scope(fn)
