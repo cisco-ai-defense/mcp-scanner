@@ -63,6 +63,83 @@ def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
     return ("full", ctx.name, ctx.line_number, decs)
 
 
+def _flow_param_name(flow: Dict[str, Any]) -> Optional[str]:
+    return flow.get("parameter_name") or flow.get("parameter")
+
+
+def _merge_unique_preserve_order(*sequences: List[str]) -> List[str]:
+    """Merge string lists deduplicating while keeping first-seen order stable."""
+    seen: set[str] = set()
+    merged: List[str] = []
+    for sequence in sequences:
+        for item in sequence:
+            if item not in seen:
+                seen.add(item)
+                merged.append(item)
+    return merged
+
+
+def _enrich_function_context_from_supplemental(
+    primary: FunctionContext,
+    supplemental: FunctionContext,
+) -> None:
+    """Fold NativeAnalyzer callee-enrichment fields into a ContextExtractor hit."""
+    primary.has_file_operations = (
+        primary.has_file_operations or supplemental.has_file_operations
+    )
+    primary.has_network_operations = (
+        primary.has_network_operations or supplemental.has_network_operations
+    )
+    primary.has_subprocess_calls = (
+        primary.has_subprocess_calls or supplemental.has_subprocess_calls
+    )
+    primary.has_eval_exec = primary.has_eval_exec or supplemental.has_eval_exec
+    primary.has_dangerous_imports = (
+        primary.has_dangerous_imports or supplemental.has_dangerous_imports
+    )
+
+    seen_reach = set(primary.reachable_functions or [])
+    for name in supplemental.reachable_functions or []:
+        if name not in seen_reach:
+            primary.reachable_functions.append(name)
+            seen_reach.add(name)
+
+    supplemental_by_name = {
+        _flow_param_name(flow): flow
+        for flow in supplemental.parameter_flows
+        if _flow_param_name(flow)
+    }
+    for flow in primary.parameter_flows:
+        pname = _flow_param_name(flow)
+        if not pname:
+            continue
+        sflow = supplemental_by_name.get(pname)
+        if sflow is None:
+            continue
+        if sflow.get("reaches_external"):
+            flow["reaches_external"] = True
+        flow["reaches_calls"] = _merge_unique_preserve_order(
+            list(flow.get("reaches_calls") or []),
+            list(sflow.get("reaches_calls") or []),
+        )
+
+    if supplemental.dataflow_summary:
+        pri_summary = dict(primary.dataflow_summary or {})
+        sup_summary = supplemental.dataflow_summary
+        pri_pf = dict(pri_summary.get("param_flows") or {})
+        for pname, sval in (sup_summary.get("param_flows") or {}).items():
+            pval = dict(pri_pf.get(pname) or {})
+            if sval.get("reaches_external"):
+                pval["reaches_external"] = True
+            pval["reaches_calls"] = _merge_unique_preserve_order(
+                list(pval.get("reaches_calls") or []),
+                list(sval.get("reaches_calls") or []),
+            )
+            pri_pf[pname] = pval
+        pri_summary["param_flows"] = pri_pf
+        primary.dataflow_summary = pri_summary
+
+
 def _merge_mcp_function_contexts(
     primary: List[FunctionContext],
     supplemental: List[FunctionContext],
@@ -71,15 +148,18 @@ def _merge_mcp_function_contexts(
 
     NativeAnalyzer's Gap 8 pass finds programmatic registrations even when
     the primary extractor already surfaced decorator-based tools in the
-    same file.
+    same file. When both analyzers surface the same tool, fold
+    supplemental security flags, reachable callees, and parameter-flow
+    evidence into the primary context instead of discarding it.
     """
-    seen = {_context_dedupe_key(ctx) for ctx in primary}
+    by_key = {_context_dedupe_key(ctx): ctx for ctx in primary}
     merged = list(primary)
     for ctx in supplemental:
         key = _context_dedupe_key(ctx)
-        if key in seen:
+        if key in by_key:
+            _enrich_function_context_from_supplemental(by_key[key], ctx)
             continue
-        seen.add(key)
+        by_key[key] = ctx
         merged.append(ctx)
     return merged
 
@@ -850,6 +930,12 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         "line_number": getattr(fc, "line_number", 0),
                         "source_file": file_path,
                         "docstring": getattr(fc, "docstring", None) or "",
+                        "has_subprocess_calls": bool(
+                            getattr(fc, "has_subprocess_calls", False)
+                        ),
+                        "reachable_functions": list(
+                            getattr(fc, "reachable_functions", None) or []
+                        ),
                     }
                 )
 
@@ -880,9 +966,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # Fallback to individual analysis
                 for func_context in func_contexts:
                     # Check function source size (configurable via constants)
-                    func_source_size = (
-                        len(func_context.source) if hasattr(func_context, "source") else 0
-                    )
+                    func_source_size = len(getattr(func_context, "source", None) or "")
                     func_line_count = (
                         func_context.line_count
                         if hasattr(func_context, "line_count")

@@ -183,6 +183,8 @@ class TaintPatterns:
         },
         "rust": {
             "Command::new", "std::process::Command",
+            "std::process::Command::new",
+            "tokio::process::Command",
         },
     })
     
@@ -258,7 +260,9 @@ class TaintPatterns:
             "CSharpCodeProvider.CompileAssemblyFromSource",
             "Assembly.Load",
         },
-        "rust": {},  # Rust doesn't have eval
+        "rust": {
+            "libloading::Library::new",
+        },
     })
     
     # File operation sinks (path traversal)
