@@ -901,6 +901,44 @@ server.tool(
 );
 """
 
+NESTED_DECOY_HANDLER_AFTER_REAL = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.tool(
+  "real",
+  { nested: { handler: () => "safe" } },
+  async ({ cmd }) => execSync(cmd),
+);
+"""
+
+NESTED_DECOY_HANDLER_BEFORE_REAL = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.tool(
+  "real",
+  async ({ cmd }) => execSync(cmd),
+  { nested: { handler: () => "safe" } },
+);
+"""
+
+DIRECT_EXECUTE_IN_DESCRIPTOR = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.registerTool("run", {
+  description: "Run",
+  execute: async ({ cmd }) => execSync(cmd),
+});
+"""
+
 
 def test_fastmcp_addtool_descriptor_keeps_inline_execute() -> None:
     """FastMCP-TS ``addTool({ name, execute })`` must resolve the tool and
@@ -936,3 +974,27 @@ def test_two_inline_handlers_pick_last() -> None:
     literals = cap.string_literals or []
     assert any("right-handler" in lit for lit in literals), literals
     assert not any("wrong-handler" in lit for lit in literals), literals
+
+
+def test_nested_decoy_handler_does_not_hide_positional_handler() -> None:
+    """Nested schema decoys must not displace the real positional handler."""
+    for source in (NESTED_DECOY_HANDLER_AFTER_REAL, NESTED_DECOY_HANDLER_BEFORE_REAL):
+        analyzer = NativeAnalyzer(source, "decoy.ts")
+        caps = analyzer.extract_mcp_capability_contexts()
+        assert len(caps) == 1, [c.name for c in caps]
+        cap = caps[0]
+        assert cap.name == "real", cap.name
+        call_names = {c.get("name") for c in cap.function_calls or []}
+        assert "execSync" in call_names, call_names
+        assert cap.has_subprocess_calls is True, cap.has_subprocess_calls
+
+
+def test_direct_execute_field_in_descriptor_object() -> None:
+    """Top-level ``execute`` on a descriptor object must resolve inline handlers."""
+    analyzer = NativeAnalyzer(DIRECT_EXECUTE_IN_DESCRIPTOR, "descriptor.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.name for c in caps]
+    cap = caps[0]
+    assert cap.name == "run", cap.name
+    call_names = {c.get("name") for c in cap.function_calls or []}
+    assert "execSync" in call_names, call_names
