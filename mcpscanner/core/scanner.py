@@ -897,7 +897,6 @@ class Scanner:
 
         if AnalyzerEnum.YARA in analyzers:
             # Run YARA analysis on the description
-            reported_yara_rules = set()
             try:
                 yara_desc_context = {"tool_name": name, "content_type": "description"}
                 yara_desc_findings = await self._yara_analyzer.analyze(
@@ -905,34 +904,25 @@ class Scanner:
                 )
                 for finding in yara_desc_findings:
                     finding.analyzer = "YARA"
-                reported_yara_rules = {
-                    (finding.details.get("raw_response") or {}).get("rule")
-                    for finding in yara_desc_findings
-                }
                 all_findings.extend(yara_desc_findings)
             except Exception as e:
                 logger.error(
                     f'YARA analysis failed on description: tool="{name}", error="{e}"'
                 )
 
-            # Run YARA analysis on the complete serialized tool so that rules
-            # conjoining multiple signals (e.g. a credential path AND an action
-            # word) evaluate across field boundaries instead of being defeated
-            # by splitting the signals across description and parameters.
-            # Findings whose rule already fired on the description alone are
-            # dropped; YARA findings carry no match offsets, so this dedup
-            # loses no information.
+            # Run YARA analysis on the tool parameters
             try:
+                # Remove description from the JSON as it is already analyzed
+                if "description" in tool_data:
+                    del tool_data["description"]
+                tool_json_str = json.dumps(tool_data)
                 yara_params_context = {"tool_name": name, "content_type": "parameters"}
                 yara_params_findings = await self._yara_analyzer.analyze(
-                    tool_json, yara_params_context
+                    tool_json_str, yara_params_context
                 )
                 for finding in yara_params_findings:
-                    raw = finding.details.get("raw_response") or {}
-                    if raw.get("rule") in reported_yara_rules:
-                        continue
                     finding.analyzer = "YARA"
-                    all_findings.append(finding)
+                all_findings.extend(yara_params_findings)
             except Exception as e:
                 logger.error(
                     f'YARA analysis failed on parameters: tool="{name}", error="{e}"'
@@ -1055,7 +1045,6 @@ class Scanner:
                 f"Error parsing prompt '{name}' data: {e}. Using minimal data."
             )
             prompt_data = {"name": name, "description": description}
-            prompt_json = json.dumps(prompt_data)
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the description
@@ -1074,7 +1063,6 @@ class Scanner:
 
         if AnalyzerEnum.YARA in analyzers:
             # Run YARA analysis on the description
-            reported_yara_rules = set()
             try:
                 yara_desc_context = {"prompt_name": name, "content_type": "description"}
                 yara_desc_findings = await self._yara_analyzer.analyze(
@@ -1082,33 +1070,25 @@ class Scanner:
                 )
                 for finding in yara_desc_findings:
                     finding.analyzer = "YARA"
-                reported_yara_rules = {
-                    (finding.details.get("raw_response") or {}).get("rule")
-                    for finding in yara_desc_findings
-                }
                 all_findings.extend(yara_desc_findings)
             except Exception as e:
                 logger.error(
                     f'YARA analysis failed on prompt description: prompt="{name}", error="{e}"'
                 )
 
-            # Run YARA analysis on the complete serialized prompt so that
-            # rules conjoining multiple signals evaluate across field
-            # boundaries instead of being defeated by splitting the signals
-            # across description and arguments. Findings whose rule already
-            # fired on the description alone are dropped; YARA findings carry
-            # no match offsets, so this dedup loses no information.
+            # Run YARA analysis on the prompt arguments/structure
             try:
+                # Remove description from the JSON as it is already analyzed
+                if "description" in prompt_data:
+                    del prompt_data["description"]
+                prompt_json_str = json.dumps(prompt_data)
                 yara_params_context = {"prompt_name": name, "content_type": "arguments"}
                 yara_params_findings = await self._yara_analyzer.analyze(
-                    prompt_json, yara_params_context
+                    prompt_json_str, yara_params_context
                 )
                 for finding in yara_params_findings:
-                    raw = finding.details.get("raw_response") or {}
-                    if raw.get("rule") in reported_yara_rules:
-                        continue
                     finding.analyzer = "YARA"
-                    all_findings.append(finding)
+                all_findings.extend(yara_params_findings)
             except Exception as e:
                 logger.error(
                     f'YARA analysis failed on prompt arguments: prompt="{name}", error="{e}"'
