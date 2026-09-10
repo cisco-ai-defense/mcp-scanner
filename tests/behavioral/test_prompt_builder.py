@@ -23,6 +23,8 @@ from mcpscanner.config.constants import MCPScannerConstants
 from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
     AlignmentPromptBuilder,
     _ANALYSIS_TRUNCATION_SUFFIX,
+    _MIN_ANALYSIS_CHARS,
+    _PROMPT_FRAME_ALLOWANCE_CHARS,
     _TEMPLATE_TRUNCATION_SUFFIX,
 )
 from mcpscanner.core.static_analysis.context_extractor import FunctionContext
@@ -66,18 +68,68 @@ class TestAlignmentPromptBudget:
         )
         assert len(prompt) <= cap
 
-    def test_template_truncated_when_fixed_overhead_exceeds_cap(self, monkeypatch):
+    def test_undersized_budget_raises_at_init(self, monkeypatch):
         monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 8000)
+        with pytest.raises(ValueError, match="ALIGNMENT_MAX_PROMPT_CHARS"):
+            AlignmentPromptBuilder()
+
+    def test_budget_boundary_accepted_and_below_rejected(self, monkeypatch):
+        probe = AlignmentPromptBuilder()
+        required = (
+            len(probe._template)
+            + _MIN_ANALYSIS_CHARS
+            + len(_ANALYSIS_TRUNCATION_SUFFIX)
+            + _PROMPT_FRAME_ALLOWANCE_CHARS
+        )
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", required)
+        AlignmentPromptBuilder()
+        monkeypatch.setattr(
+            MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", required - 1
+        )
+        with pytest.raises(ValueError, match="ALIGNMENT_MAX_PROMPT_CHARS"):
+            AlignmentPromptBuilder()
+
+    def test_default_budget_keeps_template_intact(self):
+        builder = AlignmentPromptBuilder()
+        prompt = builder.build_prompt(_minimal_function_context())
+        assert _TEMPLATE_TRUNCATION_SUFFIX not in prompt
+        assert builder._template[-500:] in prompt
+
+    def test_analysis_evidence_floor_reserved(self):
+        builder = AlignmentPromptBuilder()
+        cap = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        analysis_content = "A" * cap
+        prompt = builder._assemble_prompt(
+            template=builder._template,
+            analysis_content=analysis_content,
+            start_tag="<!---UNTRUSTED_INPUT_START_test--->",
+            end_tag="<!---UNTRUSTED_INPUT_END_test--->",
+            log_label="test=evidence_floor",
+        )
+        assert len(prompt) <= cap
+        assert analysis_content[:_MIN_ANALYSIS_CHARS] in prompt
+
+    def test_custom_budget_override_honored(self, monkeypatch):
+        probe = AlignmentPromptBuilder()
+        required = (
+            len(probe._template)
+            + _MIN_ANALYSIS_CHARS
+            + len(_ANALYSIS_TRUNCATION_SUFFIX)
+            + _PROMPT_FRAME_ALLOWANCE_CHARS
+        )
+        custom_cap = required + 10_000
+        monkeypatch.setattr(
+            MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", custom_cap
+        )
         builder = AlignmentPromptBuilder()
         prompt = builder._assemble_prompt(
             template=builder._template,
-            analysis_content="short body",
+            analysis_content="A" * (custom_cap + 10_000),
             start_tag="<!---UNTRUSTED_INPUT_START_test--->",
             end_tag="<!---UNTRUSTED_INPUT_END_test--->",
-            log_label="test=template_cap",
+            log_label="test=custom_cap",
         )
-        assert _TEMPLATE_TRUNCATION_SUFFIX in prompt
-        assert len(prompt) <= 8000
+        assert len(prompt) <= custom_cap
 
     def test_build_prompt_respects_alignment_cap(self):
         builder = AlignmentPromptBuilder()
