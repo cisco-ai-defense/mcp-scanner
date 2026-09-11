@@ -311,6 +311,125 @@ class Scanner:
         return text[:budget] + f"... [instructions truncated, {elided} bytes elided]"
 
     @staticmethod
+    def _coerce_prompt_message_content(content: Any) -> str:
+        """Extract plain text from an MCP prompt message content object."""
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if hasattr(content, "text"):
+            text = getattr(content, "text", None)
+            return text if isinstance(text, str) else str(text or "")
+        if isinstance(content, list):
+            parts = [
+                Scanner._coerce_prompt_message_content(item)
+                for item in content
+            ]
+            return "\n".join(part for part in parts if part)
+        return str(content)
+
+    @classmethod
+    def _extract_prompt_messages_text(cls, get_prompt_result: Any) -> str:
+        """Flatten ``prompts/get`` message bodies into one analyzable string."""
+        messages = getattr(get_prompt_result, "messages", None) or []
+        blocks: List[str] = []
+        for message in messages:
+            role = getattr(message, "role", "user")
+            text = cls._coerce_prompt_message_content(
+                getattr(message, "content", None)
+            ).strip()
+            if text:
+                blocks.append(f"[{role}]\n{text}")
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _default_prompt_arguments(prompt: MCPPrompt) -> Dict[str, str]:
+        """Build empty argument values for ``prompts/get`` when args are optional."""
+        arguments: Dict[str, str] = {}
+        for arg in getattr(prompt, "arguments", None) or []:
+            name = getattr(arg, "name", None)
+            if name:
+                arguments[name] = ""
+        return arguments
+
+    async def _resolve_prompt_messages_text(
+        self, session: ClientSession, prompt: MCPPrompt
+    ) -> str:
+        """Fetch rendered prompt messages via ``prompts/get`` for analysis."""
+        try:
+            arguments = self._default_prompt_arguments(prompt)
+            get_prompt_result = await session.get_prompt(prompt.name, arguments=arguments)
+            return self._extract_prompt_messages_text(get_prompt_result)
+        except Exception as e:
+            logger.warning(
+                f"Could not fetch prompt messages for '{prompt.name}': {e}"
+            )
+            return ""
+
+    @classmethod
+    def _extract_resource_read_result(
+        cls,
+        read_resource_result: Any,
+        list_mime_type: Optional[str] = None,
+    ) -> tuple[str, str, bool]:
+        """Extract text and effective MIME type from ``resources/read`` result.
+
+        Returns:
+            Tuple of (text_content, effective_mime_type, binary_only).
+            ``binary_only`` is True when contents had no usable text.
+        """
+        contents = getattr(read_resource_result, "contents", None) or []
+        text_content = ""
+        content_mime: Optional[str] = None
+        saw_binary = False
+
+        for content in contents:
+            if hasattr(content, "text") and content.text:
+                text_content += content.text
+                if content_mime is None and getattr(content, "mimeType", None):
+                    content_mime = content.mimeType
+            elif hasattr(content, "blob") and content.blob:
+                saw_binary = True
+                logger.info("Skipping binary blob segment in resource contents")
+                continue
+
+        effective_mime = (
+            (list_mime_type or "").strip()
+            or (content_mime or "").strip()
+            or "unknown"
+        )
+        if not text_content.strip() and saw_binary:
+            return "", effective_mime, True
+        return text_content, effective_mime, False
+
+    @staticmethod
+    def _combine_prompt_analysis_text(
+        description: str, prompt_messages_text: str
+    ) -> str:
+        """Merge list metadata and rendered message bodies for content analyzers."""
+        parts: List[str] = []
+        if description and description.strip():
+            parts.append(description.strip())
+        if prompt_messages_text and prompt_messages_text.strip():
+            parts.append(prompt_messages_text.strip())
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _build_prompt_description_for_meta(
+        result: PromptScanResult, budget: int = 8000
+    ) -> str:
+        """Synthesize prompt context for meta-analysis (description + message bodies)."""
+        description = (getattr(result, "prompt_description", "") or "").strip()
+        text = (getattr(result, "prompt_messages_text", "") or "").strip()
+        if not description and not text:
+            return "N/A"
+        combined = Scanner._combine_prompt_analysis_text(description, text)
+        if len(combined) <= budget:
+            return combined
+        elided = len(combined) - budget
+        return combined[:budget] + f"... [prompt context truncated, {elided} bytes elided]"
+
+    @staticmethod
     def _build_resource_description_for_meta(
         result: ResourceScanResult, budget: int = 8000
     ) -> str:
@@ -440,7 +559,7 @@ class Scanner:
         entity_context = {
             "type": "prompt",
             "name": result.prompt_name,
-            "description": result.prompt_description,
+            "description": self._build_prompt_description_for_meta(result),
         }
         prompt_analyzers = list({f.analyzer for f in result.findings})
 
@@ -460,6 +579,8 @@ class Scanner:
                     findings=kept,
                     server_source=result.server_source,
                     server_name=result.server_name,
+                    prompt_messages_text=getattr(result, "prompt_messages_text", "")
+                    or "",
                 )
                 enriched.meta_filtered_findings = dropped
                 return enriched
@@ -1021,6 +1142,7 @@ class Scanner:
         prompt: MCPPrompt,
         analyzers: List[AnalyzerEnum],
         http_headers: Optional[dict] = None,
+        prompt_messages_text: str = "",
     ) -> PromptScanResult:
         """Analyze a single MCP prompt using specified analyzers.
 
@@ -1028,6 +1150,7 @@ class Scanner:
             prompt (MCPPrompt): The MCP prompt to analyze.
             analyzers (List[AnalyzerEnum]): List of analyzers to run.
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
+            prompt_messages_text (str): Rendered message bodies from ``prompts/get``.
 
         Returns:
             PromptScanResult: The result of the analysis.
@@ -1035,6 +1158,9 @@ class Scanner:
         all_findings = []
         name = prompt.name
         description = prompt.description or ""
+        combined_content = self._combine_prompt_analysis_text(
+            description, prompt_messages_text
+        )
 
         # Safely parse prompt data
         try:
@@ -1047,11 +1173,11 @@ class Scanner:
             prompt_data = {"name": name, "description": description}
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
-            # Run API analysis on the description
+            # Run API analysis on description + rendered prompt messages
             try:
-                api_context = {"prompt_name": name, "content_type": "description"}
+                api_context = {"prompt_name": name, "content_type": "prompt_content"}
                 api_findings = await self._api_analyzer.analyze(
-                    description, api_context
+                    combined_content or description, api_context
                 )
                 for finding in api_findings:
                     finding.analyzer = "API"
@@ -1062,18 +1188,18 @@ class Scanner:
                 )
 
         if AnalyzerEnum.YARA in analyzers:
-            # Run YARA analysis on the description
+            # Run YARA analysis on description + rendered messages
             try:
-                yara_desc_context = {"prompt_name": name, "content_type": "description"}
+                yara_desc_context = {"prompt_name": name, "content_type": "prompt_content"}
                 yara_desc_findings = await self._yara_analyzer.analyze(
-                    description, yara_desc_context
+                    combined_content or description, yara_desc_context
                 )
                 for finding in yara_desc_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_desc_findings)
             except Exception as e:
                 logger.error(
-                    f'YARA analysis failed on prompt description: prompt="{name}", error="{e}"'
+                    f'YARA analysis failed on prompt content: prompt="{name}", error="{e}"'
                 )
 
             # Run YARA analysis on the prompt arguments/structure
@@ -1095,17 +1221,23 @@ class Scanner:
                 )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
-            # Run LLM analysis on the complete prompt information
+            # Run LLM analysis on list metadata + rendered prompt messages
             try:
                 # Format content for comprehensive analysis
                 analysis_content = f"Prompt Name: {name}\n"
                 analysis_content += f"Description: {description}\n"
+                if prompt_messages_text:
+                    analysis_content += f"Messages:\n{prompt_messages_text}\n"
                 if "arguments" in prompt_data and prompt_data["arguments"]:
                     analysis_content += (
                         f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
                     )
 
-                llm_context = {"prompt_name": name, "content_type": "comprehensive"}
+                llm_context = {
+                    "prompt_name": name,
+                    "content_type": "comprehensive",
+                    "entity_type": "prompt",
+                }
                 llm_findings = await self._llm_analyzer.analyze(
                     analysis_content, llm_context
                 )
@@ -1120,11 +1252,11 @@ class Scanner:
             )
 
         if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
-            # Run PROMPT_DEFENSE analysis on the prompt description
+            # Run PROMPT_DEFENSE analysis on description + rendered messages
             try:
-                pd_context = {"tool_name": name, "content_type": "description"}
+                pd_context = {"prompt_name": name, "content_type": "prompt_content"}
                 pd_findings = await self._prompt_defense_analyzer.analyze(
-                    description, pd_context
+                    combined_content or description, pd_context
                 )
                 for finding in pd_findings:
                     finding.analyzer = "PromptDefense"
@@ -1136,11 +1268,13 @@ class Scanner:
         custom_analyzer_names = []
         for analyzer in self._custom_analyzers:
             try:
-                custom_context = {"prompt_name": name, "content_type": "description"}
+                custom_context = {"prompt_name": name, "content_type": "prompt_content"}
                 # Add HTTP headers to context for custom analyzers
                 if http_headers:
                     custom_context["http_headers"] = http_headers
-                findings = await analyzer.analyze(description, custom_context)
+                findings = await analyzer.analyze(
+                    combined_content or description, custom_context
+                )
                 for finding in findings:
                     finding.analyzer = analyzer.name
                 all_findings.extend(findings)
@@ -1162,6 +1296,7 @@ class Scanner:
             status="completed",
             analyzers=all_analyzers,
             findings=all_findings,
+            prompt_messages_text=prompt_messages_text,
         )
 
     async def _analyze_instructions(
@@ -2371,7 +2506,15 @@ class Scanner:
             scan_results = []
             for prompt in prompt_list.prompts:
                 try:
-                    result = await self._analyze_prompt(prompt, analyzers, http_headers)
+                    prompt_messages_text = await self._resolve_prompt_messages_text(
+                        session, prompt
+                    )
+                    result = await self._analyze_prompt(
+                        prompt,
+                        analyzers,
+                        http_headers,
+                        prompt_messages_text=prompt_messages_text,
+                    )
                     scan_results.append(result)
                 except Exception as e:
                     logger.error(f"Error analyzing prompt '{prompt.name}': {e}")
@@ -2470,8 +2613,15 @@ class Scanner:
                     f"Prompt '{prompt_name}' not found on the server at {server_url}"
                 )
 
-            # Analyze the prompt
-            result = await self._analyze_prompt(target_prompt, analyzers, http_headers)
+            prompt_messages_text = await self._resolve_prompt_messages_text(
+                session, target_prompt
+            )
+            result = await self._analyze_prompt(
+                target_prompt,
+                analyzers,
+                http_headers,
+                prompt_messages_text=prompt_messages_text,
+            )
 
             # Run meta-analysis if enabled
             result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
@@ -2646,14 +2796,17 @@ class Scanner:
                         return []
                     raise
 
-                # Create analysis tasks for each prompt
-                scan_tasks = [
-                    self._analyze_prompt(prompt, analyzers)
-                    for prompt in prompt_list.prompts
-                ]
-
-                # Run all tasks concurrently
-                scan_results = await asyncio.gather(*scan_tasks)
+                scan_results = []
+                for prompt in prompt_list.prompts:
+                    prompt_messages_text = await self._resolve_prompt_messages_text(
+                        session, prompt
+                    )
+                    result = await self._analyze_prompt(
+                        prompt,
+                        analyzers,
+                        prompt_messages_text=prompt_messages_text,
+                    )
+                    scan_results.append(result)
 
                 # Run meta-analysis if enabled (post-pass on prompt results)
                 scan_results = await self._run_meta_analysis_on_prompt_results(
@@ -2736,8 +2889,14 @@ class Scanner:
                     f"Prompt '{prompt_name}' not found on the stdio server with command {server_config.command}"
                 )
 
-            # Analyze the prompt
-            result = await self._analyze_prompt(target_prompt, analyzers)
+            prompt_messages_text = await self._resolve_prompt_messages_text(
+                session, target_prompt
+            )
+            result = await self._analyze_prompt(
+                target_prompt,
+                analyzers,
+                prompt_messages_text=prompt_messages_text,
+            )
 
             # Run meta-analysis if enabled
             result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
@@ -2772,7 +2931,7 @@ class Scanner:
             resource_name (str): The name of the resource.
             resource_description (str): The description of the resource.
             resource_mime_type (str): The MIME type of the resource.
-            analyzers (List[AnalyzerEnum]): List of analyzers to run (only API and LLM supported for resources).
+            analyzers (List[AnalyzerEnum]): List of analyzers to run on resource body text.
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
 
         Returns:
@@ -2827,6 +2986,24 @@ class Scanner:
                     f'API analysis failed on resource: uri="{resource_uri}", error="{e}"'
                 )
 
+        if AnalyzerEnum.YARA in analyzers:
+            try:
+                yara_context = {
+                    "resource_uri": resource_uri,
+                    "resource_name": resource_name,
+                    "content_type": "resource_content",
+                }
+                yara_findings = await self._yara_analyzer.analyze(
+                    analysis_content, yara_context
+                )
+                for finding in yara_findings:
+                    finding.analyzer = "YARA"
+                all_findings.extend(yara_findings)
+            except Exception as e:
+                logger.error(
+                    f'YARA analysis failed on resource: uri="{resource_uri}", error="{e}"'
+                )
+
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
             # Run LLM analysis on the resource content
             try:
@@ -2845,6 +3022,7 @@ class Scanner:
                     "resource_name": resource_name,
                     "resource_description": resource_description,
                     "mime_type": resource_mime_type,
+                    "entity_type": "resource",
                 }
                 llm_findings = await self._llm_analyzer.analyze(
                     llm_content, llm_context
@@ -2860,6 +3038,24 @@ class Scanner:
             logger.warning(
                 f"LLM scan requested for resource '{resource_uri}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
             )
+
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
+            try:
+                pd_context = {
+                    "resource_uri": resource_uri,
+                    "resource_name": resource_name,
+                    "content_type": "resource_content",
+                }
+                pd_findings = await self._prompt_defense_analyzer.analyze(
+                    analysis_content, pd_context
+                )
+                for finding in pd_findings:
+                    finding.analyzer = "PromptDefense"
+                all_findings.extend(pd_findings)
+            except Exception as e:
+                logger.error(
+                    f'Prompt defense analysis failed: resource="{resource_uri}", error="{e}"'
+                )
 
         # Run custom analyzers
         custom_analyzer_names = []
@@ -2885,12 +3081,9 @@ class Scanner:
                     f'Custom analyzer "{analyzer.name}" failed: resource="{resource_uri}", error="{e}"'
                 )
 
-        # Combine enum analyzers and custom analyzer names (filter out YARA and META)
-        active_analyzers = [
-            a for a in analyzers
-            if a in [AnalyzerEnum.API, AnalyzerEnum.LLM]
-        ]
-        all_analyzers = active_analyzers + custom_analyzer_names
+        all_analyzers = [
+            a for a in analyzers if a != AnalyzerEnum.META
+        ] + custom_analyzer_names
 
         return ResourceScanResult(
             resource_uri=resource_uri,
@@ -2941,9 +3134,9 @@ class Scanner:
                 "No server URL provided. Please specify a valid server URL."
             )
 
-        # Default to API and LLM analyzers for resources
+        # Default: API + YARA (same as tools) plus LLM when configured
         if analyzers is None:
-            analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
+            analyzers = [*self.DEFAULT_ANALYZERS, AnalyzerEnum.LLM]
 
         # Default allowed MIME types
         if allowed_mime_types is None:
@@ -3006,18 +3199,12 @@ class Scanner:
                 try:
                     resource_contents = await session.read_resource(resource.uri)
 
-                    # Extract text content
-                    text_content = ""
                     try:
-                        for content in resource_contents.contents:
-                            if hasattr(content, "text"):
-                                text_content += content.text
-                            elif hasattr(content, "blob"):
-                                # Skip binary content
-                                logger.info(
-                                    f"Skipping binary content for resource '{resource.uri}'"
-                                )
-                                continue
+                        text_content, effective_mime, binary_only = (
+                            self._extract_resource_read_result(
+                                resource_contents, resource.mimeType
+                            )
+                        )
                     except (AttributeError, TypeError) as e:
                         logger.warning(
                             f"Error extracting content from resource '{resource.uri}': {e}"
@@ -3034,7 +3221,7 @@ class Scanner:
                         )
                         continue
 
-                    if not text_content:
+                    if binary_only or not text_content.strip():
                         logger.info(
                             f"No text content found for resource '{resource.uri}'"
                         )
@@ -3042,7 +3229,7 @@ class Scanner:
                             ResourceScanResult(
                                 resource_uri=resource.uri,
                                 resource_name=resource.name or "",
-                                resource_mime_type=resource.mimeType or "unknown",
+                                resource_mime_type=effective_mime,
                                 status="skipped",
                                 analyzers=[],
                                 findings=[],
@@ -3057,7 +3244,7 @@ class Scanner:
                             resource.uri,
                             resource.name or "",
                             resource.description or "",
-                            resource.mimeType or "unknown",
+                            effective_mime,
                             analyzers,
                             http_headers,
                         )
@@ -3153,9 +3340,9 @@ class Scanner:
                 "No resource URI provided. Please specify a valid resource URI."
             )
 
-        # Default to API and LLM analyzers for resources
+        # Default: API + YARA (same as tools) plus LLM when configured
         if analyzers is None:
-            analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
+            analyzers = [*self.DEFAULT_ANALYZERS, AnalyzerEnum.LLM]
 
         # Default allowed MIME types
         if allowed_mime_types is None:
@@ -3228,17 +3415,12 @@ class Scanner:
             try:
                 resource_contents = await session.read_resource(target_resource.uri)
 
-                # Extract text content
-                text_content = ""
                 try:
-                    for content in resource_contents.contents:
-                        if hasattr(content, "text"):
-                            text_content += content.text
-                        elif hasattr(content, "blob"):
-                            logger.info(
-                                f"Skipping binary content for resource '{resource_uri}'"
-                            )
-                            continue
+                    text_content, effective_mime, binary_only = (
+                        self._extract_resource_read_result(
+                            resource_contents, target_resource.mimeType
+                        )
+                    )
                 except (AttributeError, TypeError) as e:
                     logger.warning(
                         f"Error extracting content from resource '{resource_uri}': {e}"
@@ -3252,12 +3434,12 @@ class Scanner:
                         findings=[],
                     )
 
-                if not text_content:
+                if binary_only or not text_content.strip():
                     logger.info(f"No text content found for resource '{resource_uri}'")
                     return ResourceScanResult(
                         resource_uri=target_resource.uri,
                         resource_name=target_resource.name or "",
-                        resource_mime_type=target_resource.mimeType or "unknown",
+                        resource_mime_type=effective_mime,
                         status="skipped",
                         analyzers=[],
                         findings=[],
@@ -3269,7 +3451,7 @@ class Scanner:
                     target_resource.uri,
                     target_resource.name or "",
                     target_resource.description or "",
-                    target_resource.mimeType or "unknown",
+                    effective_mime,
                     analyzers,
                     http_headers,
                 )
