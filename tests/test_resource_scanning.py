@@ -32,6 +32,16 @@ def test_extract_resource_read_result_text_and_mime():
     assert binary_only is False
 
 
+def test_resource_mime_is_allowed_unknown_passes():
+    assert Scanner._resource_mime_is_allowed("unknown", ["text/plain"]) is True
+    assert Scanner._resource_mime_is_allowed("", ["text/plain"]) is True
+
+
+def test_resource_mime_is_allowed_rejects_disallowed():
+    assert Scanner._resource_mime_is_allowed("application/json", ["text/plain"]) is False
+    assert Scanner._resource_mime_is_allowed("text/plain", ["text/plain"]) is True
+
+
 def test_extract_resource_read_result_uses_list_mime_when_set():
     read_result = SimpleNamespace(
         contents=[SimpleNamespace(text="x", mimeType="text/plain", blob=None)]

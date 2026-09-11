@@ -110,6 +110,31 @@ async def test_scan_remote_server_prompts_fetches_get_prompt(config):
 
 
 @pytest.mark.asyncio
+async def test_get_prompt_failure_marks_prompt_failed(config):
+    scanner = Scanner(config)
+    prompt = MCPPrompt(name="broken", description="d", arguments=[])
+    session = AsyncMock()
+    session.list_prompts.return_value = SimpleNamespace(prompts=[prompt])
+    session.get_prompt.side_effect = RuntimeError("prompts/get unavailable")
+
+    with patch.object(scanner, "_get_mcp_session", AsyncMock(return_value=(AsyncMock(), session))), patch.object(
+        scanner, "_close_mcp_session", AsyncMock()
+    ), patch.object(scanner, "_server_supports_capability", return_value=True), patch.object(
+        scanner, "_analyze_prompt", AsyncMock()
+    ) as mock_analyze:
+        results = await scanner.scan_remote_server_prompts(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+        )
+
+    mock_analyze.assert_not_called()
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert results[0].findings
+    assert results[0].findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+
+
+@pytest.mark.asyncio
 async def test_prompt_scan_result_stores_messages_text(config):
     scanner = Scanner(config)
     prompt = MCPPrompt(name="x", description="d", arguments=[])

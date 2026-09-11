@@ -51,6 +51,7 @@ except (
 
 
 from ..config.config import Config
+from ..utils.analyzer_errors import build_infrastructure_error_finding
 from ..utils.logging_config import get_logger
 from ..utils.proxy_relay import is_hybrid_connector_id, prepare_mcp_dial
 from ..utils.command_utils import (
@@ -354,17 +355,112 @@ class Scanner:
 
     async def _resolve_prompt_messages_text(
         self, session: ClientSession, prompt: MCPPrompt
-    ) -> str:
-        """Fetch rendered prompt messages via ``prompts/get`` for analysis."""
+    ) -> Tuple[str, Optional[Exception]]:
+        """Fetch rendered prompt messages via ``prompts/get`` for analysis.
+
+        Returns:
+            Tuple of (message text, fetch error). On failure the text is empty
+            and the error is set so callers do not treat metadata-only as complete.
+        """
         try:
             arguments = self._default_prompt_arguments(prompt)
             get_prompt_result = await session.get_prompt(prompt.name, arguments=arguments)
-            return self._extract_prompt_messages_text(get_prompt_result)
+            return self._extract_prompt_messages_text(get_prompt_result), None
         except Exception as e:
             logger.warning(
                 f"Could not fetch prompt messages for '{prompt.name}': {e}"
             )
-            return ""
+            return "", e
+
+    @staticmethod
+    def _resource_mime_is_allowed(
+        effective_mime: str, allowed_mime_types: List[str]
+    ) -> bool:
+        """Whether a resolved MIME type may be analyzed."""
+        mime = (effective_mime or "").strip()
+        if not mime or mime == "unknown":
+            return True
+        return mime in allowed_mime_types
+
+    def _prompt_messages_fetch_failure_result(
+        self,
+        prompt: MCPPrompt,
+        error: Exception,
+        analyzers: List[AnalyzerEnum],
+    ) -> PromptScanResult:
+        """Build a failed prompt result when ``prompts/get`` is unavailable."""
+        finding = build_infrastructure_error_finding(
+            analyzer_name="MCP",
+            subject=prompt.name,
+            error=error,
+            context="local",
+        )
+        active = [a for a in analyzers if a != AnalyzerEnum.META]
+        return PromptScanResult(
+            prompt_name=prompt.name,
+            prompt_description=prompt.description or "",
+            status="failed",
+            analyzers=active,
+            findings=[finding],
+            prompt_messages_text="",
+        )
+
+    async def _collect_prompt_message_bodies(
+        self, session: ClientSession, prompts: Sequence[MCPPrompt]
+    ) -> List[Tuple[MCPPrompt, str, Optional[Exception]]]:
+        """Fetch all ``prompts/get`` bodies sequentially (session-safe)."""
+        collected: List[Tuple[MCPPrompt, str, Optional[Exception]]] = []
+        for prompt in prompts:
+            text, fetch_error = await self._resolve_prompt_messages_text(
+                session, prompt
+            )
+            collected.append((prompt, text, fetch_error))
+        return collected
+
+    async def _analyze_collected_prompts(
+        self,
+        collected: List[Tuple[MCPPrompt, str, Optional[Exception]]],
+        analyzers: List[AnalyzerEnum],
+        http_headers: Optional[dict] = None,
+    ) -> List[PromptScanResult]:
+        """Analyze prompts with bounded concurrency after bodies are fetched."""
+        sem = asyncio.Semaphore(self._META_CONCURRENCY)
+
+        async def analyze_one(
+            prompt: MCPPrompt,
+            prompt_messages_text: str,
+            fetch_error: Optional[Exception],
+        ) -> PromptScanResult:
+            if fetch_error is not None:
+                return self._prompt_messages_fetch_failure_result(
+                    prompt, fetch_error, analyzers
+                )
+            async with sem:
+                try:
+                    return await self._analyze_prompt(
+                        prompt,
+                        analyzers,
+                        http_headers,
+                        prompt_messages_text=prompt_messages_text,
+                    )
+                except Exception as e:
+                    logger.error(f"Error analyzing prompt '{prompt.name}': {e}")
+                    return PromptScanResult(
+                        prompt_name=prompt.name,
+                        prompt_description=prompt.description or "",
+                        status="failed",
+                        analyzers=[],
+                        findings=[],
+                    )
+
+        return list(
+            await asyncio.gather(
+                *[
+                    analyze_one(prompt, text, err)
+                    for prompt, text, err in collected
+                ]
+            )
+        )
 
     @classmethod
     def _extract_resource_read_result(
@@ -2502,32 +2598,12 @@ class Scanner:
                     return []
                 raise
 
-            # Analyze each prompt with individual error handling
-            scan_results = []
-            for prompt in prompt_list.prompts:
-                try:
-                    prompt_messages_text = await self._resolve_prompt_messages_text(
-                        session, prompt
-                    )
-                    result = await self._analyze_prompt(
-                        prompt,
-                        analyzers,
-                        http_headers,
-                        prompt_messages_text=prompt_messages_text,
-                    )
-                    scan_results.append(result)
-                except Exception as e:
-                    logger.error(f"Error analyzing prompt '{prompt.name}': {e}")
-                    # Create a failed result for this prompt
-                    scan_results.append(
-                        PromptScanResult(
-                            prompt_name=prompt.name,
-                            prompt_description=prompt.description or "",
-                            status="failed",
-                            analyzers=[],
-                            findings=[],
-                        )
-                    )
+            collected = await self._collect_prompt_message_bodies(
+                session, prompt_list.prompts
+            )
+            scan_results = await self._analyze_collected_prompts(
+                collected, analyzers, http_headers
+            )
 
             # Run meta-analysis if enabled (post-pass on prompt results)
             scan_results = await self._run_meta_analysis_on_prompt_results(
@@ -2613,15 +2689,20 @@ class Scanner:
                     f"Prompt '{prompt_name}' not found on the server at {server_url}"
                 )
 
-            prompt_messages_text = await self._resolve_prompt_messages_text(
-                session, target_prompt
+            prompt_messages_text, fetch_error = (
+                await self._resolve_prompt_messages_text(session, target_prompt)
             )
-            result = await self._analyze_prompt(
-                target_prompt,
-                analyzers,
-                http_headers,
-                prompt_messages_text=prompt_messages_text,
-            )
+            if fetch_error is not None:
+                result = self._prompt_messages_fetch_failure_result(
+                    target_prompt, fetch_error, analyzers
+                )
+            else:
+                result = await self._analyze_prompt(
+                    target_prompt,
+                    analyzers,
+                    http_headers,
+                    prompt_messages_text=prompt_messages_text,
+                )
 
             # Run meta-analysis if enabled
             result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
@@ -2796,17 +2877,12 @@ class Scanner:
                         return []
                     raise
 
-                scan_results = []
-                for prompt in prompt_list.prompts:
-                    prompt_messages_text = await self._resolve_prompt_messages_text(
-                        session, prompt
-                    )
-                    result = await self._analyze_prompt(
-                        prompt,
-                        analyzers,
-                        prompt_messages_text=prompt_messages_text,
-                    )
-                    scan_results.append(result)
+                collected = await self._collect_prompt_message_bodies(
+                    session, prompt_list.prompts
+                )
+                scan_results = await self._analyze_collected_prompts(
+                    collected, analyzers
+                )
 
                 # Run meta-analysis if enabled (post-pass on prompt results)
                 scan_results = await self._run_meta_analysis_on_prompt_results(
@@ -2889,14 +2965,19 @@ class Scanner:
                     f"Prompt '{prompt_name}' not found on the stdio server with command {server_config.command}"
                 )
 
-            prompt_messages_text = await self._resolve_prompt_messages_text(
-                session, target_prompt
+            prompt_messages_text, fetch_error = (
+                await self._resolve_prompt_messages_text(session, target_prompt)
             )
-            result = await self._analyze_prompt(
-                target_prompt,
-                analyzers,
-                prompt_messages_text=prompt_messages_text,
-            )
+            if fetch_error is not None:
+                result = self._prompt_messages_fetch_failure_result(
+                    target_prompt, fetch_error, analyzers
+                )
+            else:
+                result = await self._analyze_prompt(
+                    target_prompt,
+                    analyzers,
+                    prompt_messages_text=prompt_messages_text,
+                )
 
             # Run meta-analysis if enabled
             result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
@@ -3237,6 +3318,25 @@ class Scanner:
                         )
                         continue
 
+                    if not self._resource_mime_is_allowed(
+                        effective_mime, allowed_mime_types
+                    ):
+                        logger.info(
+                            f"Skipping resource '{resource.uri}' with effective "
+                            f"MIME type '{effective_mime}'"
+                        )
+                        results.append(
+                            ResourceScanResult(
+                                resource_uri=resource.uri,
+                                resource_name=resource.name or "",
+                                resource_mime_type=effective_mime,
+                                status="skipped",
+                                analyzers=[],
+                                findings=[],
+                            )
+                        )
+                        continue
+
                     # Analyze the resource
                     try:
                         result = await self._analyze_resource(
@@ -3436,6 +3536,22 @@ class Scanner:
 
                 if binary_only or not text_content.strip():
                     logger.info(f"No text content found for resource '{resource_uri}'")
+                    return ResourceScanResult(
+                        resource_uri=target_resource.uri,
+                        resource_name=target_resource.name or "",
+                        resource_mime_type=effective_mime,
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                    )
+
+                if not self._resource_mime_is_allowed(
+                    effective_mime, allowed_mime_types
+                ):
+                    logger.info(
+                        f"Resource '{resource_uri}' has unsupported effective "
+                        f"MIME type '{effective_mime}'"
+                    )
                     return ResourceScanResult(
                         resource_uri=target_resource.uri,
                         resource_name=target_resource.name or "",
