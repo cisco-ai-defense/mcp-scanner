@@ -42,6 +42,12 @@ def test_resource_mime_is_allowed_rejects_disallowed():
     assert Scanner._resource_mime_is_allowed("text/plain", ["text/plain"]) is True
 
 
+def test_resource_mime_is_allowed_normalizes_case_and_parameters():
+    allowed = ["text/plain"]
+    assert Scanner._resource_mime_is_allowed("TEXT/PLAIN", allowed) is True
+    assert Scanner._resource_mime_is_allowed("text/plain; charset=utf-8", allowed) is True
+
+
 def test_extract_resource_read_result_uses_list_mime_when_set():
     read_result = SimpleNamespace(
         contents=[SimpleNamespace(text="x", mimeType="text/plain", blob=None)]

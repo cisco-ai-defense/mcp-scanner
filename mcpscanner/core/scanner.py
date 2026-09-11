@@ -373,14 +373,23 @@ class Scanner:
             return "", e
 
     @staticmethod
+    def _normalize_mime_type(mime: Optional[str]) -> str:
+        """Normalize a MIME type for allowlist comparison (base type, lowercase)."""
+        if not mime:
+            return ""
+        base = mime.split(";", 1)[0].strip().lower()
+        return base
+
+    @classmethod
     def _resource_mime_is_allowed(
-        effective_mime: str, allowed_mime_types: List[str]
+        cls, effective_mime: str, allowed_mime_types: List[str]
     ) -> bool:
         """Whether a resolved MIME type may be analyzed."""
-        mime = (effective_mime or "").strip()
+        mime = cls._normalize_mime_type(effective_mime)
         if not mime or mime == "unknown":
             return True
-        return mime in allowed_mime_types
+        allowed = {cls._normalize_mime_type(m) for m in allowed_mime_types}
+        return mime in allowed
 
     def _prompt_messages_fetch_failure_result(
         self,
@@ -451,6 +460,7 @@ class Scanner:
                         status="failed",
                         analyzers=[],
                         findings=[],
+                        prompt_messages_text=prompt_messages_text,
                     )
 
         return list(
@@ -3260,7 +3270,9 @@ class Scanner:
             results = []
             for resource in resource_list.resources:
                 # Check if MIME type is allowed
-                if resource.mimeType and resource.mimeType not in allowed_mime_types:
+                if resource.mimeType and not self._resource_mime_is_allowed(
+                    resource.mimeType, allowed_mime_types
+                ):
                     logger.info(
                         f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'"
                     )
@@ -3495,9 +3507,8 @@ class Scanner:
                 )
 
             # Check if MIME type is allowed
-            if (
-                target_resource.mimeType
-                and target_resource.mimeType not in allowed_mime_types
+            if target_resource.mimeType and not self._resource_mime_is_allowed(
+                target_resource.mimeType, allowed_mime_types
             ):
                 logger.info(
                     f"Resource '{resource_uri}' has unsupported MIME type '{target_resource.mimeType}'"

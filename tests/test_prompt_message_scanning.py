@@ -135,6 +135,24 @@ async def test_get_prompt_failure_marks_prompt_failed(config):
 
 
 @pytest.mark.asyncio
+async def test_analyze_prompt_failure_preserves_messages_text(config):
+    scanner = Scanner(config)
+    prompt = MCPPrompt(name="x", description="d", arguments=[])
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("analyzer blew up")
+
+    scanner._analyze_prompt = boom
+
+    collected = [(prompt, "fetched body", None)]
+    results = await scanner._analyze_collected_prompts(
+        collected, [AnalyzerEnum.YARA]
+    )
+    assert results[0].status == "failed"
+    assert results[0].prompt_messages_text == "fetched body"
+
+
+@pytest.mark.asyncio
 async def test_prompt_scan_result_stores_messages_text(config):
     scanner = Scanner(config)
     prompt = MCPPrompt(name="x", description="d", arguments=[])
