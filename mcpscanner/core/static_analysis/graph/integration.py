@@ -61,6 +61,12 @@ def build_code_graph(
     language: str,
     source_registry: dict[str, str] | None = None,
 ) -> CodeGraph:
+    """Build or reuse a language-scoped graph for behavioral enrichment.
+
+    Prefer pre-built graphs from ``build_code_graphs_for_registry`` for directory
+    scans. This path calls ``build_call_graph()`` on the analyzer and must not
+    run concurrently on the same analyzer instance.
+    """
     if source_registry:
         graphs = build_code_graphs_for_registry(source_registry)
         if language in graphs:
@@ -83,6 +89,18 @@ def build_code_graph(
         len(graph.entry_points),
     )
     return graph
+
+
+def _normalized_source_registry(files: dict[str, str]) -> dict[str, str]:
+    """Alias registry keys to resolved paths for snippet lookup."""
+    registry: dict[str, str] = dict(files)
+    for path, source in files.items():
+        try:
+            resolved = str(Path(path).resolve(strict=False))
+        except (OSError, RuntimeError, ValueError):
+            continue
+        registry.setdefault(resolved, source)
+    return registry
 
 
 def build_code_graphs_for_registry(
@@ -111,7 +129,7 @@ def build_code_graphs_for_registry(
             merged = cache.get_merged(lang, files)
             if merged is not None:
                 if not merged.source_registry:
-                    merged.source_registry = dict(files)
+                    merged.source_registry = _normalized_source_registry(files)
                 graphs[lang] = merged
                 logger.debug(
                     "code_graph cache hit merged language=%s files=%d nodes=%d",
@@ -189,12 +207,45 @@ def _decorator_registered_name(func_context: FunctionContext) -> str | None:
     return None
 
 
+def _label_matches_node(node: CodeNode, candidate: str) -> bool:
+    label = node.label
+    short = label.split(".")[-1] if "." in label else label
+    return label == candidate or short == candidate
+
+
+def _select_best_node_match(
+    matches: list[tuple[str, CodeNode]],
+    *,
+    line_number: int | None,
+) -> Optional[str]:
+    """Pick one graph node when several share the same short name."""
+    if not matches:
+        return None
+
+    def _filter_by_line(pool: list[tuple[str, CodeNode]]) -> list[str]:
+        if line_number and line_number > 0:
+            on_line = [nid for nid, node in pool if node.line == line_number]
+            if on_line:
+                return on_line
+        return [nid for nid, _ in pool]
+
+    mcp_entries = [(nid, node) for nid, node in matches if node.is_mcp_entry]
+    for pool in (mcp_entries, matches):
+        if not pool:
+            continue
+        narrowed = _filter_by_line(pool)
+        if narrowed:
+            return narrowed[0]
+    return matches[0][0]
+
+
 def resolve_entry_id(
     graph: CodeGraph,
     file_path: str,
     func_name: str,
     *,
     decorator_name: str | None = None,
+    line_number: int | None = None,
 ) -> Optional[str]:
     """Map a FunctionContext to a graph node id."""
     resolved = _resolved_path(file_path)
@@ -205,19 +256,23 @@ def resolve_entry_id(
         candidates.append(decorator_name)
 
     for candidate in candidates:
+        matches: list[tuple[str, CodeNode]] = []
         for node_id, node in graph.nodes.items():
-            label = node.label
-            short = label.split(".")[-1] if "." in label else label
-            if label != candidate and short != candidate:
+            if not _label_matches_node(node, candidate):
                 continue
             if not _node_matches_scan_file(node, resolved):
                 continue
-            if node.is_mcp_entry:
-                entry_match = node_id
-            elif name_match is None:
-                name_match = node_id
-        if entry_match:
+            matches.append((node_id, node))
+        if not matches:
+            continue
+        picked = _select_best_node_match(matches, line_number=line_number)
+        if not picked:
+            continue
+        if graph.nodes[picked].is_mcp_entry:
+            entry_match = picked
             break
+        if name_match is None:
+            name_match = picked
 
     return entry_match or name_match
 
@@ -361,6 +416,7 @@ def partition_functions_by_graph(
             file_path,
             func_context.name,
             decorator_name=decorator_name,
+            line_number=func_context.line_number,
         )
         if entry_id:
             resolved_count += 1

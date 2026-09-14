@@ -536,7 +536,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     ),
                 }
 
-                # Analyze files concurrently (shared call graphs are read-only).
+                # Analyze files concurrently (shared call graphs + code graphs are read-only).
                 file_concurrency = max(
                     1,
                     int(

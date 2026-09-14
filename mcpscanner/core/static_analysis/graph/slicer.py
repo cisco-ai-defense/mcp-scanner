@@ -42,6 +42,7 @@ class GraphSlicer:
 
         node_ids: set[str] = {entry_id}
         edges: list[CodeEdge] = []
+        seen_edges: set[tuple[str, str, Relation]] = set()
         frontier = [entry_id]
         hops = 0
 
@@ -51,13 +52,18 @@ class GraphSlicer:
                 for edge in self._graph.edges:
                     if edge.source != node_id or edge.relation != Relation.CALLS:
                         continue
+                    edge_key = (edge.source, edge.target, edge.relation)
                     if edge.target in node_ids:
-                        edges.append(edge)
+                        if edge_key not in seen_edges:
+                            seen_edges.add(edge_key)
+                            edges.append(edge)
                         continue
                     if len(node_ids) >= max_nodes:
                         break
                     node_ids.add(edge.target)
-                    edges.append(edge)
+                    if edge_key not in seen_edges:
+                        seen_edges.add(edge_key)
+                        edges.append(edge)
                     next_frontier.append(edge.target)
             frontier = next_frontier
             hops += 1

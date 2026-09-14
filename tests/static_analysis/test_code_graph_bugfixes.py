@@ -11,6 +11,7 @@ from mcpscanner.core.static_analysis.context_extractor import FunctionContext
 from mcpscanner.core.static_analysis.graph.builder import CodeGraphBuilder
 from mcpscanner.core.static_analysis.graph.integration import (
     _paths_refer_to_same_file,
+    attach_graph_evidence,
     partition_functions_by_graph,
     resolve_entry_id,
 )
@@ -132,3 +133,130 @@ def test_resolve_entry_id_macos_private_var_path(tmp_path: Path) -> None:
             assert resolve_entry_id(graph, str(alt), "tool_alpha") == node_id
 
     assert _paths_refer_to_same_file(resolved, resolved)
+
+
+def test_attach_graph_evidence_does_not_mutate_shared_edges() -> None:
+    from mcpscanner.core.static_analysis.context_extractor import FunctionContext
+    from mcpscanner.core.static_analysis.graph.models import Provenance, Relation
+
+    graph = CodeGraph(language="python")
+    e1 = "/tmp/a.py::tool_one"
+    e2 = "/tmp/a.py::tool_two"
+    for eid, name in ((e1, "tool_one"), (e2, "tool_two")):
+        graph.add_node(
+            CodeNode(
+                node_id=eid,
+                label=name,
+                source_file="/tmp/a.py",
+                language="python",
+                is_mcp_entry=True,
+                metadata={"parameters": [{"name": "x"}]},
+            )
+        )
+        graph.entry_points.add(eid)
+    graph.add_edge(
+        CodeEdge(
+            source=e1,
+            target="external::print",
+            relation=Relation.CALLS,
+            provenance=Provenance.INFERRED,
+        )
+    )
+    graph.add_edge(
+        CodeEdge(
+            source=e2,
+            target="external::print",
+            relation=Relation.CALLS,
+            provenance=Provenance.INFERRED,
+        )
+    )
+    graph.classic_dataflow_enriched = True
+
+    def _ctx(name: str) -> FunctionContext:
+        return FunctionContext(
+            name=name,
+            decorator_types=["tool"],
+            imports=[],
+            function_calls=[],
+            assignments=[],
+            control_flow={},
+            parameter_flows=[],
+            constants={},
+            variable_dependencies={},
+            has_file_operations=False,
+            has_network_operations=False,
+            has_subprocess_calls=False,
+            has_eval_exec=False,
+            has_dangerous_imports=False,
+        )
+
+    before = len(graph.edges)
+    attach_graph_evidence(_ctx("tool_one"), graph, e1)
+    mid = len(graph.edges)
+    attach_graph_evidence(_ctx("tool_two"), graph, e2)
+    after = len(graph.edges)
+    assert mid == before
+    assert after == before
+
+
+def test_resolve_entry_id_prefers_line_number(tmp_path: Path) -> None:
+    sample = tmp_path / "server.py"
+    sample.write_text("pass\n", encoding="utf-8")
+    resolved = sample.resolve()
+    graph = CodeGraph(language="python")
+    low = f"{resolved}::helper"
+    high = f"{resolved}::tool_alpha"
+    graph.add_node(
+        CodeNode(
+            node_id=low,
+            label="tool_alpha",
+            source_file=str(resolved),
+            language="python",
+            line=5,
+            is_mcp_entry=False,
+        )
+    )
+    graph.add_node(
+        CodeNode(
+            node_id=high,
+            label="tool_alpha",
+            source_file=str(resolved),
+            language="python",
+            line=20,
+            is_mcp_entry=True,
+        )
+    )
+    graph.entry_points.add(high)
+    assert (
+        resolve_entry_id(graph, str(sample), "tool_alpha", line_number=20) == high
+    )
+
+
+def test_graph_slicer_dedupes_edges() -> None:
+    from mcpscanner.core.static_analysis.graph.slicer import GraphSlicer
+
+    graph = CodeGraph(language="python")
+    nodes = ("entry", "mid", "sink")
+    for nid in nodes:
+        graph.add_node(
+            CodeNode(
+                node_id=nid,
+                label=nid,
+                source_file="/tmp/x.py",
+                language="python",
+            )
+        )
+    from mcpscanner.core.static_analysis.graph.models import Provenance
+
+    for src, tgt in (("entry", "mid"), ("entry", "sink"), ("mid", "sink")):
+        graph.add_edge(
+            CodeEdge(
+                source=src,
+                target=tgt,
+                relation=Relation.CALLS,
+                provenance=Provenance.INFERRED,
+            )
+        )
+    slice_ = GraphSlicer(graph).slice("entry")
+    keys = {(e.source, e.target) for e in slice_.edges}
+    assert len(slice_.edges) == len(keys)

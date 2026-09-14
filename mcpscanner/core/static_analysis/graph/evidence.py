@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
-from .models import CodeGraph
+from pathlib import Path
+
+from .models import CodeGraph, CodeNode
 from .sink_analyzer import SinkAnalysisResult
 from .slicer import GraphSlice
 
@@ -16,11 +18,28 @@ class EvidenceFormatter:
         self._graph = graph
         self._max_snippet_chars = max_snippet_chars
 
+    def _source_text_for(self, node: CodeNode) -> str | None:
+        from .integration import _paths_refer_to_same_file
+
+        if not node.source_file:
+            return None
+        direct = self._graph.source_registry.get(node.source_file)
+        if direct:
+            return direct
+        node_path = Path(node.source_file).resolve(strict=False)
+        for key, source in self._graph.source_registry.items():
+            try:
+                if _paths_refer_to_same_file(Path(key).resolve(strict=False), node_path):
+                    return source
+            except (OSError, RuntimeError, ValueError):
+                continue
+        return None
+
     def _snippet_for(self, node_id: str) -> str | None:
         node = self._graph.nodes.get(node_id)
-        if not node or not node.source_file:
+        if not node:
             return None
-        source = self._graph.source_registry.get(node.source_file)
+        source = self._source_text_for(node)
         if not source or node.line is None:
             return None
         lines = source.splitlines()

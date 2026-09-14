@@ -16,6 +16,7 @@ from ..interprocedural.treesitter_call_graph import (
 from ..native_analyzer import NativeAnalyzer
 from .cache import GRAPH_EXTRACTOR_VERSION, CodeGraphCache, GraphCache, graph_cache_for_scan
 from .cfg_fusion import extract_function_parameters
+from .classic_dataflow import ensure_classic_dataflow_enriched
 from .fixpoint import refine_call_graph
 from .models import CodeEdge, CodeGraph, CodeNode, Provenance, Relation
 from .resolver import CrossFileSymbolResolver, module_id_for
@@ -120,6 +121,7 @@ class CodeGraphBuilder:
             elif ts_buckets:
                 graph.language = next(iter(ts_buckets))
 
+        ensure_classic_dataflow_enriched(graph)
         logger.info(
             "code_graph built nodes=%d edges=%d entry_points=%d language=%s",
             len(graph.nodes),
@@ -459,6 +461,7 @@ class CodeGraphBuilder:
             mcp_entries=mcp_entries,
             resolver=resolver,
         )
+        ensure_classic_dataflow_enriched(graph)
         logger.info(
             "code_graph built_from_analyzer nodes=%d edges=%d entry_points=%d language=%s",
             len(graph.nodes),
