@@ -99,6 +99,8 @@ class SinkAnalyzer:
 
         reachable = [entry_id] + self._graph.reachable(entry_id)
         for node_id in reachable:
+            if node_id == entry_id:
+                continue
             node = self._graph.nodes.get(node_id)
             if not node:
                 continue

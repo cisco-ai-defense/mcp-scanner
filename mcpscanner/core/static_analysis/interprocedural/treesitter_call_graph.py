@@ -472,6 +472,7 @@ class TreeSitterCallGraphAnalyzer:
     def build_call_graph(self) -> TSCallGraph:
         """Build the complete call graph."""
         build_start = time.perf_counter()
+        self.call_graph.calls.clear()
         for file_path, (tree, source_bytes) in self.files.items():
             self._extract_calls(file_path, tree.root_node, source_bytes)
 

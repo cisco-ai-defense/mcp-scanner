@@ -297,6 +297,12 @@ class AlignmentPromptBuilder:
                 f"{json.dumps(sink_hints, indent=2)}\n"
             )
 
+        if summary.get("code_graph_status") == "entry_unresolved":
+            parts.append(
+                "\n**CODE GRAPH STATUS:** entry_unresolved — static graph could not "
+                "map this MCP function to a graph node; rely on other evidence.\n"
+            )
+
         return "".join(parts)
 
     def build_analysis_content(self, func_context: FunctionContext) -> str:

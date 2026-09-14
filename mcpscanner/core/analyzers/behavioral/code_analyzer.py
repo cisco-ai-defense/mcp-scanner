@@ -528,6 +528,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 scan_context = {
                     **context,
+                    "source_registry": source_registry,
                     "code_graphs": _build_directory_code_graphs(
                         py_call_graph_analyzer,
                         ts_call_graph_analyzers,
@@ -1096,6 +1097,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     code_graph = build_code_graph(
                         context["cross_file_analyzer"],
                         language=lang,
+                        source_registry=context.get("source_registry"),
                     )
                 if code_graph is not None:
                     try:

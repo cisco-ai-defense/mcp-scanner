@@ -152,12 +152,29 @@ class CodeGraphBuilder:
         return partial
 
     def _merge_graphs(self, target: CodeGraph, other: CodeGraph) -> None:
+        seen_edges: set[tuple[str, str, Relation]] = {
+            (edge.source, edge.target, edge.relation) for edge in target.edges
+        }
         for node_id, node in other.nodes.items():
             if node_id not in target.nodes:
                 target.add_node(node)
-        target.edges.extend(other.edges)
+        for edge in other.edges:
+            key = (edge.source, edge.target, edge.relation)
+            if key in seen_edges:
+                continue
+            target.edges.append(edge)
+            seen_edges.add(key)
         target.entry_points.update(other.entry_points)
-        target.taint_flows.extend(other.taint_flows)
+        seen_taint: set[tuple[str, str, str]] = {
+            (flow.source_id, flow.target_id, flow.parameter)
+            for flow in target.taint_flows
+        }
+        for flow in other.taint_flows:
+            key = (flow.source_id, flow.target_id, flow.parameter)
+            if key in seen_taint:
+                continue
+            target.taint_flows.append(flow)
+            seen_taint.add(key)
 
     def _ingest_python(self, files: dict[Path, str], graph: CodeGraph) -> None:
         def _build(single_files: dict[Path, str]) -> CodeGraph:
