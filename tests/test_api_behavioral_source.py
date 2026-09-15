@@ -53,7 +53,10 @@ def behavioral_app(api_root, monkeypatch):
     )
     behavioral = MagicMock()
     behavioral.analyze = AsyncMock(return_value=[finding])
-    behavioral.analyzed_functions = 1
+    # Mirrors the real attribute: per-function metadata, not a count.
+    behavioral.analyzed_functions = [
+        {"name": "handler", "source_file": str(api_root / "server.py")}
+    ]
 
     scanner = MagicMock()
     scanner._behavioral_analyzer = behavioral
@@ -128,6 +131,40 @@ class TestBehavioralSourceEndpoint:
             "/scan-behavioral-source", json={"source_path": "/etc/passwd"}
         )
         assert resp.status_code == 422
+
+    def test_symlink_escaping_root_rejected(self, behavioral_app, tmp_path_factory):
+        """A symlink planted inside the root passes the string-level prefix
+        check but must still be refused: the analyzer would open its target."""
+        app, behavioral, api_root = behavioral_app
+        outside = tmp_path_factory.mktemp("outside") / "secret.py"
+        outside.write_text("SECRET = 1\n", encoding="utf-8")
+        (api_root / "leak.py").symlink_to(outside)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/scan-behavioral-source", json={"source_path": "leak.py"}
+        )
+        assert resp.status_code == 400
+        assert "outside" in resp.json()["detail"].lower()
+        assert str(outside) not in resp.json()["detail"]
+        behavioral.analyze.assert_not_awaited()
+
+    def test_symlinked_directory_escaping_root_rejected(
+        self, behavioral_app, tmp_path_factory
+    ):
+        """Directories matter more than files: the analyzer re-roots its walk
+        on the resolved target, so a linked directory leaks a whole tree."""
+        app, behavioral, api_root = behavioral_app
+        outside_dir = tmp_path_factory.mktemp("outside_pkg")
+        (outside_dir / "secret.py").write_text("SECRET = 1\n", encoding="utf-8")
+        (api_root / "linked").symlink_to(outside_dir, target_is_directory=True)
+
+        client = TestClient(app)
+        resp = client.post(
+            "/scan-behavioral-source", json={"source_path": "linked"}
+        )
+        assert resp.status_code == 400
+        behavioral.analyze.assert_not_awaited()
 
     def test_missing_path_returns_404(self, behavioral_app):
         app, behavioral, _ = behavioral_app

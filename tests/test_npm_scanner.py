@@ -1315,6 +1315,73 @@ def test_analysis_scan_status_real_finding_beside_placeholder_is_completed():
     assert analysis_scan_status(_analyzer_with_error_stats(4), findings) == "completed"
 
 
+def _infrastructure_finding():
+    from mcpscanner.utils.analyzer_errors import build_infrastructure_error_finding
+
+    return build_infrastructure_error_finding(
+        analyzer_name="Behavioral",
+        subject="pkg",
+        error=RuntimeError("tree-sitter unavailable"),
+        context="local",
+    )
+
+
+def test_analysis_scan_status_infrastructure_finding_is_error():
+    """The analyzer's own "I crashed" notice must not be mistaken for a
+    result: it is INFO-severity and therefore reportable, so without an
+    explicit check it would short-circuit the whole guard to ``completed``
+    and publish a definitive ``is_safe=False`` verdict for a scan that
+    never ran."""
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    findings = [_infrastructure_finding()]
+    assert analysis_scan_status(_analyzer_with_error_stats(0), findings) == "error"
+
+
+def test_analysis_scan_status_infrastructure_finding_outranks_real_findings():
+    """Partial results collected before the crash don't make the scan
+    trustworthy — the crash notice still wins."""
+    from mcpscanner.core.analyzers.base import SecurityFinding
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    real = SecurityFinding(
+        severity="HIGH",
+        summary="exfiltrates data",
+        analyzer="Behavioral",
+        threat_category="MALICIOUS_CODE",
+    )
+    findings = [real, _infrastructure_finding()]
+    assert analysis_scan_status(_analyzer_with_error_stats(0), findings) == "error"
+
+
+def test_infrastructure_finding_scan_result_refuses_a_verdict():
+    """End of the chain: ``error`` status means ``is_safe=None`` and the
+    package guard raises rather than letting a caller read the crash
+    notice as a scanned-and-unsafe package."""
+    from mcpscanner.core.pypi_scanner import (
+        PyPIScanError,
+        _build_scan_result,
+        analysis_scan_status,
+        raise_if_unreliable_package_scan,
+    )
+
+    findings = [_infrastructure_finding()]
+    status = analysis_scan_status(_analyzer_with_error_stats(0), findings)
+    result = _build_scan_result(
+        ecosystem="npm",
+        package="pkg",
+        resolved_version="1.0.0",
+        source_root=Path("/tmp/pkg"),
+        files_scanned=3,
+        findings=findings,
+        scan_status=status,
+    )
+
+    assert result["is_safe"] is None
+    with pytest.raises(PyPIScanError):
+        raise_if_unreliable_package_scan(result)
+
+
 def test_analysis_scan_status_fails_closed_when_stats_unreadable():
     """If the analyzer doesn't expose orchestrator stats and produced no
     findings, downgrade to ``error`` rather than reporting safe."""

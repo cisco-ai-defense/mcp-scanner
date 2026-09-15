@@ -1227,7 +1227,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # SecurityFinding framework accepts here) so the reporter
                 # doesn't claim we successfully analysed something we
                 # never did.
-                if (file_path, name) in errored_funcs:
+                if self._alignment_errored(fc, name, file_path, errored_funcs):
                     findings.append(
                         SecurityFinding(
                             severity="UNKNOWN",
@@ -1284,6 +1284,29 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             )
 
         return findings
+
+    def _alignment_errored(
+        self,
+        func_context: Any,
+        name: str,
+        file_path: str,
+        errored_keys: set,
+    ) -> bool:
+        """Whether this capability's alignment check failed during the scan.
+
+        The orchestrator keys failures by the function's *defining* file.
+        For a cross-file handler registration (``server.tool("x", handler)``
+        where ``handler`` lives elsewhere) that is not ``file_path``, so ask
+        the orchestrator to key the context the same way it did when it
+        recorded the failure; ``file_path`` is only the fallback for
+        contexts it never saw.
+        """
+        if not errored_keys:
+            return False
+        failed = getattr(self.alignment_orchestrator, "alignment_failed", None)
+        if callable(failed) and failed(func_context):
+            return True
+        return (file_path, name) in errored_keys
 
     def _create_security_finding(
         self, analysis: Dict[str, Any], func_context, file_path: str

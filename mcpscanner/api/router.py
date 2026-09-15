@@ -14,10 +14,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ..core.analyzers.base import is_infrastructure_error
 from ..core.analyzers.meta_analyzer import build_meta_audit_payload
 from ..core.auth import Auth
 from ..core.exceptions import (
@@ -41,7 +43,11 @@ from ..core.models import (
 )
 from ..config.constants import MCPScannerConstants
 from ..core.report_generator import ReportGenerator, results_to_json
-from ..utils.path_safety import require_confined_path, resolve_confined_api_root
+from ..utils.path_safety import (
+    is_within_root,
+    require_confined_path,
+    resolve_confined_api_root,
+)
 from ..core.result import (
     ScanResult,
     PromptScanResult,
@@ -107,7 +113,7 @@ def _behavioral_api_path_not_found(findings: List[Any]) -> bool:
     if len(findings) != 1:
         return False
     finding = findings[0]
-    if getattr(finding, "threat_category", "") != "ANALYZER INFRASTRUCTURE":
+    if not is_infrastructure_error(finding):
         return False
     details = getattr(finding, "details", None) or {}
     return details.get("error_type") == "FileNotFoundError"
@@ -1101,6 +1107,25 @@ async def scan_behavioral_source_endpoint(
             logger.error("Invalid behavioral source path: %s", exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        # ``require_confined_path`` is a pure string check, so a symlink
+        # planted inside the root still yields an in-root path whose target
+        # is not. The analyzer follows that symlink when it opens the file
+        # (and re-roots its own directory walk on the target), so resolve
+        # before handing the path over. The rejection message deliberately
+        # omits the target: it is the file the caller was probing for.
+        if not is_within_root(Path(confined_str), Path(api_root)):
+            logger.error(
+                "Behavioral source path escapes API root via symlink: %s",
+                request.source_path,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Path {request.source_path!r} resolves outside the "
+                    f"allowed root"
+                ),
+            )
+
         scanner_factory = _resolve_scanner_factory(http_request)
         scanner = scanner_factory([AnalyzerEnum.BEHAVIORAL])
         if not scanner._behavioral_analyzer:
@@ -1126,17 +1151,21 @@ async def scan_behavioral_source_endpoint(
                 status_code=404,
                 detail=f"Path not found under API root: {request.source_path}",
             )
-        analyzed_functions = getattr(analyzer, "analyzed_functions", 0)
+        # ``analyzed_functions`` is the analyzer's per-function metadata
+        # list; the API reports how many were scanned, not their contents.
+        analyzed_function_count = len(
+            getattr(analyzer, "analyzed_functions", None) or []
+        )
         logger.debug(
-            "Behavioral source scan completed - path: %s finding_count=%d analyzed_functions=%s",
+            "Behavioral source scan completed - path: %s finding_count=%d analyzed_functions=%d",
             confined_str,
             len(findings),
-            analyzed_functions,
+            analyzed_function_count,
         )
         return {
             "source_path": confined_str,
             "finding_count": len(findings),
-            "analyzed_functions": analyzed_functions,
+            "analyzed_functions": analyzed_function_count,
             "findings": [
                 {
                     "severity": f.severity,

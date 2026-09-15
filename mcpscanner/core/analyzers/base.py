@@ -159,6 +159,12 @@ class SecurityFinding:
         return f"{self.severity}: {self.threat_category} - {self.summary} (analyzer: {self.analyzer})"
 
 
+#: Threat category carried by the pseudo-findings
+#: :func:`mcpscanner.utils.analyzer_errors.build_infrastructure_error_finding`
+#: emits when an analyzer stage fails outright.
+INFRASTRUCTURE_THREAT_CATEGORY = "ANALYZER INFRASTRUCTURE"
+
+
 def is_safe_placeholder(finding: Any) -> bool:
     """True for the ``SAFE`` rows analyzers emit to record "nothing found".
 
@@ -168,6 +174,18 @@ def is_safe_placeholder(finding: Any) -> bool:
     "we produced results" must drop them first.
     """
     return (getattr(finding, "severity", None) or "").upper() == "SAFE"
+
+
+def is_infrastructure_error(finding: Any) -> bool:
+    """True for the pseudo-finding that reports "this analysis crashed".
+
+    Like SAFE placeholders these are not verdicts about the code: they say
+    the analyzer never ran to completion. Callers deciding whether a scan
+    produced usable results must not count them as evidence that it did.
+    """
+    return (
+        getattr(finding, "threat_category", None) or ""
+    ) == INFRASTRUCTURE_THREAT_CATEGORY
 
 
 def reportable_findings(findings: Sequence[Any]) -> List[Any]:

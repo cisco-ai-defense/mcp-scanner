@@ -336,6 +336,78 @@ class TestErroredFunctionKeysScopedPerFile:
         assert by_file[str(bad)] == "UNKNOWN"
 
 
+class TestErroredCrossFileHandlerNotSynthesisedSafe:
+    """A capability registered in one file but *defined* in another must
+    still be surfaced as UNKNOWN when its alignment check fails.
+
+    ``NativeAnalyzer`` points such a context at the defining file, so the
+    orchestrator records the failure under that path — not the file being
+    scanned. Keying the lookup off the scanned path silently misses them
+    and reports "No behavioral mismatches detected" for a capability that
+    was never successfully analysed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_handler_defined_in_other_file_is_unknown(
+        self, tmp_path, monkeypatch
+    ):
+        analyzer = BehavioralCodeAnalyzer(_cfg())
+
+        registry = tmp_path / "server.py"
+        handlers = tmp_path / "handlers.py"
+        registry.write_text(
+            "from mcp.server.fastmcp import FastMCP\n"
+            'mcp = FastMCP("test")\n'
+            "@mcp.tool()\n"
+            "def handler(x: str) -> str:\n"
+            '    """Doc."""\n'
+            "    return x\n",
+            encoding="utf-8",
+        )
+        handlers.write_text("def handler(x):\n    return x\n", encoding="utf-8")
+
+        # Stand in for the cross-file registration NativeAnalyzer resolves:
+        # the context describes code living in ``handlers.py``.
+        from mcpscanner.core.static_analysis.context_extractor import ContextExtractor
+
+        original = ContextExtractor.extract_mcp_function_contexts
+
+        def _extract_from_other_file(self):
+            contexts = original(self)
+            for ctx in contexts:
+                ctx.source_file = str(handlers)
+            return contexts
+
+        monkeypatch.setattr(
+            ContextExtractor,
+            "extract_mcp_function_contexts",
+            _extract_from_other_file,
+        )
+
+        async def _stub_check_alignment(func_context):
+            analyzer.alignment_orchestrator._mark_errored(func_context)
+            return None
+
+        monkeypatch.setattr(
+            analyzer.alignment_orchestrator,
+            "check_alignment",
+            _stub_check_alignment,
+        )
+
+        findings = await analyzer.analyze(
+            str(registry),
+            {"tool_name": "handler", "file_path": str(registry)},
+        )
+
+        mine = [
+            f for f in findings
+            if (f.details or {}).get("function_name") == "handler"
+        ]
+        assert len(mine) == 1, f"expected one finding, got {findings!r}"
+        assert mine[0].severity == "UNKNOWN"
+        assert (mine[0].details or {}).get("analysis_status") == "errored"
+
+
 # ---------------------------------------------------------------------------
 # Batch-failure regression coverage (post-review)
 # ---------------------------------------------------------------------------

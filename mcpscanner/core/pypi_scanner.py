@@ -46,7 +46,7 @@ import httpx
 from ..config.config import Config
 from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
-from .analyzers.base import reportable_findings
+from .analyzers.base import is_infrastructure_error, reportable_findings
 from .docker_build import (
     DockerBuildError,
     default_scanner_image_tag,
@@ -668,11 +668,15 @@ def analysis_scan_status(analyzer: Any, findings: Sequence[Any]) -> str:
 
     Rules:
 
-    * If we surfaced any *reportable* findings, the scan is ``completed``
-      regardless of partial errors — the findings stand on their own and
-      ``is_safe`` is already ``False``. SAFE placeholders don't count: they
-      are emitted once per scanned capability, so counting them would mark
-      every degraded scan ``completed`` and hand back ``is_safe=True``.
+    * An ``ANALYZER INFRASTRUCTURE`` finding *is* the report that the scan
+      crashed, so it forces ``error`` — otherwise the analyzer's own
+      failure notice would be read as proof that the analyzer ran.
+    * If we surfaced any other *reportable* findings, the scan is
+      ``completed`` regardless of partial errors — the findings stand on
+      their own and ``is_safe`` is already ``False``. SAFE placeholders
+      don't count: they are emitted once per scanned capability, so
+      counting them would mark every degraded scan ``completed`` and hand
+      back ``is_safe=True``.
     * If we surfaced no findings *and* either tally is non-zero, the result
       is unreliable → ``error``. The caller maps this to ``is_safe=None``.
     * Otherwise (no findings, no errors — nothing to analyse or everything
@@ -685,6 +689,8 @@ def analysis_scan_status(analyzer: Any, findings: Sequence[Any]) -> str:
     bookkeeping glitch can't crash a scan, but a glitch there still lets
     the ``analysis_errors`` tally (read separately) drive the decision.
     """
+    if any(is_infrastructure_error(f) for f in findings):
+        return "error"
     if _reportable_findings(findings):
         return "completed"
     error_tally = 0
