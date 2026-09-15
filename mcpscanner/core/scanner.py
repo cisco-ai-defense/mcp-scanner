@@ -62,7 +62,7 @@ from ..utils.command_utils import (
     resolve_executable_path,
 )
 from .analyzers.api_analyzer import ApiAnalyzer
-from .analyzers.base import BaseAnalyzer
+from .analyzers.base import BaseAnalyzer, reportable_findings
 from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.meta_analyzer import MetaAnalyzer, apply_meta_analysis
 from .analyzers.yara_analyzer import YaraAnalyzer
@@ -659,10 +659,18 @@ class Scanner:
             )
             return scan_results
 
+        # The behavioural analyzer emits one SAFE placeholder per scanned
+        # capability. ``ToolScanResult.is_safe`` is ``len(findings) == 0``, so
+        # merging those rows would flip every cleanly-scanned tool to unsafe.
+        placeholder_count = len(behavioral_findings)
+        behavioral_findings = reportable_findings(behavioral_findings)
+        placeholder_count -= len(behavioral_findings)
+
         if not behavioral_findings:
             logger.debug(
-                "Behavioral source scan returned no findings path=%s",
+                "Behavioral source scan returned no findings path=%s safe_placeholders=%d",
                 resolved_path,
+                placeholder_count,
             )
             return scan_results
 

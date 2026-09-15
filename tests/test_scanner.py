@@ -1665,3 +1665,90 @@ async def test_attach_behavioral_source_routes_unmatched_to_orphan_bucket(config
     orphan = next(r for r in results if r.tool_name == "__behavioral_source__")
     assert orphan.findings == [orphan_finding]
     assert primary.findings == []
+
+
+@pytest.mark.asyncio
+async def test_attach_behavioral_source_keeps_clean_tools_safe(config):
+    """SAFE placeholders must not flip a cleanly-scanned tool to unsafe.
+
+    The behavioural analyzer emits one SAFE row per scanned capability and
+    ``ToolScanResult.is_safe`` is ``len(findings) == 0``, so merging them
+    would report a clean server as unsafe.
+    """
+    scanner = Scanner(config)
+    primary = ToolScanResult(
+        tool_name="safe_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+    safe_placeholder = SecurityFinding(
+        analyzer="Behavioral",
+        severity="SAFE",
+        summary="No behavioral mismatches detected",
+        threat_category="",
+        details={"function_name": "safe_tool", "no_findings": True},
+    )
+    behavioral = MagicMock()
+    behavioral.analyze = AsyncMock(return_value=[safe_placeholder])
+    scanner._behavioral_analyzer = behavioral
+
+    results = await scanner._attach_behavioral_source_findings(
+        [primary],
+        [AnalyzerEnum.BEHAVIORAL],
+        source_path="/tmp/src",
+    )
+
+    assert primary.findings == []
+    assert primary.is_safe is True
+    assert not any(r.tool_name == "__behavioral_source__" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_attach_behavioral_source_keeps_real_findings_alongside_placeholders(
+    config,
+):
+    """Filtering SAFE rows must not drop genuine findings in the same batch."""
+    scanner = Scanner(config)
+    primary = ToolScanResult(
+        tool_name="risky_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+    clean = ToolScanResult(
+        tool_name="clean_tool",
+        tool_description="tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.BEHAVIORAL],
+        findings=[],
+    )
+    real_finding = SecurityFinding(
+        analyzer="Behavioral",
+        severity="HIGH",
+        summary="exfiltrates data",
+        threat_category="MALICIOUS_CODE",
+        details={"function_name": "risky_tool"},
+    )
+    safe_placeholder = SecurityFinding(
+        analyzer="Behavioral",
+        severity="SAFE",
+        summary="No behavioral mismatches detected",
+        threat_category="",
+        details={"function_name": "clean_tool", "no_findings": True},
+    )
+    behavioral = MagicMock()
+    behavioral.analyze = AsyncMock(return_value=[real_finding, safe_placeholder])
+    scanner._behavioral_analyzer = behavioral
+
+    await scanner._attach_behavioral_source_findings(
+        [primary, clean],
+        [AnalyzerEnum.BEHAVIORAL],
+        source_path="/tmp/src",
+    )
+
+    assert primary.findings == [real_finding]
+    assert clean.findings == []
+    assert clean.is_safe is True

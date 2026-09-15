@@ -20,7 +20,7 @@ This module contains the base analyzer interface and common classes.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from ...utils.logging_config import get_logger
 from ...threats.threats import ThreatMapping
@@ -157,6 +157,22 @@ class SecurityFinding:
 
     def __str__(self) -> str:
         return f"{self.severity}: {self.threat_category} - {self.summary} (analyzer: {self.analyzer})"
+
+
+def is_safe_placeholder(finding: Any) -> bool:
+    """True for the ``SAFE`` rows analyzers emit to record "nothing found".
+
+    The behavioural analyzer emits one of these per scanned capability so
+    reporters can enumerate clean tools. They are audit records, not
+    findings: anything that treats a non-empty finding list as "unsafe" or
+    "we produced results" must drop them first.
+    """
+    return (getattr(finding, "severity", None) or "").upper() == "SAFE"
+
+
+def reportable_findings(findings: Sequence[Any]) -> List[Any]:
+    """Drop benign SAFE placeholders; keep UNKNOWN for inconclusive scans."""
+    return [f for f in findings if not is_safe_placeholder(f)]
 
 
 class BaseAnalyzer(ABC):

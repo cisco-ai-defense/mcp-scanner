@@ -137,3 +137,100 @@ z = y
         # Check if module has expected attributes
         assert hasattr(dataflow, "__file__"), "Module should have __file__ attribute"
         assert hasattr(dataflow, "__path__"), "Package should have __path__ attribute"
+
+
+class TestFunctionScopedCFG:
+    """``build_cfg_for_function`` must survive the ``analyze_*`` entry points.
+
+    Rebuilding the CFG from the whole module would mix facts (dead variables,
+    live parameters, available expressions) across unrelated functions.
+    """
+
+    _SOURCE = """
+def other_function(z):
+    unrelated_dead = 12345
+    return z
+
+def target(path):
+    keep = path
+    return keep
+"""
+
+    def _parser_and_target(self):
+        from pathlib import Path
+
+        from mcpscanner.core.static_analysis.parser.python_parser import PythonParser
+
+        parser = PythonParser(Path("module_under_test.py"), self._SOURCE)
+        parser.parse()
+        target = next(
+            node
+            for node in parser.get_ast().body
+            if getattr(node, "name", None) == "target"
+        )
+        return parser, target
+
+    def test_liveness_keeps_function_scope(self):
+        from mcpscanner.core.static_analysis.dataflow.liveness_analysis import (
+            LivenessAnalyzer,
+        )
+
+        parser, target = self._parser_and_target()
+        analysis = LivenessAnalyzer(parser, ["path"])
+        analysis.build_cfg_for_function(target)
+        scoped_nodes = len(analysis.cfg.nodes)
+        analysis.analyze_liveness()
+
+        assert len(analysis.cfg.nodes) == scoped_nodes
+        dead_vars = {var for _node, var in analysis.dead_code}
+        assert "unrelated_dead" not in dead_vars
+
+    def test_available_expressions_keeps_function_scope(self):
+        from mcpscanner.core.static_analysis.dataflow.available_expressions import (
+            AvailableExpressionsAnalyzer,
+        )
+
+        parser, target = self._parser_and_target()
+        analysis = AvailableExpressionsAnalyzer(parser, ["path"])
+        analysis.build_cfg_for_function(target)
+        scoped_nodes = len(analysis.cfg.nodes)
+        analysis.analyze_available_exprs()
+
+        assert len(analysis.cfg.nodes) == scoped_nodes
+
+    def test_reaching_definitions_keeps_function_scope(self):
+        from mcpscanner.core.static_analysis.dataflow.reaching_definitions import (
+            ReachingDefinitionsAnalysis,
+        )
+
+        parser, target = self._parser_and_target()
+        analysis = ReachingDefinitionsAnalysis(parser, ["path"])
+        analysis.build_cfg_for_function(target)
+        scoped_nodes = len(analysis.cfg.nodes)
+        analysis.analyze_reaching_defs()
+
+        assert len(analysis.cfg.nodes) == scoped_nodes
+
+    def test_analyses_still_build_cfg_when_unscoped(self):
+        """Without an explicit function scope the module CFG is still built."""
+        from mcpscanner.core.static_analysis.dataflow.liveness_analysis import (
+            LivenessAnalyzer,
+        )
+
+        parser, _target = self._parser_and_target()
+        analysis = LivenessAnalyzer(parser, ["path"])
+        assert analysis.cfg is None
+        analysis.analyze_liveness()
+        assert analysis.cfg is not None and len(analysis.cfg.nodes) > 0
+
+    def test_classic_summary_excludes_other_function_dead_vars(self):
+        """End-to-end: the per-function summary must not leak sibling facts."""
+        from mcpscanner.core.static_analysis.graph.classic_dataflow import (
+            analyze_python_function,
+        )
+
+        _parser, target = self._parser_and_target()
+        summary = analyze_python_function(
+            self._SOURCE, "module_under_test.py", target, ["path"]
+        )
+        assert "unrelated_dead" not in summary.dead_variables

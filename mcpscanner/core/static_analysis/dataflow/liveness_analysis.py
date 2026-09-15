@@ -80,7 +80,10 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
         Returns:
             Mapping of node_id -> set of live variables
         """
-        self.build_cfg()
+        # Preserve a function-scoped CFG from ``build_cfg_for_function``;
+        # rebuilding here would silently widen the analysis to the module.
+        if not self.cfg:
+            self.build_cfg()
 
         # Run BACKWARD dataflow analysis
         initial_fact = LivenessFact()

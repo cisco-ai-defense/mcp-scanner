@@ -1267,6 +1267,54 @@ def test_analysis_scan_status_no_findings_no_errors_is_completed():
     assert analysis_scan_status(_analyzer_with_error_stats(0), []) == "completed"
 
 
+def _safe_placeholder(function_name: str = "tool"):
+    from mcpscanner.core.analyzers.base import SecurityFinding
+
+    return SecurityFinding(
+        severity="SAFE",
+        summary="No behavioral mismatches detected",
+        analyzer="Behavioral",
+        threat_category="",
+        details={"function_name": function_name, "no_findings": True},
+    )
+
+
+def test_analysis_scan_status_safe_placeholders_do_not_mask_errors():
+    """SAFE rows are audit records, not results.
+
+    The unified pipeline emits one per discovered tool, so counting them
+    would report a degraded scan as ``completed`` and hand back
+    ``is_safe=True`` once the placeholders are stripped downstream.
+    """
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    findings = [_safe_placeholder("a"), _safe_placeholder("b")]
+    assert analysis_scan_status(_analyzer_with_error_stats(3), findings) == "error"
+
+
+def test_analysis_scan_status_safe_placeholders_alone_stay_completed():
+    """Placeholders with no error tally still mean a clean, complete scan."""
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    findings = [_safe_placeholder("a")]
+    assert analysis_scan_status(_analyzer_with_error_stats(0), findings) == "completed"
+
+
+def test_analysis_scan_status_real_finding_beside_placeholder_is_completed():
+    """A genuine finding still short-circuits to ``completed``."""
+    from mcpscanner.core.analyzers.base import SecurityFinding
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    real = SecurityFinding(
+        severity="HIGH",
+        summary="exfiltrates data",
+        analyzer="Behavioral",
+        threat_category="MALICIOUS_CODE",
+    )
+    findings = [_safe_placeholder("a"), real]
+    assert analysis_scan_status(_analyzer_with_error_stats(4), findings) == "completed"
+
+
 def test_analysis_scan_status_fails_closed_when_stats_unreadable():
     """If the analyzer doesn't expose orchestrator stats and produced no
     findings, downgrade to ``error`` rather than reporting safe."""

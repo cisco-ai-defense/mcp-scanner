@@ -46,6 +46,7 @@ import httpx
 from ..config.config import Config
 from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
+from .analyzers.base import reportable_findings
 from .docker_build import (
     DockerBuildError,
     default_scanner_image_tag,
@@ -667,9 +668,11 @@ def analysis_scan_status(analyzer: Any, findings: Sequence[Any]) -> str:
 
     Rules:
 
-    * If we surfaced any findings, the scan is ``completed`` regardless of
-      partial errors — the findings stand on their own and ``is_safe`` is
-      already ``False``.
+    * If we surfaced any *reportable* findings, the scan is ``completed``
+      regardless of partial errors — the findings stand on their own and
+      ``is_safe`` is already ``False``. SAFE placeholders don't count: they
+      are emitted once per scanned capability, so counting them would mark
+      every degraded scan ``completed`` and hand back ``is_safe=True``.
     * If we surfaced no findings *and* either tally is non-zero, the result
       is unreliable → ``error``. The caller maps this to ``is_safe=None``.
     * Otherwise (no findings, no errors — nothing to analyse or everything
@@ -682,7 +685,7 @@ def analysis_scan_status(analyzer: Any, findings: Sequence[Any]) -> str:
     bookkeeping glitch can't crash a scan, but a glitch there still lets
     the ``analysis_errors`` tally (read separately) drive the decision.
     """
-    if findings:
+    if _reportable_findings(findings):
         return "completed"
     error_tally = 0
     stats_ok = False
@@ -705,11 +708,7 @@ def analysis_scan_status(analyzer: Any, findings: Sequence[Any]) -> str:
 
 def _reportable_findings(findings: Sequence[Any]) -> List[Any]:
     """Drop benign SAFE placeholders; keep UNKNOWN for inconclusive scans."""
-    return [
-        f
-        for f in findings
-        if (getattr(f, "severity", None) or "").upper() != "SAFE"
-    ]
+    return reportable_findings(findings)
 
 
 def _build_scan_result(
