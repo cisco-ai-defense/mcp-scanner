@@ -81,6 +81,25 @@ class TestBehavioralCodeAnalyzerFileDetection:
             assert any(str(f).endswith(".py") for f in files)
             assert not any(str(f).endswith(".txt") for f in files)
 
+    def test_find_source_files_skips_dist_build_and_coverage(self) -> None:
+        config = Config(llm_provider_api_key="test-key")
+        analyzer = BehavioralCodeAnalyzer(config)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "src").mkdir()
+            (root / "src" / "index.ts").write_text("export {}")
+            (root / "dist").mkdir()
+            (root / "dist" / "bundle.js").write_text("// compiled")
+            (root / "build").mkdir()
+            (root / "build" / "out.js").write_text("// build")
+            (root / "coverage").mkdir()
+            (root / "coverage" / "report.js").write_text("// coverage")
+
+            files = analyzer._find_source_files(str(root))
+            assert any(Path(f).name == "index.ts" for f in files)
+            assert not any(Path(f).name in {"bundle.js", "out.js", "report.js"} for f in files)
+
 
 class TestBehavioralCodeAnalyzerMCPDetection:
     """Test MCP function detection."""
@@ -248,7 +267,7 @@ def add(a: float, b: float) -> float:
             assert func_names == ["add", "echo"], func_names
             for f in safe_findings:
                 d = f.details or {}
-                assert d.get("source_file") == temp_path
+                assert d.get("source_file") == str(Path(temp_path).resolve())
                 assert d.get("no_findings") is True, (
                     "synthesized SAFE finding must be marked with no_findings=True"
                 )
@@ -610,6 +629,24 @@ def add(a: int, b: int) -> int:
     return a + b
 """
 
+    _JS_SERVER_TOOL_SOURCE = """\
+import { copyFileSync } from "node:fs";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.tool(
+  "copy_file",
+  "Copy a file to the designated application storage path.",
+  { source: z.string(), destination: z.string() },
+  async ({ source, destination }) => {
+    copyFileSync(source, destination);
+    return { content: [{ type: "text", text: `copied ${source}` }] };
+  },
+);
+"""
+
     def test_merge_dedupes_decorator_name_override(self) -> None:
         primary = ContextExtractor(
             self._CUSTOM_NAME_SOURCE, "custom_name.py"
@@ -620,6 +657,52 @@ def add(a: int, b: int) -> int:
         merged = _merge_mcp_function_contexts(primary, supplemental)
         assert len(merged) == 1
         assert merged[0].name == "custom"
+
+    def test_merge_dedupes_js_server_tool_handler_stub(self) -> None:
+        from mcpscanner.core.static_analysis.javascript.js_context_extractor import (
+            JSContextExtractor,
+        )
+
+        source = self._JS_SERVER_TOOL_SOURCE
+        file_path = "copy_file.js"
+        primary = JSContextExtractor(source, file_path).extract_mcp_function_contexts()
+        supplemental = NativeAnalyzer(source, file_path).extract_mcp_capability_contexts()
+        merged = _merge_mcp_function_contexts(primary, supplemental)
+        assert len(merged) == 1
+        assert merged[0].name == "copy_file"
+        assert "designated application storage path" in (merged[0].docstring or "")
+
+    def test_merge_dedupes_js_named_handler_stub(self) -> None:
+        from mcpscanner.core.static_analysis.javascript.js_context_extractor import (
+            JSContextExtractor,
+        )
+
+        source = """\
+import { copyFileSync } from "node:fs";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+async function copyFileHandler({ source, destination }) {
+  copyFileSync(source, destination);
+  return { content: [{ type: "text", text: `copied ${source}` }] };
+}
+
+server.tool(
+  "copy_file",
+  "Copy a file to the designated application storage path.",
+  { source: z.string(), destination: z.string() },
+  copyFileHandler,
+);
+"""
+        file_path = "copy_file.js"
+        primary = JSContextExtractor(source, file_path).extract_mcp_function_contexts()
+        supplemental = NativeAnalyzer(source, file_path).extract_mcp_capability_contexts()
+        merged = _merge_mcp_function_contexts(primary, supplemental)
+        assert len(merged) == 1
+        assert merged[0].name == "copy_file"
+        assert "designated application storage path" in (merged[0].docstring or "")
 
 
 class TestAnalyzedFunctionsBackfill:

@@ -469,6 +469,20 @@ class SpecificInstructionsScanRequest(APIScanRequest):
     pass  # No additional fields needed - scans the server's instructions field
 
 
+class BehavioralSourceScanRequest(BaseModel):
+    """Request for scanning MCP server source with the behavioral analyzer."""
+
+    source_path: str
+
+    @field_validator("source_path")
+    @classmethod
+    def validate_source_path(cls, value: str) -> str:
+        from ..utils.path_safety import validate_confined_path_input
+
+        validate_confined_path_input(value)
+        return value
+
+
 class AnalyzerFinding(BaseModel):
     """Analyzer finding with grouped structure."""
 

@@ -238,6 +238,7 @@ def _build_config(
     return Config(**config_params)
 
 
+
 def _finding_threat_vuln_classification(finding: Any) -> Optional[str]:
     """Per-finding THREAT/VULNERABILITY label used for CLI output filtering."""
     details = finding.details or {}
@@ -359,6 +360,11 @@ def _build_behavioral_results(
             threat_vuln_classification = _infer_behavioral_threat_classification(
                 func_findings, max_severity
             )
+
+            # Derive is_safe from severity instead of hardcoding False.
+            # Analyzers can now emit SAFE-severity findings for tools that
+            # came back clean (see BehavioralCodeAnalyzer.analyze docstring);
+            # those rows must NOT be filtered out downstream as unsafe.
             is_safe_row = max_severity == "SAFE"
 
             analyzer_finding: Dict[str, Any] = {

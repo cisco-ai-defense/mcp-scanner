@@ -29,6 +29,7 @@ This is the entry point for all alignment verification operations.
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .....config.config import Config
@@ -45,6 +46,7 @@ from ....static_analysis.context_extractor import FunctionContext
 from .alignment_prompt_builder import AlignmentPromptBuilder
 from .alignment_llm_client import AlignmentLLMClient
 from .alignment_response_validator import AlignmentResponseValidator, is_unanalysed
+from .alignment_cache import AlignmentResultCache
 from .threat_vulnerability_classifier import ThreatVulnerabilityClassifier
 
 
@@ -76,15 +78,43 @@ class AlignmentOrchestrator:
         self.llm_client = AlignmentLLMClient(config)
         self.response_validator = AlignmentResponseValidator()
         self.threat_vuln_classifier = ThreatVulnerabilityClassifier(config)
+        self._result_cache = AlignmentResultCache(
+            model=getattr(self.llm_client, "_model", None) or "unknown"
+        )
 
         self.stats = self._fresh_stats()
-        # Names of functions whose alignment check raised or produced an
-        # invalid response in the current scan. Consumed by the behavioural
-        # analyzer to skip SAFE-synthesis (an errored function is not
-        # "safe", just unknown).
-        self.errored_function_names: Set[str] = set()
+        # (source_file, function_name) pairs whose alignment check raised or
+        # produced an invalid response in the current scan. Scoped per file so
+        # concurrent directory scans cannot cross-contaminate same-named funcs.
+        self.errored_function_keys: Set[Tuple[str, str]] = set()
 
         self.logger.debug("AlignmentOrchestrator initialized")
+
+    @staticmethod
+    def _function_key(func_context: Any) -> Tuple[str, str]:
+        name = getattr(func_context, "name", None) or ""
+        source = getattr(func_context, "source_file", "") or ""
+        if source and source != "unknown":
+            try:
+                source = str(Path(source).resolve(strict=False))
+            except (OSError, RuntimeError, ValueError) as exc:
+                logging.getLogger(__name__).debug(
+                    "alignment function_key path_resolve_failed source=%s error_type=%s error=%s",
+                    source,
+                    type(exc).__name__,
+                    truncate(exc),
+                )
+        return (source, name)
+
+    def _mark_errored(self, func_context: Any) -> None:
+        name = getattr(func_context, "name", None)
+        if name:
+            self.errored_function_keys.add(self._function_key(func_context))
+
+    @property
+    def errored_function_names(self) -> Set[str]:
+        """Function names that errored (any source file). Test/diagnostic helper."""
+        return {name for _, name in self.errored_function_keys}
 
     def _record_skipped_error(
         self, exc: BaseException, *, context: str = "llm"
@@ -113,13 +143,46 @@ class AlignmentOrchestrator:
             "skipped_error": 0,
             "skipped_error_transient": 0,
             "skipped_error_final": 0,
+            "cache_hits": 0,
         }
 
     def reset_stats(self) -> None:
         """Reset cumulative counters to zero."""
         for key in self.stats:
             self.stats[key] = 0
-        self.errored_function_names.clear()
+        self.errored_function_keys.clear()
+        self._result_cache.clear()
+        self._result_cache.model = getattr(self.llm_client, "_model", None) or "unknown"
+
+    def _cache_lookup(
+        self, func_context: FunctionContext
+    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+        if not MCPScannerConstants.ALIGNMENT_CACHE_ENABLED:
+            return None, None
+        cache_key = self._result_cache.key_for(
+            func_context, prompt_builder=self.prompt_builder
+        )
+        entry = self._result_cache.get(cache_key)
+        if entry is None:
+            return None, cache_key
+        return entry.result, cache_key
+
+    def _store_cache(self, cache_key: Optional[str], result: Dict[str, Any]) -> None:
+        if cache_key and MCPScannerConstants.ALIGNMENT_CACHE_ENABLED:
+            self._result_cache.put(cache_key, result)
+
+    def _return_cached_result(
+        self,
+        func_context: FunctionContext,
+        result: Dict[str, Any],
+    ) -> Optional[Tuple[Dict[str, Any], FunctionContext]]:
+        self.stats["total_analyzed"] += 1
+        self.stats["cache_hits"] += 1
+        if result.get("mismatch_detected"):
+            self.stats["mismatches_detected"] += 1
+            return (result, func_context)
+        self.stats["no_mismatch"] += 1
+        return None
 
     async def check_alignment(
         self, func_context: FunctionContext
@@ -139,9 +202,18 @@ class AlignmentOrchestrator:
         Returns:
             Tuple of (analysis_dict, func_context) if mismatch detected, None if aligned
         """
-        self.stats["total_analyzed"] += 1
         check_start = time.perf_counter()
         stage = "local"
+
+        cached_result, cache_key = self._cache_lookup(func_context)
+        if cached_result is not None:
+            self.logger.debug(
+                "alignment cache hit function=%s",
+                func_context.name,
+            )
+            return self._return_cached_result(func_context, cached_result)
+
+        self.stats["total_analyzed"] += 1
 
         try:
             self.logger.debug(f"Building alignment prompt for {func_context.name}")
@@ -159,12 +231,12 @@ class AlignmentOrchestrator:
 
             if not result:
                 self.logger.warning(
-                    f"Invalid response for {func_context.name}, skipping"
+                    "alignment invalid_response function=%s source_file=%s stage=parse",
+                    func_context.name,
+                    sanitize_log_value(getattr(func_context, "source_file", "")),
                 )
                 self.stats["skipped_invalid_response"] += 1
-                name = getattr(func_context, "name", None)
-                if name:
-                    self.errored_function_names.add(name)
+                self._mark_errored(func_context)
                 return None
 
             # Step 4: Return analysis if mismatch detected
@@ -210,7 +282,9 @@ class AlignmentOrchestrator:
                             )
                         else:
                             self.logger.warning(
-                                f"Failed to classify finding for {func_context.name}"
+                                "alignment classify_empty function=%s threat=%s",
+                                func_context.name,
+                                threat_name or "<unset>",
                             )
                             result["threat_vulnerability_classification"] = "UNCLEAR"
                     except Exception as e:
@@ -221,6 +295,7 @@ class AlignmentOrchestrator:
                         # Continue without classification - mark as UNCLEAR
                         result["threat_vulnerability_classification"] = "UNCLEAR"
 
+                self._store_cache(cache_key, result)
                 return (result, func_context)
             else:
                 check_ms = int((time.perf_counter() - check_start) * 1000)
@@ -230,225 +305,281 @@ class AlignmentOrchestrator:
                     check_ms,
                 )
                 self.stats["no_mismatch"] += 1
+                self._store_cache(cache_key, result)
                 return None
 
         except Exception as e:
             check_ms = int((time.perf_counter() - check_start) * 1000)
             kind = self._record_skipped_error(e, context=stage)
             self.logger.error(
-                "alignment check failed function=%s duration_ms=%d error_kind=%s "
-                "error_type=%s error=%s",
+                "alignment check failed function=%s source_file=%s stage=%s duration_ms=%d "
+                "error_kind=%s error_type=%s error=%s",
                 func_context.name,
+                sanitize_log_value(getattr(func_context, "source_file", "")),
+                stage,
                 check_ms,
                 kind.value,
                 type(e).__name__,
                 truncate(e),
+                exc_info=True,
             )
-            name = getattr(func_context, "name", None)
-            if name:
-                self.errored_function_names.add(name)
+            self._mark_errored(func_context)
             return None
 
     async def check_alignment_batch(
-        self, func_contexts: List[FunctionContext], batch_size: int = 5
+        self,
+        func_contexts: List[FunctionContext],
+        batch_size: int = 5,
+        *,
+        max_concurrency: int | None = None,
     ) -> List[Tuple[Dict[str, Any], FunctionContext]]:
         """Check alignment for multiple functions in batched LLM calls.
 
-        This method batches multiple functions into single LLM requests to reduce
-        API calls and improve scanning speed.
+        Batches are submitted concurrently up to ``max_concurrency`` to
+        reduce wall-clock time on multi-function scans.
 
         Args:
             func_contexts: List of function contexts to analyze
             batch_size: Number of functions per LLM request (default: 5)
+            max_concurrency: Parallel batch limit (default: from constants)
 
         Returns:
             List of (analysis_dict, func_context) tuples for detected mismatches
         """
-        results = []
+        if not func_contexts:
+            return []
 
+        concurrency = max(
+            1,
+            max_concurrency or MCPScannerConstants.BEHAVIORAL_LLM_BATCH_CONCURRENCY,
+        )
+        batches = [
+            func_contexts[i : i + batch_size]
+            for i in range(0, len(func_contexts), batch_size)
+        ]
         total_funcs = len(func_contexts)
-        total_batches = (total_funcs + batch_size - 1) // batch_size if batch_size else 0
+        total_batches = len(batches)
         self.logger.info(
-            "alignment batch scan start total_functions=%d batches=%d batch_size=%d",
+            "alignment batch scan start total_functions=%d batches=%d "
+            "batch_size=%d concurrency=%d",
             total_funcs,
             total_batches,
             batch_size,
+            concurrency,
         )
 
-        # Process in batches
-        for i in range(0, len(func_contexts), batch_size):
-            batch = func_contexts[i:i + batch_size]
-            batch_idx = i // batch_size + 1
-            batch_start = time.perf_counter()
-            self.logger.debug(
-                "batch %d/%d start size=%d", batch_idx, total_batches, len(batch)
-            )
+        semaphore = asyncio.Semaphore(concurrency)
 
-            stage = "local"
-            try:
-                batch_body = self.prompt_builder.build_batch_analysis_content(batch)
-                batch_results = None
-                parse_attempts = max(
-                    1, MCPScannerConstants.LLM_BATCH_PARSE_MAX_ATTEMPTS
+        async def _run_batch(
+            batch_idx: int, batch: List[FunctionContext]
+        ) -> List[Tuple[Dict[str, Any], FunctionContext]]:
+            async with semaphore:
+                return await self._process_alignment_batch(
+                    batch,
+                    batch_idx=batch_idx,
+                    total_batches=total_batches,
                 )
-                base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
 
-                for parse_attempt in range(parse_attempts):
-                    prompt = self.prompt_builder.wrap_batch_prompt(
-                        batch, batch_body
-                    )
-                    stage = "llm"
-                    if parse_attempt == 0:
-                        response = await self.llm_client.verify_alignment(prompt)
-                    else:
-                        # Re-prompt only; first attempt already consumed the
-                        # full API retry budget for transient failures.
-                        response = await self.llm_client.verify_alignment(
-                            prompt, max_retries=1
-                        )
-                    stage = "parse"
-                    batch_results = self.response_validator.validate_batch(
-                        response, len(batch)
-                    )
-                    if batch_results is not None:
-                        break
-                    if parse_attempt < parse_attempts - 1:
-                        delay = compute_backoff_delay(parse_attempt, base_delay)
-                        self.logger.warning(
-                            "batch %d/%d invalid_response error_kind=%s "
-                            "attempt=%d/%d backoff_s=%.1f fallback=retry_batch",
-                            batch_idx,
-                            total_batches,
-                            ERROR_KIND_TRANSIENT,
-                            parse_attempt + 1,
-                            parse_attempts,
-                            delay,
-                        )
-                        await asyncio.sleep(delay)
+        batch_outputs = await asyncio.gather(
+            *(_run_batch(idx + 1, batch) for idx, batch in enumerate(batches))
+        )
+        results: List[Tuple[Dict[str, Any], FunctionContext]] = []
+        for batch_result in batch_outputs:
+            results.extend(batch_result)
+        return results
 
-                # ``None`` means hard failure (empty / unparseable response).
-                # An empty *list* would mean the batch was empty, which is
-                # impossible here because we only enter the loop when
-                # ``len(batch) > 0``. Use ``is None`` for symmetry with the
-                # validator's own contract.
-                if batch_results is None:
+    async def _process_alignment_batch(
+        self,
+        batch: List[FunctionContext],
+        *,
+        batch_idx: int,
+        total_batches: int,
+    ) -> List[Tuple[Dict[str, Any], FunctionContext]]:
+        """Process one alignment batch (single LLM request + parse/classify)."""
+        results: List[Tuple[Dict[str, Any], FunctionContext]] = []
+        pending: List[Tuple[FunctionContext, Optional[str]]] = []
+
+        for func_context in batch:
+            cached_result, cache_key = self._cache_lookup(func_context)
+            if cached_result is not None:
+                hit = self._return_cached_result(func_context, cached_result)
+                if hit:
+                    results.append(hit)
+                continue
+            pending.append((func_context, cache_key))
+
+        if not pending:
+            return results
+
+        pending_contexts = [ctx for ctx, _ in pending]
+        batch_start = time.perf_counter()
+        self.logger.debug(
+            "batch %d/%d start size=%d cached=%d",
+            batch_idx,
+            total_batches,
+            len(pending_contexts),
+            len(batch) - len(pending_contexts),
+        )
+
+        stage = "local"
+        try:
+            batch_body = self.prompt_builder.build_batch_analysis_content(
+                pending_contexts
+            )
+            batch_results = None
+            parse_attempts = max(1, MCPScannerConstants.LLM_BATCH_PARSE_MAX_ATTEMPTS)
+            base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
+
+            for parse_attempt in range(parse_attempts):
+                prompt = self.prompt_builder.wrap_batch_prompt(
+                    pending_contexts, batch_body
+                )
+                stage = "llm"
+                if parse_attempt == 0:
+                    response = await self.llm_client.verify_alignment(prompt)
+                else:
+                    response = await self.llm_client.verify_alignment(
+                        prompt, max_retries=1
+                    )
+                stage = "parse"
+                batch_results = self.response_validator.validate_batch(
+                    response, len(pending_contexts)
+                )
+                if batch_results is not None:
+                    break
+                if parse_attempt < parse_attempts - 1:
+                    delay = compute_backoff_delay(parse_attempt, base_delay)
                     self.logger.warning(
-                        "batch %d/%d invalid_response fallback=individual size=%d "
-                        "-- LLM returned an unparseable batch, retrying each function individually",
+                        "batch %d/%d invalid_response error_kind=%s "
+                        "attempt=%d/%d backoff_s=%.1f fallback=retry_batch",
                         batch_idx,
                         total_batches,
-                        len(batch),
+                        ERROR_KIND_TRANSIENT,
+                        parse_attempt + 1,
+                        parse_attempts,
+                        delay,
                     )
-                    for func_context in batch:
-                        result = await self.check_alignment(func_context)
-                        if result:
-                            results.append(result)
-                    continue
-                
-                # Process each result in the batch
-                batch_mismatches = 0
-                batch_clean = 0
-                batch_unanalysed = 0
-                for idx, result in enumerate(batch_results):
-                    if idx >= len(batch):
-                        break
+                    await asyncio.sleep(delay)
 
-                    func_context = batch[idx]
-                    self.stats["total_analyzed"] += 1
-
-                    # Sentinel slot: the LLM never produced a valid
-                    # result for this function. Source taxonomy lives in
-                    # ``alignment_response_validator._validate_items`` —
-                    # short-padding, non-dict items, items missing
-                    # ``mismatch_detected``, and malformed mismatches
-                    # (``mismatch_detected=true`` without
-                    # ``threat_name`` / ``summary``) all funnel through
-                    # ``_unanalysed_sentinel()`` and end up here. Adversarial
-                    # LLM-supplied ``_unanalysed`` keys are stripped by
-                    # the validator, so reaching this branch means the
-                    # *validator* tagged the slot. Route to errored —
-                    # these functions are "unknown", not "safe".
-                    if is_unanalysed(result):
-                        self.stats["skipped_invalid_response"] += 1
-                        batch_unanalysed += 1
-                        name = getattr(func_context, "name", None)
-                        if name:
-                            self.errored_function_names.add(name)
-                        continue
-
-                    if result and result.get("mismatch_detected"):
-                        self.stats["mismatches_detected"] += 1
-                        batch_mismatches += 1
-                        
-                        # Classify as threat or vulnerability
-                        threat_name = result.get("threat_name", "")
-                        if threat_name != "GENERAL DESCRIPTION-CODE MISMATCH":
-                            try:
-                                mapped_severity = self._get_mapped_severity(threat_name)
-                                classification = await self.threat_vuln_classifier.classify_finding(
-                                    threat_name=threat_name or "UNKNOWN",
-                                    severity=mapped_severity,
-                                    summary=result.get("summary", ""),
-                                    description_claims=result.get("description_claims", ""),
-                                    actual_behavior=result.get("actual_behavior", ""),
-                                    security_implications=result.get("security_implications", ""),
-                                    dataflow_evidence=result.get("dataflow_evidence", ""),
-                                )
-                                if classification:
-                                    result["threat_vulnerability_classification"] = classification["classification"]
-                                else:
-                                    result["threat_vulnerability_classification"] = "UNCLEAR"
-                            except Exception as e:
-                                self.logger.error(f"Classification failed: {e}")
-                                result["threat_vulnerability_classification"] = "UNCLEAR"
-                        
-                        results.append((result, func_context))
-                    else:
-                        self.stats["no_mismatch"] += 1
-                        batch_clean += 1
-
-                batch_ms = int((time.perf_counter() - batch_start) * 1000)
-                self.logger.info(
-                    "batch %d/%d done size=%d mismatches=%d clean=%d "
-                    "unanalysed=%d duration_ms=%d",
+            if batch_results is None:
+                self.logger.warning(
+                    "batch %d/%d invalid_response fallback=individual size=%d "
+                    "-- LLM returned an unparseable batch, retrying each function individually",
                     batch_idx,
                     total_batches,
-                    len(batch),
-                    batch_mismatches,
-                    batch_clean,
-                    batch_unanalysed,
-                    batch_ms,
+                    len(pending_contexts),
                 )
-
-            except Exception as e:
-                batch_ms = int((time.perf_counter() - batch_start) * 1000)
-                kind = classify_analyzer_error(
-                    e,
-                    context=stage,
-                    model=getattr(self.llm_client, "_model", None),
-                )
-                self.logger.error(
-                    "batch %d/%d failed size=%d duration_ms=%d error_kind=%s "
-                    "error_type=%s error=%s fallback=individual_analysis",
-                    batch_idx,
-                    total_batches,
-                    len(batch),
-                    batch_ms,
-                    kind.value,
-                    type(e).__name__,
-                    truncate(e),
-                )
-                # NOTE: we do *not* pre-populate ``errored_function_names``
-                # for the whole batch. ``check_alignment`` is total — it
-                # marks errored on raise / invalid-response, and leaves
-                # the set untouched on clean / mismatch. Pre-marking
-                # would mis-flag cleanly-retried functions as errored.
-                for func_context in batch:
+                for func_context, _ in pending:
                     result = await self.check_alignment(func_context)
                     if result:
                         results.append(result)
+                return results
 
-        return results
+            batch_mismatches = 0
+            batch_clean = 0
+            batch_unanalysed = 0
+            for idx, result in enumerate(batch_results):
+                if idx >= len(pending):
+                    break
+
+                func_context, cache_key = pending[idx]
+                self.stats["total_analyzed"] += 1
+
+                if is_unanalysed(result):
+                    self.stats["skipped_invalid_response"] += 1
+                    batch_unanalysed += 1
+                    self._mark_errored(func_context)
+                    continue
+
+                if result and result.get("mismatch_detected"):
+                    self.stats["mismatches_detected"] += 1
+                    batch_mismatches += 1
+
+                    threat_name = result.get("threat_name", "")
+                    if threat_name != "GENERAL DESCRIPTION-CODE MISMATCH":
+                        try:
+                            mapped_severity = self._get_mapped_severity(threat_name)
+                            classification = (
+                                await self.threat_vuln_classifier.classify_finding(
+                                    threat_name=threat_name or "UNKNOWN",
+                                    severity=mapped_severity,
+                                    summary=result.get("summary", ""),
+                                    description_claims=result.get(
+                                        "description_claims", ""
+                                    ),
+                                    actual_behavior=result.get("actual_behavior", ""),
+                                    security_implications=result.get(
+                                        "security_implications", ""
+                                    ),
+                                    dataflow_evidence=result.get(
+                                        "dataflow_evidence", ""
+                                    ),
+                                )
+                            )
+                            if classification:
+                                result["threat_vulnerability_classification"] = (
+                                    classification["classification"]
+                                )
+                            else:
+                                result["threat_vulnerability_classification"] = "UNCLEAR"
+                        except Exception as e:
+                            self.logger.error(
+                                "alignment batch classify_failed function=%s threat=%s "
+                                "error_type=%s error=%s",
+                                func_context.name,
+                                threat_name or "<unset>",
+                                type(e).__name__,
+                                truncate(e),
+                                exc_info=True,
+                            )
+                            result["threat_vulnerability_classification"] = "UNCLEAR"
+
+                    self._store_cache(cache_key, result)
+                    results.append((result, func_context))
+                else:
+                    self.stats["no_mismatch"] += 1
+                    batch_clean += 1
+                    self._store_cache(cache_key, result)
+
+            batch_ms = int((time.perf_counter() - batch_start) * 1000)
+            self.logger.info(
+                "batch %d/%d done size=%d mismatches=%d clean=%d "
+                "unanalysed=%d duration_ms=%d",
+                batch_idx,
+                total_batches,
+                len(pending_contexts),
+                batch_mismatches,
+                batch_clean,
+                batch_unanalysed,
+                batch_ms,
+            )
+            return results
+
+        except Exception as e:
+            batch_ms = int((time.perf_counter() - batch_start) * 1000)
+            kind = classify_analyzer_error(
+                e,
+                context=stage,
+                model=getattr(self.llm_client, "_model", None),
+            )
+            self.logger.error(
+                "batch %d/%d failed size=%d duration_ms=%d stage=%s error_kind=%s "
+                "error_type=%s error=%s fallback=individual_analysis",
+                batch_idx,
+                total_batches,
+                len(pending_contexts),
+                batch_ms,
+                stage,
+                kind.value,
+                type(e).__name__,
+                truncate(e),
+                exc_info=True,
+            )
+            for func_context, _ in pending:
+                result = await self.check_alignment(func_context)
+                if result:
+                    results.append(result)
+            return results
 
     @staticmethod
     def _get_mapped_severity(threat_name: str) -> str:
@@ -512,12 +643,13 @@ class AlignmentOrchestrator:
         safe_scope = sanitize_log_value(scope)
         self.logger.info(
             "alignment summary scope=%s total=%d mismatches=%d clean=%d "
-            "skipped_invalid_response=%d skipped_error=%d "
+            "cache_hits=%d skipped_invalid_response=%d skipped_error=%d "
             "skipped_error_transient=%d skipped_error_final=%d",
             safe_scope,
             s["total_analyzed"],
             s["mismatches_detected"],
             s["no_mismatch"],
+            s.get("cache_hits", 0),
             s["skipped_invalid_response"],
             s["skipped_error"],
             s.get("skipped_error_transient", 0),

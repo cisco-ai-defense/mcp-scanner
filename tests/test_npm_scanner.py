@@ -1473,21 +1473,37 @@ def test_js_analyzer_extract_failure_marks_scan_error(tmp_path, monkeypatch):
     This closes the residual false-safe gap where a broken/unavailable
     tree-sitter parser produced zero findings indistinguishable from a
     genuinely clean package."""
+    from mcpscanner.core.analyzers.behavioral import code_analyzer as camod
     from mcpscanner.core.analyzers.behavioral import js_code_analyzer as jmod
     from mcpscanner.core.pypi_scanner import analysis_scan_status
     from mcpscanner.core.static_analysis import native_analyzer as namod
 
     # Keep analyzer construction cheap and offline.
-    monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
+    monkeypatch.setattr(camod, "AlignmentOrchestrator", MagicMock())
 
     js_file = tmp_path / "server.ts"
-    js_file.write_text("export const handler = async () => 42;\n")
+    js_file.write_text(
+        """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.tool("handler", {}, async () => 42);
+"""
+    )
 
     def boom(self, *args, **kwargs):
         raise RuntimeError("tree-sitter unavailable")
 
     monkeypatch.setattr(
         namod.NativeAnalyzer, "extract_mcp_capability_contexts", boom
+    )
+    from mcpscanner.core.static_analysis.javascript import (
+        js_context_extractor as jsmod,
+    )
+
+    monkeypatch.setattr(
+        jsmod.JSContextExtractor, "extract_mcp_function_contexts", boom
     )
 
     analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
