@@ -418,3 +418,13 @@ class TestBatchGraphEvidence:
         assert pos_a != -1 and pos_b != -1
         assert pos_evidence_a != -1 and pos_evidence_b != -1
         assert pos_a < pos_evidence_a < pos_b < pos_evidence_b
+
+
+def test_analysis_content_includes_assignments() -> None:
+    builder = AlignmentPromptBuilder()
+    ctx = _minimal_function_context(
+        assignments=[{"line": 12, "variable": "cmd", "value": "user_input"}]
+    )
+    content = builder.build_analysis_content(ctx)
+    assert "**ASSIGNMENTS (1 total):**" in content
+    assert "Line 12: cmd = user_input" in content

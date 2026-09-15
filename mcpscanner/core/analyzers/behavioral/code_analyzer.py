@@ -133,6 +133,23 @@ def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
     return ("full", ctx.name, ctx.line_number, decs)
 
 
+def _registration_names_align(primary_name: str, supplemental_name: str) -> bool:
+    """True when two extractor names refer to the same MCP registration.
+
+    NativeAnalyzer rewrites named JS handlers to ``{registered} ({symbol})``
+    while JSContextExtractor keeps the registered tool name.
+    """
+    if not primary_name or not supplemental_name:
+        return False
+    if primary_name == supplemental_name:
+        return True
+    prefix = f"{primary_name} ("
+    if supplemental_name.startswith(prefix) and supplemental_name.endswith(")"):
+        return True
+    reverse_prefix = f"{supplemental_name} ("
+    return primary_name.startswith(reverse_prefix) and primary_name.endswith(")")
+
+
 def _is_duplicate_native_registration_stub(
     primary: FunctionContext,
     supplemental: FunctionContext,
@@ -145,7 +162,7 @@ def _is_duplicate_native_registration_stub(
     ``<registration>.tool`` and no docstring. Keeping both forces batched
     alignment and can hide mismatches behind aggressive batch truncation.
     """
-    if primary.name != supplemental.name:
+    if not _registration_names_align(primary.name, supplemental.name):
         return False
     primary_doc = (primary.docstring or "").strip()
     supplemental_doc = (supplemental.docstring or "").strip()
@@ -188,6 +205,19 @@ _SEVERITY_DISPLAY_ORDER = (
     "SAFE",
     "ERROR",
     "UNKNOWN",
+)
+
+# Directories skipped while walking a scan root. Keep in sync with
+# ``js_code_analyzer._SKIP_DIRS`` / npm ``js_files_scanned`` counting.
+_SKIP_SOURCE_DIRS = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        "dist",
+        "build",
+        "out",
+        "coverage",
+    }
 )
 
 
@@ -756,12 +786,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # TMPDIR) as reason to skip every file, silently emptying
                 # the scan.
                 rel_parts = _relative_parts(source_file, path)
-                if (
-                    "__pycache__" not in rel_parts
-                    and "node_modules" not in rel_parts
-                    and not any(part.startswith(".") for part in rel_parts)
-                ):
-                    candidates.append(source_file)
+                if any(part in _SKIP_SOURCE_DIRS for part in rel_parts):
+                    continue
+                if any(part.startswith(".") for part in rel_parts):
+                    continue
+                candidates.append(source_file)
 
         safe_candidates, _skipped = filter_safe_paths(
             candidates, resolved_root, audit_label="behavioral"

@@ -435,6 +435,7 @@ Parameter Flow Tracking:
                         truncate(exc),
                     )
                     continue
+            content_parts.append("".join(assign_parts))
 
         # Add control flow information
         if func_context.control_flow:
