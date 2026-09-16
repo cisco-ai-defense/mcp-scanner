@@ -33,6 +33,7 @@ Integration point: Registered as a main analyzer alongside YARA, LLM, etc.
 import hashlib
 import logging
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -55,14 +56,34 @@ logger = logging.getLogger(__name__)
 #       because they can carry scripts, phishing, and embedded content
 #       (see https://filesec.io/).
 _PURE_TEXT_EXTENSIONS: Set[str] = {
-    ".md", ".txt", ".rst", ".adoc", ".org", ".tex",     # prose
-    ".json", ".yaml", ".yml", ".toml", ".ini",           # config/data
-    ".cfg", ".conf", ".csv", ".tsv",                     # config/data
-    ".css", ".scss", ".sass", ".less",                   # stylesheets (no script)
-    ".graphql", ".proto", ".thrift",                     # schema
-    ".gitignore", ".gitattributes", ".editorconfig",     # dotfiles (config only)
-    ".env.example", ".dockerignore",                     # templates
-    ".lock",                                             # lockfiles
+    ".md",
+    ".txt",
+    ".rst",
+    ".adoc",
+    ".org",
+    ".tex",  # prose
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",  # config/data
+    ".cfg",
+    ".conf",
+    ".csv",
+    ".tsv",  # config/data
+    ".css",
+    ".scss",
+    ".sass",
+    ".less",  # stylesheets (no script)
+    ".graphql",
+    ".proto",
+    ".thrift",  # schema
+    ".gitignore",
+    ".gitattributes",
+    ".editorconfig",  # dotfiles (config only)
+    ".env.example",
+    ".dockerignore",  # templates
+    ".lock",  # lockfiles
 }
 
 # Families that are never directly executable / malware carriers.
@@ -76,97 +97,205 @@ _TEXT_ONLY_FAMILIES: Set[str] = {"text"}
 
 # Script & executable code (cross-platform)
 _KNOWN_DANGEROUS_SCRIPT: Set[str] = {
-    ".py", ".pyc", ".pyo", ".pyw", ".pyz", ".pyzw",     # Python (filesec.io)
-    ".js", ".jse", ".ts", ".jsx", ".tsx", ".mjs",        # JavaScript / JScript
-    ".sh", ".bash", ".zsh", ".fish",                     # Unix shell
-    ".ps1", ".bat", ".cmd",                              # Windows shell (filesec.io)
-    ".vb", ".vbs", ".vbe",                               # VBScript (filesec.io)
-    ".ws", ".wsf", ".wsh",                               # Windows Script Host (filesec.io)
-    ".hta",                                              # HTML Application (filesec.io)
-    ".sct",                                              # Scriptlet (filesec.io)
-    ".xsl",                                              # XSLT (filesec.io)
-    ".mof",                                              # Managed Object Format (filesec.io)
-    ".a3x",                                              # AutoIt compiled (filesec.io)
-    ".applescript", ".scpt",                             # macOS scripts (filesec.io)
-    ".service", ".timer",                                # systemd units (filesec.io)
-    ".rb", ".pl", ".php",                                # Server-side scripting
-    ".java", ".kt", ".cs", ".go", ".rs",                 # Compiled languages (source)
-    ".c", ".cpp", ".h", ".hpp", ".swift",                # Compiled languages (source)
+    ".py",
+    ".pyc",
+    ".pyo",
+    ".pyw",
+    ".pyz",
+    ".pyzw",  # Python (filesec.io)
+    ".js",
+    ".jse",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".mjs",  # JavaScript / JScript
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".fish",  # Unix shell
+    ".ps1",
+    ".bat",
+    ".cmd",  # Windows shell (filesec.io)
+    ".vb",
+    ".vbs",
+    ".vbe",  # VBScript (filesec.io)
+    ".ws",
+    ".wsf",
+    ".wsh",  # Windows Script Host (filesec.io)
+    ".hta",  # HTML Application (filesec.io)
+    ".sct",  # Scriptlet (filesec.io)
+    ".xsl",  # XSLT (filesec.io)
+    ".mof",  # Managed Object Format (filesec.io)
+    ".a3x",  # AutoIt compiled (filesec.io)
+    ".applescript",
+    ".scpt",  # macOS scripts (filesec.io)
+    ".service",
+    ".timer",  # systemd units (filesec.io)
+    ".rb",
+    ".pl",
+    ".php",  # Server-side scripting
+    ".java",
+    ".kt",
+    ".cs",
+    ".go",
+    ".rs",  # Compiled languages (source)
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".swift",  # Compiled languages (source)
 }
 
 # Native executables & libraries
 _KNOWN_DANGEROUS_EXECUTABLE: Set[str] = {
-    ".exe", ".dll", ".so", ".dylib", ".com",             # Standard binaries (filesec.io)
-    ".bin", ".ocx", ".cpl",                              # Windows executables (filesec.io)
-    ".scr", ".pif",                                      # Screensaver / PIF (filesec.io)
-    ".msi", ".msp", ".msix",                             # Windows installers (filesec.io)
-    ".appx", ".appxbundle", ".appinstaller",             # Windows app packages (filesec.io)
-    ".application", ".appref-ms",                        # ClickOnce (filesec.io)
-    ".gadget", ".ppkg",                                  # Windows gadgets/provisioning (filesec.io)
-    ".dmg", ".pkg",                                      # macOS installers (filesec.io)
-    ".deb", ".rpm", ".snap", ".flatpak",                 # Linux packages
-    ".apk", ".ipa", ".aab",                              # Mobile packages
-    ".wasm",                                             # WebAssembly
-    ".class", ".jar", ".war", ".ear", ".jnlp",          # Java (filesec.io)
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".com",  # Standard binaries (filesec.io)
+    ".bin",
+    ".ocx",
+    ".cpl",  # Windows executables (filesec.io)
+    ".scr",
+    ".pif",  # Screensaver / PIF (filesec.io)
+    ".msi",
+    ".msp",
+    ".msix",  # Windows installers (filesec.io)
+    ".appx",
+    ".appxbundle",
+    ".appinstaller",  # Windows app packages (filesec.io)
+    ".application",
+    ".appref-ms",  # ClickOnce (filesec.io)
+    ".gadget",
+    ".ppkg",  # Windows gadgets/provisioning (filesec.io)
+    ".dmg",
+    ".pkg",  # macOS installers (filesec.io)
+    ".deb",
+    ".rpm",
+    ".snap",
+    ".flatpak",  # Linux packages
+    ".apk",
+    ".ipa",
+    ".aab",  # Mobile packages
+    ".wasm",  # WebAssembly
+    ".class",
+    ".jar",
+    ".war",
+    ".ear",
+    ".jnlp",  # Java (filesec.io)
 }
 
 # Archives & disk images
 _KNOWN_DANGEROUS_ARCHIVE: Set[str] = {
-    ".zip", ".7z", ".rar", ".tar", ".gz", ".bz2",       # Common archives (filesec.io)
-    ".xz", ".z", ".tgz", ".lz", ".lzma", ".zst",        # Compression
-    ".cab", ".arj", ".uue",                              # Legacy archives (filesec.io)
-    ".iso", ".img", ".dmg", ".daa",                      # Disk images (filesec.io)
-    ".vhd", ".vhdx", ".wim",                             # Virtual disks (filesec.io)
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".gz",
+    ".bz2",  # Common archives (filesec.io)
+    ".xz",
+    ".z",
+    ".tgz",
+    ".lz",
+    ".lzma",
+    ".zst",  # Compression
+    ".cab",
+    ".arj",
+    ".uue",  # Legacy archives (filesec.io)
+    ".iso",
+    ".img",
+    ".dmg",
+    ".daa",  # Disk images (filesec.io)
+    ".vhd",
+    ".vhdx",
+    ".wim",  # Virtual disks (filesec.io)
 }
 
 # Documents with macro / embedded content capability
 _KNOWN_DANGEROUS_DOCUMENT: Set[str] = {
     # Office with macros (filesec.io)
-    ".doc", ".docm", ".dot", ".dotm",                    # Word
-    ".xls", ".xlsm", ".xlsb", ".xlam", ".xll",          # Excel (filesec.io)
-    ".xlt", ".xltm", ".xlm", ".slk",                    # Excel templates/macros
-    ".ppt", ".pptm", ".pps", ".ppsm",                   # PowerPoint (filesec.io)
-    ".pot", ".potm", ".sldm",                            # PowerPoint templates
-    ".pub", ".wbk", ".wiz", ".asd",                      # Other Office (filesec.io)
-    ".ppa", ".ppam",                                     # PowerPoint add-ins (filesec.io)
+    ".doc",
+    ".docm",
+    ".dot",
+    ".dotm",  # Word
+    ".xls",
+    ".xlsm",
+    ".xlsb",
+    ".xlam",
+    ".xll",  # Excel (filesec.io)
+    ".xlt",
+    ".xltm",
+    ".xlm",
+    ".slk",  # Excel templates/macros
+    ".ppt",
+    ".pptm",
+    ".pps",
+    ".ppsm",  # PowerPoint (filesec.io)
+    ".pot",
+    ".potm",
+    ".sldm",  # PowerPoint templates
+    ".pub",
+    ".wbk",
+    ".wiz",
+    ".asd",  # Other Office (filesec.io)
+    ".ppa",
+    ".ppam",  # PowerPoint add-ins (filesec.io)
     # Office without macros (still archive-based, can embed OLE)
-    ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".odt",
+    ".ods",
+    ".odp",
     # Other document formats
-    ".pdf", ".rtf",                                      # (filesec.io)
-    ".chm",                                              # Compiled HTML Help (filesec.io)
-    ".hwpx",                                             # Hancom (filesec.io)
+    ".pdf",
+    ".rtf",  # (filesec.io)
+    ".chm",  # Compiled HTML Help (filesec.io)
+    ".hwpx",  # Hancom (filesec.io)
 }
 
 # Web / phishing vectors that can carry scripts or redirect
 _KNOWN_DANGEROUS_WEB: Set[str] = {
-    ".html", ".htm", ".mht", ".mhtml",                   # (filesec.io)
-    ".svg",                                              # (filesec.io -- script/phishing)
-    ".xml",                                              # Can contain XSLT/entities
-    ".eml",                                              # Email (filesec.io)
-    ".ics",                                              # Calendar invite (filesec.io)
-    ".url", ".website",                                  # URL shortcuts (filesec.io)
-    ".lnk",                                              # Windows shortcut (filesec.io)
-    ".scf",                                              # Shell Command File (filesec.io)
-    ".iqy",                                              # Excel Web Query (filesec.io)
+    ".html",
+    ".htm",
+    ".mht",
+    ".mhtml",  # (filesec.io)
+    ".svg",  # (filesec.io -- script/phishing)
+    ".xml",  # Can contain XSLT/entities
+    ".eml",  # Email (filesec.io)
+    ".ics",  # Calendar invite (filesec.io)
+    ".url",
+    ".website",  # URL shortcuts (filesec.io)
+    ".lnk",  # Windows shortcut (filesec.io)
+    ".scf",  # Shell Command File (filesec.io)
+    ".iqy",  # Excel Web Query (filesec.io)
 }
 
 # Windows-specific system files used in attacks
 _KNOWN_DANGEROUS_WINDOWS: Set[str] = {
-    ".reg",                                              # Registry (filesec.io)
-    ".msc",                                              # MMC snap-in (filesec.io)
-    ".diagcab",                                          # Diagnostic (filesec.io)
-    ".settingcontent-ms",                                # (filesec.io)
-    ".library-ms", ".searchConnector-ms",                # (filesec.io)
-    ".desktopthemepackfile", ".theme", ".themepack",     # (filesec.io)
-    ".msrcincident",                                     # (filesec.io)
-    ".oxps", ".xps",                                     # XPS documents (filesec.io)
-    ".bgi",                                              # BGInfo (filesec.io)
-    ".mam",                                              # Access macro (filesec.io)
+    ".reg",  # Registry (filesec.io)
+    ".msc",  # MMC snap-in (filesec.io)
+    ".diagcab",  # Diagnostic (filesec.io)
+    ".settingcontent-ms",  # (filesec.io)
+    ".library-ms",
+    ".searchConnector-ms",  # (filesec.io)
+    ".desktopthemepackfile",
+    ".theme",
+    ".themepack",  # (filesec.io)
+    ".msrcincident",  # (filesec.io)
+    ".oxps",
+    ".xps",  # XPS documents (filesec.io)
+    ".bgi",  # BGInfo (filesec.io)
+    ".mam",  # Access macro (filesec.io)
 }
 
 # Font files (can contain exploitable parsers)
 _KNOWN_DANGEROUS_FONT: Set[str] = {
-    ".ttf", ".otf", ".woff", ".woff2", ".eot",
+    ".ttf",
+    ".otf",
+    ".woff",
+    ".woff2",
+    ".eot",
 }
 
 # Union for reference / test assertions
@@ -191,6 +320,44 @@ _VT_DAILY_CAP = 500
 # =========================================================================
 # Analyzer
 # =========================================================================
+
+
+@dataclass
+class _DirectoryScan:
+    """What one directory scan accumulates as it walks its files.
+
+    The counters become ``last_scan_summary``, which is a caller's only
+    record of what was actually checked. Keeping them distinct matters: a
+    file counted clean when it was really throttled reads downstream as
+    scanned-and-safe, when in fact nothing looked at it.
+    """
+
+    total_found: int = 0
+    total_to_scan: int = 0
+    scanned: int = 0
+    clean: int = 0
+    malicious: int = 0
+    not_found: int = 0
+    throttled: int = 0
+    failed: int = 0
+    skipped_by_limit: int = 0
+    findings: List[SecurityFinding] = field(default_factory=list)
+    validated: List[str] = field(default_factory=list)
+
+    def summary(self) -> Dict[str, int]:
+        """The counters published to callers as ``last_scan_summary``."""
+        return {
+            "total_found": self.total_found,
+            "total_to_scan": self.total_to_scan,
+            "scanned": self.scanned,
+            "clean": self.clean,
+            "malicious": self.malicious,
+            "not_found": self.not_found,
+            "throttled": self.throttled,
+            "failed": self.failed,
+            "skipped_by_limit": self.skipped_by_limit,
+        }
+
 
 class VirusTotalAnalyzer:
     """
@@ -328,9 +495,7 @@ class VirusTotalAnalyzer:
                         vt_result=vt_result,
                     )
             else:
-                logger.info(
-                    "Hash not found in VT (upload disabled): %s", file_path
-                )
+                logger.info("Hash not found in VT (upload disabled): %s", file_path)
 
         except Exception as e:
             logger.warning("VirusTotal scan failed for %s: %s", file_path, e)
@@ -353,181 +518,200 @@ class VirusTotalAnalyzer:
         if not self.enabled:
             return []
 
-        all_files = self._discover_files(directory)
-        scannable = [f for f in all_files if self._should_scan_file(f)]
-
+        scannable, scan = self._select_scannable(directory)
         if not scannable:
             logger.debug("No scannable files found in %s", directory)
             return []
 
-        # Enforce file limit
-        total_found = len(scannable)
-        if self.max_files > 0 and total_found > self.max_files:
+        logger.info(
+            "Scanning %d file(s) with VirusTotal in %s", len(scannable), directory
+        )
+
+        for index, file_path_str in enumerate(scannable):
+            if not self._scan_one_file(file_path_str, directory, scan):
+                # VirusTotal is refusing requests; the rest would be refused too.
+                scan.throttled += len(scannable) - index - 1
+                break
+
+        self._log_scan_summary(scan)
+        self.validated_files = scan.validated
+        self.last_scan_summary = scan.summary()
+        return scan.findings
+
+    def _select_scannable(self, directory: str) -> Tuple[List[str], "_DirectoryScan"]:
+        """Pick the files to scan and open a tally sized to that decision."""
+        scannable = [
+            f for f in self._discover_files(directory) if self._should_scan_file(f)
+        ]
+        scan = _DirectoryScan(total_found=len(scannable))
+
+        if self.max_files > 0 and scan.total_found > self.max_files:
             logger.warning(
                 "Found %d scannable files but max_files limit is %d. "
                 "Only the first %d files will be scanned. "
                 "Set MCP_SCANNER_VT_MAX_FILES=0 for unlimited or increase the limit.",
-                total_found,
+                scan.total_found,
                 self.max_files,
                 self.max_files,
             )
-            skipped_files = scannable[self.max_files :]
+            scan.skipped_by_limit = scan.total_found - self.max_files
             scannable = scannable[: self.max_files]
+
+        scan.total_to_scan = len(scannable)
+        return scannable, scan
+
+    def _scan_one_file(
+        self, file_path_str: str, directory: str, scan: "_DirectoryScan"
+    ) -> bool:
+        """Check one file against VirusTotal, folding the verdict into ``scan``.
+
+        Returns False when VirusTotal refused the request on rate, quota, or
+        auth grounds, which means the remaining files cannot be scanned
+        either.
+        """
+        try:
+            file_path = Path(file_path_str)
+            file_hash = self._calculate_sha256(file_path)
+            relative_path = str(file_path.relative_to(directory))
+
+            logger.info("Checking file: %s (SHA256: %s)", relative_path, file_hash)
+
+            vt_result, hash_found, error_reason = self._query_virustotal_cached(
+                file_hash
+            )
+
+            if error_reason in ("rate_limit", "quota_exceeded", "auth_error"):
+                scan.throttled += 1
+                return False
+
+            if error_reason:
+                scan.failed += 1
+                return True
+
+            scan.scanned += 1
+
+            if hash_found:
+                self._record_known_verdict(
+                    vt_result,
+                    relative_path=relative_path,
+                    file_hash=file_hash,
+                    scan=scan,
+                )
+            elif self.upload_files:
+                logger.info("Hash not found — uploading %s for analysis", relative_path)
+                self._record_upload_verdict(
+                    file_path,
+                    relative_path=relative_path,
+                    file_hash=file_hash,
+                    scan=scan,
+                )
+            else:
+                scan.not_found += 1
+                logger.info("Hash not found in VT (upload disabled): %s", relative_path)
+
+        except Exception as e:
+            logger.warning("VirusTotal scan failed for %s: %s", file_path_str, e)
+            scan.failed += 1
+
+        return True
+
+    def _record_known_verdict(
+        self,
+        vt_result: Dict[str, Any],
+        *,
+        relative_path: str,
+        file_hash: str,
+        scan: "_DirectoryScan",
+    ) -> None:
+        """Fold a verdict VirusTotal already held into the tally.
+
+        A file any vendor flagged suspicious is not counted clean even when
+        no vendor calls it malicious: it is unproven, not validated.
+        """
+        total = vt_result.get("total_engines", 0)
+        malicious = vt_result.get("malicious", 0)
+        suspicious = vt_result.get("suspicious", 0)
+
+        if malicious > 0 or suspicious > 0:
+            logger.warning(
+                "VT result: %d malicious, %d suspicious out of %d vendors — %s",
+                malicious,
+                suspicious,
+                total,
+                relative_path,
+            )
         else:
-            skipped_files = []
+            logger.info(
+                "VT result: clean (%d/%d vendors) — %s", malicious, total, relative_path
+            )
+            scan.validated.append(relative_path)
+            scan.clean += 1
 
-        logger.info(
-            "Scanning %d file(s) with VirusTotal in %s",
-            len(scannable),
-            directory,
-        )
-
-        findings: List[SecurityFinding] = []
-        validated_files: List[str] = []
-
-        count_scanned = 0
-        count_clean = 0
-        count_malicious = 0
-        count_not_found = 0
-        count_throttled = 0
-        count_failed = 0
-        count_skipped_limit = len(skipped_files)
-        stop_scanning = False
-
-        for file_path_str in scannable:
-            if stop_scanning:
-                count_throttled += 1
-                continue
-
-            try:
-                file_path = Path(file_path_str)
-                file_hash = self._calculate_sha256(file_path)
-                relative_path = str(file_path.relative_to(directory))
-
-                logger.info(
-                    "Checking file: %s (SHA256: %s)", relative_path, file_hash
+        if malicious > 0:
+            scan.findings.append(
+                self._create_finding(
+                    file_path=relative_path,
+                    file_hash=file_hash,
+                    vt_result=vt_result,
                 )
+            )
+            scan.malicious += 1
 
-                vt_result, hash_found, error_reason = (
-                    self._query_virustotal_cached(file_hash)
+    def _record_upload_verdict(
+        self,
+        file_path: Path,
+        *,
+        relative_path: str,
+        file_hash: str,
+        scan: "_DirectoryScan",
+    ) -> None:
+        """Upload a file VirusTotal has not seen and fold in the verdict."""
+        vt_result = self._upload_and_scan(file_path, file_hash)
+        if not vt_result:
+            scan.failed += 1
+            return
+
+        if vt_result.get("malicious", 0) > 0:
+            scan.findings.append(
+                self._create_finding(
+                    file_path=relative_path,
+                    file_hash=file_hash,
+                    vt_result=vt_result,
                 )
+            )
+            scan.malicious += 1
+        else:
+            scan.validated.append(relative_path)
+            scan.clean += 1
 
-                # Handle rate limiting / quota — stop scanning remaining files
-                if error_reason in ("rate_limit", "quota_exceeded", "auth_error"):
-                    count_throttled += 1
-                    stop_scanning = True
-                    continue
-
-                if error_reason:
-                    count_failed += 1
-                    continue
-
-                count_scanned += 1
-
-                if hash_found:
-                    total = vt_result.get("total_engines", 0)
-                    malicious = vt_result.get("malicious", 0)
-                    suspicious = vt_result.get("suspicious", 0)
-
-                    if malicious > 0 or suspicious > 0:
-                        logger.warning(
-                            "VT result: %d malicious, %d suspicious out of %d vendors — %s",
-                            malicious,
-                            suspicious,
-                            total,
-                            relative_path,
-                        )
-                    else:
-                        logger.info(
-                            "VT result: clean (%d/%d vendors) — %s",
-                            malicious,
-                            total,
-                            relative_path,
-                        )
-                        validated_files.append(relative_path)
-                        count_clean += 1
-
-                    if malicious > 0:
-                        finding = self._create_finding(
-                            file_path=relative_path,
-                            file_hash=file_hash,
-                            vt_result=vt_result,
-                        )
-                        findings.append(finding)
-                        count_malicious += 1
-
-                elif self.upload_files:
-                    logger.info(
-                        "Hash not found — uploading %s for analysis", relative_path
-                    )
-                    vt_result = self._upload_and_scan(file_path, file_hash)
-
-                    if vt_result:
-                        if vt_result.get("malicious", 0) > 0:
-                            finding = self._create_finding(
-                                file_path=relative_path,
-                                file_hash=file_hash,
-                                vt_result=vt_result,
-                            )
-                            findings.append(finding)
-                            count_malicious += 1
-                        else:
-                            validated_files.append(relative_path)
-                            count_clean += 1
-                    else:
-                        count_failed += 1
-                else:
-                    count_not_found += 1
-                    logger.info(
-                        "Hash not found in VT (upload disabled): %s", relative_path
-                    )
-
-            except Exception as e:
-                logger.warning(
-                    "VirusTotal scan failed for %s: %s", file_path_str, e
-                )
-                count_failed += 1
-                continue
-
-        # Log scan summary
-        total_to_scan = len(scannable)
+    @staticmethod
+    def _log_scan_summary(scan: "_DirectoryScan") -> None:
+        """Report what was checked, and say so loudly when some was not."""
         logger.info(
             "VirusTotal scan summary: %d/%d files scanned "
             "(%d clean, %d malicious, %d not in VT, %d throttled, %d failed"
             "%s)",
-            count_scanned,
-            total_to_scan,
-            count_clean,
-            count_malicious,
-            count_not_found,
-            count_throttled,
-            count_failed,
-            f", {count_skipped_limit} skipped by limit"
-            if count_skipped_limit > 0
-            else "",
+            scan.scanned,
+            scan.total_to_scan,
+            scan.clean,
+            scan.malicious,
+            scan.not_found,
+            scan.throttled,
+            scan.failed,
+            (
+                f", {scan.skipped_by_limit} skipped by limit"
+                if scan.skipped_by_limit > 0
+                else ""
+            ),
         )
-        if count_throttled > 0:
+        if scan.throttled > 0:
             logger.warning(
                 "VirusTotal rate/quota limit hit: %d of %d files could not be scanned. "
                 "Free tier: 4 requests/min, 500 requests/day. "
                 "Consider upgrading your API key or reducing MCP_SCANNER_VT_MAX_FILES.",
-                count_throttled,
-                total_to_scan,
+                scan.throttled,
+                scan.total_to_scan,
             )
-
-        self.validated_files = validated_files
-        self.last_scan_summary = {
-            "total_found": total_found,
-            "total_to_scan": total_to_scan,
-            "scanned": count_scanned,
-            "clean": count_clean,
-            "malicious": count_malicious,
-            "not_found": count_not_found,
-            "throttled": count_throttled,
-            "failed": count_failed,
-            "skipped_by_limit": count_skipped_limit,
-        }
-        return findings
 
     # ------------------------------------------------------------------
     # Three-tier file selection (Section 2.2 of design doc)
@@ -824,7 +1008,9 @@ class VirusTotalAnalyzer:
 
             rate_limit_signal = self._enforce_rate_limit()
             if rate_limit_signal:
-                logger.warning("Rate limit reached before upload: %s", rate_limit_signal)
+                logger.warning(
+                    "Rate limit reached before upload: %s", rate_limit_signal
+                )
                 return None
 
             with open(file_path, "rb") as f:
@@ -846,9 +1032,7 @@ class VirusTotalAnalyzer:
                 logger.warning("No analysis ID returned from upload")
                 return None
 
-            logger.info(
-                "File uploaded successfully. Analysis ID: %s", analysis_id
-            )
+            logger.info("File uploaded successfully. Analysis ID: %s", analysis_id)
 
             # Poll for completion
             max_retries = 6
@@ -856,7 +1040,9 @@ class VirusTotalAnalyzer:
                 time.sleep(10)
                 rate_limit_signal = self._enforce_rate_limit()
                 if rate_limit_signal:
-                    logger.warning("Rate limit reached during poll: %s", rate_limit_signal)
+                    logger.warning(
+                        "Rate limit reached during poll: %s", rate_limit_signal
+                    )
                     return None
 
                 analysis_response = self.session.get(
@@ -963,9 +1149,7 @@ class VirusTotalAnalyzer:
                 "permalink": vt_result.get("permalink"),
                 "threat_type": "MALWARE",
                 "confidence": 0.95 if malicious_count >= 5 else 0.8,
-                "references": [
-                    f"https://www.virustotal.com/gui/file/{file_hash}"
-                ],
+                "references": [f"https://www.virustotal.com/gui/file/{file_hash}"],
                 "remediation": (
                     "Remove this file from the MCP server package. "
                     "Files flagged by multiple antivirus engines should not be included."
