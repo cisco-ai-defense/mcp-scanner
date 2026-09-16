@@ -25,6 +25,7 @@ already import it from this module.
 
 from pathlib import Path
 import ast
+from dataclasses import dataclass, field
 import logging
 import re as _re
 
@@ -52,6 +53,36 @@ from .native_common import (  # noqa: F401
 
 from .native_python_backend import PythonBackendMixin
 from .native_treesitter_backend import TreeSitterBackendMixin
+
+
+@dataclass
+class _CapabilityScan:
+    """State threaded through the passes of one capability extraction.
+
+    The passes accumulate into ``contexts`` and coordinate through ``seen``,
+    which is keyed by ``(handle, capability_kind)``. Including the kind means
+    a function registered as both a tool and a prompt -- legal in MCP --
+    surfaces once per kind rather than being collapsed by whichever pass
+    reached it first. The handle is whatever identifies the capability in
+    that pass: a handler's start byte when we have the function, and a
+    synthetic string when we only have a registration or a table entry.
+    """
+
+    tree: Any
+    imports: List[str]
+    func_types: Set[str]
+    import_target_map: Dict[str, Any]
+    cross_file_analyzer: Optional[Any]
+    contexts: List[FunctionContext] = field(default_factory=list)
+    seen: Set[Any] = field(default_factory=set)
+
+    def claim(self, handle: Any, capability: str) -> bool:
+        """Reserve a capability slot, returning False if already taken."""
+        key = (handle, capability)
+        if key in self.seen:
+            return False
+        self.seen.add(key)
+        return True
 
 
 class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
@@ -236,17 +267,47 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
                 cross_file_analyzer=cross_file_analyzer
             )
 
-        # Gap 12: byte-level prefilter — skip the whole tree-sitter
-        # parse for files that contain none of the MCP marker tokens.
-        if not self._has_mcp_markers():
+        parsed = self._parse_for_capabilities()
+        if parsed is None:
             return []
+        tree, imports = parsed
 
+        scan = _CapabilityScan(
+            tree=tree,
+            imports=imports,
+            func_types=self.FUNCTION_NODE_TYPES.get(self.language, set()),
+            # Built once per extract call: cross-file resolution prefers
+            # entries whose defining file path matches one of the calling
+            # file's import targets, killing the "wrong same-named function
+            # in node_modules wins" failure mode.
+            import_target_map=self._build_import_target_map(
+                imports,
+                current_file=str(self.file_path) if self.file_path else None,
+            ),
+            cross_file_analyzer=cross_file_analyzer,
+        )
+
+        self._capabilities_from_annotations(scan)
+        self._capabilities_from_registrations(scan)
+        self._capabilities_from_endpoint_tables(scan)
+        return scan.contexts
+
+    def _parse_for_capabilities(self) -> Optional["tuple[Any, List[str]]"]:
+        """Parse the file for capability extraction, or None if there is nothing to find.
+
+        Returns None for the four cheap ways out: no MCP marker token
+        anywhere in the bytes (Gap 12 -- skips the whole tree-sitter parse),
+        no function node types for the language, no tree-sitter grammar
+        installed, or a parse that raises.
+        """
+        if not self._has_mcp_markers():
+            return None
         if self.language not in self.FUNCTION_NODE_TYPES:
-            return []
+            return None
 
         lang_mod = _get_language_module(self.language)
         if lang_mod is None:
-            return []
+            return None
 
         try:
             if self.language == "typescript":
@@ -258,212 +319,175 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
 
             parser = Parser(lang)
             tree = parser.parse(self.source_bytes)
-            imports = self._ts_extract_imports(tree.root_node)
+            return tree, self._ts_extract_imports(tree.root_node)
         except Exception as e:
             self.logger.warning(
                 f"MCP capability extraction failed for {self.file_path}: {e}"
             )
-            return []
+            return None
 
-        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
-        contexts: List[FunctionContext] = []
-        # Dedupe by ``(handler_start_byte, capability_kind)`` so a single
-        # function registered as BOTH a tool and a prompt (legal in MCP)
-        # surfaces twice — once per capability kind — instead of being
-        # collapsed by whichever pass reaches it first. The kind is a
-        # str (``"tool"`` / ``"prompt"`` / ``"resource"``); see Gap 9 in
-        # the PR review.
-        seen_handlers: Set["tuple[int, str]"] = set()
-
-        # Gap 13: build the annotation index once, then look up
-        # annotations per function via dict lookup instead of paying
-        # for ``_ts_collect_function_annotations`` (a parent walk +
-        # sibling scan) on every helper.
+    def _capabilities_from_annotations(self, scan: _CapabilityScan) -> None:
+        """Pass 1: functions carrying a sigil-led MCP marker."""
+        # Gap 13: build the annotation index once, then look up annotations
+        # per function via dict lookup instead of paying for
+        # ``_ts_collect_function_annotations`` (a parent walk + sibling scan)
+        # on every helper.
         annotation_index = self._ts_build_annotation_index(
-            tree.root_node, func_types
+            scan.tree.root_node, scan.func_types
         )
 
-        # -----------------------------------------------------------------
-        # Pass 1: function-attached annotation/attribute/macro detection
-        # -----------------------------------------------------------------
-        def visit_funcs(node):
+        def visit(node):
             if (
-                node.type in func_types
+                node.type in scan.func_types
                 and node.type not in _TS_NON_FUNCTION_NODE_TYPES
             ):
                 annotations = annotation_index.get(node.start_byte, [])
                 cap_kind = _classify_mcp_annotation(annotations, self.language)
-                # Dedupe key includes capability kind so the same handler
-                # registered as both a tool AND a prompt yields one
-                # context per kind. See _append_capability_context which
-                # also de-dupes within a single kind via the same set.
-                cap_key = (node.start_byte, cap_kind) if cap_kind else None
-                if cap_kind is not None and cap_key not in seen_handlers:
-                    seen_handlers.add(cap_key)
+                if cap_kind is not None and scan.claim(node.start_byte, cap_kind):
                     self._append_capability_context(
-                        contexts,
+                        scan.contexts,
                         node,
-                        imports,
+                        scan.imports,
                         capability=cap_kind,
                         registered_name=_parse_name_from_annotations(annotations),
                         source_kind="annotation",
                     )
             for child in node.children:
-                visit_funcs(child)
+                visit(child)
 
-        visit_funcs(tree.root_node)
+        visit(scan.tree.root_node)
 
-        # -----------------------------------------------------------------
-        # Pass 2: SDK call-site registration detection
-        # -----------------------------------------------------------------
-        # Build a per-file index of trusted MCP receiver names (Gap 4) so
-        # ``Pass 2`` can require ``X.tool(...)`` / ``X.registerTool(...)``
-        # / etc. to have ``X`` resolve to an instance imported from the
-        # MCP SDK. Stops unrelated builder DSLs (``myToolbar.tool('save')``)
-        # from false-positive-classifying as MCP registrations.
-        mcp_instances = self._collect_mcp_instances(tree.root_node, imports)
-
+    def _capabilities_from_registrations(self, scan: _CapabilityScan) -> None:
+        """Pass 2: functions registered by being passed to an SDK call."""
+        # Gap 4: require ``X.tool(...)`` / ``X.registerTool(...)`` to have
+        # ``X`` resolve to an instance imported from the MCP SDK, so unrelated
+        # builder DSLs (``myToolbar.tool('save')``) do not classify as MCP
+        # registrations.
+        mcp_instances = self._collect_mcp_instances(scan.tree.root_node, scan.imports)
         registrations = self._ts_find_mcp_registrations(
-            tree.root_node, trusted_receivers=mcp_instances
-        )
-
-        # Build an import-target map once per extract call: cross-file
-        # resolution prefers entries whose defining file path matches
-        # one of the calling file's import targets, killing the
-        # "wrong same-named function in node_modules wins" failure mode.
-        import_target_map = self._build_import_target_map(
-            imports, current_file=str(self.file_path) if self.file_path else None
+            scan.tree.root_node, trusted_receivers=mcp_instances
         )
 
         for reg in registrations:
-            handler_node = reg.get("handler_node")
+            handler_node, cross_file_match = self._resolve_registration_handler(
+                scan, reg
+            )
+            cap_kind = reg["capability"]
             handler_name = reg.get("handler_name")
 
-            if handler_node is None and handler_name:
-                handler_node = self._ts_find_function_def_by_name(
-                    tree.root_node, handler_name, func_types
-                )
-
-            # Gap 2: cross-file resolution. If the handler is a bare
-            # identifier and the in-file symbol index missed it, try the
-            # cross-file call graph (tree-sitter or Python) before giving
-            # up. The resolver prefers matches whose path lines up with
-            # one of the calling file's import targets so a sibling
-            # ``tests/fixtures/add.ts`` defining the same name doesn't
-            # win the suffix race.
-            cross_file_match: Optional["tuple[str, Any]"] = None
-            if handler_node is None and handler_name and cross_file_analyzer is not None:
-                cross_file_match = self._resolve_cross_file_handler(
-                    handler_name,
-                    cross_file_analyzer,
-                    target_module_paths=import_target_map.get(handler_name),
-                )
-
-            cap_kind = reg["capability"]
-
-            # Gap 8: emit an ``unresolved`` placeholder when the handler
-            # cannot be located in-file or cross-file. Without this, the
-            # capability is silently dropped and the alignment LLM never
-            # sees it. Stub contexts are tagged
-            # ``<registration>.unresolved.<kind>`` so consumers can
-            # distinguish them from analyzed handlers.
-            if handler_node is None and cross_file_match is None:
-                if not (handler_name or reg.get("name")):
+            if handler_node is not None:
+                if not scan.claim(handler_node.start_byte, cap_kind):
                     continue
-                template_subtype = reg.get("template_subtype")
-                source_kind = (
-                    "registration.unresolved.template"
-                    if template_subtype == "template"
-                    else "registration.unresolved"
-                )
-                # Use the call site's start byte as the dedupe key — the
-                # capability extracted is the registration itself, not a
-                # specific function.
-                stub_key = (id(reg), cap_kind)
-                if stub_key in seen_handlers:
-                    continue
-                seen_handlers.add(stub_key)
-                self._append_unresolved_capability(
-                    contexts,
+                self._append_capability_context(
+                    scan.contexts,
+                    handler_node,
+                    scan.imports,
                     capability=cap_kind,
-                    registered_name=reg.get("name") or handler_name,
-                    source_kind=source_kind,
-                    handler_name_hint=handler_name,
+                    registered_name=reg.get("name"),
+                    # Tag templates with a ``.template`` subtype so reports can
+                    # distinguish ``addResourceTemplate`` from ``addResource``.
+                    source_kind=self._registration_source_kind(reg),
                 )
                 continue
 
-            if handler_node is None and cross_file_match is not None:
+            if cross_file_match is not None:
                 # Cross-file hit: build a stub context that points at the
                 # defining file/line via the call-graph node.
                 cross_file_path, _ = cross_file_match
-                template_subtype = reg.get("template_subtype")
-                source_kind = (
-                    "registration.cross_file.template"
-                    if template_subtype == "template"
-                    else "registration.cross_file"
-                )
-                stub_key = (
-                    f"{cross_file_path}::{handler_name}",
-                    cap_kind,
-                )
-                if stub_key in seen_handlers:
+                if not scan.claim(f"{cross_file_path}::{handler_name}", cap_kind):
                     continue
-                seen_handlers.add(stub_key)
                 self._append_unresolved_capability(
-                    contexts,
+                    scan.contexts,
                     capability=cap_kind,
                     registered_name=reg.get("name") or handler_name,
-                    source_kind=source_kind,
+                    source_kind=self._registration_source_kind(reg, "cross_file"),
                     handler_name_hint=handler_name,
                     source_file=cross_file_path,
                 )
                 continue
 
-            cap_key = (handler_node.start_byte, cap_kind)
-            if cap_key in seen_handlers:
+            # Gap 8: emit an ``unresolved`` placeholder when the handler
+            # cannot be located in-file or cross-file. Without this, the
+            # capability is silently dropped and the alignment LLM never sees
+            # it. The registration itself is the capability here, so it is
+            # its own dedupe handle.
+            if not (handler_name or reg.get("name")):
                 continue
-            seen_handlers.add(cap_key)
-
-            # Tag templates with a ``.template`` subtype so reports can
-            # distinguish ``addResourceTemplate`` from ``addResource``.
-            template_subtype = reg.get("template_subtype")
-            source_kind = (
-                "registration.template"
-                if template_subtype == "template"
-                else "registration"
-            )
-
-            self._append_capability_context(
-                contexts,
-                handler_node,
-                imports,
+            if not scan.claim(id(reg), cap_kind):
+                continue
+            self._append_unresolved_capability(
+                scan.contexts,
                 capability=cap_kind,
-                registered_name=reg.get("name"),
-                source_kind=source_kind,
+                registered_name=reg.get("name") or handler_name,
+                source_kind=self._registration_source_kind(reg, "unresolved"),
+                handler_name_hint=handler_name,
             )
 
-        # Gap 8 extension: static endpoint tables (literal ``name`` /
-        # ``alias`` fields) including arrays reached via ``for (const tool
-        # of api.endpoints)`` loops (in-file and cross-file).
+    def _resolve_registration_handler(
+        self, scan: _CapabilityScan, reg: Dict[str, Any]
+    ) -> "tuple[Optional[Any], Optional[tuple[str, Any]]]":
+        """Locate a registration's handler, in-file first and then cross-file.
+
+        Returns ``(handler_node, cross_file_match)``. Both None means the
+        registration names a handler we cannot find anywhere, which Gap 8
+        turns into a stub rather than a silent drop.
+        """
+        handler_node = reg.get("handler_node")
+        handler_name = reg.get("handler_name")
+
+        if handler_node is None and handler_name:
+            handler_node = self._ts_find_function_def_by_name(
+                scan.tree.root_node, handler_name, scan.func_types
+            )
+        if handler_node is not None:
+            return handler_node, None
+
+        # Gap 2: the resolver prefers matches whose path lines up with one of
+        # the calling file's import targets, so a sibling
+        # ``tests/fixtures/add.ts`` defining the same name does not win the
+        # suffix race.
+        if handler_name and scan.cross_file_analyzer is not None:
+            return None, self._resolve_cross_file_handler(
+                handler_name,
+                scan.cross_file_analyzer,
+                target_module_paths=scan.import_target_map.get(handler_name),
+            )
+        return None, None
+
+    @staticmethod
+    def _registration_source_kind(
+        reg: Dict[str, Any], qualifier: Optional[str] = None
+    ) -> str:
+        """Build the ``registration[.qualifier][.template]`` provenance tag."""
+        parts = ["registration"]
+        if qualifier:
+            parts.append(qualifier)
+        if reg.get("template_subtype") == "template":
+            parts.append("template")
+        return ".".join(parts)
+
+    def _capabilities_from_endpoint_tables(self, scan: _CapabilityScan) -> None:
+        """Gap 8 extension: tool names declared in static endpoint tables.
+
+        Covers literal ``name`` / ``alias`` fields, including arrays reached
+        via ``for (const tool of api.endpoints)`` loops, in-file and
+        cross-file.
+        """
         table_names = self._ts_collect_static_endpoint_tool_names(
-            tree.root_node,
-            import_target_map=import_target_map,
-            cross_file_analyzer=cross_file_analyzer,
+            scan.tree.root_node,
+            import_target_map=scan.import_target_map,
+            cross_file_analyzer=scan.cross_file_analyzer,
         )
         for tool_name in table_names:
-            cap_key = (f"table:{tool_name}", "tool")
-            if cap_key in seen_handlers:
+            if not scan.claim(f"table:{tool_name}", "tool"):
                 continue
-            seen_handlers.add(cap_key)
             self._append_unresolved_capability(
-                contexts,
+                scan.contexts,
                 capability="tool",
                 registered_name=tool_name,
                 source_kind="registration.table",
                 handler_name_hint=tool_name,
             )
-
-        return contexts
     def _resolve_cross_file_handler(
         self,
         handler_name: str,
