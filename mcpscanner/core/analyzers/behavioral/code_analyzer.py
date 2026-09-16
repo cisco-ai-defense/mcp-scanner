@@ -32,7 +32,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
@@ -523,8 +523,6 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         """
         self.logger.debug(f"Scanning directory: {content}")
 
-        self.logger.debug(f"Scanning directory: {content}")
-
         source_files = self._find_source_files(content)
         self.logger.debug(
             f"Found {len(source_files)} source file(s) to analyze"
@@ -545,6 +543,93 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 sanitize_log_value(content),
             )
 
+        python_files, ts_files_by_lang = self._partition_by_language(capability_files)
+        (
+            py_call_graph_analyzer,
+            ts_call_graph_analyzers,
+            source_registry,
+        ) = self._build_directory_call_graphs(
+            capability_files, python_files, ts_files_by_lang
+        )
+
+        scan_context = {
+            **context,
+            "source_registry": source_registry,
+            "code_graphs": _build_directory_code_graphs(
+                py_call_graph_analyzer,
+                ts_call_graph_analyzers,
+                source_registry=source_registry,
+            ),
+        }
+
+        # Analyze files concurrently (shared call graphs + code graphs are read-only).
+        file_concurrency = max(
+            1,
+            int(
+                context.get(
+                    "file_concurrency",
+                    MCPScannerConstants.BEHAVIORAL_FILE_CONCURRENCY,
+                )
+            ),
+        )
+        file_semaphore = asyncio.Semaphore(file_concurrency)
+
+        async def _analyze_accepted(accepted: _AcceptedFile) -> List[SecurityFinding]:
+            async with file_semaphore:
+                self.logger.debug(f"Analyzing file: {accepted.path}")
+                ext = Path(accepted.path).suffix.lower()
+                if ext in self._PYTHON_EXTENSIONS:
+                    file_cga = py_call_graph_analyzer
+                elif ext in self._EXT_TO_TS_LANGUAGE:
+                    lang = self._EXT_TO_TS_LANGUAGE[ext]
+                    file_cga = ts_call_graph_analyzers.get(lang)
+                else:
+                    file_cga = None
+
+                file_start = time.perf_counter()
+                file_findings = await self._analyze_file(
+                    accepted.path,
+                    scan_context,
+                    file_cga,
+                    cached_source=accepted.source_text or None,
+                )
+                file_ms = int((time.perf_counter() - file_start) * 1000)
+                non_safe = sum(
+                    1
+                    for f in file_findings
+                    if getattr(f, "severity", "") != "SAFE"
+                )
+                self.logger.info(
+                    "behavioral file done path=%s findings=%d non_safe=%d duration_ms=%d",
+                    sanitize_log_value(accepted.path),
+                    len(file_findings),
+                    non_safe,
+                    file_ms,
+                )
+                return file_findings
+
+        if file_concurrency > 1 and len(capability_files) > 1:
+            self.logger.info(
+                "behavioral file concurrency=%d files=%d",
+                file_concurrency,
+                len(capability_files),
+            )
+
+        all_findings: List[SecurityFinding] = []
+        for file_findings in await asyncio.gather(
+            *(_analyze_accepted(accepted) for accepted in capability_files)
+        ):
+            all_findings.extend(file_findings)
+        return all_findings
+
+    def _partition_by_language(
+        self, capability_files: List[_AcceptedFile]
+    ) -> Tuple[List[_AcceptedFile], Dict[str, List[_AcceptedFile]]]:
+        """Split accepted files into Python and per-language tree-sitter groups.
+
+        Files matching neither are dropped -- there is no backend that could
+        analyze them.
+        """
         # Partition files by language family
         python_files: List[_AcceptedFile] = []
         ts_files_by_lang: Dict[str, List[_AcceptedFile]] = {}
@@ -568,6 +653,24 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 "behavioral languages %s", lang_fields
             )
 
+        return python_files, ts_files_by_lang
+
+    def _build_directory_call_graphs(
+        self,
+        capability_files: List[_AcceptedFile],
+        python_files: List[_AcceptedFile],
+        ts_files_by_lang: Dict[str, List[_AcceptedFile]],
+    ) -> Tuple[
+        Optional[CallGraphAnalyzer],
+        Dict[str, TreeSitterCallGraphAnalyzer],
+        Dict[str, str],
+    ]:
+        """Read every accepted file once, feeding its language's call graph.
+
+        Returns the built analyzers plus the source registry, which later
+        stages reuse so no file is read twice. A file that cannot be read is
+        logged and skipped rather than failing the whole tree.
+        """
         # Build Python call graph
         py_call_graph_analyzer: Optional[CallGraphAnalyzer] = None
         if python_files:
@@ -645,75 +748,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 f"Built {lang} call graph with {len(ts_cg.functions)} functions"
             )
 
-        scan_context = {
-            **context,
-            "source_registry": source_registry,
-            "code_graphs": _build_directory_code_graphs(
-                py_call_graph_analyzer,
-                ts_call_graph_analyzers,
-                source_registry=source_registry,
-            ),
-        }
-
-        # Analyze files concurrently (shared call graphs + code graphs are read-only).
-        file_concurrency = max(
-            1,
-            int(
-                context.get(
-                    "file_concurrency",
-                    MCPScannerConstants.BEHAVIORAL_FILE_CONCURRENCY,
-                )
-            ),
-        )
-        file_semaphore = asyncio.Semaphore(file_concurrency)
-
-        async def _analyze_accepted(accepted: _AcceptedFile) -> List[SecurityFinding]:
-            async with file_semaphore:
-                self.logger.debug(f"Analyzing file: {accepted.path}")
-                ext = Path(accepted.path).suffix.lower()
-                if ext in self._PYTHON_EXTENSIONS:
-                    file_cga = py_call_graph_analyzer
-                elif ext in self._EXT_TO_TS_LANGUAGE:
-                    lang = self._EXT_TO_TS_LANGUAGE[ext]
-                    file_cga = ts_call_graph_analyzers.get(lang)
-                else:
-                    file_cga = None
-
-                file_start = time.perf_counter()
-                file_findings = await self._analyze_file(
-                    accepted.path,
-                    scan_context,
-                    file_cga,
-                    cached_source=accepted.source_text or None,
-                )
-                file_ms = int((time.perf_counter() - file_start) * 1000)
-                non_safe = sum(
-                    1
-                    for f in file_findings
-                    if getattr(f, "severity", "") != "SAFE"
-                )
-                self.logger.info(
-                    "behavioral file done path=%s findings=%d non_safe=%d duration_ms=%d",
-                    sanitize_log_value(accepted.path),
-                    len(file_findings),
-                    non_safe,
-                    file_ms,
-                )
-                return file_findings
-
-        if file_concurrency > 1 and len(capability_files) > 1:
-            self.logger.info(
-                "behavioral file concurrency=%d files=%d",
-                file_concurrency,
-                len(capability_files),
-            )
-
-        all_findings: List[SecurityFinding] = []
-        for file_findings in await asyncio.gather(
-            *(_analyze_accepted(accepted) for accepted in capability_files)
-        ):
-            all_findings.extend(file_findings)
-        return all_findings
+        return py_call_graph_analyzer, ts_call_graph_analyzers, source_registry
 
     async def _analyze_single_file(
         self, content: str, context: Dict[str, Any]
@@ -823,6 +858,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     }
 
     _PYTHON_EXTENSIONS = {".py", ".pyw"}
+
+    # The subset of _EXT_TO_TS_LANGUAGE that has a dedicated extractor to pair
+    # with NativeAnalyzer; every other tree-sitter language relies on
+    # NativeAnalyzer alone.
+    _JS_TS_EXTENSIONS = {
+        ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+    }
 
     def _find_source_files(self, directory: str) -> List[str]:
         """Find all supported source files in a directory.
@@ -1109,99 +1151,60 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         return findings
 
+    def _run_extractor(
+        self, label: str, file_path: str, extract
+    ) -> Tuple[List[FunctionContext], bool]:
+        """Run one extractor, reporting its contexts and whether it failed."""
+        try:
+            return extract(), False
+        except Exception as e:
+            self.logger.debug(f"{label} failed for {file_path}: {e}")
+            return [], True
+
     def _extract_function_contexts(
         self, source_code: str, file_path: str, context: Dict[str, Any]
     ) -> List[FunctionContext]:
         """Extract MCP capability contexts, choosing extractors by file type.
 
-        Python and JS/TS each pair a dedicated extractor with NativeAnalyzer
-        and merge the two: the dedicated extractor understands decorator-style
-        registrations, NativeAnalyzer catches programmatic ones, and running
-        either alone lets one shadow the other. ``analysis_errors`` is
-        incremented only when both fail, since one surviving extractor still
-        produces usable coverage.
+        Python and JS/TS each pair a language-specific extractor with
+        NativeAnalyzer and merge the two: the language extractor understands
+        decorator-style registrations, NativeAnalyzer catches programmatic
+        ones, and running either alone lets one shadow the other.
+        ``analysis_errors`` is incremented only when both fail, since one
+        surviving extractor still produces usable coverage.
         """
-        # Determine file type
         file_ext = Path(file_path).suffix.lower()
-        is_python = file_ext in {".py", ".pyw"}
-        is_js_ts = file_ext in {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
 
-        if is_python:
-            # Primary ContextExtractor for standard @mcp.tool decorators;
-            # always merge NativeAnalyzer so Gap 8 programmatic registrations
-            # in the same file are not shadowed by decorator hits.
-            func_contexts: List[FunctionContext] = []
-            extractor_failed = False
-            try:
-                extractor = ContextExtractor(source_code, file_path)
-                func_contexts = extractor.extract_mcp_function_contexts()
-                if func_contexts:
-                    self.logger.debug(
-                        f"Found {len(func_contexts)} MCP functions in {file_path}"
-                    )
-            except Exception as e:
-                extractor_failed = True
-                self.logger.debug(
-                    f"ContextExtractor failed for {file_path}: {e}, using NativeAnalyzer"
-                )
-
-            native_contexts: List[FunctionContext] = []
-            native_failed = False
-            try:
-                native_analyzer = NativeAnalyzer(source_code, file_path)
-                native_contexts = native_analyzer.extract_mcp_capability_contexts(
-                    cross_file_analyzer=context.get("cross_file_analyzer")
-                )
-                if native_contexts:
-                    self.logger.debug(
-                        f"NativeAnalyzer extracted {len(native_contexts)} MCP "
-                        f"capabilities from {file_path}"
-                    )
-            except Exception as e:
-                native_failed = True
-                self.logger.debug(
-                    f"NativeAnalyzer failed for {file_path}: {e}"
-                )
-            if extractor_failed and native_failed:
-                self.analysis_errors += 1
-            func_contexts = _merge_mcp_function_contexts(
-                func_contexts, native_contexts
+        def _native() -> List[FunctionContext]:
+            return NativeAnalyzer(source_code, file_path).extract_mcp_capability_contexts(
+                cross_file_analyzer=context.get("cross_file_analyzer")
             )
 
-        elif is_js_ts:
-            self.logger.debug(f"Using JSContextExtractor + NativeAnalyzer for: {file_path}")
-            js_contexts: List[FunctionContext] = []
-            js_failed = False
-            try:
+        if file_ext in self._PYTHON_EXTENSIONS:
+            def language_extractor() -> List[FunctionContext]:
+                return ContextExtractor(
+                    source_code, file_path
+                ).extract_mcp_function_contexts()
+
+            label = "ContextExtractor"
+        elif file_ext in self._JS_TS_EXTENSIONS:
+            self.logger.debug(
+                f"Using JSContextExtractor + NativeAnalyzer for: {file_path}"
+            )
+
+            def language_extractor() -> List[FunctionContext]:
                 from ...static_analysis.javascript.js_context_extractor import (
                     JSContextExtractor,
                 )
 
-                js_contexts = JSContextExtractor(
+                return JSContextExtractor(
                     source_code, file_path
                 ).extract_mcp_function_contexts()
-            except Exception as e:
-                js_failed = True
-                self.logger.debug(
-                    f"JSContextExtractor failed for {file_path}: {e}"
-                )
 
-            native_contexts: List[FunctionContext] = []
-            native_failed = False
-            try:
-                native_analyzer = NativeAnalyzer(source_code, file_path)
-                native_contexts = native_analyzer.extract_mcp_capability_contexts(
-                    cross_file_analyzer=context.get("cross_file_analyzer")
-                )
-            except Exception as e:
-                native_failed = True
-                self.logger.debug(f"NativeAnalyzer failed for {file_path}: {e}")
-
-            if js_failed and native_failed:
-                self.analysis_errors += 1
-            func_contexts = _merge_mcp_function_contexts(js_contexts, native_contexts)
-
+            label = "JSContextExtractor"
         else:
+            # No language-specific extractor: NativeAnalyzer detects the
+            # language itself and is the only source of contexts.
             self.logger.debug(f"Unknown file type {file_path}, trying NativeAnalyzer")
             native_analyzer = NativeAnalyzer(source_code, file_path)
             func_contexts = native_analyzer.extract_mcp_capability_contexts(
@@ -1212,8 +1215,29 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     f"NativeAnalyzer detected {native_analyzer.language}, "
                     f"extracted {len(func_contexts)} MCP capabilities"
                 )
+            return func_contexts
 
-        return func_contexts
+        language_contexts, language_failed = self._run_extractor(
+            label, file_path, language_extractor
+        )
+        if language_contexts:
+            self.logger.debug(
+                f"Found {len(language_contexts)} MCP functions in {file_path}"
+            )
+
+        native_contexts, native_failed = self._run_extractor(
+            "NativeAnalyzer", file_path, _native
+        )
+        if native_contexts:
+            self.logger.debug(
+                f"NativeAnalyzer extracted {len(native_contexts)} MCP "
+                f"capabilities from {file_path}"
+            )
+
+        if language_failed and native_failed:
+            self.analysis_errors += 1
+
+        return _merge_mcp_function_contexts(language_contexts, native_contexts)
 
     def _prepare_contexts_for_llm(
         self,

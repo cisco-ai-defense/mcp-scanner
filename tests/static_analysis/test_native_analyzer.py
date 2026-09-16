@@ -375,3 +375,48 @@ class MyClass:
         assert "func1" in names
         assert "func2" in names
         assert "method1" in names
+
+    def test_global_statement_does_not_rename_function(self):
+        """A ``global`` declaration must not become the function's name.
+
+        The Python extractor once ran its global/nonlocal collection in the
+        same scope as the function name, so ``for name in child.names`` left
+        ``name`` pointing at the last global declared. A tool using ``global``
+        was reported to operators under the global variable's name.
+        """
+        from mcpscanner.core.static_analysis import NativeAnalyzer
+
+        code = '''
+COUNTER = 0
+
+def record_event(payload):
+    """Records an event."""
+    global COUNTER
+    COUNTER += 1
+    return payload
+'''
+        contexts = NativeAnalyzer(code, "test.py").extract_all_function_contexts()
+        func = next(c for c in contexts if c.line_number == 4)
+
+        assert func.name == "record_event"
+        assert func.global_writes == [
+            {"type": "global", "name": "COUNTER", "line": 6}
+        ]
+
+    def test_decorator_name_still_overrides_function_name(self):
+        """``@tool(name=...)`` wins over the Python identifier, globals aside."""
+        from mcpscanner.core.static_analysis import NativeAnalyzer
+
+        code = '''
+COUNTER = 0
+
+@mcp.tool(name="record")
+def record_event(payload):
+    """Records an event."""
+    global COUNTER
+    return payload
+'''
+        contexts = NativeAnalyzer(code, "test.py").extract_all_function_contexts()
+        func = next(c for c in contexts if c.line_number == 5)
+
+        assert func.name == "record"

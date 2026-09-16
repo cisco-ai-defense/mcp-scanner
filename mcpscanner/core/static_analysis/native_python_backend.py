@@ -26,7 +26,7 @@ a rewrite rather than a move.
 import ast
 import re as _re
 
-from typing import Any, Dict, Iterator, List, Optional, Set, Union
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from .context_extractor import FunctionContext
 from .dataflow.forward_analysis import ForwardDataflowAnalysis
@@ -771,19 +771,10 @@ class PythonBackendMixin:
                         stmt += f" as {alias.asname}"
                     imports.append(stmt)
         return imports
-    def _py_extract_function(
-        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef], module_imports: List[str]
-    ) -> FunctionContext:
-        """Extract FunctionContext from Python function AST node with full dataflow analysis.
-        
-        Uses the existing ForwardDataflowAnalysis infrastructure for proper
-        CFG-based taint tracking with shape-aware analysis.
-        """
-        name = node.name
-        docstring = ast.get_docstring(node)
-        line_number = node.lineno
-
-        # Extract decorators from AST
+    def _py_collect_decorators(
+        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]
+    ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
+        """Decorator names and the keyword arguments each was called with."""
         decorator_types = []
         decorator_params: Dict[str, Dict[str, Any]] = {}
         for dec in node.decorator_list:
@@ -794,6 +785,19 @@ class PythonBackendMixin:
                 if dec_params:
                     decorator_params[dec_name] = dec_params
 
+        return decorator_types, decorator_params
+
+    @staticmethod
+    def _py_apply_decorator_overrides(
+        decorator_params: Dict[str, Dict[str, Any]],
+        name: str,
+        docstring: Optional[str],
+    ) -> Tuple[str, Optional[str]]:
+        """Let ``@tool(name=..., description=...)`` override the Python names.
+
+        The decorator's name is what the MCP client sees, so it wins over the
+        function's. The description only fills in for a missing docstring.
+        """
         for _dec_name, params in decorator_params.items():
             if "name" in params:
                 raw_name = params["name"]
@@ -814,7 +818,12 @@ class PythonBackendMixin:
                 else:
                     docstring = raw_desc
 
-        # Extract parameters from AST
+        return name, docstring
+
+    def _py_collect_parameters(
+        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Parameter descriptors plus their bare names for dataflow analysis."""
         parameters = []
         param_names = []
         for arg in node.args.args:
@@ -824,16 +833,10 @@ class PythonBackendMixin:
             parameters.append(param_info)
             param_names.append(arg.arg)
 
-        # Extract return type from AST
-        return_type = self._py_unparse_safe(node.returns) if node.returns else None
-        
-        # Use existing ForwardDataflowAnalysis for proper CFG-based taint tracking
-        parameter_flows = self._py_analyze_dataflow_full(node, param_names)
-        
-        # Detect security operations via dataflow
-        security_ops = self._py_detect_security_ops(node)
+        return parameters, param_names
 
-        # Extract ALL function calls from AST
+    def _py_collect_function_calls(self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> List[Dict[str, Any]]:
+        """Every call made anywhere in the function body."""
         function_calls = []
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
@@ -844,7 +847,10 @@ class PythonBackendMixin:
                     "line": getattr(child, "lineno", 0),
                 })
 
-        # Extract ALL assignments from AST
+        return function_calls
+
+    def _py_collect_assignments(self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> List[Dict[str, Any]]:
+        """Plain, annotated and augmented assignments, in one list."""
         assignments = []
         for child in ast.walk(node):
             if isinstance(child, ast.Assign):
@@ -869,7 +875,10 @@ class PythonBackendMixin:
                     "line": getattr(child, "lineno", 0),
                 })
 
-        # Extract control flow from AST
+        return assignments
+
+    def _py_collect_control_flow(self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> Dict[str, Any]:
+        """Branch, loop, try and with statements, grouped by kind."""
         control_flow = {
             "if_statements": [{"line": n.lineno, "test": self._py_unparse_safe(n.test)}
                              for n in ast.walk(node) if isinstance(n, ast.If)],
@@ -883,7 +892,11 @@ class PythonBackendMixin:
                                for n in ast.walk(node) if isinstance(n, (ast.With, ast.AsyncWith))],
         }
 
-        # Extract ALL constants from AST
+        return control_flow
+
+    @staticmethod
+    def _py_collect_constants(node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> Dict[str, Any]:
+        """Names bound directly to a literal."""
         constants: Dict[str, Any] = {}
         for child in ast.walk(node):
             if isinstance(child, ast.Assign):
@@ -891,7 +904,11 @@ class PythonBackendMixin:
                     if isinstance(target, ast.Name) and isinstance(child.value, ast.Constant):
                         constants[target.id] = child.value.value
 
-        # Extract variable dependencies from AST
+        return constants
+
+    @staticmethod
+    def _py_collect_variable_dependencies(node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> Dict[str, List[str]]:
+        """For each assigned name, the names its value reads."""
         var_deps: Dict[str, List[str]] = {}
         for child in ast.walk(node):
             if isinstance(child, ast.Assign):
@@ -900,7 +917,11 @@ class PythonBackendMixin:
                         deps = [n.id for n in ast.walk(child.value) if isinstance(n, ast.Name)]
                         var_deps[target.id] = deps
 
-        # Extract ALL string literals from AST
+        return var_deps
+
+    @staticmethod
+    def _py_collect_string_literals(node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> List[str]:
+        """Distinct short string literals, capped at 50."""
         string_literals = []
         for child in ast.walk(node):
             if isinstance(child, ast.Constant) and isinstance(child.value, str):
@@ -908,13 +929,19 @@ class PythonBackendMixin:
                     string_literals.append(child.value)
         string_literals = list(set(string_literals))[:50]
 
-        # Extract ALL return expressions from AST
+        return string_literals
+
+    def _py_collect_return_expressions(self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> List[str]:
+        """The expression behind every ``return`` that has one."""
         return_expressions = []
         for child in ast.walk(node):
             if isinstance(child, ast.Return) and child.value:
                 return_expressions.append(self._py_unparse_safe(child.value))
 
-        # Extract exception handlers from AST
+        return return_expressions
+
+    def _py_collect_exception_handlers(self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> List[Dict[str, Any]]:
+        """Except clauses, with the size of each handler body."""
         exception_handlers = []
         for child in ast.walk(node):
             if isinstance(child, ast.ExceptHandler):
@@ -925,7 +952,11 @@ class PythonBackendMixin:
                     "body_size": len(child.body),
                 })
 
-        # Extract global/nonlocal from AST
+        return exception_handlers
+
+    @staticmethod
+    def _py_collect_global_writes(node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> List[Dict[str, Any]]:
+        """``global`` and ``nonlocal`` declarations."""
         global_writes = []
         for child in ast.walk(node):
             if isinstance(child, ast.Global):
@@ -935,7 +966,10 @@ class PythonBackendMixin:
                 for name in child.names:
                     global_writes.append({"type": "nonlocal", "name": name, "line": child.lineno})
 
-        # Extract attribute access from AST
+        return global_writes
+
+    def _py_collect_attribute_access(self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> List[Dict[str, Any]]:
+        """Attribute reads and writes, capped at 50."""
         attribute_access = []
         for child in ast.walk(node):
             if isinstance(child, ast.Attribute):
@@ -946,7 +980,10 @@ class PythonBackendMixin:
                 })
         attribute_access = attribute_access[:50]
 
-        # Extract subscript access from AST
+        return attribute_access
+
+    def _py_collect_subscript_access(self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> List[Dict[str, Any]]:
+        """Subscript expressions such as ``d[k]``."""
         subscript_access = []
         for child in ast.walk(node):
             if isinstance(child, ast.Subscript):
@@ -956,7 +993,11 @@ class PythonBackendMixin:
                     "line": getattr(child, "lineno", 0),
                 })
 
-        # Calculate complexity from AST
+        return subscript_access
+
+    @staticmethod
+    def _py_cyclomatic_complexity(node: Union[ast.FunctionDef, ast.AsyncFunctionDef]) -> int:
+        """Branch count plus one -- the usual cyclomatic measure."""
         complexity = 1
         for child in ast.walk(node):
             if isinstance(child, (ast.If, ast.For, ast.While, ast.ExceptHandler, ast.With)):
@@ -964,11 +1005,35 @@ class PythonBackendMixin:
             elif isinstance(child, ast.BoolOp):
                 complexity += len(child.values) - 1
 
+        return complexity
+
+    def _py_extract_function(
+        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef], module_imports: List[str]
+    ) -> FunctionContext:
+        """Extract FunctionContext from Python function AST node with full dataflow analysis.
+
+        Uses the existing ForwardDataflowAnalysis infrastructure for proper
+        CFG-based taint tracking with shape-aware analysis.
+        """
+        decorator_types, decorator_params = self._py_collect_decorators(node)
+        name, docstring = self._py_apply_decorator_overrides(
+            decorator_params, node.name, ast.get_docstring(node)
+        )
+        parameters, param_names = self._py_collect_parameters(node)
+
+        # Use existing ForwardDataflowAnalysis for proper CFG-based taint tracking
+        parameter_flows = self._py_analyze_dataflow_full(node, param_names)
+
+        # Detect security operations via dataflow
+        security_ops = self._py_detect_security_ops(node)
+
+        subscript_access = self._py_collect_subscript_access(node)
+
         # Build dataflow summary with taint info
         dataflow_summary = {
             "total_statements": len([n for n in ast.walk(node) if isinstance(n, ast.stmt)]),
             "total_expressions": len([n for n in ast.walk(node) if isinstance(n, ast.expr)]),
-            "complexity": complexity,
+            "complexity": self._py_cyclomatic_complexity(node),
             "subscript_access": subscript_access[:20],
             "param_flows": {p["parameter_name"]: {
                 "reaches_calls": p.get("reaches_calls", []),
@@ -984,28 +1049,29 @@ class PythonBackendMixin:
             decorator_params=decorator_params,
             docstring=docstring,
             parameters=parameters,
-            return_type=return_type,
-            line_number=line_number,
+            return_type=self._py_unparse_safe(node.returns) if node.returns else None,
+            line_number=node.lineno,
             imports=module_imports,
-            function_calls=function_calls,
-            assignments=assignments,
-            control_flow=control_flow,
+            function_calls=self._py_collect_function_calls(node),
+            assignments=self._py_collect_assignments(node),
+            control_flow=self._py_collect_control_flow(node),
             parameter_flows=parameter_flows,  # Already list of dicts
-            constants=constants,
-            variable_dependencies=var_deps,
+            constants=self._py_collect_constants(node),
+            variable_dependencies=self._py_collect_variable_dependencies(node),
             has_file_operations=security_ops["has_file_operations"],
             has_network_operations=security_ops["has_network_operations"],
             has_subprocess_calls=security_ops["has_subprocess_calls"],
             has_eval_exec=security_ops["has_eval_exec"],
             has_dangerous_imports=any(d in " ".join(module_imports) for d in ["subprocess", "os", "pickle", "marshal"]),
             dataflow_summary=dataflow_summary,
-            string_literals=string_literals,
-            return_expressions=return_expressions,
-            exception_handlers=exception_handlers,
+            string_literals=self._py_collect_string_literals(node),
+            return_expressions=self._py_collect_return_expressions(node),
+            exception_handlers=self._py_collect_exception_handlers(node),
             env_var_access=[],
-            global_writes=global_writes,
-            attribute_access=attribute_access,
+            global_writes=self._py_collect_global_writes(node),
+            attribute_access=self._py_collect_attribute_access(node),
         )
+
     def _py_get_node_name(self, node: ast.expr) -> str:
         """Get name from any AST expression node."""
         if isinstance(node, ast.Name):
