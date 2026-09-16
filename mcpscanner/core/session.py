@@ -31,7 +31,9 @@ import os
 import sys
 import warnings
 import logging as stdlib_logging
-from typing import Any, Dict, Optional, Tuple
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from mcp import StdioServerParameters
 from mcp.client.session import ClientSession
@@ -214,6 +216,178 @@ async def close_mcp_session(client_context, session):
                 pass
 
 
+@dataclass
+class _HttpStatusProbe:
+    """The HTTP status code httpx logged during a connection attempt."""
+
+    code: Optional[int] = None
+
+
+@contextmanager
+def _capture_http_status() -> Iterator[_HttpStatusProbe]:
+    """Watch httpx's log output for the status code behind a failed connect.
+
+    The MCP library surfaces an HTTP 401/403/404 as a cancelled task or an
+    ExceptionGroup, which loses the code. httpx logs it one line earlier, so
+    reading that line is the only way to tell "needs authentication" apart
+    from "server is unreachable".
+    """
+    probe = _HttpStatusProbe()
+    httpx_logger = stdlib_logging.getLogger("httpx")
+    original_level = httpx_logger.level
+    original_propagate = httpx_logger.propagate
+
+    class StatusCodeCapture(stdlib_logging.Handler):
+        def __init__(self):
+            super().__init__(level=stdlib_logging.INFO)
+
+        def emit(self, record):
+            probe.code = check_http_error_in_logs(record.getMessage()) or probe.code
+
+    handler = StatusCodeCapture()
+    handler._check_http_error_in_logs = check_http_error_in_logs
+    httpx_logger.addHandler(handler)
+
+    # Raise the level so the lines we need are emitted at all, and stop them
+    # propagating so raising it does not spray httpx output onto the console.
+    if (
+        original_level > stdlib_logging.INFO
+        or original_level == stdlib_logging.NOTSET
+    ):
+        httpx_logger.setLevel(stdlib_logging.INFO)
+        httpx_logger.propagate = False
+
+    try:
+        yield probe
+    finally:
+        httpx_logger.removeHandler(handler)
+        httpx_logger.setLevel(original_level)
+        httpx_logger.propagate = original_propagate
+
+
+def _auth_headers(
+    auth: Optional[Auth], server_url: str
+) -> Tuple[Optional[Any], Dict[str, str]]:
+    """Turn an Auth configuration into an OAuth provider and request headers.
+
+    Returns ``(oauth_provider, extra_headers)``; both are empty when no auth
+    was configured, which means connecting anonymously.
+    """
+    if auth is None:
+        logger.debug(
+            f'No explicit auth provided, connecting without authentication: server="{server_url}"'
+        )
+        return None, {}
+
+    oauth_provider = None
+    extra_headers: Dict[str, str] = {}
+
+    if auth.type == AuthType.OAUTH:
+        logger.debug(
+            f'Using explicit OAuth authentication for MCP server: server="{server_url}"'
+        )
+        oauth_provider = create_oauth_provider_from_auth(auth, server_url)
+    elif auth.type == AuthType.BEARER:
+        if not getattr(auth, "bearer_token", None):
+            raise ValueError(
+                "Bearer authentication selected but no bearer_token provided"
+            )
+        extra_headers["Authorization"] = f"Bearer {auth.bearer_token}"
+        logger.debug(
+            f'Using explicit Bearer authentication for MCP server: server="{server_url}"'
+        )
+    elif auth.type == AuthType.APIKEY:
+        if not getattr(auth, "api_key", None) or not getattr(
+            auth, "api_key_header", None
+        ):
+            raise ValueError(
+                "APIKEY authentication selected but no api key or api header value provided"
+            )
+        extra_headers[auth.api_key_header] = auth.api_key
+        logger.debug(
+            f'Using APIKEY authentication for MCP server: server="{server_url}"'
+        )
+
+    # Custom headers ride along with any auth type.
+    if getattr(auth, "custom_headers", None):
+        extra_headers.update(auth.custom_headers)
+
+    return oauth_provider, extra_headers
+
+
+def _build_client_context(
+    dial_url: str,
+    destination_url: str,
+    extra_headers: Dict[str, str],
+    oauth_provider: Optional[Any],
+) -> Any:
+    """Create the transport context for a server, SSE or streamable HTTP.
+
+    For streamable HTTP the httpx client is created explicitly and stashed on
+    the context, so ``close_mcp_session`` can close it even when the MCP
+    library's own cleanup fails (a session-termination DELETE returning 404,
+    for instance).
+    """
+    if not oauth_provider:
+        logger.debug(
+            f'Using standard connection (no auth) for MCP server: server="{destination_url}"'
+        )
+
+    httpx_client = None
+    if "/sse" in destination_url:
+        client_context = sse_client(
+            dial_url,
+            **({"headers": extra_headers} if extra_headers else {}),
+            **({"auth": oauth_provider} if oauth_provider else {}),
+        )
+    else:
+        httpx_client = create_mcp_http_client(
+            headers=extra_headers if extra_headers else None,
+            **({"auth": oauth_provider} if oauth_provider else {}),
+        )
+        client_context = streamable_http_client(dial_url, http_client=httpx_client)
+
+    client_context._httpx_client = httpx_client
+    return client_context
+
+
+def _http_status_error(
+    status_code: Optional[int], server_url: str, cause: Optional[Any] = None
+) -> Optional[Exception]:
+    """Map a captured HTTP status onto the error that explains it.
+
+    Returns None when the status says nothing useful, leaving the caller to
+    raise whichever generic connection error fits how the failure arrived.
+    """
+    detail = f" Original error: {cause}" if cause is not None else ""
+    if status_code == 401:
+        return MCPAuthenticationError(
+            f"Authentication failed for MCP server at {server_url}. "
+            f"This server requires OAuth or Bearer token authentication. "
+            f"Use --bearer-token <token> or configure OAuth.{detail}"
+        )
+    if status_code == 403:
+        return MCPAuthenticationError(
+            f"Access denied to MCP server at {server_url}. "
+            f"Check your authentication credentials.{detail}"
+        )
+    if status_code == 404:
+        return MCPServerNotFoundError(
+            f"MCP server endpoint not found at {server_url}. "
+            f"Please verify the URL is correct.{detail}"
+        )
+    return None
+
+
+def _looks_like_connection_failure(error: Exception) -> bool:
+    """Whether an exception is really a failure to reach the host."""
+    return (
+        "ConnectError" in str(type(error))
+        or "connection" in str(error).lower()
+        or "nodename nor servname" in str(error)
+    )
+
+
 async def get_mcp_session(
     server_url: str,
     auth: Optional[Auth] = None,
@@ -233,47 +407,11 @@ async def get_mcp_session(
         tuple: A tuple containing (client_context, session)
 
     Raises:
-        ConnectionError: If unable to connect to the MCP server
+        MCPAuthenticationError: If the server answered 401 or 403.
+        MCPServerNotFoundError: If the server answered 404.
+        MCPConnectionError: If the server could not be reached at all.
     """
-    oauth_provider = None
-    extra_headers: Dict[str, str] = {}
-
-    # Only use authentication if explicitly provided via Auth parameter
-    if auth is not None:
-        if auth and auth.type == AuthType.OAUTH:
-            logger.debug(
-                f'Using explicit OAuth authentication for MCP server: server="{server_url}"'
-            )
-            oauth_provider = create_oauth_provider_from_auth(auth, server_url)
-        elif auth and auth.type == AuthType.BEARER:
-            if not getattr(auth, "bearer_token", None):
-                raise ValueError(
-                    "Bearer authentication selected but no bearer_token provided"
-                )
-            # Prepare Authorization header for bearer token auth
-            extra_headers["Authorization"] = f"Bearer {auth.bearer_token}"
-            logger.debug(
-                f'Using explicit Bearer authentication for MCP server: server="{server_url}"'
-            )
-        elif auth and auth.type == AuthType.APIKEY:
-            if not getattr(auth, "api_key", None) or not getattr(
-                auth, "api_key_header", None
-            ):
-                raise ValueError(
-                    "APIKEY authentication selected but no api key or api header value provided"
-                )
-            extra_headers[auth.api_key_header] = auth.api_key
-            logger.debug(
-                f'Using APIKEY authentication for MCP server: server="{server_url}"'
-            )
-
-        # Add any custom headers from Auth object (works with any auth type)
-        if hasattr(auth, "custom_headers") and auth.custom_headers:
-            extra_headers.update(auth.custom_headers)
-    else:
-        logger.debug(
-            f'No explicit auth provided, connecting without authentication: server="{server_url}"'
-        )
+    oauth_provider, extra_headers = _auth_headers(auth, server_url)
 
     destination_url = server_url
     dial_url, extra_headers = prepare_mcp_dial(
@@ -288,187 +426,63 @@ async def get_mcp_session(
             f'Using hybrid proxy relay for MCP server: destination="{destination_url}"'
         )
 
-    # Create client context with or without OAuth
-    # For streamable HTTP, create an explicit httpx.AsyncClient so we can
-    # guarantee it gets closed even if the MCP library's internal cleanup
-    # fails (e.g. session termination DELETE returns 404).
-    httpx_client = None
-    if oauth_provider:
-        if "/sse" in destination_url:
-            client_context = (
-                sse_client(dial_url, headers=extra_headers, auth=oauth_provider)
-                if extra_headers
-                else sse_client(dial_url, auth=oauth_provider)
-            )
-        else:
-            httpx_client = create_mcp_http_client(
-                headers=extra_headers if extra_headers else None,
-                auth=oauth_provider,
-            )
-            client_context = streamable_http_client(dial_url, http_client=httpx_client)
-    else:
-        logger.debug(
-            f'Using standard connection (no auth) for MCP server: server="{destination_url}"'
-        )
-        # Pass bearer Authorization header when requested
-        if "/sse" in destination_url:
-            client_context = (
-                sse_client(dial_url, headers=extra_headers)
-                if extra_headers
-                else sse_client(dial_url)
-            )
-        else:
-            httpx_client = create_mcp_http_client(
-                headers=extra_headers if extra_headers else None
-            )
-            client_context = streamable_http_client(dial_url, http_client=httpx_client)
-
-    # Stash the httpx client on the context so _close_mcp_session can close it
-    client_context._httpx_client = httpx_client
-
-    client_context_opened = None
+    client_context = _build_client_context(
+        dial_url, destination_url, extra_headers, oauth_provider
+    )
     session = None
-    http_status_code = None
-    capture_handler = None
-    httpx_logger = None
-    original_httpx_level = None
-    original_propagate = None
 
-    # Set up httpx logging capture to detect HTTP errors
-    httpx_logger = stdlib_logging.getLogger("httpx")
-    original_httpx_level = httpx_logger.level
-    original_propagate = httpx_logger.propagate
-
-    class StatusCodeCapture(stdlib_logging.Handler):
-        def __init__(self):
-            super().__init__(level=stdlib_logging.INFO)
-
-        def emit(self, record):
-            nonlocal http_status_code
-            # Capture the status code silently (don't propagate to console)
-            http_status_code = (
-                check_http_error_in_logs(record.getMessage())
-                or http_status_code
+    with _capture_http_status() as probe:
+        try:
+            logger.debug(f'Attempting to connect to MCP server: server="{server_url}"')
+            # Suppress async generator warnings from MCP library cleanup bugs
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", category=RuntimeWarning, message=".*async.*generator.*"
+                )
+                read, write, *_ = await client_context.__aenter__()
+                session = ClientSession(read, write)
+                await session.__aenter__()
+                logger.debug(f'Initializing MCP session: server="{server_url}"')
+                # Stored on the session so instruction scans can read it later.
+                session._init_result = await session.initialize()
+            logger.debug(
+                f'Successfully connected to MCP server: server="{server_url}"'
             )
+            return client_context, session
 
-    capture_handler = StatusCodeCapture()
-    capture_handler._check_http_error_in_logs = check_http_error_in_logs
+        except (asyncio.CancelledError, GeneratorExit) as e:
+            # These exceptions often wrap HTTP errors from the MCP library.
+            await close_mcp_session(client_context, session)
+            error = _http_status_error(probe.code, server_url)
+            if error is None:
+                error = MCPConnectionError(
+                    f"Connection to MCP server at {server_url} was cancelled. "
+                    f"This may indicate the server is not reachable, not responding, or requires authentication."
+                )
+            raise error from e
 
-    # Temporarily set httpx logger to INFO to ensure it emits logs we can capture
-    # Disable propagation only if we're raising the log level to avoid console output
-    httpx_logger.addHandler(capture_handler)
-    if (
-        httpx_logger.level > stdlib_logging.INFO
-        or httpx_logger.level == stdlib_logging.NOTSET
-    ):
-        httpx_logger.setLevel(stdlib_logging.INFO)
-        httpx_logger.propagate = False  # Prevent console output
+        except BaseExceptionGroup as eg:
+            await close_mcp_session(client_context, session)
+            first_error = eg.exceptions[0] if eg.exceptions else eg
+            # The group may carry the status in its text even when httpx
+            # logged nothing we could capture.
+            detected = probe.code or check_http_error_in_logs(str(first_error))
+            error = _http_status_error(detected, server_url, cause=first_error)
+            if error is None:
+                error = MCPConnectionError(
+                    f"Error connecting to MCP server at {server_url}: {first_error}"
+                )
+            raise error from eg
 
-    try:
-        logger.debug(f'Attempting to connect to MCP server: server="{server_url}"')
-        # Suppress async generator warnings from MCP library cleanup bugs
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*async.*generator.*"
-            )
-            client_context_opened = await client_context.__aenter__()
-            streams = client_context_opened
-            read, write, *_ = streams
-            session = ClientSession(read, write)
-            await session.__aenter__()
-            logger.debug(f'Initializing MCP session: server="{server_url}"')
-            init_result = await session.initialize()
-            # Store the initialize result on the session for later access
-            session._init_result = init_result
-        logger.debug(f'Successfully connected to MCP server: server="{server_url}"')
-        return client_context, session
-    except (asyncio.CancelledError, GeneratorExit) as e:
-        # These exceptions often wrap HTTP errors from the MCP library
-        await close_mcp_session(client_context, session)
-
-        # Check if we captured an HTTP error status code from logs
-        if http_status_code == 401:
-            raise MCPAuthenticationError(
-                f"Authentication failed for MCP server at {server_url}. "
-                f"This server requires OAuth or Bearer token authentication. "
-                f"Use --bearer-token <token> or configure OAuth."
-            ) from e
-        elif http_status_code == 403:
-            raise MCPAuthenticationError(
-                f"Access denied to MCP server at {server_url}. "
-                f"Check your authentication credentials."
-            ) from e
-        elif http_status_code == 404:
-            raise MCPServerNotFoundError(
-                f"MCP server endpoint not found at {server_url}. "
-                f"Please verify the URL is correct."
-            ) from e
-
-        # Generic cancellation error
-        raise MCPConnectionError(
-            f"Connection to MCP server at {server_url} was cancelled. "
-            f"This may indicate the server is not reachable, not responding, or requires authentication."
-        ) from e
-    except BaseExceptionGroup as eg:
-        # ExceptionGroup from MCP library - check for HTTP errors
-        await close_mcp_session(client_context, session)
-
-        # Get the first error for inspection
-        first_error = eg.exceptions[0] if eg.exceptions else eg
-        error_str = str(first_error)
-
-        # Check if we captured an HTTP error status code from logs, or check error string
-        detected_code = http_status_code or check_http_error_in_logs(
-            error_str
-        )
-
-        if detected_code == 401:
-            raise MCPAuthenticationError(
-                f"Authentication failed for MCP server at {server_url}. "
-                f"This server requires OAuth or Bearer token authentication. "
-                f"Use --bearer-token <token> or configure OAuth. "
-                f"Original error: {first_error}"
-            ) from eg
-        elif detected_code == 403:
-            raise MCPAuthenticationError(
-                f"Access denied to MCP server at {server_url}. "
-                f"Check your authentication credentials. "
-                f"Original error: {first_error}"
-            ) from eg
-        elif detected_code == 404:
-            raise MCPServerNotFoundError(
-                f"MCP server endpoint not found at {server_url}. "
-                f"Please verify the URL is correct. "
-                f"Original error: {first_error}"
-            ) from eg
-
-        # Generic ExceptionGroup error
-        raise MCPConnectionError(
-            f"Error connecting to MCP server at {server_url}: {first_error}"
-        ) from eg
-    except Exception as e:
-        # Try to clean up resources on any error
-        await close_mcp_session(client_context, session)
-        # Convert connection errors to more user-friendly messages
-        if (
-            "ConnectError" in str(type(e))
-            or "connection" in str(e).lower()
-            or "nodename nor servname" in str(e)
-        ):
-            raise MCPConnectionError(
-                f"Unable to connect to MCP server at {server_url}. "
-                f"Please verify the server is running and accessible. "
-                f"Original error: {e}"
-            ) from e
-        raise
-    finally:
-        # Clean up httpx logger handler and restore original settings
-        if capture_handler and httpx_logger:
-            httpx_logger.removeHandler(capture_handler)
-            if original_httpx_level is not None:
-                httpx_logger.setLevel(original_httpx_level)
-            if original_propagate is not None:
-                httpx_logger.propagate = original_propagate
+        except Exception as e:
+            await close_mcp_session(client_context, session)
+            if _looks_like_connection_failure(e):
+                raise MCPConnectionError(
+                    f"Unable to connect to MCP server at {server_url}. "
+                    f"Please verify the server is running and accessible. "
+                    f"Original error: {e}"
+                ) from e
+            raise
 
 
 async def get_stdio_session(
