@@ -687,12 +687,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
                     self.logger.error(
-                        f"Very large file detected, skipping: {accepted.path} ({file_size:,} bytes)"
+                        "Very large file detected, skipping: %s (%s bytes)",
+                        accepted.path,
+                        f"{file_size:,}",
                     )
                     continue
                 elif file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES:
                     self.logger.debug(
-                        f"Large file detected: {accepted.path} ({file_size:,} bytes)"
+                        "Large file detected: %s (%s bytes)",
+                        accepted.path,
+                        f"{file_size:,}",
                     )
 
                 if accepted.source_text:
@@ -720,11 +724,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
 
         self.logger.debug(
-            f"Total directory size: {total_size:,} bytes across {len(capability_files)} files"
+            "Total directory size: %s bytes across %s files",
+            f"{total_size:,}",
+            len(capability_files),
         )
         if total_size > 10_000_000:  # 10MB
             self.logger.warning(
-                f"Detected large codebase ({total_size:,} bytes). Analysis performance may be affected."
+                "Detected large codebase (%s bytes). Analysis performance may be affected.",
+                f"{total_size:,}",
             )
 
         # Build call graphs
@@ -921,8 +928,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 file_size = os.path.getsize(src_file)
                 if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
                     self.logger.debug(
-                        f"Prefilter skipping huge file: {src_file} "
-                        f"({file_size:,} bytes)"
+                        "Prefilter skipping huge file: %s (%s bytes)",
+                        src_file,
+                        f"{file_size:,}",
                     )
                     continue
                 with open(src_file, "rb") as f:
@@ -1366,8 +1374,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 if func_source_size > MCPScannerConstants.MAX_FUNCTION_SIZE_BYTES:
                     self.logger.warning(
-                        f"Large function detected: {func_context.name} "
-                        f"({func_source_size:,} bytes, {func_line_count} lines) - prompt may be oversized"
+                        "Large function detected: %s (%s bytes, %s lines)"
+                        " - prompt may be oversized",
+                        func_context.name,
+                        f"{func_source_size:,}",
+                        func_line_count,
                     )
                 elif func_line_count > 500:
                     self.logger.debug(
