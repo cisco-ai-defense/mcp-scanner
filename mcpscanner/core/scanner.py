@@ -53,6 +53,12 @@ from .auth import Auth
 from .models import AnalyzerEnum
 from .mcp_models import StdioServer, RemoteServer
 from . import session as session_transport
+from .resource_scan import (
+    DEFAULT_ALLOWED_MIME_TYPES,
+    extract_resource_text,
+    mime_type_allowed,
+    resource_placeholder,
+)
 from .orchestration import (
     AnalyzerBundle,
     analyze_instructions,
@@ -1736,6 +1742,8 @@ class Scanner:
 
         Returns:
             List[ResourceScanResult]: The results of the scan for each resource.
+            A resource that could not be read or analyzed appears with a
+            "skipped" or "failed" status rather than being dropped.
 
         Raises:
             MCPAuthenticationError: If authentication fails (HTTP 401/403).
@@ -1752,9 +1760,8 @@ class Scanner:
         if analyzers is None:
             analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
 
-        # Default allowed MIME types
         if allowed_mime_types is None:
-            allowed_mime_types = ["text/plain", "text/html"]
+            allowed_mime_types = list(DEFAULT_ALLOWED_MIME_TYPES)
 
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
@@ -1792,120 +1799,22 @@ class Scanner:
 
             results = []
             for resource in resource_list.resources:
-                # Check if MIME type is allowed
-                if resource.mimeType and resource.mimeType not in allowed_mime_types:
+                if not mime_type_allowed(resource, allowed_mime_types):
                     logger.info(
                         f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'"
                     )
-                    results.append(
-                        ResourceScanResult(
-                            resource_uri=resource.uri,
-                            resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
-                            status="skipped",
-                            analyzers=[],
-                            findings=[],
-                        )
-                    )
+                    results.append(resource_placeholder(resource, "skipped"))
                     continue
 
-                # Read resource content
-                try:
-                    resource_contents = await session.read_resource(resource.uri)
-
-                    # Extract text content
-                    text_content = ""
-                    try:
-                        for content in resource_contents.contents:
-                            if hasattr(content, "text"):
-                                text_content += content.text
-                            elif hasattr(content, "blob"):
-                                # Skip binary content
-                                logger.info(
-                                    f"Skipping binary content for resource '{resource.uri}'"
-                                )
-                                continue
-                    except (AttributeError, TypeError) as e:
-                        logger.warning(
-                            f"Error extracting content from resource '{resource.uri}': {e}"
-                        )
-                        results.append(
-                            ResourceScanResult(
-                                resource_uri=resource.uri,
-                                resource_name=resource.name or "",
-                                resource_mime_type=resource.mimeType or "unknown",
-                                status="failed",
-                                analyzers=[],
-                                findings=[],
-                            )
-                        )
-                        continue
-
-                    if not text_content:
-                        logger.info(
-                            f"No text content found for resource '{resource.uri}'"
-                        )
-                        results.append(
-                            ResourceScanResult(
-                                resource_uri=resource.uri,
-                                resource_name=resource.name or "",
-                                resource_mime_type=resource.mimeType or "unknown",
-                                status="skipped",
-                                analyzers=[],
-                                findings=[],
-                            )
-                        )
-                        continue
-
-                    # Analyze the resource
-                    try:
-                        result = await self._analyze_resource(
-                            text_content,
-                            resource.uri,
-                            resource.name or "",
-                            resource.description or "",
-                            resource.mimeType or "unknown",
-                            analyzers,
-                            http_headers,
-                        )
-                        results.append(result)
-                    except Exception as e:
-                        logger.error(f"Error analyzing resource '{resource.uri}': {e}")
-                        results.append(
-                            ResourceScanResult(
-                                resource_uri=resource.uri,
-                                resource_name=resource.name or "",
-                                resource_mime_type=resource.mimeType or "unknown",
-                                status="failed",
-                                analyzers=[],
-                                findings=[],
-                            )
-                        )
-
-                except asyncio.TimeoutError:
-                    logger.error(f"Timeout reading resource '{resource.uri}'")
-                    results.append(
-                        ResourceScanResult(
-                            resource_uri=resource.uri,
-                            resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
-                            status="failed",
-                            analyzers=[],
-                            findings=[],
-                        )
+                results.append(
+                    await self._read_and_analyze_resource(
+                        session,
+                        resource,
+                        analyzers,
+                        http_headers,
+                        absorb_analysis_errors=True,
                     )
-                except Exception as e:
-                    logger.error(f"Error reading resource '{resource.uri}': {e}")
-                    results.append(
-                        ResourceScanResult(
-                            resource_uri=resource.uri,
-                            resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
-                            status="failed",
-                            analyzers=[],
-                            findings=[],
-                        )
-                    )
+                )
 
             # Run meta-analysis if enabled (post-pass on all resource results)
             results = await self._run_meta_analysis_on_resource_results(
@@ -1919,6 +1828,55 @@ class Scanner:
             raise
         finally:
             await self._close_mcp_session(client_context, session)
+
+    async def _read_and_analyze_resource(
+        self,
+        session: Any,
+        resource: Any,
+        analyzers: List[AnalyzerEnum],
+        http_headers: Optional[dict],
+        *,
+        absorb_analysis_errors: bool,
+    ) -> ResourceScanResult:
+        """Read one resource and analyze it, turning read failures into placeholders.
+
+        ``absorb_analysis_errors`` reflects a difference between the two
+        callers that predates this refactor: a whole-server scan must not abort
+        because one resource failed to analyze, while a caller who asked for
+        one specific resource gets the exception. Note that an absorbed failure
+        becomes a findings-free result, which downstream reads as safe.
+        """
+        try:
+            contents = await session.read_resource(resource.uri)
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout reading resource '{resource.uri}'")
+            return resource_placeholder(resource, "failed")
+        except Exception as e:
+            logger.error(f"Error reading resource '{resource.uri}': {e}")
+            return resource_placeholder(resource, "failed")
+
+        text_content = extract_resource_text(contents, resource.uri)
+        if text_content is None:
+            return resource_placeholder(resource, "failed")
+        if not text_content:
+            logger.info(f"No text content found for resource '{resource.uri}'")
+            return resource_placeholder(resource, "skipped")
+
+        try:
+            return await self._analyze_resource(
+                text_content,
+                resource.uri,
+                resource.name or "",
+                resource.description or "",
+                resource.mimeType or "unknown",
+                analyzers,
+                http_headers,
+            )
+        except Exception as e:
+            if not absorb_analysis_errors:
+                raise
+            logger.error(f"Error analyzing resource '{resource.uri}': {e}")
+            return resource_placeholder(resource, "failed")
 
     async def scan_remote_server_resource(
         self,
@@ -1964,9 +1922,8 @@ class Scanner:
         if analyzers is None:
             analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
 
-        # Default allowed MIME types
         if allowed_mime_types is None:
-            allowed_mime_types = ["text/plain", "text/html"]
+            allowed_mime_types = list(DEFAULT_ALLOWED_MIME_TYPES)
 
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
@@ -1997,115 +1954,31 @@ class Scanner:
                     raise ValueError(message) from e
                 raise
 
-            target_resource = None
-            for resource in resource_list.resources:
-                # Convert AnyUrl to string for comparison
-                resource_uri_str = (
-                    str(resource.uri)
-                    if hasattr(resource.uri, "__str__")
-                    else resource.uri
-                )
-                if resource_uri_str == resource_uri:
-                    target_resource = resource
-                    break
-
+            target_resource = next(
+                (r for r in resource_list.resources if str(r.uri) == resource_uri),
+                None,
+            )
             if not target_resource:
                 raise ValueError(
                     f"Resource '{resource_uri}' not found on server {server_url}"
                 )
 
-            # Check if MIME type is allowed
-            if (
-                target_resource.mimeType
-                and target_resource.mimeType not in allowed_mime_types
-            ):
+            if not mime_type_allowed(target_resource, allowed_mime_types):
                 logger.info(
                     f"Resource '{resource_uri}' has unsupported MIME type '{target_resource.mimeType}'"
                 )
-                return ResourceScanResult(
-                    resource_uri=target_resource.uri,
-                    resource_name=target_resource.name or "",
-                    resource_mime_type=target_resource.mimeType or "unknown",
-                    status="skipped",
-                    analyzers=[],
-                    findings=[],
-                )
+                return resource_placeholder(target_resource, "skipped")
 
-            # Read resource content
-            try:
-                resource_contents = await session.read_resource(target_resource.uri)
+            result = await self._read_and_analyze_resource(
+                session,
+                target_resource,
+                analyzers,
+                http_headers,
+                absorb_analysis_errors=False,
+            )
 
-                # Extract text content
-                text_content = ""
-                try:
-                    for content in resource_contents.contents:
-                        if hasattr(content, "text"):
-                            text_content += content.text
-                        elif hasattr(content, "blob"):
-                            logger.info(
-                                f"Skipping binary content for resource '{resource_uri}'"
-                            )
-                            continue
-                except (AttributeError, TypeError) as e:
-                    logger.warning(
-                        f"Error extracting content from resource '{resource_uri}': {e}"
-                    )
-                    return ResourceScanResult(
-                        resource_uri=target_resource.uri,
-                        resource_name=target_resource.name or "",
-                        resource_mime_type=target_resource.mimeType or "unknown",
-                        status="failed",
-                        analyzers=[],
-                        findings=[],
-                    )
-
-                if not text_content:
-                    logger.info(f"No text content found for resource '{resource_uri}'")
-                    return ResourceScanResult(
-                        resource_uri=target_resource.uri,
-                        resource_name=target_resource.name or "",
-                        resource_mime_type=target_resource.mimeType or "unknown",
-                        status="skipped",
-                        analyzers=[],
-                        findings=[],
-                    )
-
-                # Analyze the resource
-                result = await self._analyze_resource(
-                    text_content,
-                    target_resource.uri,
-                    target_resource.name or "",
-                    target_resource.description or "",
-                    target_resource.mimeType or "unknown",
-                    analyzers,
-                    http_headers,
-                )
-
-                # Run meta-analysis if enabled
-                result = await self._run_meta_analysis_on_single_resource(result, analyzers)
-
-                return result
-
-            except asyncio.TimeoutError:
-                logger.error(f"Timeout reading resource '{resource_uri}'")
-                return ResourceScanResult(
-                    resource_uri=target_resource.uri,
-                    resource_name=target_resource.name or "",
-                    resource_mime_type=target_resource.mimeType or "unknown",
-                    status="failed",
-                    analyzers=[],
-                    findings=[],
-                )
-            except Exception as e:
-                logger.error(f"Error reading resource '{resource_uri}': {e}")
-                return ResourceScanResult(
-                    resource_uri=target_resource.uri,
-                    resource_name=target_resource.name or "",
-                    resource_mime_type=target_resource.mimeType or "unknown",
-                    status="failed",
-                    analyzers=[],
-                    findings=[],
-                )
+            # Run meta-analysis if enabled
+            return await self._run_meta_analysis_on_single_resource(result, analyzers)
 
         except ValueError:
             raise
