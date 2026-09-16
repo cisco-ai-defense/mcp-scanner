@@ -20,7 +20,17 @@ This module contains the unified scanner class that combines API and YARA analyz
 """
 
 import asyncio
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from contextlib import asynccontextmanager
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 # MCP client imports
 from mcp.client.session import ClientSession
@@ -713,6 +723,58 @@ class Scanner:
             server_url, auth, connector_id=connector_id, tenant_id=tenant_id
         )
 
+    @staticmethod
+    def _require_server_url(server_url: Optional[str]) -> None:
+        """Reject a scan request that names no server."""
+        if not server_url:
+            raise ValueError(
+                "No server URL provided. Please specify a valid server URL."
+            )
+
+    @asynccontextmanager
+    async def _remote_session(
+        self,
+        server_url: str,
+        auth: Optional[Auth] = None,
+        *,
+        connector_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+    ) -> AsyncIterator[ClientSession]:
+        """Open a session to a remote MCP server, closing it on every exit path.
+
+        Every ``scan_remote_*`` method needs the same open/close pair, and a
+        leaked session holds a live connection to the scanned server, so the
+        teardown belongs in one place rather than in nine ``finally`` blocks.
+        """
+        client_context = None
+        session = None
+        try:
+            client_context, session = await self._get_mcp_session(
+                server_url, auth, connector_id=connector_id, tenant_id=tenant_id
+            )
+            yield session
+        finally:
+            await self._close_mcp_session(client_context, session)
+
+    @asynccontextmanager
+    async def _stdio_session(
+        self, server_config: StdioServer, timeout: int, errlog: Any
+    ) -> AsyncIterator[ClientSession]:
+        """Launch a stdio MCP server, shutting it down on every exit path.
+
+        The stdio counterpart of :meth:`_remote_session`; here a leak would be
+        a child process rather than a connection.
+        """
+        client_context = None
+        session = None
+        try:
+            client_context, session = await self._get_stdio_session(
+                server_config, timeout, errlog
+            )
+            yield session
+        finally:
+            await self._close_mcp_session(client_context, session)
+
     async def scan_remote_server_tool(
         self,
         server_url: str,
@@ -738,10 +800,7 @@ class Scanner:
         Raises:
             ValueError: If the tool is not found on the server.
         """
-        if not server_url:
-            raise ValueError(
-                "No server URL provided. Please specify a valid server URL."
-            )
+        self._require_server_url(server_url)
 
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -750,40 +809,34 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            client_context, session = await self._get_mcp_session(
-                server_url,
-                auth,
-                connector_id=connector_id,
-                tenant_id=tenant_id,
-            )
-
-            # List all tools and find the target tool
-            try:
-                tool_list = await session.list_tools()
-            except McpError as e:
-                if self._is_missing_capability_error(e):
-                    message = f"Server '{server_url}' does not expose tools; cannot scan '{tool_name}'."
-                    logger.warning(message)
-                    raise ValueError(message) from e
-                raise
-            target_tool = next(
-                (t for t in tool_list.tools if t.name == tool_name), None
-            )
-
-            if not target_tool:
-                raise ValueError(
-                    f"Tool '{tool_name}' not found on the server at {server_url}"
+            async with self._remote_session(
+                server_url, auth, connector_id=connector_id, tenant_id=tenant_id
+            ) as session:
+                # List all tools and find the target tool
+                try:
+                    tool_list = await session.list_tools()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        message = f"Server '{server_url}' does not expose tools; cannot scan '{tool_name}'."
+                        logger.warning(message)
+                        raise ValueError(message) from e
+                    raise
+                target_tool = next(
+                    (t for t in tool_list.tools if t.name == tool_name), None
                 )
 
-            # Analyze the tool
-            result = await self._analyze_tool(target_tool, analyzers, http_headers)
+                if not target_tool:
+                    raise ValueError(
+                        f"Tool '{tool_name}' not found on the server at {server_url}"
+                    )
 
-            return await self._finalize_single_tool_scan(
-                result, analyzers, source_path=source_path
-            )
+                # Analyze the tool
+                result = await self._analyze_tool(target_tool, analyzers, http_headers)
+
+                return await self._finalize_single_tool_scan(
+                    result, analyzers, source_path=source_path
+                )
 
         except ValueError:
             raise
@@ -792,8 +845,6 @@ class Scanner:
                 f'Error scanning tool \'{tool_name}\' on MCP server: server="{server_url}", error="{e}"'
             )
             raise
-        finally:
-            await self._close_mcp_session(client_context, session)
 
     async def scan_remote_server_tools(
         self,
@@ -822,10 +873,7 @@ class Scanner:
             MCPConnectionError: If unable to connect to the server (network issues, DNS failure, etc).
             ValueError: If the server URL is invalid or empty.
         """
-        if not server_url:
-            raise ValueError(
-                "No server URL provided. Please specify a valid server URL."
-            )
+        self._require_server_url(server_url)
 
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -834,43 +882,35 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            client_context, session = await self._get_mcp_session(
-                server_url,
-                auth,
-                connector_id=connector_id,
-                tenant_id=tenant_id,
-            )
+            async with self._remote_session(
+                server_url, auth, connector_id=connector_id, tenant_id=tenant_id
+            ) as session:
+                # List all tools
+                try:
+                    tool_list = await session.list_tools()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        logger.warning(f"Server '{server_url}' does not expose tools: {e}")
+                        return []
+                    raise
 
-            # List all tools
-            try:
-                tool_list = await session.list_tools()
-            except McpError as e:
-                if self._is_missing_capability_error(e):
-                    logger.warning(f"Server '{server_url}' does not expose tools: {e}")
-                    return []
-                raise
+                # Create analysis tasks for each tool
+                scan_tasks = [
+                    self._analyze_tool(tool, analyzers, http_headers)
+                    for tool in tool_list.tools
+                ]
 
-            # Create analysis tasks for each tool
-            scan_tasks = [
-                self._analyze_tool(tool, analyzers, http_headers)
-                for tool in tool_list.tools
-            ]
+                # Run all tasks concurrently
+                scan_results = await asyncio.gather(*scan_tasks)
 
-            # Run all tasks concurrently
-            scan_results = await asyncio.gather(*scan_tasks)
-
-            return await self._finalize_tool_scan_results(
-                list(scan_results), analyzers, source_path=source_path
-            )
+                return await self._finalize_tool_scan_results(
+                    list(scan_results), analyzers, source_path=source_path
+                )
 
         except Exception as e:
             logger.error(f"Error scanning server {server_url}: {e}")
             raise
-        finally:
-            await self._close_mcp_session(client_context, session)
 
     @staticmethod
     async def _get_stdio_session(
@@ -908,16 +948,10 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            # Create a new task for the connection to isolate async contexts
-            async def connect_and_scan():
-                nonlocal client_context, session
-                client_context, session = await self._get_stdio_session(
-                    server_config, timeout, errlog
-                )
-
+            async with self._stdio_session(
+                server_config, timeout, errlog
+            ) as session:
                 # List all tools
                 try:
                     tool_list = await session.list_tools()
@@ -941,15 +975,9 @@ class Scanner:
                     list(scan_results), analyzers, source_path=source_path
                 )
 
-            # Run the connection and scanning in an isolated task
-            return await connect_and_scan()
-
         except Exception as e:
             logger.error(f"Error scanning stdio server {server_config.command}: {e}")
             raise
-        finally:
-            # Always clean up resources
-            await self._close_mcp_session(client_context, session)
 
     async def scan_stdio_server_tool(
         self,
@@ -987,37 +1015,34 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            client_context, session = await self._get_stdio_session(
+            async with self._stdio_session(
                 server_config, timeout, errlog
-            )
-
-            # List all tools and find the target tool
-            try:
-                tool_list = await session.list_tools()
-            except McpError as e:
-                if self._is_missing_capability_error(e):
-                    message = f"Stdio server '{server_config.command}' does not expose tools; cannot scan '{tool_name}'."
-                    logger.warning(message)
-                    raise ValueError(message) from e
-                raise
-            target_tool = next(
-                (t for t in tool_list.tools if t.name == tool_name), None
-            )
-
-            if not target_tool:
-                raise ValueError(
-                    f"Tool '{tool_name}' not found on the stdio server with command {server_config.command}"
+            ) as session:
+                # List all tools and find the target tool
+                try:
+                    tool_list = await session.list_tools()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        message = f"Stdio server '{server_config.command}' does not expose tools; cannot scan '{tool_name}'."
+                        logger.warning(message)
+                        raise ValueError(message) from e
+                    raise
+                target_tool = next(
+                    (t for t in tool_list.tools if t.name == tool_name), None
                 )
 
-            # Analyze the tool
-            result = await self._analyze_tool(target_tool, analyzers)
+                if not target_tool:
+                    raise ValueError(
+                        f"Tool '{tool_name}' not found on the stdio server with command {server_config.command}"
+                    )
 
-            return await self._finalize_single_tool_scan(
-                result, analyzers, source_path=source_path
-            )
+                # Analyze the tool
+                result = await self._analyze_tool(target_tool, analyzers)
+
+                return await self._finalize_single_tool_scan(
+                    result, analyzers, source_path=source_path
+                )
 
         except ValueError:
             raise
@@ -1026,8 +1051,6 @@ class Scanner:
                 f'Error scanning tool \'{tool_name}\' on stdio server: command="{server_config.command}", error="{e}"'
             )
             raise
-        finally:
-            await self._close_mcp_session(client_context, session)
 
     async def scan_well_known_mcp_configs(
         self,
@@ -1272,10 +1295,7 @@ class Scanner:
             MCPConnectionError: If unable to connect to the server (network issues, DNS failure, etc).
             ValueError: If the server URL is invalid or empty.
         """
-        if not server_url:
-            raise ValueError(
-                "No server URL provided. Please specify a valid server URL."
-            )
+        self._require_server_url(server_url)
 
         # Default to API and LLM analyzers for prompts
         if analyzers is None:
@@ -1284,65 +1304,57 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            client_context, session = await self._get_mcp_session(
-                server_url,
-                auth,
-                connector_id=connector_id,
-                tenant_id=tenant_id,
-            )
-
-            # Capability gate: see scan_remote_server_resources for rationale.
-            if self._server_supports_capability(session, "prompts") is False:
-                logger.info(
-                    f"Server '{server_url}' did not advertise prompts capability; skipping prompt scan"
-                )
-                return []
-
-            # List all prompts
-            try:
-                prompt_list = await session.list_prompts()
-            except McpError as e:
-                if self._is_missing_capability_error(e):
-                    logger.warning(
-                        f"Server '{server_url}' does not expose prompts: {e}"
+            async with self._remote_session(
+                server_url, auth, connector_id=connector_id, tenant_id=tenant_id
+            ) as session:
+                # Capability gate: see scan_remote_server_resources for rationale.
+                if self._server_supports_capability(session, "prompts") is False:
+                    logger.info(
+                        f"Server '{server_url}' did not advertise prompts capability; skipping prompt scan"
                     )
                     return []
-                raise
 
-            # Analyze each prompt with individual error handling
-            scan_results = []
-            for prompt in prompt_list.prompts:
+                # List all prompts
                 try:
-                    result = await self._analyze_prompt(prompt, analyzers, http_headers)
-                    scan_results.append(result)
-                except Exception as e:
-                    logger.error(f"Error analyzing prompt '{prompt.name}': {e}")
-                    # Create a failed result for this prompt
-                    scan_results.append(
-                        PromptScanResult(
-                            prompt_name=prompt.name,
-                            prompt_description=prompt.description or "",
-                            status="failed",
-                            analyzers=[],
-                            findings=[],
+                    prompt_list = await session.list_prompts()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        logger.warning(
+                            f"Server '{server_url}' does not expose prompts: {e}"
                         )
-                    )
+                        return []
+                    raise
 
-            # Run meta-analysis if enabled (post-pass on prompt results)
-            scan_results = await self._run_meta_analysis_on_prompt_results(
-                scan_results, analyzers
-            )
+                # Analyze each prompt with individual error handling
+                scan_results = []
+                for prompt in prompt_list.prompts:
+                    try:
+                        result = await self._analyze_prompt(prompt, analyzers, http_headers)
+                        scan_results.append(result)
+                    except Exception as e:
+                        logger.error(f"Error analyzing prompt '{prompt.name}': {e}")
+                        # Create a failed result for this prompt
+                        scan_results.append(
+                            PromptScanResult(
+                                prompt_name=prompt.name,
+                                prompt_description=prompt.description or "",
+                                status="failed",
+                                analyzers=[],
+                                findings=[],
+                            )
+                        )
 
-            return scan_results
+                # Run meta-analysis if enabled (post-pass on prompt results)
+                scan_results = await self._run_meta_analysis_on_prompt_results(
+                    scan_results, analyzers
+                )
+
+                return scan_results
 
         except Exception as e:
             logger.error(f"Error scanning prompts on server {server_url}: {e}")
             raise
-        finally:
-            await self._close_mcp_session(client_context, session)
 
     async def scan_remote_server_prompt(
         self,
@@ -1369,10 +1381,7 @@ class Scanner:
         Raises:
             ValueError: If the prompt is not found on the server.
         """
-        if not server_url:
-            raise ValueError(
-                "No server URL provided. Please specify a valid server URL."
-            )
+        self._require_server_url(server_url)
 
         # Default to API and LLM analyzers for prompts
         if analyzers is None:
@@ -1381,47 +1390,41 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            client_context, session = await self._get_mcp_session(
-                server_url,
-                auth,
-                connector_id=connector_id,
-                tenant_id=tenant_id,
-            )
-
-            # Capability gate (same rationale as scan_remote_server_prompts).
-            if self._server_supports_capability(session, "prompts") is False:
-                message = f"Server '{server_url}' did not advertise prompts capability; cannot scan '{prompt_name}'."
-                logger.warning(message)
-                raise ValueError(message)
-
-            # List all prompts and find the target prompt
-            try:
-                prompt_list = await session.list_prompts()
-            except McpError as e:
-                if self._is_missing_capability_error(e):
-                    message = f"Server '{server_url}' does not expose prompts; cannot scan '{prompt_name}'."
+            async with self._remote_session(
+                server_url, auth, connector_id=connector_id, tenant_id=tenant_id
+            ) as session:
+                # Capability gate (same rationale as scan_remote_server_prompts).
+                if self._server_supports_capability(session, "prompts") is False:
+                    message = f"Server '{server_url}' did not advertise prompts capability; cannot scan '{prompt_name}'."
                     logger.warning(message)
-                    raise ValueError(message) from e
-                raise
-            target_prompt = next(
-                (p for p in prompt_list.prompts if p.name == prompt_name), None
-            )
+                    raise ValueError(message)
 
-            if not target_prompt:
-                raise ValueError(
-                    f"Prompt '{prompt_name}' not found on the server at {server_url}"
+                # List all prompts and find the target prompt
+                try:
+                    prompt_list = await session.list_prompts()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        message = f"Server '{server_url}' does not expose prompts; cannot scan '{prompt_name}'."
+                        logger.warning(message)
+                        raise ValueError(message) from e
+                    raise
+                target_prompt = next(
+                    (p for p in prompt_list.prompts if p.name == prompt_name), None
                 )
 
-            # Analyze the prompt
-            result = await self._analyze_prompt(target_prompt, analyzers, http_headers)
+                if not target_prompt:
+                    raise ValueError(
+                        f"Prompt '{prompt_name}' not found on the server at {server_url}"
+                    )
 
-            # Run meta-analysis if enabled
-            result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
+                # Analyze the prompt
+                result = await self._analyze_prompt(target_prompt, analyzers, http_headers)
 
-            return result
+                # Run meta-analysis if enabled
+                result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
+
+                return result
 
         except ValueError:
             raise
@@ -1430,8 +1433,6 @@ class Scanner:
                 f'Error scanning prompt \'{prompt_name}\' on MCP server: server="{server_url}", error="{e}"'
             )
             raise
-        finally:
-            await self._close_mcp_session(client_context, session)
 
     async def scan_remote_server_instructions(
         self,
@@ -1456,10 +1457,7 @@ class Scanner:
         Raises:
             ValueError: If the server does not provide instructions.
         """
-        if not server_url:
-            raise ValueError(
-                "No server URL provided. Please specify a valid server URL."
-            )
+        self._require_server_url(server_url)
 
         # Default to all analyzers including LLM for instructions
         # Instructions benefit from semantic analysis
@@ -1469,66 +1467,60 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            client_context, session = await self._get_mcp_session(
-                server_url,
-                auth,
-                connector_id=connector_id,
-                tenant_id=tenant_id,
-            )
+            async with self._remote_session(
+                server_url, auth, connector_id=connector_id, tenant_id=tenant_id
+            ) as session:
+                # Get the initialize result which was stored during session initialization
+                init_result = getattr(session, "_init_result", None)
 
-            # Get the initialize result which was stored during session initialization
-            init_result = getattr(session, "_init_result", None)
+                if not init_result:
+                    raise ValueError(
+                        f"Failed to get initialization result from server at {server_url}"
+                    )
 
-            if not init_result:
-                raise ValueError(
-                    f"Failed to get initialization result from server at {server_url}"
+                # Extract instructions from the initialize result
+                instructions = getattr(init_result, "instructions", None)
+
+                if not instructions:
+                    # Return a result with no findings if instructions are not provided
+                    logger.info(
+                        f"Server at {server_url} does not provide instructions field"
+                    )
+                    return InstructionsScanResult(
+                        instructions="",
+                        server_name=(
+                            getattr(init_result.serverInfo, "name", "Unknown")
+                            if hasattr(init_result, "serverInfo")
+                            else "Unknown"
+                        ),
+                        protocol_version=getattr(init_result, "protocolVersion", "Unknown"),
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                    )
+
+                # Extract server info
+                server_name = (
+                    getattr(init_result.serverInfo, "name", "Unknown")
+                    if hasattr(init_result, "serverInfo")
+                    else "Unknown"
+                )
+                protocol_version = getattr(init_result, "protocolVersion", "Unknown")
+
+                # Analyze the instructions
+                result = await self._analyze_instructions(
+                    instructions=instructions,
+                    server_name=server_name,
+                    protocol_version=protocol_version,
+                    analyzers=analyzers,
+                    http_headers=http_headers,
                 )
 
-            # Extract instructions from the initialize result
-            instructions = getattr(init_result, "instructions", None)
+                # Run meta-analysis if enabled
+                result = await self._run_meta_analysis_on_instructions_result(result, analyzers)
 
-            if not instructions:
-                # Return a result with no findings if instructions are not provided
-                logger.info(
-                    f"Server at {server_url} does not provide instructions field"
-                )
-                return InstructionsScanResult(
-                    instructions="",
-                    server_name=(
-                        getattr(init_result.serverInfo, "name", "Unknown")
-                        if hasattr(init_result, "serverInfo")
-                        else "Unknown"
-                    ),
-                    protocol_version=getattr(init_result, "protocolVersion", "Unknown"),
-                    status="skipped",
-                    analyzers=[],
-                    findings=[],
-                )
-
-            # Extract server info
-            server_name = (
-                getattr(init_result.serverInfo, "name", "Unknown")
-                if hasattr(init_result, "serverInfo")
-                else "Unknown"
-            )
-            protocol_version = getattr(init_result, "protocolVersion", "Unknown")
-
-            # Analyze the instructions
-            result = await self._analyze_instructions(
-                instructions=instructions,
-                server_name=server_name,
-                protocol_version=protocol_version,
-                analyzers=analyzers,
-                http_headers=http_headers,
-            )
-
-            # Run meta-analysis if enabled
-            result = await self._run_meta_analysis_on_instructions_result(result, analyzers)
-
-            return result
+                return result
 
         except ValueError:
             raise
@@ -1537,8 +1529,6 @@ class Scanner:
                 f'Error scanning instructions on MCP server: server="{server_url}", error="{e}"'
             )
             raise
-        finally:
-            await self._close_mcp_session(client_context, session)
 
     async def scan_stdio_server_prompts(
         self,
@@ -1570,16 +1560,10 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            # Create a new task for the connection to isolate async contexts
-            async def connect_and_scan():
-                nonlocal client_context, session
-                client_context, session = await self._get_stdio_session(
-                    server_config, timeout, errlog
-                )
-
+            async with self._stdio_session(
+                server_config, timeout, errlog
+            ) as session:
                 # List all prompts
                 try:
                     prompt_list = await session.list_prompts()
@@ -1607,17 +1591,11 @@ class Scanner:
 
                 return scan_results
 
-            # Run the connection and scanning in an isolated task
-            return await connect_and_scan()
-
         except Exception as e:
             logger.error(
                 f"Error scanning prompts on stdio server {server_config.command}: {e}"
             )
             raise
-        finally:
-            # Always clean up resources
-            await self._close_mcp_session(client_context, session)
 
     async def scan_stdio_server_prompt(
         self,
@@ -1656,38 +1634,35 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            client_context, session = await self._get_stdio_session(
+            async with self._stdio_session(
                 server_config, timeout, errlog
-            )
-
-            # List all prompts and find the target prompt
-            try:
-                prompt_list = await session.list_prompts()
-            except McpError as e:
-                if self._is_missing_capability_error(e):
-                    message = f"Stdio server '{server_config.command}' does not expose prompts; cannot scan '{prompt_name}'."
-                    logger.warning(message)
-                    raise ValueError(message) from e
-                raise
-            target_prompt = next(
-                (p for p in prompt_list.prompts if p.name == prompt_name), None
-            )
-
-            if not target_prompt:
-                raise ValueError(
-                    f"Prompt '{prompt_name}' not found on the stdio server with command {server_config.command}"
+            ) as session:
+                # List all prompts and find the target prompt
+                try:
+                    prompt_list = await session.list_prompts()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        message = f"Stdio server '{server_config.command}' does not expose prompts; cannot scan '{prompt_name}'."
+                        logger.warning(message)
+                        raise ValueError(message) from e
+                    raise
+                target_prompt = next(
+                    (p for p in prompt_list.prompts if p.name == prompt_name), None
                 )
 
-            # Analyze the prompt
-            result = await self._analyze_prompt(target_prompt, analyzers)
+                if not target_prompt:
+                    raise ValueError(
+                        f"Prompt '{prompt_name}' not found on the stdio server with command {server_config.command}"
+                    )
 
-            # Run meta-analysis if enabled
-            result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
+                # Analyze the prompt
+                result = await self._analyze_prompt(target_prompt, analyzers)
 
-            return result
+                # Run meta-analysis if enabled
+                result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
+
+                return result
 
         except ValueError:
             raise
@@ -1696,8 +1671,6 @@ class Scanner:
                 f'Error scanning prompt \'{prompt_name}\' on stdio server: command="{server_config.command}", error="{e}"'
             )
             raise
-        finally:
-            await self._close_mcp_session(client_context, session)
 
     async def _analyze_resource(
         self,
@@ -1751,10 +1724,7 @@ class Scanner:
             MCPConnectionError: If unable to connect to the server (network issues, DNS failure, etc).
             ValueError: If the server URL is invalid or empty.
         """
-        if not server_url:
-            raise ValueError(
-                "No server URL provided. Please specify a valid server URL."
-            )
+        self._require_server_url(server_url)
 
         # Default to API and LLM analyzers for resources
         if analyzers is None:
@@ -1766,68 +1736,60 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            client_context, session = await self._get_mcp_session(
-                server_url,
-                auth,
-                connector_id=connector_id,
-                tenant_id=tenant_id,
-            )
-
-            # Capability gate: if the InitializeResult didn't advertise
-            # resources support, don't bother calling list_resources — many
-            # real servers return HTTP 404 for the unsupported method which
-            # the MCP SDK relabels as "Session terminated".
-            if self._server_supports_capability(session, "resources") is False:
-                logger.info(
-                    f"Server '{server_url}' did not advertise resources capability; skipping resource scan"
-                )
-                return []
-
-            # List all resources
-            try:
-                resource_list = await session.list_resources()
-            except McpError as e:
-                if self._is_missing_capability_error(e):
-                    logger.warning(
-                        f"Server '{server_url}' does not expose resources: {e}"
+            async with self._remote_session(
+                server_url, auth, connector_id=connector_id, tenant_id=tenant_id
+            ) as session:
+                # Capability gate: if the InitializeResult didn't advertise
+                # resources support, don't bother calling list_resources — many
+                # real servers return HTTP 404 for the unsupported method which
+                # the MCP SDK relabels as "Session terminated".
+                if self._server_supports_capability(session, "resources") is False:
+                    logger.info(
+                        f"Server '{server_url}' did not advertise resources capability; skipping resource scan"
                     )
                     return []
-                raise
 
-            results = []
-            for resource in resource_list.resources:
-                if not mime_type_allowed(resource, allowed_mime_types):
-                    logger.info(
-                        f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'"
-                    )
-                    results.append(resource_placeholder(resource, "skipped"))
-                    continue
+                # List all resources
+                try:
+                    resource_list = await session.list_resources()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        logger.warning(
+                            f"Server '{server_url}' does not expose resources: {e}"
+                        )
+                        return []
+                    raise
 
-                results.append(
-                    await self._read_and_analyze_resource(
-                        session,
-                        resource,
-                        analyzers,
-                        http_headers,
-                        absorb_analysis_errors=True,
+                results = []
+                for resource in resource_list.resources:
+                    if not mime_type_allowed(resource, allowed_mime_types):
+                        logger.info(
+                            f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'"
+                        )
+                        results.append(resource_placeholder(resource, "skipped"))
+                        continue
+
+                    results.append(
+                        await self._read_and_analyze_resource(
+                            session,
+                            resource,
+                            analyzers,
+                            http_headers,
+                            absorb_analysis_errors=True,
+                        )
                     )
+
+                # Run meta-analysis if enabled (post-pass on all resource results)
+                results = await self._run_meta_analysis_on_resource_results(
+                    results, analyzers
                 )
 
-            # Run meta-analysis if enabled (post-pass on all resource results)
-            results = await self._run_meta_analysis_on_resource_results(
-                results, analyzers
-            )
-
-            return results
+                return results
 
         except Exception as e:
             logger.error(f"Error scanning resources on server {server_url}: {e}")
             raise
-        finally:
-            await self._close_mcp_session(client_context, session)
 
     async def _read_and_analyze_resource(
         self,
@@ -1908,10 +1870,7 @@ class Scanner:
             MCPConnectionError: If unable to connect to the server (network issues, DNS failure, etc).
             ValueError: If the resource is not found on the server or server URL is invalid.
         """
-        if not server_url:
-            raise ValueError(
-                "No server URL provided. Please specify a valid server URL."
-            )
+        self._require_server_url(server_url)
 
         if not resource_uri:
             raise ValueError(
@@ -1928,57 +1887,51 @@ class Scanner:
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
 
-        client_context = None
-        session = None
         try:
-            client_context, session = await self._get_mcp_session(
-                server_url,
-                auth,
-                connector_id=connector_id,
-                tenant_id=tenant_id,
-            )
-
-            # Capability gate (same rationale as scan_remote_server_resources).
-            if self._server_supports_capability(session, "resources") is False:
-                message = f"Server '{server_url}' did not advertise resources capability; cannot scan '{resource_uri}'."
-                logger.warning(message)
-                raise ValueError(message)
-
-            # List all resources to find the target
-            try:
-                resource_list = await session.list_resources()
-            except McpError as e:
-                if self._is_missing_capability_error(e):
-                    message = f"Server '{server_url}' does not expose resources; cannot scan '{resource_uri}'."
+            async with self._remote_session(
+                server_url, auth, connector_id=connector_id, tenant_id=tenant_id
+            ) as session:
+                # Capability gate (same rationale as scan_remote_server_resources).
+                if self._server_supports_capability(session, "resources") is False:
+                    message = f"Server '{server_url}' did not advertise resources capability; cannot scan '{resource_uri}'."
                     logger.warning(message)
-                    raise ValueError(message) from e
-                raise
+                    raise ValueError(message)
 
-            target_resource = next(
-                (r for r in resource_list.resources if str(r.uri) == resource_uri),
-                None,
-            )
-            if not target_resource:
-                raise ValueError(
-                    f"Resource '{resource_uri}' not found on server {server_url}"
+                # List all resources to find the target
+                try:
+                    resource_list = await session.list_resources()
+                except McpError as e:
+                    if self._is_missing_capability_error(e):
+                        message = f"Server '{server_url}' does not expose resources; cannot scan '{resource_uri}'."
+                        logger.warning(message)
+                        raise ValueError(message) from e
+                    raise
+
+                target_resource = next(
+                    (r for r in resource_list.resources if str(r.uri) == resource_uri),
+                    None,
+                )
+                if not target_resource:
+                    raise ValueError(
+                        f"Resource '{resource_uri}' not found on server {server_url}"
+                    )
+
+                if not mime_type_allowed(target_resource, allowed_mime_types):
+                    logger.info(
+                        f"Resource '{resource_uri}' has unsupported MIME type '{target_resource.mimeType}'"
+                    )
+                    return resource_placeholder(target_resource, "skipped")
+
+                result = await self._read_and_analyze_resource(
+                    session,
+                    target_resource,
+                    analyzers,
+                    http_headers,
+                    absorb_analysis_errors=False,
                 )
 
-            if not mime_type_allowed(target_resource, allowed_mime_types):
-                logger.info(
-                    f"Resource '{resource_uri}' has unsupported MIME type '{target_resource.mimeType}'"
-                )
-                return resource_placeholder(target_resource, "skipped")
-
-            result = await self._read_and_analyze_resource(
-                session,
-                target_resource,
-                analyzers,
-                http_headers,
-                absorb_analysis_errors=False,
-            )
-
-            # Run meta-analysis if enabled
-            return await self._run_meta_analysis_on_single_resource(result, analyzers)
+                # Run meta-analysis if enabled
+                return await self._run_meta_analysis_on_single_resource(result, analyzers)
 
         except ValueError:
             raise
@@ -1987,5 +1940,3 @@ class Scanner:
                 f"Error scanning resource '{resource_uri}' on server {server_url}: {e}"
             )
             raise
-        finally:
-            await self._close_mcp_session(client_context, session)
