@@ -306,17 +306,49 @@ class AlignmentPromptBuilder:
         return "".join(parts)
 
     def build_analysis_content(self, func_context: FunctionContext) -> str:
-        """Build deterministic alignment evidence (no random delimiters)."""
+        """Build deterministic alignment evidence (no random delimiters).
+
+        Each section is a builder returning its text, or ``None`` when it has
+        no evidence to contribute. Listing the builders here rather than
+        appending to an accumulator is the point: the one bug this function
+        has produced was a section built into a local list and then never
+        appended, which this shape makes impossible.
+        """
+        builders = (
+            self._section_entry_point,
+            self._section_imports,
+            self._section_dataflow_preamble,
+            self._section_parameter_flows,
+            self._section_variable_dependencies,
+            self._section_function_calls,
+            self._section_assignments,
+            self._section_control_flow,
+            self._section_cross_file_calls,
+            self._section_reachability,
+            self._section_constants,
+            self._section_string_literals,
+            self._section_return_expressions,
+            self._section_exception_handlers,
+            self._section_env_var_access,
+            self._section_global_writes,
+            self._section_attribute_writes,
+            self._format_graph_evidence_section,
+        )
+        return "".join(
+            section for section in (build(func_context) for build in builders) if section
+        )
+
+    def _section_entry_point(self, func_context: FunctionContext) -> Optional[str]:
+        """Function identity, docstring and signature. Always present."""
         docstring = func_context.docstring or "No docstring provided"
-
-        # Build the analysis content using list accumulation for efficiency
-        content_parts = []
-
-        # Entry point information
-        content_parts.append(
-            f"""**ENTRY POINT INFORMATION:**
+        decorator = (
+            func_context.decorator_types[0]
+            if func_context.decorator_types
+            else "unknown"
+        )
+        return f"""**ENTRY POINT INFORMATION:**
 - Function Name: {func_context.name}
-- Decorator: {func_context.decorator_types[0] if func_context.decorator_types else 'unknown'}
+- Decorator: {decorator}
 - Line: {func_context.line_number}
 - Docstring/Description: {docstring}
 
@@ -326,276 +358,317 @@ class AlignmentPromptBuilder:
 - Parameters: {json.dumps(func_context.parameters, indent=2)}
 - Return Type: {func_context.return_type or 'Not specified'}
 """
-        )
 
-        # Add imports section
-        if func_context.imports:
-            import_parts = ["\n**IMPORTS:**\n"]
-            import_parts.append("The following libraries and modules are imported:\n")
-            for imp in func_context.imports:
-                import_parts.append(f"  {imp}\n")
-            import_parts.append("\n")
-            content_parts.append("".join(import_parts))
+    def _section_imports(self, func_context: FunctionContext) -> Optional[str]:
+        """Libraries the function pulls in."""
+        if not func_context.imports:
+            return None
 
-        content_parts.append(
-            """
+        import_parts = ["\n**IMPORTS:**\n"]
+        import_parts.append("The following libraries and modules are imported:\n")
+        for imp in func_context.imports:
+            import_parts.append(f"  {imp}\n")
+        import_parts.append("\n")
+        return ("".join(import_parts))
+
+    def _section_dataflow_preamble(self, func_context: FunctionContext) -> Optional[str]:
+        """States the untrusted-input assumption. Always present."""
+        return """
 **DATAFLOW ANALYSIS:**
 All parameters are treated as untrusted input (MCP entry points receive external data).
 
 Parameter Flow Tracking:
 """
+
+    def _section_parameter_flows(self, func_context: FunctionContext) -> Optional[str]:
+        """Where each parameter travels and what it reaches."""
+        if not func_context.parameter_flows:
+            return None
+
+        param_parts = ["\n**PARAMETER FLOW TRACKING:**\n"]
+        for flow in func_context.parameter_flows:
+            param_name = flow.get("parameter", "unknown")
+            param_parts.append(f"\nParameter '{param_name}' flows through:\n")
+
+            if flow.get("operations"):
+                param_parts.append(
+                    f"  Operations ({len(flow['operations'])} total):\n"
+                )
+                for op in flow["operations"][: self.MAX_OPERATIONS_PER_PARAM]:
+                    op_type = op.get("type", "unknown")
+                    line = op.get("line", 0)
+                    if op_type == "assignment":
+                        param_parts.append(
+                            f"    Line {line}: {op.get('target')} = {op.get('value')}\n"
+                        )
+                    elif op_type == "function_call":
+                        param_parts.append(
+                            f"    Line {line}: {op.get('function')}({op.get('argument')})\n"
+                        )
+                    elif op_type == "return":
+                        param_parts.append(
+                            f"    Line {line}: return {op.get('value')}\n"
+                        )
+
+            if flow.get("reaches_calls"):
+                param_parts.append(
+                    f"  Reaches function calls: {', '.join(flow['reaches_calls'][:self.MAX_REACHES_CALLS])}\n"
+                )
+
+            if flow.get("reaches_external"):
+                param_parts.append(
+                    f"  ⚠️  REACHES EXTERNAL OPERATIONS (file/network/subprocess)\n"
+                )
+
+            if flow.get("reaches_returns"):
+                param_parts.append(f"  Returns to caller\n")
+
+        return ("".join(param_parts))
+
+    def _section_variable_dependencies(self, func_context: FunctionContext) -> Optional[str]:
+        """Which variables derive from which."""
+        if not func_context.variable_dependencies:
+            return None
+
+        var_parts = ["\n**VARIABLE DEPENDENCIES:**\n"]
+        for var, deps in func_context.variable_dependencies.items():
+            var_parts.append(f"  {var} depends on: {', '.join(deps)}\n")
+        return ("".join(var_parts))
+
+    def _section_function_calls(self, func_context: FunctionContext) -> Optional[str]:
+        """Calls made, capped at ``MAX_FUNCTION_CALLS``."""
+        if not func_context.function_calls:
+            return None
+
+        call_parts = [
+            f"\n**FUNCTION CALLS ({len(func_context.function_calls)} total):**\n"
+        ]
+        for call in func_context.function_calls[: self.MAX_FUNCTION_CALLS]:
+            try:
+                call_name = call.get("name", "unknown")
+                call_args = call.get("args", [])
+                call_line = call.get("line", 0)
+                call_parts.append(
+                    f"  Line {call_line}: {call_name}({', '.join(str(a) for a in call_args)})\n"
+                )
+            except Exception as exc:
+                self.logger.debug(
+                    "alignment prompt skipped_malformed kind=function_call error_type=%s error=%s",
+                    type(exc).__name__,
+                    truncate(exc),
+                )
+                continue
+        return ("".join(call_parts))
+
+    def _section_assignments(self, func_context: FunctionContext) -> Optional[str]:
+        """Assignments made, capped at ``MAX_ASSIGNMENTS``."""
+        if not func_context.assignments:
+            return None
+
+        assign_parts = [
+            f"\n**ASSIGNMENTS ({len(func_context.assignments)} total):**\n"
+        ]
+        for assign in func_context.assignments[: self.MAX_ASSIGNMENTS]:
+            try:
+                line = assign.get("line", 0)
+                var = assign.get("variable", "unknown")
+                val = assign.get("value", "unknown")
+                assign_parts.append(f"  Line {line}: {var} = {val}\n")
+            except Exception as exc:
+                self.logger.debug(
+                    "alignment prompt skipped_malformed kind=assignment error_type=%s error=%s",
+                    type(exc).__name__,
+                    truncate(exc),
+                )
+                continue
+        return ("".join(assign_parts))
+
+    def _section_control_flow(self, func_context: FunctionContext) -> Optional[str]:
+        """Branching structure as raw JSON."""
+        if not func_context.control_flow:
+            return None
+
+        return (
+            f"\n**CONTROL FLOW:**\n{json.dumps(func_context.control_flow, indent=2)}\n"
         )
 
-        # Add parameter flow tracking
-        if func_context.parameter_flows:
-            param_parts = ["\n**PARAMETER FLOW TRACKING:**\n"]
-            for flow in func_context.parameter_flows:
-                param_name = flow.get("parameter", "unknown")
-                param_parts.append(f"\nParameter '{param_name}' flows through:\n")
+    def _section_cross_file_calls(self, func_context: FunctionContext) -> Optional[str]:
+        """Calls leaving this file, with their transitive chains."""
+        if not func_context.cross_file_calls:
+            return None
 
-                if flow.get("operations"):
-                    param_parts.append(
-                        f"  Operations ({len(flow['operations'])} total):\n"
+        cross_file_parts = [
+            f"\n**CROSS-FILE CALL CHAINS ({len(func_context.cross_file_calls)} calls to other files):**\n"
+        ]
+        cross_file_parts.append(
+            "⚠️  This function calls functions from other files. Full call chains shown:\n\n"
+        )
+        for call in func_context.cross_file_calls[: self.MAX_CROSS_FILE_CALLS]:
+            try:
+                # Handle both old format (function, file) and new format (from_function, to_function, etc.)
+                if "to_function" in call:
+                    cross_file_parts.append(
+                        f"  {call.get('from_function', 'unknown')} → {call.get('to_function', 'unknown')}\n"
                     )
-                    for op in flow["operations"][: self.MAX_OPERATIONS_PER_PARAM]:
-                        op_type = op.get("type", "unknown")
-                        line = op.get("line", 0)
-                        if op_type == "assignment":
-                            param_parts.append(
-                                f"    Line {line}: {op.get('target')} = {op.get('value')}\n"
-                            )
-                        elif op_type == "function_call":
-                            param_parts.append(
-                                f"    Line {line}: {op.get('function')}({op.get('argument')})\n"
-                            )
-                        elif op_type == "return":
-                            param_parts.append(
-                                f"    Line {line}: return {op.get('value')}\n"
-                            )
-
-                if flow.get("reaches_calls"):
-                    param_parts.append(
-                        f"  Reaches function calls: {', '.join(flow['reaches_calls'][:self.MAX_REACHES_CALLS])}\n"
+                    cross_file_parts.append(
+                        f"    From: {call.get('from_file', 'unknown')}\n"
                     )
-
-                if flow.get("reaches_external"):
-                    param_parts.append(
-                        f"  ⚠️  REACHES EXTERNAL OPERATIONS (file/network/subprocess)\n"
+                    cross_file_parts.append(
+                        f"    To: {call.get('to_file', 'unknown')}\n"
                     )
-
-                if flow.get("reaches_returns"):
-                    param_parts.append(f"  Returns to caller\n")
-
-            content_parts.append("".join(param_parts))
-
-        # Add variable dependencies
-        if func_context.variable_dependencies:
-            var_parts = ["\n**VARIABLE DEPENDENCIES:**\n"]
-            for var, deps in func_context.variable_dependencies.items():
-                var_parts.append(f"  {var} depends on: {', '.join(deps)}\n")
-            content_parts.append("".join(var_parts))
-
-        # Add function calls
-        if func_context.function_calls:
-            call_parts = [
-                f"\n**FUNCTION CALLS ({len(func_context.function_calls)} total):**\n"
-            ]
-            for call in func_context.function_calls[: self.MAX_FUNCTION_CALLS]:
-                try:
-                    call_name = call.get("name", "unknown")
-                    call_args = call.get("args", [])
-                    call_line = call.get("line", 0)
-                    call_parts.append(
-                        f"  Line {call_line}: {call_name}({', '.join(str(a) for a in call_args)})\n"
-                    )
-                except Exception as exc:
-                    self.logger.debug(
-                        "alignment prompt skipped_malformed kind=function_call error_type=%s error=%s",
-                        type(exc).__name__,
-                        truncate(exc),
-                    )
-                    continue
-            content_parts.append("".join(call_parts))
-
-        # Add assignments
-        if func_context.assignments:
-            assign_parts = [
-                f"\n**ASSIGNMENTS ({len(func_context.assignments)} total):**\n"
-            ]
-            for assign in func_context.assignments[: self.MAX_ASSIGNMENTS]:
-                try:
-                    line = assign.get("line", 0)
-                    var = assign.get("variable", "unknown")
-                    val = assign.get("value", "unknown")
-                    assign_parts.append(f"  Line {line}: {var} = {val}\n")
-                except Exception as exc:
-                    self.logger.debug(
-                        "alignment prompt skipped_malformed kind=assignment error_type=%s error=%s",
-                        type(exc).__name__,
-                        truncate(exc),
-                    )
-                    continue
-            content_parts.append("".join(assign_parts))
-
-        # Add control flow information
-        if func_context.control_flow:
-            content_parts.append(
-                f"\n**CONTROL FLOW:**\n{json.dumps(func_context.control_flow, indent=2)}\n"
-            )
-
-        # Add cross-file analysis with transitive call chains
-        if func_context.cross_file_calls:
-            cross_file_parts = [
-                f"\n**CROSS-FILE CALL CHAINS ({len(func_context.cross_file_calls)} calls to other files):**\n"
-            ]
-            cross_file_parts.append(
-                "⚠️  This function calls functions from other files. Full call chains shown:\n\n"
-            )
-            for call in func_context.cross_file_calls[: self.MAX_CROSS_FILE_CALLS]:
-                try:
-                    # Handle both old format (function, file) and new format (from_function, to_function, etc.)
-                    if "to_function" in call:
-                        cross_file_parts.append(
-                            f"  {call.get('from_function', 'unknown')} → {call.get('to_function', 'unknown')}\n"
-                        )
-                        cross_file_parts.append(
-                            f"    From: {call.get('from_file', 'unknown')}\n"
-                        )
-                        cross_file_parts.append(
-                            f"    To: {call.get('to_file', 'unknown')}\n"
-                        )
-                    else:
-                        func_name = call.get("function", "unknown")
-                        file_name = call.get("file", "unknown")
-                        cross_file_parts.append(f"  {func_name}() in {file_name}\n")
-                        # Show transitive calls
-                        if call.get("call_chain"):
-                            cross_file_parts.append(
-                                self._format_call_chain(call["call_chain"], indent=4)
-                            )
-                    cross_file_parts.append("\n")
-                except Exception as exc:
-                    self.logger.debug(
-                        "alignment prompt skipped_malformed kind=cross_file_call error_type=%s error=%s",
-                        type(exc).__name__,
-                        truncate(exc),
-                    )
-                    continue
-            cross_file_parts.append(
-                "Note: Analyze the entire call chain to understand what operations are performed.\n"
-            )
-            content_parts.append("".join(cross_file_parts))
-
-        # Add detailed reachability analysis
-        if func_context.reachable_functions:
-            total_reachable = len(func_context.reachable_functions)
-            # Group reachable functions by file
-            functions_by_file = {}
-            for func in func_context.reachable_functions:
-                if "::" in func:
-                    file_path, func_name = func.rsplit("::", 1)
-                    if file_path not in functions_by_file:
-                        functions_by_file[file_path] = []
-                    functions_by_file[file_path].append(func_name)
-
-            if len(functions_by_file) > 1:  # More than just the current file
-                reach_parts = [f"\n**REACHABILITY ANALYSIS:**\n"]
-                reach_parts.append(
-                    f"Total reachable functions: {total_reachable} across {len(functions_by_file)} file(s)\n\n"
-                )
-                for file_path, funcs in list(functions_by_file.items())[
-                    : self.MAX_REACHABLE_FILES
-                ]:
-                    file_name = (
-                        file_path.split("/")[-1] if "/" in file_path else file_path
-                    )
-                    reach_parts.append(f"  {file_name}: {', '.join(funcs[:10])}\n")
-                    if len(funcs) > 10:
-                        reach_parts.append(f"    ... and {len(funcs) - 10} more\n")
-                content_parts.append("".join(reach_parts))
-
-        # Add constants
-        if func_context.constants:
-            const_parts = [f"\n**CONSTANTS:**\n"]
-            for var, val in list(func_context.constants.items())[: self.MAX_CONSTANTS]:
-                const_parts.append(f"  {var} = {val}\n")
-            content_parts.append("".join(const_parts))
-
-        # Add string literals (high-value security indicator)
-        if func_context.string_literals:
-            lit_parts = [
-                f"\n**STRING LITERALS ({len(func_context.string_literals)} total):**\n"
-            ]
-            for literal in func_context.string_literals[: self.MAX_STRING_LITERALS]:
-                # Escape and truncate for safety
-                safe_literal = literal.replace("\n", "\\n").replace("\r", "\\r")[:150]
-                lit_parts.append(f'  "{safe_literal}"\n')
-            content_parts.append("".join(lit_parts))
-
-        # Add return expressions
-        if func_context.return_expressions:
-            ret_parts = [f"\n**RETURN EXPRESSIONS:**\n"]
-            if func_context.return_type:
-                ret_parts.append(f"Declared return type: {func_context.return_type}\n")
-            for ret_expr in func_context.return_expressions:
-                ret_parts.append(f"  return {ret_expr}\n")
-            content_parts.append("".join(ret_parts))
-
-        # Add exception handling details
-        if func_context.exception_handlers:
-            exc_parts = [f"\n**EXCEPTION HANDLING:**\n"]
-            for handler in func_context.exception_handlers:
-                exc_type = handler.get('exception_type', 'Exception')
-                line = handler.get('line', '?')
-                exc_parts.append(
-                    f"  Line {line}: except {exc_type}"
-                )
-                if handler.get("is_silent", False):
-                    exc_parts.append(" (⚠️  SILENT - just 'pass')\n")
                 else:
-                    exc_parts.append("\n")
-            content_parts.append("".join(exc_parts))
-
-        # Add environment variable access
-        if func_context.env_var_access:
-            env_parts = [f"\n**ENVIRONMENT VARIABLE ACCESS:**\n"]
-            env_parts.append("⚠️  This function accesses environment variables:\n")
-            for env_access in func_context.env_var_access:
-                env_parts.append(f"  {env_access}\n")
-            content_parts.append("".join(env_parts))
-
-        # Add global variable writes
-        if func_context.global_writes:
-            global_parts = [f"\n**GLOBAL VARIABLE WRITES:**\n"]
-            global_parts.append("⚠️  This function modifies global state:\n")
-            for gwrite in func_context.global_writes:
-                global_parts.append(
-                    f"  Line {gwrite['line']}: global {gwrite['variable']} = {gwrite['value']}\n"
+                    func_name = call.get("function", "unknown")
+                    file_name = call.get("file", "unknown")
+                    cross_file_parts.append(f"  {func_name}() in {file_name}\n")
+                    # Show transitive calls
+                    if call.get("call_chain"):
+                        cross_file_parts.append(
+                            self._format_call_chain(call["call_chain"], indent=4)
+                        )
+                cross_file_parts.append("\n")
+            except Exception as exc:
+                self.logger.debug(
+                    "alignment prompt skipped_malformed kind=cross_file_call error_type=%s error=%s",
+                    type(exc).__name__,
+                    truncate(exc),
                 )
-            content_parts.append("".join(global_parts))
+                continue
+        cross_file_parts.append(
+            "Note: Analyze the entire call chain to understand what operations are performed.\n"
+        )
+        return ("".join(cross_file_parts))
 
-        # Add attribute access (self.attr, obj.attr)
-        if func_context.attribute_access:
-            writes = [
-                op for op in func_context.attribute_access if op.get("type") == "write"
-            ]
-            if writes:
-                attr_parts = [f"\n**ATTRIBUTE WRITES:**\n"]
-                for op in writes[:10]:
-                    line = op.get('line', '?')
-                    obj = op.get('object', '?')
-                    attr = op.get('attribute', '?')
-                    val = op.get('value', '?')
-                    attr_parts.append(
-                        f"  Line {line}: {obj}.{attr} = {val}\n"
-                    )
-                content_parts.append("".join(attr_parts))
+    def _section_reachability(self, func_context: FunctionContext) -> Optional[str]:
+        """Reachable functions, grouped by file.
 
-        graph_section = self._format_graph_evidence_section(func_context)
-        if graph_section:
-            content_parts.append(graph_section)
+        Omitted when everything reachable lives in the current file, where
+        the grouping is noise rather than evidence."""
+        if not func_context.reachable_functions:
+            return None
 
-        return "".join(content_parts)
+        total_reachable = len(func_context.reachable_functions)
+        # Group reachable functions by file
+        functions_by_file = {}
+        for func in func_context.reachable_functions:
+            if "::" in func:
+                file_path, func_name = func.rsplit("::", 1)
+                if file_path not in functions_by_file:
+                    functions_by_file[file_path] = []
+                functions_by_file[file_path].append(func_name)
+
+        if len(functions_by_file) > 1:  # More than just the current file
+            reach_parts = [f"\n**REACHABILITY ANALYSIS:**\n"]
+            reach_parts.append(
+                f"Total reachable functions: {total_reachable} across {len(functions_by_file)} file(s)\n\n"
+            )
+            for file_path, funcs in list(functions_by_file.items())[
+                : self.MAX_REACHABLE_FILES
+            ]:
+                file_name = (
+                    file_path.split("/")[-1] if "/" in file_path else file_path
+                )
+                reach_parts.append(f"  {file_name}: {', '.join(funcs[:10])}\n")
+                if len(funcs) > 10:
+                    reach_parts.append(f"    ... and {len(funcs) - 10} more\n")
+            return ("".join(reach_parts))
+
+    def _section_constants(self, func_context: FunctionContext) -> Optional[str]:
+        """Constant values defined in the function."""
+        if not func_context.constants:
+            return None
+
+        const_parts = [f"\n**CONSTANTS:**\n"]
+        for var, val in list(func_context.constants.items())[: self.MAX_CONSTANTS]:
+            const_parts.append(f"  {var} = {val}\n")
+        return ("".join(const_parts))
+
+    def _section_string_literals(self, func_context: FunctionContext) -> Optional[str]:
+        """String literals, escaped and truncated. A high-value indicator."""
+        if not func_context.string_literals:
+            return None
+
+        lit_parts = [
+            f"\n**STRING LITERALS ({len(func_context.string_literals)} total):**\n"
+        ]
+        for literal in func_context.string_literals[: self.MAX_STRING_LITERALS]:
+            # Escape and truncate for safety
+            safe_literal = literal.replace("\n", "\\n").replace("\r", "\\r")[:150]
+            lit_parts.append(f'  "{safe_literal}"\n')
+        return ("".join(lit_parts))
+
+    def _section_return_expressions(self, func_context: FunctionContext) -> Optional[str]:
+        """What the function returns, and its declared type."""
+        if not func_context.return_expressions:
+            return None
+
+        ret_parts = [f"\n**RETURN EXPRESSIONS:**\n"]
+        if func_context.return_type:
+            ret_parts.append(f"Declared return type: {func_context.return_type}\n")
+        for ret_expr in func_context.return_expressions:
+            ret_parts.append(f"  return {ret_expr}\n")
+        return ("".join(ret_parts))
+
+    def _section_exception_handlers(self, func_context: FunctionContext) -> Optional[str]:
+        """Handlers, flagging any that silently swallow."""
+        if not func_context.exception_handlers:
+            return None
+
+        exc_parts = [f"\n**EXCEPTION HANDLING:**\n"]
+        for handler in func_context.exception_handlers:
+            exc_type = handler.get('exception_type', 'Exception')
+            line = handler.get('line', '?')
+            exc_parts.append(
+                f"  Line {line}: except {exc_type}"
+            )
+            if handler.get("is_silent", False):
+                exc_parts.append(" (⚠️  SILENT - just 'pass')\n")
+            else:
+                exc_parts.append("\n")
+        return ("".join(exc_parts))
+
+    def _section_env_var_access(self, func_context: FunctionContext) -> Optional[str]:
+        """Environment variables the function reads."""
+        if not func_context.env_var_access:
+            return None
+
+        env_parts = [f"\n**ENVIRONMENT VARIABLE ACCESS:**\n"]
+        env_parts.append("⚠️  This function accesses environment variables:\n")
+        for env_access in func_context.env_var_access:
+            env_parts.append(f"  {env_access}\n")
+        return ("".join(env_parts))
+
+    def _section_global_writes(self, func_context: FunctionContext) -> Optional[str]:
+        """Global state the function modifies."""
+        if not func_context.global_writes:
+            return None
+
+        global_parts = [f"\n**GLOBAL VARIABLE WRITES:**\n"]
+        global_parts.append("⚠️  This function modifies global state:\n")
+        for gwrite in func_context.global_writes:
+            global_parts.append(
+                f"  Line {gwrite['line']}: global {gwrite['variable']} = {gwrite['value']}\n"
+            )
+        return ("".join(global_parts))
+
+    def _section_attribute_writes(self, func_context: FunctionContext) -> Optional[str]:
+        """Attribute writes only; reads are not evidence of mutation."""
+        if not func_context.attribute_access:
+            return None
+
+        writes = [
+            op for op in func_context.attribute_access if op.get("type") == "write"
+        ]
+        if writes:
+            attr_parts = [f"\n**ATTRIBUTE WRITES:**\n"]
+            for op in writes[:10]:
+                line = op.get('line', '?')
+                obj = op.get('object', '?')
+                attr = op.get('attribute', '?')
+                val = op.get('value', '?')
+                attr_parts.append(
+                    f"  Line {line}: {obj}.{attr} = {val}\n"
+                )
+            return ("".join(attr_parts))
 
     def build_prompt(self, func_context: FunctionContext) -> str:
         """Build comprehensive alignment verification prompt.
