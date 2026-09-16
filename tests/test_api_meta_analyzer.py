@@ -1084,13 +1084,13 @@ class TestCLIMetaBedrockGate:
         )
 
     def test_cli_gate_source_includes_bedrock_branch(self):
-        """Source-level pin: cli.py's --enable-meta gate must include the
-        Bedrock fallback. Catches a future refactor that silently drops
-        the IAM-only Bedrock path again.
+        """Source-level pin: the static command's --enable-meta gate must
+        include the Bedrock fallback. Catches a future refactor that
+        silently drops the IAM-only Bedrock path again.
         """
         import inspect
 
-        from mcpscanner import cli as cli_module
+        from mcpscanner.cli.commands import static as cli_module
 
         source = inspect.getsource(cli_module)
         # The fix introduces an ``_meta_is_bedrock`` local that is OR-ed

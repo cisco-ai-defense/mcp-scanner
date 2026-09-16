@@ -229,12 +229,12 @@ class TestScanMcpServerDirect:
     @pytest.mark.asyncio
     async def test_scan_mcp_server_direct_success(self, mock_scan_results):
         """Test successful scan_mcp_server_direct execution."""
-        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+        with patch("mcpscanner.cli.direct.Scanner") as mock_scanner_class:
             mock_scanner = AsyncMock()
             mock_scanner.scan_remote_server_tools.return_value = mock_scan_results
             mock_scanner_class.return_value = mock_scanner
 
-            with patch("mcpscanner.cli.results_to_json") as mock_results_to_json:
+            with patch("mcpscanner.cli.direct.results_to_json") as mock_results_to_json:
                 mock_results_to_json.return_value = [{"tool_name": "test"}]
 
                 with patch.dict(
@@ -258,12 +258,12 @@ class TestScanMcpServerDirect:
             output_file = f.name
 
         try:
-            with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            with patch("mcpscanner.cli.direct.Scanner") as mock_scanner_class:
                 mock_scanner = AsyncMock()
                 mock_scanner.scan_remote_server_tools.return_value = mock_scan_results
                 mock_scanner_class.return_value = mock_scanner
 
-                with patch("mcpscanner.cli.results_to_json") as mock_results_to_json:
+                with patch("mcpscanner.cli.direct.results_to_json") as mock_results_to_json:
                     mock_results_to_json.return_value = [{"tool_name": "test"}]
 
                     with patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}):
@@ -286,12 +286,12 @@ class TestScanMcpServerDirect:
         self, mock_scan_results, capsys
     ):
         """Test scan_mcp_server_direct with verbose output."""
-        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+        with patch("mcpscanner.cli.direct.Scanner") as mock_scanner_class:
             mock_scanner = AsyncMock()
             mock_scanner.scan_remote_server_tools.return_value = mock_scan_results
             mock_scanner_class.return_value = mock_scanner
 
-            with patch("mcpscanner.cli.results_to_json") as mock_results_to_json:
+            with patch("mcpscanner.cli.direct.results_to_json") as mock_results_to_json:
                 mock_results_to_json.return_value = []
 
                 with patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}):
@@ -309,12 +309,12 @@ class TestScanMcpServerDirect:
         self, mock_scan_results, capsys
     ):
         """Test scan_mcp_server_direct with custom YARA rules."""
-        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+        with patch("mcpscanner.cli.direct.Scanner") as mock_scanner_class:
             mock_scanner = AsyncMock()
             mock_scanner.scan_remote_server_tools.return_value = mock_scan_results
             mock_scanner_class.return_value = mock_scanner
 
-            with patch("mcpscanner.cli.results_to_json") as mock_results_to_json:
+            with patch("mcpscanner.cli.direct.results_to_json") as mock_results_to_json:
                 mock_results_to_json.return_value = []
 
                 with patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}):
@@ -336,7 +336,7 @@ class TestScanMcpServerDirect:
     @pytest.mark.asyncio
     async def test_scan_mcp_server_direct_connection_error(self, capsys):
         """Test scan_mcp_server_direct with connection error."""
-        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+        with patch("mcpscanner.cli.direct.Scanner") as mock_scanner_class:
             mock_scanner = AsyncMock()
             mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
                 "Connection failed"
@@ -356,7 +356,7 @@ class TestScanMcpServerDirect:
     @pytest.mark.asyncio
     async def test_scan_mcp_server_direct_general_exception(self, capsys):
         """Test scan_mcp_server_direct with general exception."""
-        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+        with patch("mcpscanner.cli.direct.Scanner") as mock_scanner_class:
             mock_scanner = AsyncMock()
             mock_scanner.scan_remote_server_tools.side_effect = Exception(
                 "General error"
@@ -375,12 +375,12 @@ class TestScanMcpServerDirect:
     @pytest.mark.asyncio
     async def test_scan_mcp_server_direct_with_endpoint_url(self, mock_scan_results):
         """Test scan_mcp_server_direct with custom endpoint URL."""
-        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+        with patch("mcpscanner.cli.direct.Scanner") as mock_scanner_class:
             mock_scanner = AsyncMock()
             mock_scanner.scan_remote_server_tools.return_value = mock_scan_results
             mock_scanner_class.return_value = mock_scanner
 
-            with patch("mcpscanner.cli.results_to_json") as mock_results_to_json:
+            with patch("mcpscanner.cli.direct.results_to_json") as mock_results_to_json:
                 mock_results_to_json.return_value = []
 
                 with patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}):
