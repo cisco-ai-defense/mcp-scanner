@@ -203,11 +203,11 @@ omit = [
 ]
 
 [tool.coverage.report]
-# Measured 72.9% with branch coverage on. The floor sits just under that
+# Measured 74.5% with branch coverage on. The floor sits just under that
 # so an ordinary refactor does not trip the gate while a feature landing
 # with no tests does. Raise it as coverage improves; it is a ratchet,
 # not a target.
-fail_under = 72
+fail_under = 74
 show_missing = true
 exclude_also = [
     "if TYPE_CHECKING:",
