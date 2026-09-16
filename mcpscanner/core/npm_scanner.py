@@ -34,12 +34,11 @@ pipeline.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import subprocess
 import sys
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -47,12 +46,7 @@ import httpx
 from ..config.config import Config
 from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
-from .docker_build import (
-    DockerBuildError,
-    default_scanner_image_tag,
-    docker_run_hardening_flags,
-    prepare_docker_build,
-)
+from .docker_build import docker_run_hardening_flags
 from .package_sandbox import (
     PackageDownloadError,
     PackageExtractionError,
@@ -63,10 +57,13 @@ from .package_sandbox import (
     temp_workdir,
     validate_npm_package_name,
 )
+from .package_scanner_base import (
+    EcosystemProfile,
+    PackageScannerBase,
+)
 from .pypi_scanner import (
-    DockerNotAvailableError,
+    DockerNotAvailableError,  # noqa: F401  (re-exported for SDK importers)
     LLMNotConfiguredError,
-    _assert_loop_not_running,
     _build_config_from_env,
     _build_scan_result,
     _https_get_json,
@@ -89,8 +86,27 @@ class NPMScanError(Exception):
     """Raised when the npm scan fails."""
 
 
-class NPMPackageScanner:
+NPM_PROFILE = EcosystemProfile(
+    name="npm",
+    dockerfile="Dockerfile.npm",
+    default_image_name=CONSTANTS.NPM_DOCKER_IMAGE_NAME,
+    default_timeout=CONSTANTS.NPM_SCAN_TIMEOUT,
+    scan_error=NPMScanError,
+    docker_missing_hint=(
+        "Install Docker or pass use_docker=False to the "
+        "NPMPackageScanner SDK constructor."
+    ),
+    docker_unresponsive_hint="",
+    build_failure_subject="npm Docker image",
+)
+
+
+class NPMPackageScanner(PackageScannerBase):
     """Scan npm packages either in Docker (default) or in-process.
+
+    Docker lifecycle and entrypoint dispatch come from
+    :class:`~mcpscanner.core.package_scanner_base.PackageScannerBase`; what
+    is npm-specific is registry resolution and the JS/TS analyzer.
 
     Example:
         >>> scanner = NPMPackageScanner()
@@ -100,6 +116,8 @@ class NPMPackageScanner:
         >>> sdk = NPMPackageScanner(use_docker=False)
         >>> results = sdk.scan_package("some-mcp-server", version="1.2.3")
     """
+
+    PROFILE = NPM_PROFILE
 
     def __init__(
         self,
@@ -112,142 +130,23 @@ class NPMPackageScanner:
     ):
         """
         Args:
-            image_name: Docker image name override.
-            image_tag: Docker image tag override.
-            timeout: Per-scan timeout in seconds (Docker mode).
-            use_docker: Run inside Docker (recommended). When ``False``,
-                run the SDK local path which never executes package code.
             registry_url: Override the npm registry. Defaults to
                 ``https://registry.npmjs.org``. HTTP is rejected.
-            config: Pre-built ``Config`` for local mode. Falls back to
-                env vars if omitted.
+
+        See :class:`PackageScannerBase` for the remaining arguments.
         """
-        self._image_name = image_name or CONSTANTS.NPM_DOCKER_IMAGE_NAME
-        self._image_tag = image_tag or default_scanner_image_tag(ecosystem="npm")
-        self._timeout = timeout or CONSTANTS.NPM_SCAN_TIMEOUT
-        self._full_image = f"{self._image_name}:{self._image_tag}"
-        self._use_docker = use_docker
+        super().__init__(
+            image_name=image_name,
+            image_tag=image_tag,
+            timeout=timeout,
+            use_docker=use_docker,
+            config=config,
+        )
         self._registry_url = (registry_url or CONSTANTS.NPM_REGISTRY_URL).rstrip("/")
-        self._config = config
 
-    # ------------------------------------------------------------------
-    # Docker plumbing (mirrors PyPI)
-    # ------------------------------------------------------------------
-
-    def check_docker(self) -> None:
-        try:
-            result = subprocess.run(
-                ["docker", "info"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode != 0:
-                raise DockerNotAvailableError(
-                    "Docker is installed but not running. "
-                    "Please start Docker Desktop or the Docker daemon.\n"
-                    f"Error: {result.stderr.strip()}"
-                )
-        except FileNotFoundError:
-            raise DockerNotAvailableError(
-                "Docker is not installed. Install Docker or pass "
-                "use_docker=False to the NPMPackageScanner SDK constructor."
-            )
-        except subprocess.TimeoutExpired:
-            raise DockerNotAvailableError(
-                "Docker did not respond within 10 seconds."
-            )
-
-    def _image_exists(self) -> bool:
-        result = subprocess.run(
-            ["docker", "image", "inspect", self._full_image],
-            capture_output=True,
-            text=True,
-        )
-        return result.returncode == 0
-
-    def build_image(self, force: bool = False) -> None:
-        if not force and self._image_exists():
-            logger.info(
-                "Docker image %s already exists, skipping build", self._full_image
-            )
-            return
-        logger.info("Building Docker image %s ...", self._full_image)
-        try:
-            context, dockerfile, build_args = prepare_docker_build(
-                dockerfile="Dockerfile.npm"
-            )
-        except DockerBuildError as exc:
-            raise NPMScanError(str(exc)) from exc
-        cmd = [
-            "docker", "build",
-            "-t", self._full_image,
-            "-f", str(dockerfile),
-        ]
-        for key, value in build_args.items():
-            cmd.extend(["--build-arg", f"{key}={value}"])
-        cmd.append(str(context))
-        logger.debug("Running: %s", redact_argv_for_logging(cmd))
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=600
-        )
-        if result.returncode != 0:
-            raise NPMScanError(
-                f"Failed to build npm Docker image:\n{result.stderr.strip()}"
-            )
-        logger.info("Docker image %s built successfully", self._full_image)
-
-    # ------------------------------------------------------------------
-    # Public entrypoint
-    # ------------------------------------------------------------------
-
-    def scan_package(
-        self,
-        package: str,
-        version: Optional[str] = None,
-        verbose: bool = False,
-    ) -> dict:
-        """Scan an npm package (synchronous).
-
-        Args:
-            package: npm package name. Scoped packages like
-                ``@scope/name`` are supported.
-            version: Specific version (default: latest).
-            verbose: Print container stderr to host stderr (Docker mode).
-
-        Returns:
-            Scan result dict — same schema as ``PyPIPackageScanner``.
-
-        Raises:
-            DockerNotAvailableError: If Docker is required but unavailable.
-            NPMScanError: If the scan fails.
-            LLMNotConfiguredError: In local mode when no LLM key is set.
-            RuntimeError: If called from inside an already-running event
-                loop; use :meth:`scan_package_async` instead.
-        """
-        if self._use_docker:
-            _validate_npm_package_or_raise(package)
-            return self._scan_in_docker(package, version, verbose)
-        _assert_loop_not_running("NPMPackageScanner.scan_package")
+    @staticmethod
+    def _validate_package(package: str) -> None:
         _validate_npm_package_or_raise(package)
-        return asyncio.run(self._scan_locally(package, version))
-
-    async def scan_package_async(
-        self,
-        package: str,
-        version: Optional[str] = None,
-        verbose: bool = False,
-    ) -> dict:
-        """Async-friendly counterpart of :meth:`scan_package`. Required
-        whenever the caller already lives inside an event loop."""
-        if self._use_docker:
-            _validate_npm_package_or_raise(package)
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
-                None, self._scan_in_docker, package, version, verbose
-            )
-        _validate_npm_package_or_raise(package)
-        return await self._scan_locally(package, version)
 
     # ------------------------------------------------------------------
     # Docker mode

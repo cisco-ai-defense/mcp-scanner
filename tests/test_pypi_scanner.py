@@ -103,7 +103,7 @@ class TestImageManagement:
             text=True,
         )
 
-    @patch("mcpscanner.core.pypi_scanner.prepare_docker_build")
+    @patch("mcpscanner.core.package_scanner_base.prepare_docker_build")
     @patch("mcpscanner.core.pypi_scanner.subprocess.run")
     def test_build_image_force(self, mock_run, mock_prepare):
         mock_prepare.return_value = (
