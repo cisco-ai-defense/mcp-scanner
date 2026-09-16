@@ -44,7 +44,7 @@ from ..utils.logging_config import get_logger
 from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer, reportable_findings
 from .analyzers.llm_analyzer import LLMAnalyzer
-from .analyzers.meta_analyzer import MetaAnalyzer, apply_meta_analysis
+from .analyzers.meta_analyzer import MetaAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .analyzers.virustotal_analyzer import VirusTotalAnalyzer
@@ -54,6 +54,17 @@ from .auth import Auth
 from .models import AnalyzerEnum
 from .mcp_models import StdioServer, RemoteServer
 from . import session as session_transport
+from .meta_runner import (
+    DEFAULT_DESCRIPTION_BUDGET,
+    DEFAULT_META_CONCURRENCY,
+    INSTRUCTIONS_SPEC,
+    PROMPT_SPEC,
+    RESOURCE_SPEC,
+    TOOL_SPEC,
+    MetaAnalysisRunner,
+    build_instructions_description,
+    build_resource_description,
+)
 from ..config.config_parser import MCPConfigScanner
 from .result import (
     ScanResult,
@@ -261,93 +272,31 @@ class Scanner:
 
     @staticmethod
     def _build_instructions_description_for_meta(
-        result: "InstructionsScanResult", budget: int = 8000
+        result: "InstructionsScanResult", budget: int = DEFAULT_DESCRIPTION_BUDGET
     ) -> str:
-        """Synthesize a description string for instructions meta-analysis.
-
-        M3 fix: prior to this the meta helper truncated to a hard 500-byte
-        slice of ``result.instructions``, leaving the meta-analyzer
-        unable to see evidence past that boundary. Mirror the
-        resource-side budgeted-snippet shape so behaviour is consistent
-        across entity types.
-
-        Returns an empty string when ``result.instructions`` is falsy
-        (no risk of TypeError on ``None``); otherwise the full text up
-        to ``budget`` bytes with a clear truncation marker.
-        """
-        text = (getattr(result, "instructions", "") or "").strip()
-        if not text:
-            return ""
-        if len(text) <= budget:
-            return text
-        elided = len(text) - budget
-        return text[:budget] + f"... [instructions truncated, {elided} bytes elided]"
+        """Delegates to :func:`.meta_runner.build_instructions_description`."""
+        return build_instructions_description(result, budget)
 
     @staticmethod
     def _build_resource_description_for_meta(
-        result: ResourceScanResult, budget: int = 8000
+        result: ResourceScanResult, budget: int = DEFAULT_DESCRIPTION_BUDGET
     ) -> str:
-        """Synthesize a description string for the meta-analyzer entity context.
+        """Delegates to :func:`.meta_runner.build_resource_description`."""
+        return build_resource_description(result, budget)
 
-        Combines the MCP-advertised description (if any) with a budgeted
-        snippet of the actual analyzed content. Without this, the
-        meta-analyzer is asked to second-guess resource findings blind —
-        it sees only ``name + uri + mime_type``. P0-3 fix.
+    # Cap on concurrent LLM round-trips during meta-analysis. Operators with
+    # stricter per-tenant limits can monkey-patch this or subclass.
+    _META_CONCURRENCY = DEFAULT_META_CONCURRENCY
 
-        Args:
-            result: The ResourceScanResult to summarize.
-            budget: Combined character cap for description + content. Default
-                ~8 KB stays well inside any modern LLM's per-call budget while
-                preserving enough context for FP triage.
+    @property
+    def _meta_runner(self) -> MetaAnalysisRunner:
+        """A runner bound to the meta-analyzer and cap as they stand right now.
 
-        Returns:
-            A string of the form ``"<description>\\n\\n--- Content (first N chars) ---\\n<text>[truncated, X bytes]"``.
-            Returns ``"N/A"`` if both description and text are empty.
+        Built per access rather than in ``__init__`` because both
+        ``_meta_analyzer`` and ``_META_CONCURRENCY`` are documented as
+        replaceable after construction.
         """
-        description = (getattr(result, "resource_description", "") or "").strip()
-        text = (getattr(result, "resource_text", "") or "").strip()
-
-        if not description and not text:
-            return "N/A"
-
-        # Reserve up to half the budget for the description; in practice the
-        # description is short (≤500 chars) so almost all of the budget
-        # ends up available for content.
-        desc_budget = min(len(description), budget // 2) if description else 0
-        # Need a minimum of 256 chars of content to be meaningful for FP
-        # triage; if the budget can't accommodate that after description,
-        # we shrink the description rather than emit useless content.
-        text_budget = max(budget - desc_budget, 256) if text else 0
-
-        parts = []
-        if description:
-            if len(description) > desc_budget:
-                parts.append(
-                    description[:desc_budget]
-                    + f"... [description truncated, {len(description) - desc_budget} bytes elided]"
-                )
-            else:
-                parts.append(description)
-
-        if text:
-            text_total = len(text)
-            if text_total > text_budget:
-                snippet = (
-                    text[:text_budget]
-                    + f"... [content truncated, {text_total - text_budget} bytes elided]"
-                )
-            else:
-                snippet = text
-            parts.append(f"--- Content (first {min(text_total, text_budget)} chars) ---\n{snippet}")
-
-        return "\n\n".join(parts)
-
-    # P1-2: cap concurrent LLM round-trips during meta-analysis. With this
-    # cap a 30-tool server completes in ~30/8 ≈ 4 sequential waves instead
-    # of 30 sequential round-trips, while staying well within typical Bedrock
-    # / Azure OpenAI rate-limit budgets. Operators with stricter per-tenant
-    # limits can monkey-patch ``Scanner._META_CONCURRENCY`` or subclass.
-    _META_CONCURRENCY = 8
+        return MetaAnalysisRunner(self._meta_analyzer, self._META_CONCURRENCY)
 
     async def _meta_analyze_one_tool(
         self,
@@ -355,49 +304,7 @@ class Scanner:
         sem: "asyncio.Semaphore",
     ) -> ToolScanResult:
         """Per-tool meta-analysis worker. Bounded by ``sem``."""
-        if not result.findings:
-            # P2-2: clear any stale audit list from a prior meta call.
-            # The public ``Scanner.apply_meta_to_results`` invites
-            # repeated invocation; without this reset, a second pass
-            # over a result that previously had findings filtered would
-            # leak the prior call's ``meta_filtered_findings`` into the
-            # new audit block, misrepresenting what just happened.
-            result.meta_filtered_findings = []
-            return result
-
-        entity_context = {
-            "type": "tool",
-            "name": result.tool_name,
-            "description": result.tool_description,
-        }
-        tool_analyzers = list({f.analyzer for f in result.findings})
-
-        async with sem:
-            try:
-                meta_result = await self._meta_analyzer.analyze_findings(
-                    findings=result.findings,
-                    analyzers_used=tool_analyzers,
-                    entity_context=entity_context,
-                )
-                kept, dropped = apply_meta_analysis(result.findings, meta_result)
-                enriched = ToolScanResult(
-                    tool_name=result.tool_name,
-                    tool_description=result.tool_description,
-                    status=result.status,
-                    analyzers=result.analyzers,
-                    findings=kept,
-                    server_source=result.server_source,
-                    server_name=result.server_name,
-                )
-                enriched.meta_filtered_findings = dropped
-                return enriched
-            except Exception as e:
-                logger.error(f'Meta-analysis failed for tool "{result.tool_name}": {e}')
-                # P2-2: same reset on the failure path. Returning the
-                # original with stale ``meta_filtered_findings`` would
-                # claim findings were filtered when meta in fact errored.
-                result.meta_filtered_findings = []
-                return result
+        return await self._meta_runner.analyze_one(result, TOOL_SPEC, sem)
 
     async def _meta_analyze_one_prompt(
         self,
@@ -405,41 +312,7 @@ class Scanner:
         sem: "asyncio.Semaphore",
     ) -> PromptScanResult:
         """Per-prompt meta-analysis worker. Bounded by ``sem``."""
-        if not result.findings:
-            # P2-2: see ``_meta_analyze_one_tool`` for rationale.
-            result.meta_filtered_findings = []
-            return result
-
-        entity_context = {
-            "type": "prompt",
-            "name": result.prompt_name,
-            "description": result.prompt_description,
-        }
-        prompt_analyzers = list({f.analyzer for f in result.findings})
-
-        async with sem:
-            try:
-                meta_result = await self._meta_analyzer.analyze_findings(
-                    findings=result.findings,
-                    analyzers_used=prompt_analyzers,
-                    entity_context=entity_context,
-                )
-                kept, dropped = apply_meta_analysis(result.findings, meta_result)
-                enriched = PromptScanResult(
-                    prompt_name=result.prompt_name,
-                    prompt_description=result.prompt_description,
-                    status=result.status,
-                    analyzers=result.analyzers,
-                    findings=kept,
-                    server_source=result.server_source,
-                    server_name=result.server_name,
-                )
-                enriched.meta_filtered_findings = dropped
-                return enriched
-            except Exception as e:
-                logger.error(f'Meta-analysis failed for prompt "{result.prompt_name}": {e}')
-                result.meta_filtered_findings = []
-                return result
+        return await self._meta_runner.analyze_one(result, PROMPT_SPEC, sem)
 
     async def _meta_analyze_one_resource(
         self,
@@ -447,56 +320,7 @@ class Scanner:
         sem: "asyncio.Semaphore",
     ) -> ResourceScanResult:
         """Per-resource meta-analysis worker. Bounded by ``sem``."""
-        if not result.findings:
-            # P2-2: see ``_meta_analyze_one_tool`` for rationale.
-            result.meta_filtered_findings = []
-            return result
-
-        # P0-3 fix: pipe MCP description + analyzed text content to the
-        # meta-analyzer. Previously the meta-analyzer was asked to FP-filter
-        # resource findings with only name/uri/mime_type for context,
-        # making FP filtering on resources essentially unsupervised.
-        entity_context = {
-            "type": "resource",
-            "name": result.resource_name,
-            "uri": result.resource_uri,
-            "mime_type": result.resource_mime_type,
-            "description": self._build_resource_description_for_meta(result),
-        }
-        res_analyzers = list({f.analyzer for f in result.findings})
-
-        async with sem:
-            try:
-                meta_result = await self._meta_analyzer.analyze_findings(
-                    findings=result.findings,
-                    analyzers_used=res_analyzers,
-                    entity_context=entity_context,
-                )
-                kept, dropped = apply_meta_analysis(result.findings, meta_result)
-                enriched = ResourceScanResult(
-                    resource_uri=result.resource_uri,
-                    resource_name=result.resource_name,
-                    resource_mime_type=result.resource_mime_type,
-                    status=result.status,
-                    analyzers=result.analyzers,
-                    findings=kept,
-                    server_source=result.server_source,
-                    server_name=result.server_name,
-                    # P0-3 carry-through: preserve the description and text
-                    # the primary analyzers consumed. Without this, every
-                    # ``--enable-meta`` (or API ``enable_meta=True``) run
-                    # silently zeroed those fields on the post-meta result,
-                    # defeating the contract that ResourceScanResult holds
-                    # the evidence the analyzers saw.
-                    resource_description=getattr(result, "resource_description", "") or "",
-                    resource_text=getattr(result, "resource_text", "") or "",
-                )
-                enriched.meta_filtered_findings = dropped
-                return enriched
-            except Exception as e:
-                logger.error(f'Meta-analysis failed for resource "{result.resource_uri}": {e}')
-                result.meta_filtered_findings = []
-                return result
+        return await self._meta_runner.analyze_one(result, RESOURCE_SPEC, sem)
 
     @classmethod
     def for_meta_only(cls, config: Config) -> "Scanner":
@@ -546,52 +370,28 @@ class Scanner:
     ) -> List[ScanResult]:
         """Apply meta-analysis to a heterogeneous list of scan results.
 
-        Public, single-source-of-truth entrypoint that the static-config
-        CLI path uses (P1-6). Previously the CLI reimplemented the entire
-        per-result loop inline in ``cli.py``; that duplicate had already
-        drifted from the Scanner's own helpers and produced two real bugs
-        (P0-4: silently dropped resource/instructions enrichment,
-        P0-5: silently no-op'd on the IAM-only Bedrock flow). Routing the
-        CLI through this method keeps all four entity types (tool, prompt,
-        resource, instructions) in lock-step.
+        The single entrypoint the static-config CLI path uses. The CLI once
+        reimplemented this loop inline, and the duplicate had already drifted
+        into two real bugs: it silently dropped resource and instructions
+        enrichment, and it no-op'd entirely on the IAM-only Bedrock flow.
 
         Args:
             scan_results: Heterogeneous list of ScanResult subclasses.
-            analyzers: Analyzer set requested for the scan. If META is not
-                in this list (or omitted) the input is returned unchanged.
-                Default: ``[META]`` so callers that already gated on
-                ``--enable-meta`` upstream don't need to re-pass it.
+            analyzers: Analyzer set requested for the scan. If META is not in
+                this list the input is returned unchanged. Defaults to
+                ``[META]`` so callers that already gated on ``--enable-meta``
+                upstream don't need to re-pass it.
 
         Returns:
-            The same list with ``ScanResult.meta_filtered_findings``
-            populated on each enriched result. Order is preserved. On
-            per-result failure the original is kept (no silent drop).
+            The same list, order preserved, with
+            ``ScanResult.meta_filtered_findings`` populated on each enriched
+            result. On per-result failure the original is kept.
         """
         if analyzers is None:
             analyzers = [AnalyzerEnum.META]
         if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
             return list(scan_results)
-
-        sem = asyncio.Semaphore(self._META_CONCURRENCY)
-
-        async def _dispatch(result: ScanResult) -> ScanResult:
-            if isinstance(result, ToolScanResult):
-                return await self._meta_analyze_one_tool(result, sem)
-            if isinstance(result, PromptScanResult):
-                return await self._meta_analyze_one_prompt(result, sem)
-            if isinstance(result, ResourceScanResult):
-                return await self._meta_analyze_one_resource(result, sem)
-            if isinstance(result, InstructionsScanResult):
-                # No bulk endpoint takes a list of instructions, but the CLI
-                # static path may include one in ``all_results``. Re-use the
-                # single-result helper so behaviour stays in lock-step.
-                return await self._run_meta_analysis_on_instructions_result(
-                    result, analyzers
-                )
-            # Unknown result subclass: don't silently drop — pass through.
-            return result
-
-        return list(await asyncio.gather(*(_dispatch(r) for r in scan_results)))
+        return await self._meta_runner.analyze_mixed(scan_results)
 
     async def _attach_behavioral_source_findings(
         self,
@@ -737,125 +537,46 @@ class Scanner:
         scan_results: List[ToolScanResult],
         analyzers: List[AnalyzerEnum],
     ) -> List[ToolScanResult]:
-        """Run meta-analysis on tool scan results if META analyzer is enabled.
-
-        P1-2: bounded concurrency. Previously this loop awaited each
-        per-tool LLM call sequentially, making total wall-clock cost
-        N × LLM round-trip (~1–4 s each). Now we run up to
-        ``_META_CONCURRENCY`` analyses in flight simultaneously, with
-        ``asyncio.gather`` preserving the input order so consumers don't
-        see reshuffled findings.
-
-        Args:
-            scan_results: The tool scan results from primary analyzers.
-            analyzers: The list of analyzers that were used.
-
-        Returns:
-            The scan results with meta-analysis enrichments applied,
-            in the same order as ``scan_results``.
-        """
+        """Meta-analyze tool results when META is enabled, preserving order."""
         if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
             return scan_results
-
-        sem = asyncio.Semaphore(self._META_CONCURRENCY)
-        return list(
-            await asyncio.gather(
-                *(self._meta_analyze_one_tool(r, sem) for r in scan_results)
-            )
-        )
+        return await self._meta_runner.analyze_many(scan_results, TOOL_SPEC)
 
     async def _run_meta_analysis_on_prompt_results(
         self,
         scan_results: List[PromptScanResult],
         analyzers: List[AnalyzerEnum],
     ) -> List[PromptScanResult]:
-        """Run meta-analysis on prompt scan results, bounded by _META_CONCURRENCY."""
+        """Meta-analyze prompt results when META is enabled, preserving order."""
         if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
             return scan_results
-
-        sem = asyncio.Semaphore(self._META_CONCURRENCY)
-        return list(
-            await asyncio.gather(
-                *(self._meta_analyze_one_prompt(r, sem) for r in scan_results)
-            )
-        )
+        return await self._meta_runner.analyze_many(scan_results, PROMPT_SPEC)
 
     async def _run_meta_analysis_on_resource_results(
         self,
         scan_results: List[ResourceScanResult],
         analyzers: List[AnalyzerEnum],
     ) -> List[ResourceScanResult]:
-        """Run meta-analysis on resource scan results, bounded by _META_CONCURRENCY."""
+        """Meta-analyze resource results when META is enabled, preserving order."""
         if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
             return scan_results
-
-        sem = asyncio.Semaphore(self._META_CONCURRENCY)
-        return list(
-            await asyncio.gather(
-                *(self._meta_analyze_one_resource(r, sem) for r in scan_results)
-            )
-        )
+        return await self._meta_runner.analyze_many(scan_results, RESOURCE_SPEC)
 
     async def _run_meta_analysis_on_instructions_result(
         self,
         result: InstructionsScanResult,
         analyzers: List[AnalyzerEnum],
     ) -> InstructionsScanResult:
-        """Run meta-analysis on instructions scan result if META analyzer is enabled.
+        """Meta-analyze an instructions result when META is enabled.
 
-        H1 follow-up: parity with the other three ``_meta_analyze_one_*``
-        helpers — every early-return / exception path resets
-        ``meta_filtered_findings`` so a re-invocation cannot leak a prior
-        run's audit list into the new response. Without this the
-        instructions helper alone would report stale filtering
-        (asymmetric with tools/prompts/resources, which the P2-2 fix
-        already covers).
+        Unlike the bulk runners, the disabled path clears
+        ``meta_filtered_findings`` so a re-invocation cannot report a prior
+        run's filtering.
         """
         if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
             result.meta_filtered_findings = []
             return result
-
-        if not result.findings:
-            result.meta_filtered_findings = []
-            return result
-
-        # M3 follow-up: mirror P0-3's resource-context fix. The previous
-        # ``[:500]`` truncation made the meta-analyzer second-guess
-        # findings against ~500 bytes of evidence; if a finding cited
-        # text past byte 500 the LLM couldn't see it and FP filtering
-        # devolved into "trust whatever the LLM hallucinates from the
-        # opening paragraph". Use the same budgeted-snippet helper as
-        # resources so instructions get the full context window the
-        # primary analyzers consumed.
-        entity_context = {
-            "type": "instructions",
-            "name": result.server_name,
-            "description": self._build_instructions_description_for_meta(result),
-        }
-        instr_analyzers = list({f.analyzer for f in result.findings})
-
-        try:
-            meta_result = await self._meta_analyzer.analyze_findings(
-                findings=result.findings,
-                analyzers_used=instr_analyzers,
-                entity_context=entity_context,
-            )
-            kept, dropped = apply_meta_analysis(result.findings, meta_result)
-            enriched_result = InstructionsScanResult(
-                instructions=result.instructions,
-                server_name=result.server_name,
-                protocol_version=result.protocol_version,
-                status=result.status,
-                analyzers=result.analyzers,
-                findings=kept,
-                server_source=result.server_source,
-            )
-            enriched_result.meta_filtered_findings = dropped
-            return enriched_result
-        except Exception as e:
-            logger.error(f'Meta-analysis failed for instructions from "{result.server_name}": {e}')
-            result.meta_filtered_findings = []
-            return result
+        return await self._meta_runner.analyze_one(result, INSTRUCTIONS_SPEC)
 
     async def _run_meta_analysis_on_single_tool(
         self,
