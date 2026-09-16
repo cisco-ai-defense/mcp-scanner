@@ -193,3 +193,25 @@ module = [
     "mcp.*",
 ]
 ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["mcpscanner"]
+branch = true
+omit = [
+    # Run inside the scan container, not under the host test suite.
+    "mcpscanner/docker/entrypoint*.py",
+]
+
+[tool.coverage.report]
+# Measured 72.9% with branch coverage on. The floor sits just under that
+# so an ordinary refactor does not trip the gate while a feature landing
+# with no tests does. Raise it as coverage improves; it is a ratchet,
+# not a target.
+fail_under = 72
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "if __name__ == .__main__.:",
+]

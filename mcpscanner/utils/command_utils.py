@@ -16,17 +16,17 @@
 
 from typing import Dict, List, Tuple, Optional, Any
 import os
+import re
 import shlex
 import shutil
 
 # Optional expandvars support
 try:
     from expandvars import expandvars as _expandvars_lib  # type: ignore
-    from expandvars import expand as _expand_custom  # type: ignore
 
     _HAS_EXPANDVARS = True
 except Exception:  # pragma: no cover
-    _expandvars_lib = _expand_custom = None
+    _expandvars_lib = None
     _HAS_EXPANDVARS = False
 
 
@@ -47,6 +47,22 @@ def decide_windows_semantics(expand_mode: str) -> bool:
         return os.name == "nt"
     # auto
     return os.name == "nt"
+
+
+_WINDOWS_VAR = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
+
+
+def _expand_windows_vars(text: str, env: Dict[str, str]) -> str:
+    """Substitute ``%VAR%`` references from ``env``.
+
+    expandvars cannot do this: with ``surrounded_vars_only`` it matches
+    nothing, and without it ``%TOKEN%`` expands to the value plus a
+    stray trailing ``%``. Either way the argument handed to the server
+    was wrong, so the substitution is done here.
+
+    Unknown names are left as written, which is what cmd.exe does.
+    """
+    return _WINDOWS_VAR.sub(lambda m: env.get(m.group(1), m.group(0)), text)
 
 
 def expand_text(text: str, env: Dict[str, str], expand_mode: str) -> str:
@@ -86,15 +102,7 @@ def expand_text(text: str, env: Dict[str, str], expand_mode: str) -> str:
             return os.path.expandvars(text).strip()
 
         if mode == "windows":
-            if _HAS_EXPANDVARS and _expand_custom:
-                return _expand_custom(
-                    text,
-                    environ=env,
-                    var_symbol="%",
-                    surrounded_vars_only=True,
-                    escape_char="",
-                ).strip()
-            return text.strip()
+            return _expand_windows_vars(text, env).strip()
     except Exception:
         # Fallback to os.path.expandvars on any error
         return os.path.expandvars(text).strip()
