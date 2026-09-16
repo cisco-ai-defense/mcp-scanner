@@ -201,10 +201,10 @@ class TaintShape:
         result.scalar_taint = self.scalar_taint.merge(other.scalar_taint)
 
         all_fields = set(self.fields.keys()) | set(other.fields.keys())
-        for field in all_fields:
-            self_field = self.fields.get(field, TaintShape(depth=max_depth))
-            other_field = other.fields.get(field, TaintShape(depth=max_depth))
-            result.fields[field] = self_field.merge(other_field)
+        for field_name in all_fields:
+            self_field = self.fields.get(field_name, TaintShape(depth=max_depth))
+            other_field = other.fields.get(field_name, TaintShape(depth=max_depth))
+            result.fields[field_name] = self_field.merge(other_field)
 
         if self.element_shape or other.element_shape:
             self_elem = self.element_shape or TaintShape(depth=max_depth)
@@ -223,8 +223,8 @@ class TaintShape:
         result.is_array = self.is_array
         result.collapsed = self.collapsed
 
-        for field, shape in self.fields.items():
-            result.fields[field] = shape.copy()
+        for field_name, shape in self.fields.items():
+            result.fields[field_name] = shape.copy()
 
         if self.element_shape:
             result.element_shape = self.element_shape.copy()
@@ -259,8 +259,8 @@ class TaintShape:
         if self.fields.keys() != other.fields.keys():
             return False
 
-        for field in self.fields:
-            if self.fields[field] != other.fields[field]:
+        for field_name in self.fields:
+            if self.fields[field_name] != other.fields[field_name]:
                 return False
 
         # Check element shape for arrays

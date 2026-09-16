@@ -725,7 +725,6 @@ class TreeSitterBackendMixin:
             "interpreted_string_literal",
         }
         name: Optional[str] = None
-        inline_handler: Optional["Node"] = None
         # Positional slots preserve argument order so the first ref
         # (``tool.alias``) is not confused with later identifiers
         # (``toolDescription``, ``paramSchema``) in Graph-style loops.
@@ -1833,7 +1832,6 @@ class TreeSitterBackendMixin:
         return list(flows.values())
     def _ts_eval_taint(self, node: "Node", param_names: List[str]) -> TaintInfo:
         """Evaluate taint of tree-sitter expression via AST traversal."""
-        result = TaintInfo()
         
         def visit(n: "Node") -> TaintInfo:
             """Recursively evaluate taint of AST node."""

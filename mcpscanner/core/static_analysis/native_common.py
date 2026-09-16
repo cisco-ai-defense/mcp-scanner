@@ -77,7 +77,7 @@ class TaintInfo:
         return TaintInfo(status=self.status, sources=self.sources.copy())
 
 # Tree-sitter imports - each language is optional
-from tree_sitter import Language, Parser, Node  # noqa: F401
+from tree_sitter import Language, Parser, Node  # noqa: F401,E402
 TREE_SITTER_AVAILABLE = True
 
 # Language modules - imported lazily
@@ -232,7 +232,7 @@ _TS_MEMBER_EXPR_TYPES: Set[str] = {
 #   #[tool]          Rust attribute macros (and `#[mcp::tool]`)
 #   #[Tool]          PHP 8 attributes
 #   # @tool          Ruby comment-style annotation
-import re as _re  # local alias avoids polluting wider module namespace
+import re as _re  # noqa: E402  (local alias avoids polluting wider module namespace)
 # Notes for maintainers:
 # - The optional namespace path consumes ``::``, ``.``, *and* ``\\``
 #   separators so fully-qualified annotations like

@@ -70,6 +70,7 @@ __all__ = [
     "build_code_graphs_for_registry",
     "call_edges_without_superseded_external",
     "create_sink_finding",
+    "extract_function_parameters",
     "graph_cache_for_scan",
     "is_actionable_sink_hit",
     "is_graph_supported_language",

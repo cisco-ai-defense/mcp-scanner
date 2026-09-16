@@ -23,7 +23,6 @@ static analysis engine, following SAST tool conventions.
 import ast
 import time
 from pathlib import Path
-from typing import Any
 
 from .base import BaseParser
 from ..types import Position, Range

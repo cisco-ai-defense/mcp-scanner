@@ -23,7 +23,7 @@ across TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, and PHP.
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set
 from tree_sitter import Node
 
 from ....utils.logging_config import get_logger
@@ -294,7 +294,7 @@ class TreeSitterCFGBuilder:
     
     def _build_if(self, stmt: Node) -> tuple[TSCFGNode, List[TSCFGNode]]:
         """Build CFG for if statement."""
-        condition_node = self.cfg.create_node(stmt, f"if_condition")
+        condition_node = self.cfg.create_node(stmt, "if_condition")
         exits = []
         
         # Get consequence (then branch)

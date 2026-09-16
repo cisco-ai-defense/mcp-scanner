@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .base import BaseAnalyzer, SecurityFinding
-from ..models import AnalyzerEnum
 from ...utils.logging_config import get_logger
 
 logger = get_logger(__name__)

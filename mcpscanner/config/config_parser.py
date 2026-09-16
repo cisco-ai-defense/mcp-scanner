@@ -162,7 +162,7 @@ async def scan_mcp_config_file(path: str) -> MCPConfig:
         logger.debug("Config file parsed and validated successfully")
         return result
 
-    except Exception as e:
+    except Exception:
         logger.exception(f"Error processing config file {path}")
         raise
 

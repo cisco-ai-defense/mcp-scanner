@@ -25,7 +25,7 @@ The module is organized into two main sections:
 2. SIMPLIFIED MAPPINGS & FUNCTIONS: Helper functions and lightweight mappings
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 
 # =============================================================================

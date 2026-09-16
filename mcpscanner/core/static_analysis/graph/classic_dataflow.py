@@ -18,7 +18,6 @@ from ..dataflow.reaching_definitions import (
     ReachingDefinitionsAnalysis,
     ReachingDefsFact,
 )
-from ..dataflow.treesitter_classic import _iter_assignments as _ts_iter_assignments
 from ..dataflow.treesitter_classic import analyze_treesitter_classic
 from ..parser.python_parser import PythonParser
 from ..parser.treesitter_parser import _get_language

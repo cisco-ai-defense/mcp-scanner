@@ -299,22 +299,6 @@ def _group_findings_for_api(
             )
 
             highest_severity = analyzer_severity
-
-            # Generate threat summary - handle UNKNOWN threats specially
-            if analyzer_severity == "UNKNOWN":
-                threat_summary = "Analysis failed - status unknown"
-                if len(threat_names) == 0 or (
-                    len(threat_names) == 1 and threat_names[0].lower() == "unknown"
-                ):
-                    threat_names = ["UNKNOWN"]
-            elif len(threat_names) == 0:
-                threat_summary = "No specific threats identified"
-            elif len(threat_names) == 1:
-                threat_summary = (
-                    f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
-                )
-            else:
-                threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
         else:
             # If the analyzer was run but found nothing, it's SAFE.
             # We check if the internal name is in the list of analyzers that were part of the scan.
@@ -356,13 +340,7 @@ def _group_findings_for_api(
             else:  # Custom analyzer
                 analyzer_was_run = internal_name in ran_analyzer_values
 
-            if analyzer_was_run:
-                highest_severity = "SAFE"
-                threat_summary = "No threats detected"
-            else:
-                highest_severity = "UNKNOWN"
-                threat_summary = "Analyzer not run"
-            threat_names = []
+            highest_severity = "SAFE" if analyzer_was_run else "UNKNOWN"
 
         # Build the base structure (simplified - removed threat_names and threat_summary)
         analyzer_result = {
@@ -1039,7 +1017,7 @@ async def scan_instructions_endpoint(
             http_headers=http_headers,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned instructions from server")
+        logger.debug("Scanner completed - scanned instructions from server")
 
         # Convert result to API format using helper function
         if result.status == "completed":
@@ -1060,7 +1038,7 @@ async def scan_instructions_endpoint(
         if meta_audit is not None:
             response["meta_analysis"] = meta_audit
 
-        logger.debug(f"Instructions scan completed successfully")
+        logger.debug("Instructions scan completed successfully")
         return response
 
     except ValueError as e:

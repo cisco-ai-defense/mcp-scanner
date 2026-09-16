@@ -1099,7 +1099,7 @@ class Scanner:
                             logger.warning(
                                 f"Failed to connect to server '{server_name}': {e}"
                             )
-                            logger.debug(f"Continuing with remaining servers...")
+                            logger.debug("Continuing with remaining servers...")
                             continue
                     elif isinstance(server_config, RemoteServer):
                         # Scan remote server
@@ -1120,7 +1120,7 @@ class Scanner:
                             logger.warning(
                                 f"Failed to connect to server '{server_name}': {e}"
                             )
-                            logger.debug(f"Continuing with remaining servers...")
+                            logger.debug("Continuing with remaining servers...")
                             continue
                     else:
                         logger.warning(
@@ -1131,7 +1131,7 @@ class Scanner:
                     logger.error(
                         f"Unexpected error scanning server '{server_name}' from {config_path}: {e}"
                     )
-                    logger.debug(f"Continuing with remaining servers...")
+                    logger.debug("Continuing with remaining servers...")
                     continue
 
             all_results[config_path] = config_results
@@ -1209,7 +1209,7 @@ class Scanner:
                         logger.warning(
                             f"Failed to connect to server '{server_name}': {e}"
                         )
-                        logger.debug(f"Continuing with remaining servers...")
+                        logger.debug("Continuing with remaining servers...")
                         continue
                 elif isinstance(server_config, RemoteServer):
                     # Scan remote server
@@ -1230,7 +1230,7 @@ class Scanner:
                         logger.warning(
                             f"Failed to connect to server '{server_name}': {e}"
                         )
-                        logger.debug(f"Continuing with remaining servers...")
+                        logger.debug("Continuing with remaining servers...")
                         continue
                 else:
                     logger.warning(
@@ -1241,7 +1241,7 @@ class Scanner:
                 logger.error(
                     f"Unexpected error scanning server '{server_name}' from {config_path}: {e}"
                 )
-                logger.debug(f"Continuing with remaining servers...")
+                logger.debug("Continuing with remaining servers...")
                 continue
 
         return all_results

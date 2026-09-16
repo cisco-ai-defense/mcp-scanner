@@ -338,14 +338,11 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
         for reg in registrations:
             handler_node = reg.get("handler_node")
             handler_name = reg.get("handler_name")
-            handler_origin: str = "inline"
 
             if handler_node is None and handler_name:
                 handler_node = self._ts_find_function_def_by_name(
                     tree.root_node, handler_name, func_types
                 )
-                if handler_node is not None:
-                    handler_origin = "in_file"
 
             # Gap 2: cross-file resolution. If the handler is a bare
             # identifier and the in-file symbol index missed it, try the

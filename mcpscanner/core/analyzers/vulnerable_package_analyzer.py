@@ -244,7 +244,7 @@ class VulnerablePackageAnalyzer:
         For Python tracebacks the last non-blank line is usually the
         exception; for other output just return the last few lines.
         """
-        lines = [l for l in stderr.splitlines() if l.strip()]
+        lines = [line for line in stderr.splitlines() if line.strip()]
         if not lines:
             return stderr[:300]
         for line in reversed(lines):

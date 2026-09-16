@@ -548,16 +548,7 @@ async def get_stdio_session(
 
         except asyncio.TimeoutError:
             # Clean up on timeout
-            if session:
-                try:
-                    await session.__aexit__(None, None, None)
-                except:
-                    pass
-            if client_context:
-                try:
-                    await client_context.__aexit__(None, None, None)
-                except:
-                    pass
+            await close_mcp_session(client_context, session)
             raise
 
         logger.debug(
@@ -578,16 +569,7 @@ async def get_stdio_session(
             f"Connection cancelled for stdio server {server_config.command}"
         )
         # Clean up resources on cancellation
-        if session:
-            try:
-                await session.__aexit__(None, None, None)
-            except:
-                pass
-        if client_context:
-            try:
-                await client_context.__aexit__(None, None, None)
-            except:
-                pass
+        await close_mcp_session(client_context, session)
         raise MCPConnectionError(
             f"Connection cancelled for stdio MCP server with command {server_config.command}. "
             f"This may indicate the server failed to start properly."
@@ -597,16 +579,7 @@ async def get_stdio_session(
             f"Error connecting to stdio server {server_config.command}: {e}"
         )
         # Clean up resources on error
-        if session:
-            try:
-                await session.__aexit__(None, None, None)
-            except:
-                pass
-        if client_context:
-            try:
-                await client_context.__aexit__(None, None, None)
-            except:
-                pass
+        await close_mcp_session(client_context, session)
         raise MCPConnectionError(
             f"Unable to connect to stdio MCP server with command {server_config.command}. "
             f"Please verify the command is correct and executable. "

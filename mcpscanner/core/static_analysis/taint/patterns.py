@@ -26,7 +26,7 @@ Security patterns for:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from typing import Dict, Set
 
 
 @dataclass

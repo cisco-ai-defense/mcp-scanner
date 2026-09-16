@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 from ....threats.threats import ThreatMapping
-from ....utils.log_format import sanitize_log_value, truncate
+from ....utils.log_format import sanitize_log_value
 from ....utils.logging_config import get_logger
 from ...analyzers.base import SecurityFinding
 from ..interprocedural.call_graph_analyzer import CallGraphAnalyzer

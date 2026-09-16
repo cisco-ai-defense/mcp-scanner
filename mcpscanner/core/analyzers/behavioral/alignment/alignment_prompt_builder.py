@@ -29,7 +29,6 @@ import json
 import logging
 import re
 import secrets
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .....config.constants import MCPScannerConstants
@@ -417,11 +416,11 @@ Parameter Flow Tracking:
 
             if flow.get("reaches_external"):
                 param_parts.append(
-                    f"  ⚠️  REACHES EXTERNAL OPERATIONS (file/network/subprocess)\n"
+                    "  ⚠️  REACHES EXTERNAL OPERATIONS (file/network/subprocess)\n"
                 )
 
             if flow.get("reaches_returns"):
-                param_parts.append(f"  Returns to caller\n")
+                param_parts.append("  Returns to caller\n")
 
         return ("".join(param_parts))
 
@@ -557,7 +556,7 @@ Parameter Flow Tracking:
                 functions_by_file[file_path].append(func_name)
 
         if len(functions_by_file) > 1:  # More than just the current file
-            reach_parts = [f"\n**REACHABILITY ANALYSIS:**\n"]
+            reach_parts = ["\n**REACHABILITY ANALYSIS:**\n"]
             reach_parts.append(
                 f"Total reachable functions: {total_reachable} across {len(functions_by_file)} file(s)\n\n"
             )
@@ -577,7 +576,7 @@ Parameter Flow Tracking:
         if not func_context.constants:
             return None
 
-        const_parts = [f"\n**CONSTANTS:**\n"]
+        const_parts = ["\n**CONSTANTS:**\n"]
         for var, val in list(func_context.constants.items())[: self.MAX_CONSTANTS]:
             const_parts.append(f"  {var} = {val}\n")
         return ("".join(const_parts))
@@ -601,7 +600,7 @@ Parameter Flow Tracking:
         if not func_context.return_expressions:
             return None
 
-        ret_parts = [f"\n**RETURN EXPRESSIONS:**\n"]
+        ret_parts = ["\n**RETURN EXPRESSIONS:**\n"]
         if func_context.return_type:
             ret_parts.append(f"Declared return type: {func_context.return_type}\n")
         for ret_expr in func_context.return_expressions:
@@ -613,7 +612,7 @@ Parameter Flow Tracking:
         if not func_context.exception_handlers:
             return None
 
-        exc_parts = [f"\n**EXCEPTION HANDLING:**\n"]
+        exc_parts = ["\n**EXCEPTION HANDLING:**\n"]
         for handler in func_context.exception_handlers:
             exc_type = handler.get('exception_type', 'Exception')
             line = handler.get('line', '?')
@@ -631,7 +630,7 @@ Parameter Flow Tracking:
         if not func_context.env_var_access:
             return None
 
-        env_parts = [f"\n**ENVIRONMENT VARIABLE ACCESS:**\n"]
+        env_parts = ["\n**ENVIRONMENT VARIABLE ACCESS:**\n"]
         env_parts.append("⚠️  This function accesses environment variables:\n")
         for env_access in func_context.env_var_access:
             env_parts.append(f"  {env_access}\n")
@@ -642,7 +641,7 @@ Parameter Flow Tracking:
         if not func_context.global_writes:
             return None
 
-        global_parts = [f"\n**GLOBAL VARIABLE WRITES:**\n"]
+        global_parts = ["\n**GLOBAL VARIABLE WRITES:**\n"]
         global_parts.append("⚠️  This function modifies global state:\n")
         for gwrite in func_context.global_writes:
             global_parts.append(
@@ -659,7 +658,7 @@ Parameter Flow Tracking:
             op for op in func_context.attribute_access if op.get("type") == "write"
         ]
         if writes:
-            attr_parts = [f"\n**ATTRIBUTE WRITES:**\n"]
+            attr_parts = ["\n**ATTRIBUTE WRITES:**\n"]
             for op in writes[:10]:
                 line = op.get('line', '?')
                 obj = op.get('object', '?')

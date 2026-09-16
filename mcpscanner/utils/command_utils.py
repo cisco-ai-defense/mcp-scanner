@@ -95,7 +95,7 @@ def expand_text(text: str, env: Dict[str, str], expand_mode: str) -> str:
                     escape_char="",
                 ).strip()
             return text.strip()
-    except Exception as e:
+    except Exception:
         # Fallback to os.path.expandvars on any error
         return os.path.expandvars(text).strip()
 

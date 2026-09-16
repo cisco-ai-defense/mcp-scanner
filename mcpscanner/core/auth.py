@@ -20,7 +20,6 @@ This module provides OAuth and Bearer token authentication support for MCP clien
 including token storage and OAuth client provider setup.
 """
 
-import asyncio
 from enum import Enum
 from typing import Optional, List, Callable, Tuple, Dict
 from urllib.parse import parse_qs, urlparse

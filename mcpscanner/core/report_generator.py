@@ -486,7 +486,6 @@ class ReportGenerator:
                     threat_names = data.get("threat_names", [])
                     threat_summary = data.get("threat_summary", "N/A")
                     total_findings = data.get("total_findings", 0)
-                    mcp_taxonomy = data.get("mcp_taxonomy")
 
                     output.append(f"  • {analyzer}:")
                     output.append(f"    - Severity: {severity}")
@@ -500,7 +499,7 @@ class ReportGenerator:
                     mcp_taxonomies = data.get("mcp_taxonomies", [])
                     if mcp_taxonomies and total_findings > 0:
                         if len(mcp_taxonomies) == 1:
-                            output.append(f"    - MCP Taxonomy:")
+                            output.append("    - MCP Taxonomy:")
                             taxonomy = mcp_taxonomies[0]
                             if taxonomy.get("aitech"):
                                 output.append(f"      • AITech: {taxonomy['aitech']}")
@@ -574,7 +573,6 @@ class ReportGenerator:
 
         for result in results:
             tool_name = result.get("tool_name", result.get("package_name", "Unknown"))
-            is_safe = result.get("is_safe", True)
             findings = result.get("findings", {})
 
             # Get summary info

@@ -47,8 +47,8 @@ from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
 from .analyzers.base import is_infrastructure_error, reportable_findings
 from .docker_build import docker_run_hardening_flags
-from .package_scanner_base import (
-    DockerNotAvailableError,  # noqa: F401  (re-exported for SDK importers)
+from .package_scanner_base import (  # noqa: F401  (DockerNotAvailableError re-exported for SDK importers)
+    DockerNotAvailableError,
     EcosystemProfile,
     PackageScannerBase,
     assert_loop_not_running,

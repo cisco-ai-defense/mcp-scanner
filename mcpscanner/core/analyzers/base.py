@@ -150,7 +150,7 @@ class SecurityFinding:
                 "aisubtech_name": mapping.get("aisubtech_name"),
                 "description": mapping.get("description"),
             }
-        except (ValueError, KeyError, AttributeError) as e:
+        except (ValueError, KeyError, AttributeError):
             # If threat not found in mapping, return None
             # Silently fail to avoid breaking the scan
             return None

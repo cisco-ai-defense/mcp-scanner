@@ -61,8 +61,8 @@ from .package_scanner_base import (
     EcosystemProfile,
     PackageScannerBase,
 )
-from .pypi_scanner import (
-    DockerNotAvailableError,  # noqa: F401  (re-exported for SDK importers)
+from .pypi_scanner import (  # noqa: F401  (DockerNotAvailableError re-exported for SDK importers)
+    DockerNotAvailableError,
     LLMNotConfiguredError,
     _build_config_from_env,
     _build_scan_result,

@@ -28,7 +28,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..utils.logging_config import get_logger
-from .auth import APIAuthConfig, AuthType
+from .auth import APIAuthConfig
 
 # L1 fix: keep the module-level logger BELOW every ``from`` /
 # ``import`` so flake8 / pyflakes doesn't flag E402 (module-level

@@ -558,7 +558,6 @@ class CrossFileSymbolResolver:
         """Return (resolved_id, provenance, confidence, call_context)."""
         context: str | None = None
         caller_file = caller_id.split("::", 1)[0] if "::" in caller_id else ""
-        caller_label = caller_id.split("::", 1)[-1] if "::" in caller_id else caller_id
 
         if not _skip_dynamic and is_dynamic_call_label(callee_label):
             dispatch = self.resolve_callee_targets(caller_id, callee_label, known_functions)

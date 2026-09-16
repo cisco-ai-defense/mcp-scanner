@@ -23,11 +23,11 @@ tracking as the Python-specific ForwardDataflowAnalysis.
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List
 from tree_sitter import Node
 
-from ..cfg.treesitter_builder import TreeSitterCFG, TreeSitterCFGBuilder, TSCFGNode
-from ..taint.tracker import Taint, TaintStatus, TaintShape, ShapeEnvironment, SourceTrace
+from ..cfg.treesitter_builder import TreeSitterCFGBuilder, TSCFGNode
+from ..taint.tracker import Taint, TaintStatus, ShapeEnvironment, SourceTrace
 from ....utils.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -379,7 +379,6 @@ class TreeSitterDataflowAnalysis:
     
     def _eval_taint(self, node: Node, fact: TSFlowFact) -> Taint:
         """Evaluate taint of an expression via AST traversal."""
-        result = Taint()
         
         def visit(n: Node) -> Taint:
             node_taint = Taint()
