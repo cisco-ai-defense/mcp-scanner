@@ -29,6 +29,7 @@ from tree_sitter import Node
 from ..cfg.treesitter_builder import TreeSitterCFGBuilder, TSCFGNode
 from ..taint.tracker import Taint, TaintStatus, ShapeEnvironment, SourceTrace
 from ....utils.logging_config import get_logger
+from ....utils.ordering import union
 
 logger = get_logger(__name__)
 
@@ -93,8 +94,8 @@ class TSFlowFact:
                 result.parameter_flows[param] = TSFlowPath(
                     parameter_name=param,
                     operations=self_flow.operations + [op for op in other_flow.operations if op not in self_flow.operations],
-                    reaches_calls=list(set(self_flow.reaches_calls) | set(other_flow.reaches_calls)),
-                    reaches_assignments=list(set(self_flow.reaches_assignments) | set(other_flow.reaches_assignments)),
+                    reaches_calls=union(self_flow.reaches_calls, other_flow.reaches_calls),
+                    reaches_assignments=union(self_flow.reaches_assignments, other_flow.reaches_assignments),
                     reaches_returns=self_flow.reaches_returns or other_flow.reaches_returns,
                     reaches_external=self_flow.reaches_external or other_flow.reaches_external,
                 )
@@ -460,8 +461,8 @@ class TreeSitterDataflowAnalysis:
             for param, flow in fact.parameter_flows.items():
                 if param in result_flows:
                     result = result_flows[param]
-                    result.reaches_calls = list(set(result.reaches_calls) | set(flow.reaches_calls))
-                    result.reaches_assignments = list(set(result.reaches_assignments) | set(flow.reaches_assignments))
+                    result.reaches_calls = union(result.reaches_calls, flow.reaches_calls)
+                    result.reaches_assignments = union(result.reaches_assignments, flow.reaches_assignments)
                     result.reaches_returns = result.reaches_returns or flow.reaches_returns
                     result.reaches_external = result.reaches_external or flow.reaches_external
                     # Merge operations (avoid duplicates)

@@ -1,0 +1,572 @@
+{
+ "duplicate_threat_types_deduped": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "HIGH",
+      "threat_names": [
+       "exfil",
+       "other"
+      ],
+      "threat_summary": "s1",
+      "total_findings": 3
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "empty_input": {
+  "scan_results": []
+ },
+ "finding_without_threat_type": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "HIGH",
+      "threat_names": [],
+      "threat_summary": "No specific threats identified",
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "instructions_clean": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     }
+    },
+    "instructions": "be helpful",
+    "is_safe": true,
+    "protocol_version": "2025-06-18",
+    "server_name": "srv",
+    "status": "completed"
+   }
+  ]
+ },
+ "meta_dropped_all": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     }
+    },
+    "is_safe": true,
+    "meta_analysis": {
+     "filtered_count": 1,
+     "filtered_findings": [
+      {
+       "analyzer": "YARA",
+       "meta_confidence": null,
+       "meta_reason": "Identified as likely false positive",
+       "severity": "HIGH",
+       "summary": "dropped",
+       "threat_category": "TEST"
+      }
+     ]
+    },
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "meta_dropped_some": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "HIGH",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "kept",
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "meta_analysis": {
+     "filtered_count": 1,
+     "filtered_findings": [
+      {
+       "analyzer": "YARA",
+       "meta_confidence": null,
+       "meta_reason": "Identified as likely false positive",
+       "severity": "HIGH",
+       "summary": "dropped",
+       "threat_category": "TEST"
+      }
+     ]
+    },
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "multiple_analyzers": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "LOW",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "minor",
+      "total_findings": 1
+     },
+     "llm_analyzer": {
+      "severity": "MEDIUM",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "mid",
+      "total_findings": 1
+     },
+     "yara_analyzer": {
+      "severity": "HIGH",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "something bad",
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "prompt_clean": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     }
+    },
+    "is_safe": true,
+    "prompt_name": "demo_prompt",
+    "status": "completed"
+   }
+  ]
+ },
+ "resource_clean": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     }
+    },
+    "is_safe": true,
+    "resource_mime_type": "text/plain",
+    "resource_name": "x",
+    "resource_uri": "file://x",
+    "status": "completed"
+   }
+  ]
+ },
+ "several_results": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "HIGH",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "something bad",
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   },
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     }
+    },
+    "is_safe": true,
+    "prompt_name": "demo_prompt",
+    "status": "completed"
+   },
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "LOW",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "something bad",
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "resource_mime_type": "text/plain",
+    "resource_name": "x",
+    "resource_uri": "file://x",
+    "status": "completed"
+   }
+  ]
+ },
+ "severity_precedence_low_then_high": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "HIGH",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "low one",
+      "total_findings": 2
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "single_high_finding": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "HIGH",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "something bad",
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "taxonomy_on_later_finding_only": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "mcp_taxonomy": {
+       "aisubtech": "AISubtech-8.2.3",
+       "aitech": "AITech-8.2",
+       "aitech_name": "Data Exfiltration"
+      },
+      "severity": "HIGH",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "a",
+      "threats": {
+       "aisubtech": "AISubtech-8.2.3",
+       "aitech": "AITech-8.2",
+       "aitech_name": "Data Exfiltration"
+      },
+      "total_findings": 2
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "tool_clean": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     }
+    },
+    "is_safe": true,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "unknown_mixed_with_tool": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     }
+    },
+    "is_safe": true,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "unknown_severity_forces_unknown_threat_name": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "UNKNOWN",
+      "threat_names": [
+       "UNKNOWN"
+      ],
+      "threat_summary": "Analysis failed - status unknown",
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "unknown_severity_with_unknown_threat_type": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "UNKNOWN",
+      "threat_names": [
+       "UNKNOWN"
+      ],
+      "threat_summary": "Analysis failed - status unknown",
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "unknown_type_skipped": {
+  "scan_results": []
+ },
+ "with_taxonomy": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "mcp_taxonomy": {
+       "aisubtech": "AISubtech-8.2.3",
+       "aitech": "AITech-8.2",
+       "aitech_name": "Data Exfiltration"
+      },
+      "severity": "HIGH",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "something bad",
+      "threats": {
+       "aisubtech": "AISubtech-8.2.3",
+       "aitech": "AITech-8.2",
+       "aitech_name": "Data Exfiltration"
+      },
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ },
+ "with_threat_vuln_classification": {
+  "scan_results": [
+   {
+    "findings": {
+     "api_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "llm_analyzer": {
+      "severity": "SAFE",
+      "total_findings": 0
+     },
+     "yara_analyzer": {
+      "severity": "HIGH",
+      "threat_names": [
+       "data_exfiltration"
+      ],
+      "threat_summary": "something bad",
+      "threat_vulnerability_classification": "VULNERABILITY",
+      "total_findings": 1
+     }
+    },
+    "is_safe": false,
+    "status": "completed",
+    "tool_name": "demo_tool"
+   }
+  ]
+ }
+}

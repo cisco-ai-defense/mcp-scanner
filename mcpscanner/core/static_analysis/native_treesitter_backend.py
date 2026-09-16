@@ -30,6 +30,7 @@ from tree_sitter import Node
 from .context_extractor import FunctionContext
 from .dataflow.treesitter_analysis import TreeSitterDataflowAnalysis
 from .taint.tracker import TaintStatus
+from ...utils.ordering import dedupe
 
 from .native_common import (
     TaintInfo,
@@ -1681,7 +1682,7 @@ class TreeSitterBackendMixin:
                 visit(child)
 
         visit(node)
-        return list(set(strings))[:50]
+        return dedupe(strings)[:50]
     def _ts_extract_returns(self, node: "Node") -> List[str]:
         """Extract return expressions from tree-sitter AST."""
         returns = []

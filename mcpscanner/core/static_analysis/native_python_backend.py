@@ -32,6 +32,7 @@ from .context_extractor import FunctionContext
 from .dataflow.forward_analysis import ForwardDataflowAnalysis
 from .parser.python_parser import PythonParser
 from .taint.tracker import TaintStatus
+from ...utils.ordering import dedupe
 
 from .native_common import (
     TaintInfo,
@@ -927,7 +928,7 @@ class PythonBackendMixin:
             if isinstance(child, ast.Constant) and isinstance(child.value, str):
                 if child.value and len(child.value) <= 500:
                     string_literals.append(child.value)
-        string_literals = list(set(string_literals))[:50]
+        string_literals = dedupe(string_literals)[:50]
 
         return string_literals
 

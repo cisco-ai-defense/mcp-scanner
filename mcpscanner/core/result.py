@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from .analyzers.base import SecurityFinding
 from .analyzers.meta_analyzer import build_meta_audit_payload
+from ..utils.ordering import dedupe
 
 
 class ScanResult:
@@ -444,7 +445,8 @@ def filter_results_by_severity(
                     findings=filtered_findings,
                     server_source=result.server_source,
                     server_name=result.server_name,
-                    resource_description=getattr(result, "resource_description", "") or "",
+                    resource_description=getattr(result, "resource_description", "")
+                    or "",
                     resource_text=getattr(result, "resource_text", "") or "",
                 )
             elif isinstance(result, InstructionsScanResult):
@@ -515,13 +517,118 @@ def get_highest_severity(severities: List[str]) -> str:
         "SAFE": 1,
     }
 
-    concrete = [
-        s.upper() for s in severities if s and s.upper() in severity_order
-    ]
+    concrete = [s.upper() for s in severities if s and s.upper() in severity_order]
     if not concrete:
         return "UNKNOWN"
 
     return max(concrete, key=lambda s: severity_order[s])
+
+
+# The SDK JSON serializer always reports these three analyzers, present or
+# not, so consumers can index the block without checking. This is a
+# narrower contract than ``report_generator.results_to_json``, which keys
+# off whichever analyzers actually ran.
+_JSON_ANALYZER_NAMES = {
+    "API": "api_analyzer",
+    "YARA": "yara_analyzer",
+    "LLM": "llm_analyzer",
+}
+
+_EMPTY_ANALYZER_BLOCK = {"severity": "SAFE", "total_findings": 0}
+
+
+def _result_identity(scan_result: Any) -> Optional[Dict[str, Any]]:
+    """The type-specific head of a result's JSON object, or None if unknown."""
+    if isinstance(scan_result, ToolScanResult):
+        identity: Dict[str, Any] = {"tool_name": scan_result.tool_name}
+    elif isinstance(scan_result, PromptScanResult):
+        identity = {"prompt_name": scan_result.prompt_name}
+    elif isinstance(scan_result, ResourceScanResult):
+        identity = {
+            "resource_uri": scan_result.resource_uri,
+            "resource_name": scan_result.resource_name,
+            "resource_mime_type": scan_result.resource_mime_type,
+        }
+    elif isinstance(scan_result, InstructionsScanResult):
+        identity = {
+            "server_name": scan_result.server_name,
+            "protocol_version": scan_result.protocol_version,
+            "instructions": scan_result.instructions,
+        }
+    else:
+        return None
+
+    identity["status"] = scan_result.status
+    identity["findings"] = {}
+    identity["is_safe"] = scan_result.is_safe
+    return identity
+
+
+def _analyzer_block(vulns: List[Any]) -> Dict[str, Any]:
+    """Summarize one analyzer's findings into its JSON block.
+
+    Taxonomy and classification are taken from the first finding that
+    carries them, on the assumption that an analyzer reports one kind of
+    problem per item.
+    """
+    threat_names: List[str] = []
+    summaries: List[str] = []
+    severities: List[str] = []
+    mcp_taxonomy = None
+    threat_vuln_classification = None
+
+    for vuln in vulns:
+        severities.append(vuln.severity)
+
+        summary = getattr(vuln, "summary", None)
+        if summary and summary not in summaries:
+            summaries.append(summary)
+
+        details = getattr(vuln, "details", None)
+        if details and "threat_type" in details:
+            threat_type = details["threat_type"]
+            if threat_type not in threat_names:
+                threat_names.append(threat_type)
+
+        if mcp_taxonomy is None and getattr(vuln, "mcp_taxonomy", None):
+            mcp_taxonomy = vuln.mcp_taxonomy
+
+        if threat_vuln_classification is None and details:
+            threat_vuln_classification = details.get(
+                "threat_vulnerability_classification"
+            )
+
+    severity = get_highest_severity(severities)
+
+    if severity == "UNKNOWN":
+        # The analyzer did not run to completion, so "no threats" would
+        # overstate what we know.
+        threat_summary = "Analysis failed - status unknown"
+        if not threat_names or (
+            len(threat_names) == 1 and threat_names[0].lower() == "unknown"
+        ):
+            threat_names = ["UNKNOWN"]
+    elif not threat_names:
+        threat_summary = "No specific threats identified"
+    else:
+        threat_summary = summaries[0] if summaries else "Threats detected"
+
+    block: Dict[str, Any] = {
+        "severity": severity,
+        "total_findings": len(vulns),
+        "threat_names": dedupe(threat_names),
+        "threat_summary": threat_summary,
+    }
+
+    if threat_vuln_classification:
+        block["threat_vulnerability_classification"] = threat_vuln_classification
+
+    if mcp_taxonomy:
+        block["threats"] = mcp_taxonomy
+        # Duplicated under the legacy key the CLI display still reads.
+        block["mcp_taxonomy"] = mcp_taxonomy
+
+    return block
 
 
 def format_results_as_json(
@@ -542,164 +649,26 @@ def format_results_as_json(
     results = []
 
     for scan_result in scan_results:
-        # Initialize result_dict to None
-        result_dict = None
-
-        # Build result dict based on type
-        if isinstance(scan_result, ToolScanResult):
-            result_dict = {
-                "tool_name": scan_result.tool_name,
-                "status": scan_result.status,
-                "findings": {},
-                "is_safe": scan_result.is_safe,
-            }
-        elif isinstance(scan_result, PromptScanResult):
-            result_dict = {
-                "prompt_name": scan_result.prompt_name,
-                "status": scan_result.status,
-                "findings": {},
-                "is_safe": scan_result.is_safe,
-            }
-        elif isinstance(scan_result, ResourceScanResult):
-            result_dict = {
-                "resource_uri": scan_result.resource_uri,
-                "resource_name": scan_result.resource_name,
-                "resource_mime_type": scan_result.resource_mime_type,
-                "status": scan_result.status,
-                "findings": {},
-                "is_safe": scan_result.is_safe,
-            }
-        elif isinstance(scan_result, InstructionsScanResult):
-            result_dict = {
-                "server_name": scan_result.server_name,
-                "protocol_version": scan_result.protocol_version,
-                "instructions": scan_result.instructions,
-                "status": scan_result.status,
-                "findings": {},
-                "is_safe": scan_result.is_safe,
-            }
-
-        # Skip unknown types
+        result_dict = _result_identity(scan_result)
         if result_dict is None:
             continue
 
-        # Group findings by analyzer
         analyzer_groups = group_findings_by_analyzer(scan_result.findings)
+        present = {key.upper(): key for key in analyzer_groups}
 
-        # Always include all analyzers, even if they have no findings
-        all_analyzers = ["API", "YARA", "LLM"]
-        analyzer_name_mapping = {
-            "API": "api_analyzer",
-            "YARA": "yara_analyzer",
-            "LLM": "llm_analyzer",
-        }
+        for analyzer, display_name in _JSON_ANALYZER_NAMES.items():
+            if analyzer not in present:
+                result_dict["findings"][display_name] = dict(_EMPTY_ANALYZER_BLOCK)
+                continue
 
-        for analyzer in all_analyzers:
-            analyzer_key = analyzer.upper()
-            analyzer_display_name = analyzer_name_mapping[analyzer]
+            vulns = analyzer_groups.get(
+                analyzer, analyzer_groups.get(analyzer.lower(), [])
+            )
+            result_dict["findings"][display_name] = _analyzer_block(vulns)
 
-            if analyzer_key in [a.upper() for a in analyzer_groups.keys()]:
-                # Analyzer has findings
-                vulns = analyzer_groups.get(
-                    analyzer, analyzer_groups.get(analyzer.lower(), [])
-                )
-
-                # Extract threat names, severities, and summaries
-                threat_names = []
-                summaries = []
-                severities = []
-
-                # Collect MCP Taxonomy info (use first finding's taxonomy)
-                mcp_taxonomy = None
-                threat_vuln_classification = None
-
-                for vuln in vulns:
-                    severities.append(vuln.severity)
-
-                    # Collect summaries for threat_summary generation
-                    if hasattr(vuln, "summary") and vuln.summary:
-                        if vuln.summary not in summaries:
-                            summaries.append(vuln.summary)
-
-                    # Extract threat name from details
-                    if (
-                        hasattr(vuln, "details")
-                        and vuln.details
-                        and "threat_type" in vuln.details
-                    ):
-                        threat_type = vuln.details["threat_type"]
-                        if threat_type not in threat_names:
-                            threat_names.append(threat_type)
-
-                    # Collect MCP Taxonomy from first finding
-                    if (
-                        mcp_taxonomy is None
-                        and hasattr(vuln, "mcp_taxonomy")
-                        and vuln.mcp_taxonomy
-                    ):
-                        mcp_taxonomy = vuln.mcp_taxonomy
-
-                    # Collect threat/vulnerability classification from first finding
-                    if (
-                        threat_vuln_classification is None
-                        and hasattr(vuln, "details")
-                        and vuln.details
-                    ):
-                        threat_vuln_classification = vuln.details.get(
-                            "threat_vulnerability_classification"
-                        )
-
-                # Get the highest severity for this analyzer
-                analyzer_severity = get_highest_severity(severities)
-
-                # Get threat_summary from analyzer (each analyzer should provide this)
-                if analyzer_severity == "UNKNOWN":
-                    threat_summary = "Analysis failed - status unknown"
-                    if len(threat_names) == 0 or (
-                        len(threat_names) == 1 and threat_names[0].lower() == "unknown"
-                    ):
-                        threat_names = ["UNKNOWN"]
-                elif len(threat_names) == 0:
-                    threat_summary = "No specific threats identified"
-                else:
-                    # Use first summary as threat_summary (analyzers should provide consistent summaries)
-                    threat_summary = summaries[0] if summaries else "Threats detected"
-
-                analyzer_finding = {
-                    "severity": analyzer_severity,
-                    "total_findings": len(vulns),
-                    "threat_names": list(set(threat_names)),  # Deduplicate threat names
-                    "threat_summary": threat_summary,
-                }
-
-                # Add threat/vulnerability classification if available
-                if threat_vuln_classification:
-                    analyzer_finding["threat_vulnerability_classification"] = (
-                        threat_vuln_classification
-                    )
-
-                # Add MCP Taxonomy if available (this replaces threat_names and threat_summary)
-                if mcp_taxonomy:
-                    analyzer_finding["threats"] = mcp_taxonomy
-                    # Also add as mcp_taxonomy for CLI display compatibility
-                    analyzer_finding["mcp_taxonomy"] = mcp_taxonomy
-
-                result_dict["findings"][analyzer_display_name] = analyzer_finding
-            else:
-                # Analyzer has no findings - set default values
-                result_dict["findings"][analyzer_display_name] = {
-                    "severity": "SAFE",
-                    "total_findings": 0,
-                }
-
-        # H3 fix: surface the meta-analysis audit trail on the SDK
-        # JSON serializer too. Previously only ``report_generator`` (CLI
-        # artifacts) and ``api/router`` (HTTP responses) emitted this
-        # block, so SDK consumers following ``docs/architecture.md`` and
-        # ``docs/behavioral-scanning.md`` would miss every dropped FP and
-        # see a clean-looking ``is_safe: true`` report. Delegate to the
-        # shared ``build_meta_audit_payload`` so the three serializers
-        # stay byte-identical.
+        # Without this block, SDK consumers cannot tell a clean item from
+        # one the meta-analyzer filtered clean. ``report_generator`` and
+        # ``api/router`` emit the same payload from the same helper.
         meta_audit = build_meta_audit_payload(
             getattr(scan_result, "meta_filtered_findings", None) or []
         )
@@ -783,8 +752,6 @@ def format_results_by_analyzer(
         for f in meta_dropped:
             details = getattr(f, "details", {}) or {}
             reason = details.get("meta_reason", "Identified as likely false positive")
-            output.append(
-                f"  • [{f.analyzer}/{f.severity}] {f.summary} — {reason}"
-            )
+            output.append(f"  • [{f.analyzer}/{f.severity}] {f.summary} — {reason}")
 
     return "\n".join(output)
