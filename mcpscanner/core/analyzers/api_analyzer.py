@@ -158,8 +158,14 @@ class ApiAnalyzer(BaseAnalyzer):
                                 json=payload,
                                 timeout=self._DEFAULT_TIMEOUT,
                             )
-                    except Exception:
-                        pass  # If we can't parse the error, let the original error propagate
+                    except Exception as e:
+                        # Deliberate: the retry was best-effort, so let the
+                        # original API error surface below rather than this one.
+                        self.logger.debug(
+                            "could not parse API error for rules retry error_type=%s error=%s",
+                            type(e).__name__,
+                            e,
+                        )
 
             response.raise_for_status()
             response_json = response.json()

@@ -177,7 +177,13 @@ class ProtocolAnalyzer(BaseAnalyzer):
                         except json.JSONDecodeError:
                             continue
             return resp.json()
-        except Exception:
+        except Exception as e:
+            self.logger.debug(
+                "protocol response body unparseable status=%s error_type=%s error=%s",
+                getattr(resp, "status_code", "?"),
+                type(e).__name__,
+                e,
+            )
             return None
 
     def _get_tools(self, resp: Optional[httpx.Response]) -> List[Dict]:

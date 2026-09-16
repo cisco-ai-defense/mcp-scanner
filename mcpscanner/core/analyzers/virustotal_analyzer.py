@@ -779,8 +779,17 @@ class VirusTotalAnalyzer:
             if result.content_family in _TEXT_ONLY_FAMILIES:
                 return False  # Confirmed text
             return True  # Magic disagrees — non-text content
-        except Exception:
-            return False  # Fail open — trust the extension
+        except Exception as e:
+            # Fail open — trust the extension. This errs toward scanning the
+            # file as text, so it costs coverage rather than hiding a verdict.
+            logger.debug(
+                "magic detection failed, falling back to extension path=%s "
+                "error_type=%s error=%s",
+                file_path,
+                type(e).__name__,
+                e,
+            )
+            return False
 
     # ------------------------------------------------------------------
     # File discovery
