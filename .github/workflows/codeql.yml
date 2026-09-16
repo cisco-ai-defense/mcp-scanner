@@ -14,8 +14,8 @@ name: "CodeQL Advanced"
 on:
   push:
     branches: [ "main" ]
-  pull_request_target:
-    branches: [ "main" ]             # runs on PRs from forks targeting main
+  pull_request:
+    branches: [ "main" ]             # runs on PRs, including from forks
   merge_group:
   schedule:
     - cron: '44 2 * * 2'             # weekly scheduled scan
@@ -63,10 +63,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        # Using defaults here so it works correctly for push, PR (including forks), schedule, merge_group
+        # No explicit `ref:` needed: for pull_request (including forks), this
+        # already checks out the PR's merge commit by default. Using
+        # pull_request_target with a fork's head.sha here previously made
+        # actions/checkout refuse the checkout (a "pwn request" guard), since
+        # pull_request_target runs with the base repo's trusted token.
         with:
-          # For fork PRs, checkout PR content but with safeguards
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false  # Don't persist auth tokens
 
       # Initializes the CodeQL tools for scanning.
