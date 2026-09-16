@@ -21,7 +21,6 @@ import os
 import tempfile
 from unittest.mock import patch, MagicMock
 from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
-from mcpscanner.config.constants import MCPScannerConstants
 import yara
 
 # --- Helper Functions ---

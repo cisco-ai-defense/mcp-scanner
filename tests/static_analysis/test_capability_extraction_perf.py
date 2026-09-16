@@ -28,7 +28,6 @@ budget trips, investigate before relaxing it.
 
 import time
 
-import pytest
 
 from mcpscanner.core.static_analysis import NativeAnalyzer
 

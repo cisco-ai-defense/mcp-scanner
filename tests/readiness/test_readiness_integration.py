@@ -22,7 +22,7 @@ and verifies end-to-end scanning functionality.
 
 import json
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 from mcpscanner.config.config import Config
 from mcpscanner.core.scanner import Scanner

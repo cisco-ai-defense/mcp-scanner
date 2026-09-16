@@ -14,20 +14,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-from unittest.mock import Mock, patch, AsyncMock
-from typing import Dict, Any
 
-from mcpscanner.core.auth import (
-    Auth,
-    AuthType,
-    APIAuthConfig,
-    BearerAuth,
-    InMemoryTokenStorage,
-    OAuthHandler,
-    create_oauth_provider_from_auth,
-    create_bearer_auth,
-)
+from mcpscanner.core.auth import Auth, AuthType, BearerAuth, InMemoryTokenStorage, create_oauth_provider_from_auth
 
 
 class TestAuthType:

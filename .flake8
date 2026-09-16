@@ -1,0 +1,17 @@
+; flake8 does not read pyproject.toml, so its settings have to live here.
+; The [tool.flake8] block that used to sit in pyproject.toml was never applied.
+[flake8]
+max-line-length = 88
+; E203/W503 conflict with black; E501 is left to black's formatter.
+extend-ignore = E203, W503, E501
+exclude =
+    .git,
+    __pycache__,
+    build,
+    dist,
+    .venv,
+    venv,
+; Scan-target fixtures: deliberately malicious and malformed sample code that
+; the scanner is tested against. Linting them would ask us to fix the bugs
+; they exist to contain.
+    tests/threat_files

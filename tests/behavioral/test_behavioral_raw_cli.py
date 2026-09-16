@@ -34,13 +34,6 @@ def leaky(path: str) -> str:
         temp_path = f.name
 
     try:
-        mock_analysis = {
-            "threat_name": "DATA EXFILTRATION",
-            "description_claims": "Only reads local files",
-            "actual_behavior": "Opens arbitrary path",
-            "security_implications": "Path traversal / exfil risk",
-            "threat_vulnerability_classification": "THREAT",
-        }
 
         async def fake_analyze(self, content, context):
             finding = SecurityFinding(

@@ -173,7 +173,7 @@ async def test_scan_remote_server_tool_method(config):
         assert result.tool_name == "safe_tool"
         assert result.status == "completed"
         assert len(result.findings) == 0
-        assert result.is_safe == True
+        assert result.is_safe is True
 
         # Verify that _analyze_tool was called with the correct tool
         mock_analyze_tool.assert_called_once_with(
@@ -1070,8 +1070,7 @@ def test_resource_scan_result_failed_status():
 #      InitializeResult didn't advertise the capability.
 
 
-from types import SimpleNamespace
-from mcpscanner.core.scanner import Scanner
+from types import SimpleNamespace  # noqa: E402  (section-local test helpers)
 
 try:
     from mcp.shared.exceptions import McpError

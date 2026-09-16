@@ -15,8 +15,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from unittest.mock import Mock, patch, mock_open
-from typing import List, Dict, Any
 
 from mcpscanner.core.report_generator import ReportGenerator, results_to_json
 from mcpscanner.core.result import ToolScanResult, PromptScanResult, ResourceScanResult

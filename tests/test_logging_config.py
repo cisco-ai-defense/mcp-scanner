@@ -18,7 +18,6 @@
 
 import logging
 
-import pytest
 
 from mcpscanner.utils.logging_config import (
     get_logger,

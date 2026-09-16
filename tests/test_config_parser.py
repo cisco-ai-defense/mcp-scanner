@@ -21,7 +21,6 @@ import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from typing import Dict, Any
 
 from mcpscanner.config.config_parser import (
     MCPConfigScanner,
@@ -275,11 +274,7 @@ class TestMCPConfigScanner:
 
     def test_extract_servers_vscode_config(self, scanner):
         """Test extracting servers from VSCode configuration."""
-        from mcpscanner.core.mcp_models import (
-            VSCodeConfigFile,
-            VSCodeMCPConfig,
-            StdioServer,
-        )
+        from mcpscanner.core.mcp_models import VSCodeConfigFile, StdioServer
 
         vscode_config_data = {
             "mcp": {
@@ -422,7 +417,7 @@ class TestMCPConfigScanner:
         # This should handle validation errors gracefully
         try:
             config = ClaudeConfigFile.model_validate(config_data)
-            servers = scanner.extract_servers(config)
+            scanner.extract_servers(config)
             # Should either skip invalid servers or handle them gracefully
         except Exception:
             # Validation might fail, which is expected for invalid configs

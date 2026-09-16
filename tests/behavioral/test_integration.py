@@ -16,10 +16,7 @@
 
 """Integration tests for Behavioral Code Analyzer workflow."""
 
-import pytest
-import tempfile
 import ast
-from pathlib import Path
 
 
 class TestBehavioralAnalyzerWorkflow:

@@ -16,7 +16,6 @@
 
 """Tests for Behavioral Analyzer - Main test suite."""
 
-import pytest
 
 
 class TestBehavioralAnalyzerModule:
@@ -52,8 +51,6 @@ class TestBehavioralAnalyzerModule:
     def test_analyzer_processes_python_syntax(self):
         """Test that analyzer can process Python code syntax."""
         import ast
-        import tempfile
-        from pathlib import Path
 
         # Create a test MCP tool
         code = '''

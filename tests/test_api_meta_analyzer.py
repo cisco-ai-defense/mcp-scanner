@@ -736,7 +736,7 @@ class TestAPIAnalyzerAllowlist:
             },
         )
         assert response.status_code == 422, response.text
-        body = response.json()
+        response.json()
         # FastAPI returns the Pydantic detail under "detail"; the message
         # should at least name the offending analyzer.
         assert "behavioral" in response.text.lower()

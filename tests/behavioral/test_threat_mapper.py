@@ -16,7 +16,6 @@
 
 """Tests for ThreatMapper component."""
 
-import pytest
 
 
 class TestThreatMapper:
@@ -78,47 +77,6 @@ class TestThreatMapper:
             assert (
                 threat_data["severity"] in valid_severities
             ), f"Invalid severity for {threat_name}: {threat_data['severity']}"
-
-    def test_aitech_taxonomy_format(self):
-        """Test that AITech taxonomy follows correct format."""
-        from mcpscanner.threats.threats import ThreatMapping
-
-        behavioral_threats = ThreatMapping.BEHAVIORAL_THREATS
-
-        for threat_name, threat_data in behavioral_threats.items():
-            aitech = threat_data["aitech"]
-            assert aitech.startswith(
-                "AITech-"
-            ), f"Invalid AITech format for {threat_name}"
-
-            aisubtech = threat_data["aisubtech"]
-            assert aisubtech.startswith(
-                "AISubtech-"
-            ), f"Invalid AISubtech format for {threat_name}"
-
-    def test_threat_descriptions_exist(self):
-        """Test that all threats have descriptions."""
-        from mcpscanner.threats.threats import ThreatMapping
-
-        behavioral_threats = ThreatMapping.BEHAVIORAL_THREATS
-
-        for threat_name, threat_data in behavioral_threats.items():
-            assert (
-                "description" in threat_data
-            ), f"Missing description for {threat_name}"
-            assert (
-                len(threat_data["description"]) > 50
-            ), f"Description too short for {threat_name}"
-
-    def test_data_exfiltration_threat_details(self):
-        """Test specific details of DATA EXFILTRATION threat."""
-        from mcpscanner.threats.threats import ThreatMapping
-
-        threat = ThreatMapping.BEHAVIORAL_THREATS["DATA EXFILTRATION"]
-
-        assert threat["severity"] == "HIGH"
-        assert threat["aitech"] == "AITech-8.2"
-        assert "exfiltration" in threat["description"].lower()
 
     def test_aitech_taxonomy_format(self):
         """Test that AITech taxonomy follows correct format."""

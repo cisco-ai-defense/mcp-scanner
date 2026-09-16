@@ -19,7 +19,6 @@
 import json
 import os
 import subprocess
-import tempfile
 
 import pytest
 from unittest.mock import patch, MagicMock

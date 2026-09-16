@@ -21,8 +21,7 @@ import sys
 import tempfile
 import logging
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call
-from argparse import Namespace
+from unittest.mock import patch, call
 
 from mcpscanner.server import main
 

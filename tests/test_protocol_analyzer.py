@@ -16,11 +16,9 @@
 
 """Tests for the MCPS Protocol Security Analyzer."""
 
-import asyncio
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-from typing import Any, Dict
 import pytest
 
 from mcpscanner.core.analyzers.protocol_analyzer import ProtocolAnalyzer

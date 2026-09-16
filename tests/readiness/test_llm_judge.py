@@ -5,7 +5,7 @@
 """Tests for ReadinessLLMJudge LiteLLM request shaping."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

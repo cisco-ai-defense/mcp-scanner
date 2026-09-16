@@ -26,8 +26,7 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock, Mock
-from typing import List
+from unittest.mock import patch, AsyncMock, Mock
 
 from mcpscanner import Config, Scanner
 from mcpscanner.core.result import InstructionsScanResult
@@ -357,8 +356,6 @@ async def test_scan_remote_server_instructions_error_handling(config):
 async def test_scan_instructions_api_endpoint():
     """Test the /scan-instructions API endpoint."""
     from mcpscanner.api.router import router
-    from mcpscanner.core.models import SpecificInstructionsScanRequest
-    from fastapi.testclient import TestClient
     from fastapi import FastAPI
 
     app = FastAPI()
@@ -431,7 +428,6 @@ def test_instructions_result_in_format_results_as_json():
 def test_cli_has_instructions_subcommand():
     """Test that CLI has instructions subcommand."""
     from mcpscanner.cli import main
-    import argparse
 
     # This verifies the subcommand exists in the parser
     # Full CLI test would require more complex mocking

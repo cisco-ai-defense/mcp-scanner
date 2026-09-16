@@ -79,7 +79,6 @@ def _build_npm_tarball(dest_path: Path, *, package_name: str, sources: dict) -> 
     """Write a minimal npm-style tgz to ``dest_path``. ``sources`` maps
     ``package/path`` → file content (str). npm tarballs are always
     rooted at ``package/`` regardless of the package name."""
-    bio = io.BytesIO()
     with tarfile.open(dest_path, "w:gz") as tf:
         package_json = json.dumps({"name": package_name, "version": "0.0.1"})
         info = tarfile.TarInfo(name="package/package.json")

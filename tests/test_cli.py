@@ -21,7 +21,6 @@ import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
-from typing import List, Dict, Any
 
 from mcpscanner.cli import (
     _get_endpoint_from_env,
@@ -31,7 +30,7 @@ from mcpscanner.cli import (
     _build_behavioral_results,
 )
 from mcpscanner.core.analyzers.base import SecurityFinding
-from mcpscanner import Config, ToolScanResult
+from mcpscanner import ToolScanResult
 from mcpscanner.core.models import AnalyzerEnum
 from mcpscanner.core.exceptions import MCPConnectionError
 
@@ -267,7 +266,7 @@ class TestScanMcpServerDirect:
                     mock_results_to_json.return_value = [{"tool_name": "test"}]
 
                     with patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}):
-                        results = await scan_mcp_server_direct(
+                        await scan_mcp_server_direct(
                             "https://test.com",
                             [AnalyzerEnum.API],
                             output_file=output_file,

@@ -19,7 +19,7 @@ from mcpscanner.core.analyzers.behavioral.alignment.alignment_llm_client import 
 from mcpscanner.core.analyzers.behavioral.alignment.alignment_orchestrator import (
     AlignmentOrchestrator,
 )
-from mcpscanner.utils.analyzer_errors import ERROR_KIND_FINAL, ERROR_KIND_TRANSIENT
+from mcpscanner.utils.analyzer_errors import ERROR_KIND_TRANSIENT
 from tests.behavioral.test_logging_contracts import (
     _non_bedrock_config,
     _stub_acompletion_response,

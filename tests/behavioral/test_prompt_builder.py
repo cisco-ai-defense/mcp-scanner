@@ -16,7 +16,6 @@
 
 """Tests for AlignmentPromptBuilder component."""
 
-import pytest
 from pathlib import Path
 
 from mcpscanner.config.constants import MCPScannerConstants
@@ -276,19 +275,6 @@ class TestPromptBuilder:
             assert (
                 keyword.lower() in content.lower()
             ), f"Prompt should contain {keyword} concept"
-
-    def test_prompt_length_adequate(self):
-        """Test that prompt is sufficiently detailed."""
-        prompt_path = (
-            Path(__file__).parent.parent.parent
-            / "mcpscanner"
-            / "data"
-            / "prompts"
-            / "code_alignment_threat_analysis_prompt.md"
-        )
-        content = prompt_path.read_text()
-
-        assert len(content) > 5000, f"Prompt seems too short: {len(content)} characters"
 
     def test_prompt_has_threat_categories(self):
         """Test that prompt defines threat categories."""

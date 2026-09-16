@@ -24,7 +24,7 @@ true positives, or prioritize/correlate them.
 import json
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from mcpscanner.config import Config
 from mcpscanner.core.analyzers.base import SecurityFinding

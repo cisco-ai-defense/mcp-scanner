@@ -14,29 +14,30 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""MCP capability detection when the server instance is not named ``mcp``.
 
-"""Tests for MCP decorator detection with custom variable names."""
-
+Every other capability-extraction fixture in the suite writes
+``mcp = FastMCP(...)`` and decorates with ``@mcp.tool()``. Real servers name
+the instance whatever they like, and a scanner that only recognizes the
+conventional name would silently analyze nothing on those servers. These
+tests pin detection to the decorator shape rather than the variable name.
+"""
 
 import pytest
 
-# Skip all tests if CodeContextExtractor is not available
-pytest.skip(
-    "CodeContextExtractor tests require full static analysis implementation",
-    allow_module_level=True,
-)
+from mcpscanner.core.static_analysis import NativeAnalyzer
 
-
-# Test cases with different variable names for FastMCP instance
 CUSTOM_VARIABLE_TOOL = '''
-from mcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 hello_mcp = FastMCP("Bearer-Protected SSE Server")
+
 @hello_mcp.tool()
 def hello(name: str) -> str:
     """
     Simple tool that greets the provided name.
     """
     return f"Hello, {name}!"
+
 @hello_mcp.tool()
 def add(a: int, b: int) -> int:
     """
@@ -45,17 +46,18 @@ def add(a: int, b: int) -> int:
     return a + b
 '''
 
-
 MY_SERVER_VARIABLE = '''
-from mcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 my_server = FastMCP("My Custom Server")
+
 @my_server.prompt()
 def create_prompt(text: str) -> str:
     """
     Creates a prompt from text.
     """
     return f"Prompt: {text}"
-@my_server.resource()
+
+@my_server.resource("resource://example")
 def get_resource(id: str) -> dict:
     """
     Gets a resource by ID.
@@ -63,10 +65,10 @@ def get_resource(id: str) -> dict:
     return {"id": id, "data": "example"}
 '''
 
-
 API_VARIABLE = '''
-from mcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 api = FastMCP("API Server")
+
 @api.tool()
 def fetch_data(url: str) -> str:
     """
@@ -76,132 +78,130 @@ def fetch_data(url: str) -> str:
     return requests.get(url).text
 '''
 
-
 MIXED_DECORATORS = '''
-from mcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("Standard Server")
 custom_mcp = FastMCP("Custom Server")
+
 @mcp.tool()
 def standard_tool(x: int) -> int:
     """Standard tool."""
     return x * 2
+
 @custom_mcp.tool()
 def custom_tool(y: str) -> str:
     """Custom tool."""
     return y.upper()
+
 @custom_mcp.prompt()
 def custom_prompt(text: str) -> str:
     """Custom prompt."""
     return f"Custom: {text}"
 '''
 
-
-class TestCustomVariableMCPDetection:
-    """Test cases for detecting MCP decorators with custom variable names."""
-
-    def test_detect_hello_mcp_variable(self):
-        """Test detection of @hello_mcp.tool() decorator."""
-        extractor = CodeContextExtractor(CUSTOM_VARIABLE_TOOL, "test.py")
-        contexts = extractor.extract_mcp_function_contexts()
-
-        assert len(contexts) == 2
-        assert contexts[0].name == "hello"
-        assert contexts[1].name == "add"
-        assert "hello_mcp.tool" in contexts[0].decorator_types
-        assert "hello_mcp.tool" in contexts[1].decorator_types
-
-    def test_detect_my_server_variable(self):
-        """Test detection of @my_server.prompt() and @my_server.resource() decorators."""
-        extractor = CodeContextExtractor(MY_SERVER_VARIABLE, "test.py")
-        contexts = extractor.extract_mcp_function_contexts()
-
-        assert len(contexts) == 2
-        assert contexts[0].name == "create_prompt"
-        assert contexts[1].name == "get_resource"
-        assert "my_server.prompt" in contexts[0].decorator_types
-        assert "my_server.resource" in contexts[1].decorator_types
-
-    def test_detect_api_variable(self):
-        """Test detection of @api.tool() decorator."""
-        extractor = CodeContextExtractor(API_VARIABLE, "test.py")
-        contexts = extractor.extract_mcp_function_contexts()
-
-        assert len(contexts) == 1
-        assert contexts[0].name == "fetch_data"
-        assert "api.tool" in contexts[0].decorator_types
-
-    def test_detect_mixed_variables(self):
-        """Test detection of multiple MCP instances with different variable names."""
-        extractor = CodeContextExtractor(MIXED_DECORATORS, "test.py")
-        contexts = extractor.extract_mcp_function_contexts()
-
-        assert len(contexts) == 3
-
-        # Check standard_tool with mcp.tool
-        standard_tool = next(ctx for ctx in contexts if ctx.name == "standard_tool")
-        assert "mcp.tool" in standard_tool.decorator_types
-
-        # Check custom_tool with custom_mcp.tool
-        custom_tool = next(ctx for ctx in contexts if ctx.name == "custom_tool")
-        assert "custom_mcp.tool" in custom_tool.decorator_types
-
-        # Check custom_prompt with custom_mcp.prompt
-        custom_prompt = next(ctx for ctx in contexts if ctx.name == "custom_prompt")
-        assert "custom_mcp.prompt" in custom_prompt.decorator_types
-
-    def test_docstrings_extracted_correctly(self):
-        """Test that docstrings are correctly extracted with custom variable names."""
-        extractor = CodeContextExtractor(CUSTOM_VARIABLE_TOOL, "test.py")
-        contexts = extractor.extract_mcp_function_contexts()
-
-        assert len(contexts) == 2
-        assert "greets the provided name" in contexts[0].docstring
-        assert "Adds two numbers" in contexts[1].docstring
-
-    def test_parameters_extracted_correctly(self):
-        """Test that parameters are correctly extracted with custom variable names."""
-        extractor = CodeContextExtractor(CUSTOM_VARIABLE_TOOL, "test.py")
-        contexts = extractor.extract_mcp_function_contexts()
-
-        # hello function
-        assert len(contexts[0].parameters) == 1
-        assert contexts[0].parameters[0]["name"] == "name"
-        assert contexts[0].parameters[0]["type"] == "str"
-
-        # add function
-        assert len(contexts[1].parameters) == 2
-        assert contexts[1].parameters[0]["name"] == "a"
-        assert contexts[1].parameters[1]["name"] == "b"
-
-    def test_return_types_extracted_correctly(self):
-        """Test that return types are correctly extracted with custom variable names."""
-        extractor = CodeContextExtractor(CUSTOM_VARIABLE_TOOL, "test.py")
-        contexts = extractor.extract_mcp_function_contexts()
-
-        assert contexts[0].return_type == "str"
-        assert contexts[1].return_type == "int"
-
-
-class TestBackwardCompatibility:
-    """Test that standard @mcp.tool() decorators still work."""
-
-    def test_standard_mcp_variable_still_works(self):
-        """Test that @mcp.tool() still works (backward compatibility)."""
-        code = '''
-from mcp import FastMCP
+STANDARD_VARIABLE = '''
+from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("Standard Server")
+
 @mcp.tool()
 def standard_function(x: int) -> int:
     """Standard function."""
     return x * 2
 '''
-        extractor = CodeContextExtractor(code, "test.py")
-        contexts = extractor.extract_mcp_function_contexts()
-
-        assert len(contexts) == 1
-        assert contexts[0].name == "standard_function"
-        assert "mcp.tool" in contexts[0].decorator_types
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+def capabilities(source: str):
+    """Extract capability contexts keyed by function name."""
+    found = NativeAnalyzer(source, "test.py").extract_mcp_capability_contexts()
+    return {ctx.name: ctx for ctx in found}
+
+
+class TestCustomVariableMCPDetection:
+    """Detection keys off the decorator, not the instance's variable name."""
+
+    def test_detects_tools_on_custom_named_instance(self):
+        caps = capabilities(CUSTOM_VARIABLE_TOOL)
+
+        assert set(caps) == {"hello", "add"}
+        assert "hello_mcp.tool" in caps["hello"].decorator_types
+        assert "hello_mcp.tool" in caps["add"].decorator_types
+
+    def test_detects_prompts_and_resources_on_custom_named_instance(self):
+        caps = capabilities(MY_SERVER_VARIABLE)
+
+        assert set(caps) == {"create_prompt", "get_resource"}
+        assert "my_server.prompt" in caps["create_prompt"].decorator_types
+        assert "my_server.resource" in caps["get_resource"].decorator_types
+
+    def test_detects_short_instance_name(self):
+        caps = capabilities(API_VARIABLE)
+
+        assert set(caps) == {"fetch_data"}
+        assert "api.tool" in caps["fetch_data"].decorator_types
+
+    def test_two_instances_in_one_file_are_both_detected(self):
+        caps = capabilities(MIXED_DECORATORS)
+
+        assert set(caps) == {"standard_tool", "custom_tool", "custom_prompt"}
+        assert "mcp.tool" in caps["standard_tool"].decorator_types
+        assert "custom_mcp.tool" in caps["custom_tool"].decorator_types
+        assert "custom_mcp.prompt" in caps["custom_prompt"].decorator_types
+
+    def test_conventional_instance_name_still_detected(self):
+        caps = capabilities(STANDARD_VARIABLE)
+
+        assert set(caps) == {"standard_function"}
+        assert "mcp.tool" in caps["standard_function"].decorator_types
+
+
+class TestCustomVariableMetadataExtraction:
+    """A custom instance name must not degrade the extracted metadata.
+
+    The behavioral analyzer reasons over docstrings, parameters, and return
+    types, so these carrying through matters as much as the tool being found
+    at all.
+    """
+
+    def test_docstrings_survive(self):
+        caps = capabilities(CUSTOM_VARIABLE_TOOL)
+
+        assert "greets the provided name" in caps["hello"].docstring
+        assert "Adds two numbers" in caps["add"].docstring
+
+    def test_parameters_survive(self):
+        caps = capabilities(CUSTOM_VARIABLE_TOOL)
+
+        assert [p["name"] for p in caps["hello"].parameters] == ["name"]
+        assert caps["hello"].parameters[0]["type"] == "str"
+        assert [p["name"] for p in caps["add"].parameters] == ["a", "b"]
+
+    def test_return_types_survive(self):
+        caps = capabilities(CUSTOM_VARIABLE_TOOL)
+
+        assert caps["hello"].return_type == "str"
+        assert caps["add"].return_type == "int"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        # A non-MCP framework using the same decorator shape.
+        """
+import flask
+app = flask.Flask(__name__)
+
+@app.route("/x")
+def handler():
+    return "x"
+""",
+        # Plain helpers with no decorator at all.
+        """
+def helper(x):
+    return x * 2
+""",
+    ],
+    ids=["flask_route", "undecorated_helper"],
+)
+def test_lookalike_decorators_are_not_mistaken_for_capabilities(source):
+    """Matching on any ``@name.verb()`` would sweep in unrelated frameworks."""
+    assert capabilities(source) == {}

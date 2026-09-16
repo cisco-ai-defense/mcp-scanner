@@ -198,7 +198,7 @@ class TestScanPackage:
         )
 
         scanner = PyPIPackageScanner()
-        result = scanner.scan_package("flask", version="2.0.0")
+        scanner.scan_package("flask", version="2.0.0")
 
         call_args = mock_run.call_args[0][0]
         assert "--version" in call_args

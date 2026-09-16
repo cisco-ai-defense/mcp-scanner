@@ -18,7 +18,7 @@
 
 import pytest
 from typing import Dict, Any, List
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from mcpscanner.core.analyzers.base import BaseAnalyzer, SecurityFinding
 

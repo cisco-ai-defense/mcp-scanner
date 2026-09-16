@@ -24,7 +24,6 @@ the rest) before falling through to an unresolved stub.
 
 from pathlib import Path
 
-import pytest
 
 from mcpscanner.core.static_analysis import NativeAnalyzer
 from mcpscanner.core.static_analysis.interprocedural.treesitter_call_graph import (

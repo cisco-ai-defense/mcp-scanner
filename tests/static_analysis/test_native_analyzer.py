@@ -331,7 +331,6 @@ class TestNativeAnalyzerIntegration:
     def test_output_matches_function_context(self):
         """Test that output matches FunctionContext dataclass."""
         from mcpscanner.core.static_analysis import NativeAnalyzer, FunctionContext
-        from dataclasses import fields
 
         code = '''
 def example():
@@ -348,7 +347,6 @@ def example():
         assert isinstance(func, FunctionContext)
 
         # Verify all required fields are present
-        required_fields = {f.name for f in fields(FunctionContext) if f.default is f.default_factory}
         for field_name in ["name", "decorator_types", "imports", "function_calls"]:
             assert hasattr(func, field_name)
 

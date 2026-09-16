@@ -23,10 +23,7 @@ regex — no mocking required.
 
 import pytest
 
-from mcpscanner.core.analyzers.prompt_defense_analyzer import (
-    PromptDefenseAnalyzer,
-    DEFENSE_RULES,
-)
+from mcpscanner.core.analyzers.prompt_defense_analyzer import PromptDefenseAnalyzer
 
 
 # ---------------------------------------------------------------------------

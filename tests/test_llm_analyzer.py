@@ -18,11 +18,10 @@
 
 import pytest
 import json
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch, MagicMock
 
 from mcpscanner.config import Config
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
-from mcpscanner.core.analyzers.base import SecurityFinding
 
 
 class TestLLMPromptLoading:
@@ -87,7 +86,7 @@ class TestLLMAnalyzer:
 
         assert tool_name in prompt
         assert description in prompt
-        assert prompt_injection_detected == False  # No injection in legitimate content
+        assert prompt_injection_detected is False  # No injection in legitimate content
         # Check for randomized delimiter tags (should contain UNTRUSTED_INPUT_START with random ID)
         assert "UNTRUSTED_INPUT_START_" in prompt
         assert "UNTRUSTED_INPUT_END_" in prompt
