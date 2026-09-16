@@ -178,7 +178,9 @@ class Scanner:
         # because Scanner instances themselves are not concurrently constructed
         # within a single request lifecycle.
         self._meta_analyzer = (
-            MetaAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
+            MetaAnalyzer(config)
+            if (config.llm_provider_api_key or is_bedrock)
+            else None
         )
         self._custom_analyzers = custom_analyzers or []
 
@@ -200,7 +202,7 @@ class Scanner:
             active_analyzers.append("PromptDefense")
         for analyzer in self._custom_analyzers:
             active_analyzers.append(f"{analyzer.name}")
-        logger.debug(f'Scanner initialized: active_analyzers="{active_analyzers}"')
+        logger.debug('Scanner initialized: active_analyzers="%s"', active_analyzers)
 
     def get_custom_analyzers(self) -> List[BaseAnalyzer]:
         """Get the list of custom analyzers used by the scanner.
@@ -241,10 +243,7 @@ class Scanner:
                 "(or AWS credentials for Bedrock models)"
             )
 
-        if (
-            AnalyzerEnum.VIRUSTOTAL in requested_analyzers
-            and not self._vt_analyzer
-        ):
+        if AnalyzerEnum.VIRUSTOTAL in requested_analyzers and not self._vt_analyzer:
             missing_requirements.append(
                 "VirusTotal analyzer requested but VIRUSTOTAL_API_KEY not configured or scanning is disabled"
             )
@@ -256,13 +255,19 @@ class Scanner:
             )
 
         # READINESS analyzer should always be available since it doesn't require API keys
-        if AnalyzerEnum.READINESS in requested_analyzers and not self._readiness_analyzer:
+        if (
+            AnalyzerEnum.READINESS in requested_analyzers
+            and not self._readiness_analyzer
+        ):
             missing_requirements.append(
                 "Readiness analyzer requested but failed to initialize"
             )
 
         # PROMPT_DEFENSE analyzer should always be available (pure regex, no API keys)
-        if AnalyzerEnum.PROMPT_DEFENSE in requested_analyzers and not self._prompt_defense_analyzer:
+        if (
+            AnalyzerEnum.PROMPT_DEFENSE in requested_analyzers
+            and not self._prompt_defense_analyzer
+        ):
             missing_requirements.append(
                 "Prompt Defense analyzer requested but failed to initialize"
             )
@@ -490,11 +495,7 @@ class Scanner:
             for finding in unmatched:
                 finding.analyzer = "Behavioral"
             source_result = next(
-                (
-                    r
-                    for r in scan_results
-                    if r.tool_name == "__behavioral_source__"
-                ),
+                (r for r in scan_results if r.tool_name == "__behavioral_source__"),
                 None,
             )
             if source_result is None:
@@ -667,9 +668,7 @@ class Scanner:
         http_headers: Optional[dict] = None,
     ) -> ToolScanResult:
         """Delegates to :func:`.orchestration.analyze_tool`."""
-        return await analyze_tool(
-            self._analyzer_bundle, tool, analyzers, http_headers
-        )
+        return await analyze_tool(self._analyzer_bundle, tool, analyzers, http_headers)
 
     async def _analyze_prompt(
         self,
@@ -842,7 +841,10 @@ class Scanner:
             raise
         except Exception as e:
             logger.error(
-                f'Error scanning tool \'{tool_name}\' on MCP server: server="{server_url}", error="{e}"'
+                'Error scanning tool \'%s\' on MCP server: server="%s", error="%s"',
+                tool_name,
+                server_url,
+                e,
             )
             raise
 
@@ -891,7 +893,9 @@ class Scanner:
                     tool_list = await session.list_tools()
                 except McpError as e:
                     if self._is_missing_capability_error(e):
-                        logger.warning(f"Server '{server_url}' does not expose tools: {e}")
+                        logger.warning(
+                            "Server '%s' does not expose tools: %s", server_url, e
+                        )
                         return []
                     raise
 
@@ -909,7 +913,7 @@ class Scanner:
                 )
 
         except Exception as e:
-            logger.error(f"Error scanning server {server_url}: {e}")
+            logger.error("Error scanning server %s: %s", server_url, e)
             raise
 
     @staticmethod
@@ -949,16 +953,16 @@ class Scanner:
         self._validate_analyzer_requirements(analyzers)
 
         try:
-            async with self._stdio_session(
-                server_config, timeout, errlog
-            ) as session:
+            async with self._stdio_session(server_config, timeout, errlog) as session:
                 # List all tools
                 try:
                     tool_list = await session.list_tools()
                 except McpError as e:
                     if self._is_missing_capability_error(e):
                         logger.warning(
-                            f"Stdio server '{server_config.command}' does not expose tools: {e}"
+                            "Stdio server '%s' does not expose tools: %s",
+                            server_config.command,
+                            e,
                         )
                         return []
                     raise
@@ -976,7 +980,7 @@ class Scanner:
                 )
 
         except Exception as e:
-            logger.error(f"Error scanning stdio server {server_config.command}: {e}")
+            logger.error("Error scanning stdio server %s: %s", server_config.command, e)
             raise
 
     async def scan_stdio_server_tool(
@@ -1016,9 +1020,7 @@ class Scanner:
         self._validate_analyzer_requirements(analyzers)
 
         try:
-            async with self._stdio_session(
-                server_config, timeout, errlog
-            ) as session:
+            async with self._stdio_session(server_config, timeout, errlog) as session:
                 # List all tools and find the target tool
                 try:
                     tool_list = await session.list_tools()
@@ -1048,7 +1050,10 @@ class Scanner:
             raise
         except Exception as e:
             logger.error(
-                f'Error scanning tool \'{tool_name}\' on stdio server: command="{server_config.command}", error="{e}"'
+                'Error scanning tool \'%s\' on stdio server: command="%s", error="%s"',
+                tool_name,
+                server_config.command,
+                e,
             )
             raise
 
@@ -1084,24 +1089,29 @@ class Scanner:
         all_results = {}
 
         for config_path, config in configs.items():
-            logger.debug(f"Scanning servers from config: {config_path}")
+            logger.debug("Scanning servers from config: %s", config_path)
             servers = config_scanner.extract_servers(config)
             config_results = []
 
             for server_name, server_config in servers.items():
-                logger.debug(f"Scanning server '{server_name}' from {config_path}")
+                logger.debug("Scanning server '%s' from %s", server_name, config_path)
 
                 try:
                     if isinstance(server_config, StdioServer):
                         # Apply default expand mode if not provided by config
                         if expand_vars_default and not server_config.expand_vars:
                             logger.debug(
-                                f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'"
+                                "Applying expand_vars='%s' to server '%s'",
+                                expand_vars_default,
+                                server_name,
                             )
                             server_config.expand_vars = expand_vars_default
                         else:
                             logger.debug(
-                                f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})"
+                                "Server '%s' expand_vars: %s (default: %s)",
+                                server_name,
+                                server_config.expand_vars,
+                                expand_vars_default,
                             )
 
                         # Scan stdio server with timeout and error recovery
@@ -1120,7 +1130,7 @@ class Scanner:
                             asyncio.CancelledError,
                         ) as e:
                             logger.warning(
-                                f"Failed to connect to server '{server_name}': {e}"
+                                "Failed to connect to server '%s': %s", server_name, e
                             )
                             logger.debug("Continuing with remaining servers...")
                             continue
@@ -1141,18 +1151,23 @@ class Scanner:
                             asyncio.CancelledError,
                         ) as e:
                             logger.warning(
-                                f"Failed to connect to server '{server_name}': {e}"
+                                "Failed to connect to server '%s': %s", server_name, e
                             )
                             logger.debug("Continuing with remaining servers...")
                             continue
                     else:
                         logger.warning(
-                            f"Unknown server type for '{server_name}' in {config_path}"
+                            "Unknown server type for '%s' in %s",
+                            server_name,
+                            config_path,
                         )
 
                 except Exception as e:
                     logger.error(
-                        f"Unexpected error scanning server '{server_name}' from {config_path}: {e}"
+                        "Unexpected error scanning server '%s' from %s: %s",
+                        server_name,
+                        config_path,
+                        e,
                     )
                     logger.debug("Continuing with remaining servers...")
                     continue
@@ -1199,19 +1214,24 @@ class Scanner:
         all_results = []
 
         for server_name, server_config in servers.items():
-            logger.debug(f"Scanning server '{server_name}' from {config_path}")
+            logger.debug("Scanning server '%s' from %s", server_name, config_path)
 
             try:
                 if isinstance(server_config, StdioServer):
                     # Apply default expand mode if not provided by config
                     if expand_vars_default and not server_config.expand_vars:
                         logger.debug(
-                            f"Applying expand_vars='{expand_vars_default}' to server '{server_name}'"
+                            "Applying expand_vars='%s' to server '%s'",
+                            expand_vars_default,
+                            server_name,
                         )
                         server_config.expand_vars = expand_vars_default
                     else:
                         logger.debug(
-                            f"Server '{server_name}' expand_vars: {server_config.expand_vars} (default: {expand_vars_default})"
+                            "Server '%s' expand_vars: %s (default: %s)",
+                            server_name,
+                            server_config.expand_vars,
+                            expand_vars_default,
                         )
 
                     # Scan stdio server with timeout and error recovery
@@ -1230,7 +1250,7 @@ class Scanner:
                         asyncio.CancelledError,
                     ) as e:
                         logger.warning(
-                            f"Failed to connect to server '{server_name}': {e}"
+                            "Failed to connect to server '%s': %s", server_name, e
                         )
                         logger.debug("Continuing with remaining servers...")
                         continue
@@ -1251,18 +1271,21 @@ class Scanner:
                         asyncio.CancelledError,
                     ) as e:
                         logger.warning(
-                            f"Failed to connect to server '{server_name}': {e}"
+                            "Failed to connect to server '%s': %s", server_name, e
                         )
                         logger.debug("Continuing with remaining servers...")
                         continue
                 else:
                     logger.warning(
-                        f"Unknown server type for '{server_name}' in {config_path}"
+                        "Unknown server type for '%s' in %s", server_name, config_path
                     )
 
             except Exception as e:
                 logger.error(
-                    f"Unexpected error scanning server '{server_name}' from {config_path}: {e}"
+                    "Unexpected error scanning server '%s' from %s: %s",
+                    server_name,
+                    config_path,
+                    e,
                 )
                 logger.debug("Continuing with remaining servers...")
                 continue
@@ -1311,7 +1334,8 @@ class Scanner:
                 # Capability gate: see scan_remote_server_resources for rationale.
                 if self._server_supports_capability(session, "prompts") is False:
                     logger.info(
-                        f"Server '{server_url}' did not advertise prompts capability; skipping prompt scan"
+                        "Server '%s' did not advertise prompts capability; skipping prompt scan",
+                        server_url,
                     )
                     return []
 
@@ -1321,7 +1345,7 @@ class Scanner:
                 except McpError as e:
                     if self._is_missing_capability_error(e):
                         logger.warning(
-                            f"Server '{server_url}' does not expose prompts: {e}"
+                            "Server '%s' does not expose prompts: %s", server_url, e
                         )
                         return []
                     raise
@@ -1330,10 +1354,12 @@ class Scanner:
                 scan_results = []
                 for prompt in prompt_list.prompts:
                     try:
-                        result = await self._analyze_prompt(prompt, analyzers, http_headers)
+                        result = await self._analyze_prompt(
+                            prompt, analyzers, http_headers
+                        )
                         scan_results.append(result)
                     except Exception as e:
-                        logger.error(f"Error analyzing prompt '{prompt.name}': {e}")
+                        logger.error("Error analyzing prompt '%s': %s", prompt.name, e)
                         # Create a failed result for this prompt
                         scan_results.append(
                             PromptScanResult(
@@ -1353,7 +1379,7 @@ class Scanner:
                 return scan_results
 
         except Exception as e:
-            logger.error(f"Error scanning prompts on server {server_url}: {e}")
+            logger.error("Error scanning prompts on server %s: %s", server_url, e)
             raise
 
     async def scan_remote_server_prompt(
@@ -1419,10 +1445,14 @@ class Scanner:
                     )
 
                 # Analyze the prompt
-                result = await self._analyze_prompt(target_prompt, analyzers, http_headers)
+                result = await self._analyze_prompt(
+                    target_prompt, analyzers, http_headers
+                )
 
                 # Run meta-analysis if enabled
-                result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
+                result = await self._run_meta_analysis_on_single_prompt(
+                    result, analyzers
+                )
 
                 return result
 
@@ -1430,7 +1460,10 @@ class Scanner:
             raise
         except Exception as e:
             logger.error(
-                f'Error scanning prompt \'{prompt_name}\' on MCP server: server="{server_url}", error="{e}"'
+                'Error scanning prompt \'%s\' on MCP server: server="%s", error="%s"',
+                prompt_name,
+                server_url,
+                e,
             )
             raise
 
@@ -1485,7 +1518,7 @@ class Scanner:
                 if not instructions:
                     # Return a result with no findings if instructions are not provided
                     logger.info(
-                        f"Server at {server_url} does not provide instructions field"
+                        "Server at %s does not provide instructions field", server_url
                     )
                     return InstructionsScanResult(
                         instructions="",
@@ -1494,7 +1527,9 @@ class Scanner:
                             if hasattr(init_result, "serverInfo")
                             else "Unknown"
                         ),
-                        protocol_version=getattr(init_result, "protocolVersion", "Unknown"),
+                        protocol_version=getattr(
+                            init_result, "protocolVersion", "Unknown"
+                        ),
                         status="skipped",
                         analyzers=[],
                         findings=[],
@@ -1518,7 +1553,9 @@ class Scanner:
                 )
 
                 # Run meta-analysis if enabled
-                result = await self._run_meta_analysis_on_instructions_result(result, analyzers)
+                result = await self._run_meta_analysis_on_instructions_result(
+                    result, analyzers
+                )
 
                 return result
 
@@ -1526,7 +1563,9 @@ class Scanner:
             raise
         except Exception as e:
             logger.error(
-                f'Error scanning instructions on MCP server: server="{server_url}", error="{e}"'
+                'Error scanning instructions on MCP server: server="%s", error="%s"',
+                server_url,
+                e,
             )
             raise
 
@@ -1561,16 +1600,16 @@ class Scanner:
         self._validate_analyzer_requirements(analyzers)
 
         try:
-            async with self._stdio_session(
-                server_config, timeout, errlog
-            ) as session:
+            async with self._stdio_session(server_config, timeout, errlog) as session:
                 # List all prompts
                 try:
                     prompt_list = await session.list_prompts()
                 except McpError as e:
                     if self._is_missing_capability_error(e):
                         logger.warning(
-                            f"Stdio server '{server_config.command}' does not expose prompts: {e}"
+                            "Stdio server '%s' does not expose prompts: %s",
+                            server_config.command,
+                            e,
                         )
                         return []
                     raise
@@ -1593,7 +1632,9 @@ class Scanner:
 
         except Exception as e:
             logger.error(
-                f"Error scanning prompts on stdio server {server_config.command}: {e}"
+                "Error scanning prompts on stdio server %s: %s",
+                server_config.command,
+                e,
             )
             raise
 
@@ -1635,9 +1676,7 @@ class Scanner:
         self._validate_analyzer_requirements(analyzers)
 
         try:
-            async with self._stdio_session(
-                server_config, timeout, errlog
-            ) as session:
+            async with self._stdio_session(server_config, timeout, errlog) as session:
                 # List all prompts and find the target prompt
                 try:
                     prompt_list = await session.list_prompts()
@@ -1660,7 +1699,9 @@ class Scanner:
                 result = await self._analyze_prompt(target_prompt, analyzers)
 
                 # Run meta-analysis if enabled
-                result = await self._run_meta_analysis_on_single_prompt(result, analyzers)
+                result = await self._run_meta_analysis_on_single_prompt(
+                    result, analyzers
+                )
 
                 return result
 
@@ -1668,7 +1709,10 @@ class Scanner:
             raise
         except Exception as e:
             logger.error(
-                f'Error scanning prompt \'{prompt_name}\' on stdio server: command="{server_config.command}", error="{e}"'
+                'Error scanning prompt \'%s\' on stdio server: command="%s", error="%s"',
+                prompt_name,
+                server_config.command,
+                e,
             )
             raise
 
@@ -1746,7 +1790,8 @@ class Scanner:
                 # the MCP SDK relabels as "Session terminated".
                 if self._server_supports_capability(session, "resources") is False:
                     logger.info(
-                        f"Server '{server_url}' did not advertise resources capability; skipping resource scan"
+                        "Server '%s' did not advertise resources capability; skipping resource scan",
+                        server_url,
                     )
                     return []
 
@@ -1756,7 +1801,7 @@ class Scanner:
                 except McpError as e:
                     if self._is_missing_capability_error(e):
                         logger.warning(
-                            f"Server '{server_url}' does not expose resources: {e}"
+                            "Server '%s' does not expose resources: %s", server_url, e
                         )
                         return []
                     raise
@@ -1765,7 +1810,9 @@ class Scanner:
                 for resource in resource_list.resources:
                     if not mime_type_allowed(resource, allowed_mime_types):
                         logger.info(
-                            f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'"
+                            "Skipping resource '%s' with MIME type '%s'",
+                            resource.uri,
+                            resource.mimeType,
                         )
                         results.append(resource_placeholder(resource, "skipped"))
                         continue
@@ -1788,7 +1835,7 @@ class Scanner:
                 return results
 
         except Exception as e:
-            logger.error(f"Error scanning resources on server {server_url}: {e}")
+            logger.error("Error scanning resources on server %s: %s", server_url, e)
             raise
 
     async def _read_and_analyze_resource(
@@ -1811,17 +1858,17 @@ class Scanner:
         try:
             contents = await session.read_resource(resource.uri)
         except asyncio.TimeoutError:
-            logger.error(f"Timeout reading resource '{resource.uri}'")
+            logger.error("Timeout reading resource '%s'", resource.uri)
             return resource_placeholder(resource, "failed")
         except Exception as e:
-            logger.error(f"Error reading resource '{resource.uri}': {e}")
+            logger.error("Error reading resource '%s': %s", resource.uri, e)
             return resource_placeholder(resource, "failed")
 
         text_content = extract_resource_text(contents, resource.uri)
         if text_content is None:
             return resource_placeholder(resource, "failed")
         if not text_content:
-            logger.info(f"No text content found for resource '{resource.uri}'")
+            logger.info("No text content found for resource '%s'", resource.uri)
             return resource_placeholder(resource, "skipped")
 
         try:
@@ -1837,7 +1884,7 @@ class Scanner:
         except Exception as e:
             if not absorb_analysis_errors:
                 raise
-            logger.error(f"Error analyzing resource '{resource.uri}': {e}")
+            logger.error("Error analyzing resource '%s': %s", resource.uri, e)
             return resource_placeholder(resource, "failed")
 
     async def scan_remote_server_resource(
@@ -1918,7 +1965,9 @@ class Scanner:
 
                 if not mime_type_allowed(target_resource, allowed_mime_types):
                     logger.info(
-                        f"Resource '{resource_uri}' has unsupported MIME type '{target_resource.mimeType}'"
+                        "Resource '%s' has unsupported MIME type '%s'",
+                        resource_uri,
+                        target_resource.mimeType,
                     )
                     return resource_placeholder(target_resource, "skipped")
 
@@ -1931,12 +1980,17 @@ class Scanner:
                 )
 
                 # Run meta-analysis if enabled
-                return await self._run_meta_analysis_on_single_resource(result, analyzers)
+                return await self._run_meta_analysis_on_single_resource(
+                    result, analyzers
+                )
 
         except ValueError:
             raise
         except Exception as e:
             logger.error(
-                f"Error scanning resource '{resource_uri}' on server {server_url}: {e}"
+                "Error scanning resource '%s' on server %s: %s",
+                resource_uri,
+                server_url,
+                e,
             )
             raise

@@ -38,9 +38,7 @@ class TestAlignmentLLMFailurePaths:
     @pytest.mark.asyncio
     async def test_final_error_does_not_retry(self, caplog):
         client = AlignmentLLMClient(_cfg())
-        mock = AsyncMock(
-            side_effect=RuntimeError("401 unauthorized invalid api key")
-        )
+        mock = AsyncMock(side_effect=RuntimeError("401 unauthorized invalid api key"))
         with patch(
             "mcpscanner.core.analyzers.behavioral.alignment."
             "alignment_llm_client.acompletion",
@@ -130,9 +128,7 @@ class TestOrchestratorFailureClassification:
     async def test_prompt_build_failure_increments_final_counter(self):
         orch = AlignmentOrchestrator(_cfg())
         orch.prompt_builder = SimpleNamespace(
-            build_prompt=lambda _c: (_ for _ in ()).throw(
-                AttributeError("bad context")
-            )
+            build_prompt=lambda _c: (_ for _ in ()).throw(AttributeError("bad context"))
         )
         orch.llm_client = SimpleNamespace(
             verify_alignment=AsyncMock(return_value='{"mismatch_detected": false}')

@@ -249,7 +249,9 @@ class CodeGraph:
             "edges": len(self.edges),
             "entry_points": len(self.entry_points),
             "calls": sum(1 for e in self.edges if e.relation == Relation.CALLS),
-            "taint_flows": sum(1 for e in self.edges if e.relation == Relation.TAINT_FLOW),
+            "taint_flows": sum(
+                1 for e in self.edges if e.relation == Relation.TAINT_FLOW
+            ),
             "reaches_sink": sum(
                 1 for e in self.edges if e.relation == Relation.REACHES_SINK
             ),

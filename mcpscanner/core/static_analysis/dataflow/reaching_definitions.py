@@ -91,9 +91,7 @@ class ReachingDefinitionsAnalysis(PythonDataFlowAnalyzer[ReachingDefsFact]):
 
         return self.use_def_chains
 
-    def _transfer_python(
-        self, cfg_node: CFGNode, fact: ReachingDefsFact
-    ) -> None:
+    def _transfer_python(self, cfg_node: CFGNode, fact: ReachingDefsFact) -> None:
         """Apply one node's definitions to the reaching set.
 
         Args:

@@ -177,7 +177,7 @@ class ReadinessLLMJudge:
             self._prompt_template = prompt_path.read_text(encoding="utf-8")
             return self._prompt_template
         except Exception as e:
-            self.logger.error(f"Failed to load readiness judge prompt: {e}")
+            self.logger.error("Failed to load readiness judge prompt: %s", e)
             # Return a minimal fallback prompt
             return (
                 "Analyze this MCP tool definition for production readiness issues. "
@@ -204,7 +204,7 @@ class ReadinessLLMJudge:
         """
         if not self.is_available():
             self.logger.debug(
-                f"Readiness LLM judge unavailable: {self.get_unavailable_reason()}"
+                "Readiness LLM judge unavailable: %s", self.get_unavailable_reason()
             )
             return []
 
@@ -218,7 +218,9 @@ class ReadinessLLMJudge:
             result = await self._run_evaluation(tool_json)
             findings = self._results_to_findings(result, tool_name)
         except Exception as e:
-            self.logger.error(f"LLM readiness evaluation failed for {tool_name}: {e}")
+            self.logger.error(
+                "LLM readiness evaluation failed for %s: %s", tool_name, e
+            )
             return [
                 build_infrastructure_error_finding(
                     analyzer_name="READINESS-LLM",
@@ -281,7 +283,7 @@ class ReadinessLLMJudge:
 
             return json.loads(content.strip())
         except json.JSONDecodeError as e:
-            self.logger.warning(f"Failed to parse LLM response as JSON: {e}")
+            self.logger.warning("Failed to parse LLM response as JSON: %s", e)
             return {"error": "Failed to parse LLM response", "raw": content}
 
     def _results_to_findings(
@@ -294,7 +296,7 @@ class ReadinessLLMJudge:
 
         # Check for parse errors
         if "error" in result:
-            self.logger.warning(f"LLM evaluation error: {result.get('error')}")
+            self.logger.warning("LLM evaluation error: %s", result.get("error"))
             return []
 
         readiness_analysis = result.get("readiness_analysis", {})
@@ -391,4 +393,3 @@ class ReadinessLLMJudge:
             threat_category=threat_category,
             details=details,
         )
-

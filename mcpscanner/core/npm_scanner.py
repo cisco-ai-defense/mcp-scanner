@@ -158,7 +158,13 @@ class NPMPackageScanner(PackageScannerBase):
         self.check_docker()
         self.build_image()
 
-        cmd = ["docker", "run", "--rm", "--network=bridge", *docker_run_hardening_flags()]
+        cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "--network=bridge",
+            *docker_run_hardening_flags(),
+        ]
         env_vars = {
             "LLM_API_KEY": os.environ.get("MCP_SCANNER_LLM_API_KEY", ""),
             "LLM_MODEL": os.environ.get(
@@ -236,9 +242,7 @@ class NPMPackageScanner(PackageScannerBase):
     # Local (no-Docker) SDK mode
     # ------------------------------------------------------------------
 
-    async def _scan_locally(
-        self, package: str, version: Optional[str]
-    ) -> dict:
+    async def _scan_locally(self, package: str, version: Optional[str]) -> dict:
         """Download → safe-extract → analyse, all in-process. Package
         code is parsed via tree-sitter; nothing is executed."""
         from .analyzers.behavioral.js_code_analyzer import JSBehavioralCodeAnalyzer
@@ -304,9 +308,7 @@ class NPMPackageScanner(PackageScannerBase):
                 )
                 source_root = safe_extract_archive(archive, extract_dir)
             except (PackageDownloadError, PackageExtractionError) as e:
-                raise NPMScanError(
-                    f"failed to fetch/extract {spec}: {e}"
-                ) from e
+                raise NPMScanError(f"failed to fetch/extract {spec}: {e}") from e
 
             analyzer = JSBehavioralCodeAnalyzer(config)
             findings = await analyzer.analyze(str(source_root), {})

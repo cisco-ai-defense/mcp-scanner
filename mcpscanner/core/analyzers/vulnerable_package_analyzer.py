@@ -174,8 +174,10 @@ class VulnerablePackageAnalyzer:
             return []
 
         cmd = list(self._pip_audit_cmd) + [
-            "--format", "json",
-            "--vulnerability-service", self.vulnerability_service,
+            "--format",
+            "json",
+            "--vulnerability-service",
+            self.vulnerability_service,
         ]
         if self.desc:
             cmd.append("--desc")
@@ -249,7 +251,7 @@ class VulnerablePackageAnalyzer:
             return stderr[:300]
         for line in reversed(lines):
             stripped = line.strip()
-            if stripped and not stripped.startswith(("File ", "File \"", "Traceback")):
+            if stripped and not stripped.startswith(("File ", 'File "', "Traceback")):
                 return stripped[:300]
         return lines[-1].strip()[:300]
 

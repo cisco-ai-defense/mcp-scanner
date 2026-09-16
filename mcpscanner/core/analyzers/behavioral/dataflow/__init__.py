@@ -9,4 +9,8 @@ from .cross_file_dataflow_analyzer import (
     enrich_with_cross_file_context,
 )
 
-__all__ = ["CrossFileDataflowAnalyzer", "cross_file_dataflow_analyzer", "enrich_with_cross_file_context"]
+__all__ = [
+    "CrossFileDataflowAnalyzer",
+    "cross_file_dataflow_analyzer",
+    "enrich_with_cross_file_context",
+]

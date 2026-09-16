@@ -111,9 +111,7 @@ def prepare_docker_build(*, dockerfile: str) -> Tuple[Path, Path, Dict[str, str]
             )
 
         wheel_dockerfile = (
-            "Dockerfile.wheel"
-            if dockerfile == "Dockerfile"
-            else "Dockerfile.npm.wheel"
+            "Dockerfile.wheel" if dockerfile == "Dockerfile" else "Dockerfile.npm.wheel"
         )
         wheel_path = docker_path / wheel_dockerfile
         if not wheel_path.is_file():

@@ -293,9 +293,7 @@ class DataFlowAnalyzer(Generic[T]):
         """
         analyze_start = time.perf_counter()
         analysis_name = type(self).__name__
-        file_path = sanitize_log_value(
-            getattr(self.analyzer, "file_path", "<unknown>")
-        )
+        file_path = sanitize_log_value(getattr(self.analyzer, "file_path", "<unknown>"))
 
         if not self.cfg:
             self.build_cfg()

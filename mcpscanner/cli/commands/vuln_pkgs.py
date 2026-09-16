@@ -34,7 +34,9 @@ async def run(ctx: CommandContext) -> Optional[Any]:
     """Resolve the dependency set under a path and look for known CVEs."""
     args = ctx.args
 
-    from mcpscanner.core.analyzers.vulnerable_package_analyzer import VulnerablePackageAnalyzer
+    from mcpscanner.core.analyzers.vulnerable_package_analyzer import (
+        VulnerablePackageAnalyzer,
+    )
     from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
 
     scan_path = args.scan_path
@@ -44,8 +46,7 @@ async def run(ctx: CommandContext) -> Optional[Any]:
         sys.exit(1)
 
     vuln_service = (
-        args.vulnerability_service
-        or CONSTANTS.VULNERABLE_PACKAGE_VULNERABILITY_SERVICE
+        args.vulnerability_service or CONSTANTS.VULNERABLE_PACKAGE_VULNERABILITY_SERVICE
     )
 
     analyzer = VulnerablePackageAnalyzer(
@@ -62,9 +63,19 @@ async def run(ctx: CommandContext) -> Optional[Any]:
     results = []
     if findings:
         for finding in findings:
-            pkg = finding.details.get("package_name", "unknown") if finding.details else "unknown"
-            ver = finding.details.get("installed_version", "?") if finding.details else "?"
-            vuln_id = finding.details.get("vulnerability_id", "") if finding.details else ""
+            pkg = (
+                finding.details.get("package_name", "unknown")
+                if finding.details
+                else "unknown"
+            )
+            ver = (
+                finding.details.get("installed_version", "?")
+                if finding.details
+                else "?"
+            )
+            vuln_id = (
+                finding.details.get("vulnerability_id", "") if finding.details else ""
+            )
 
             analyzer_finding = analyzer_finding_payload(finding)
 
@@ -78,29 +89,33 @@ async def run(ctx: CommandContext) -> Optional[Any]:
             if desc:
                 tool_desc_parts.append(desc)
 
-            results.append({
-                "package_name": f"{pkg}=={ver}",
-                "vulnerability_description": " | ".join(tool_desc_parts),
-                "status": "completed",
-                "is_safe": False,
-                "findings": {"vulnerable_package_analyzer": analyzer_finding},
-            })
-    else:
-        results.append({
-            "package_name": scan_path,
-            "vulnerability_description": f"Vulnerable package scan of {os.path.basename(scan_path)}",
-            "status": "completed",
-            "is_safe": True,
-            "findings": {
-                "vulnerable_package_analyzer": {
-                    "severity": "SAFE",
-                    "threat_summary": "No known vulnerabilities found",
-                    "threat_names": [],
-                    "total_findings": 0,
-                    "mcp_taxonomies": [],
+            results.append(
+                {
+                    "package_name": f"{pkg}=={ver}",
+                    "vulnerability_description": " | ".join(tool_desc_parts),
+                    "status": "completed",
+                    "is_safe": False,
+                    "findings": {"vulnerable_package_analyzer": analyzer_finding},
                 }
-            },
-        })
+            )
+    else:
+        results.append(
+            {
+                "package_name": scan_path,
+                "vulnerability_description": f"Vulnerable package scan of {os.path.basename(scan_path)}",
+                "status": "completed",
+                "is_safe": True,
+                "findings": {
+                    "vulnerable_package_analyzer": {
+                        "severity": "SAFE",
+                        "threat_summary": "No known vulnerabilities found",
+                        "threat_names": [],
+                        "total_findings": 0,
+                        "mcp_taxonomies": [],
+                    }
+                },
+            }
+        )
 
     if analyzer.last_scan_summary:
         summary = analyzer.last_scan_summary

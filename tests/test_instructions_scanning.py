@@ -95,9 +95,13 @@ def mock_mcp_session(mock_init_result):
     patches = [
         patch("mcpscanner.core.session.sse_client", return_value=mock_stream_cm),
         patch(
-            "mcpscanner.core.session.streamable_http_client", return_value=mock_stream_cm
+            "mcpscanner.core.session.streamable_http_client",
+            return_value=mock_stream_cm,
         ),
-        patch("mcpscanner.core.session.create_mcp_http_client", return_value=mock_httpx_client),
+        patch(
+            "mcpscanner.core.session.create_mcp_http_client",
+            return_value=mock_httpx_client,
+        ),
         patch("mcpscanner.core.session.ClientSession", return_value=mock_session_cm),
     ]
 

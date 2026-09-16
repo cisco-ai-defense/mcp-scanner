@@ -97,9 +97,7 @@ class UI {
         (PHP_TOOL_LOOKALIKE, "lookalike.php"),
     ],
 )
-def test_annotation_lookalikes_yield_zero_capabilities(
-    source: str, path: str
-) -> None:
+def test_annotation_lookalikes_yield_zero_capabilities(source: str, path: str) -> None:
     """``@Tooltip``, ``[ResourceLock]``, ``#[tool_router]``,
     ``#[Toolbar]`` etc. must NOT classify as MCP capabilities (Gap 3).
 

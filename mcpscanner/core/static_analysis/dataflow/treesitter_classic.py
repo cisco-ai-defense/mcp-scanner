@@ -131,13 +131,29 @@ def _iter_assignments(stmt: Node, source_bytes: bytes) -> list[tuple[str, Node]]
                 add_pair(child.child_by_field_name("name"), _value_node(child))
     elif stmt.type == "expression_statement":
         for child in stmt.children:
-            if child.type in ("assignment_expression", "assignment", "augmented_assignment_expression"):
-                add_pair(child.child_by_field_name("left"), child.child_by_field_name("right"))
-    elif stmt.type in ("for_statement", "for_in_statement", "enhanced_for_statement", "foreach_statement"):
-        init = stmt.child_by_field_name("initializer") or stmt.child_by_field_name("left")
+            if child.type in (
+                "assignment_expression",
+                "assignment",
+                "augmented_assignment_expression",
+            ):
+                add_pair(
+                    child.child_by_field_name("left"),
+                    child.child_by_field_name("right"),
+                )
+    elif stmt.type in (
+        "for_statement",
+        "for_in_statement",
+        "enhanced_for_statement",
+        "foreach_statement",
+    ):
+        init = stmt.child_by_field_name("initializer") or stmt.child_by_field_name(
+            "left"
+        )
         if init is not None:
             pairs.extend(_iter_assignments(init, source_bytes))
-        body_target = stmt.child_by_field_name("left") or stmt.child_by_field_name("name")
+        body_target = stmt.child_by_field_name("left") or stmt.child_by_field_name(
+            "name"
+        )
         iterable = (
             stmt.child_by_field_name("right")
             or stmt.child_by_field_name("collection")
@@ -149,7 +165,9 @@ def _iter_assignments(stmt: Node, source_bytes: bytes) -> list[tuple[str, Node]]
     return pairs
 
 
-def _collect_identifiers(node: Node, source_bytes: bytes, *, skip: set[str] | None = None) -> set[str]:
+def _collect_identifiers(
+    node: Node, source_bytes: bytes, *, skip: set[str] | None = None
+) -> set[str]:
     skip = skip or set()
     found: set[str] = set()
     stack = [node]
@@ -163,7 +181,9 @@ def _collect_identifiers(node: Node, source_bytes: bytes, *, skip: set[str] | No
     return found
 
 
-def _expr_uses_parameters(expr: Node, source_bytes: bytes, fact: ReachingDefsFact) -> bool:
+def _expr_uses_parameters(
+    expr: Node, source_bytes: bytes, fact: ReachingDefsFact
+) -> bool:
     for name in _collect_identifiers(expr, source_bytes):
         reaching = [d for d in fact.defs if d.var == name]
         if any(d.is_parameter for d in reaching):
@@ -178,9 +198,7 @@ def _normalize_expr(node: Node, source_bytes: bytes) -> str:
 
 def _expr_uses_vars(expr_str: str, variable_names: set[str]) -> bool:
     for var in variable_names:
-        pattern = (
-            rf"(?<![A-Za-z0-9_$]){re.escape(var)}(?![A-Za-z0-9_$])"
-        )
+        pattern = rf"(?<![A-Za-z0-9_$]){re.escape(var)}(?![A-Za-z0-9_$])"
         if re.search(pattern, expr_str):
             return True
     return False
@@ -200,7 +218,9 @@ class TreeSitterDataFlowAnalyzer(Generic[T]):
         self.function_node = function_node
         self.source_bytes = source_bytes
         self.parameter_names = list(parameter_names)
-        self.cfg: TreeSitterCFG = TreeSitterCFGBuilder(self.language).build(function_node)
+        self.cfg: TreeSitterCFG = TreeSitterCFGBuilder(self.language).build(
+            function_node
+        )
         self.in_facts: dict[int, T] = {}
         self.out_facts: dict[int, T] = {}
 
@@ -236,13 +256,19 @@ class TreeSitterDataFlowAnalyzer(Generic[T]):
                     for pred in node.predecessors
                     if not self._is_pseudo(pred)
                 ]
-                in_fact = self.merge(pred_facts) if pred_facts else self._copy_fact(initial_fact)
+                in_fact = (
+                    self.merge(pred_facts)
+                    if pred_facts
+                    else self._copy_fact(initial_fact)
+                )
                 self.in_facts[node.node_id] = in_fact
                 out_fact = self.transfer(node, in_fact)
                 if not self._facts_equal(out_fact, self.out_facts[node.node_id]):
                     self.out_facts[node.node_id] = out_fact
                     for succ in node.successors:
-                        if succ.node_id not in in_worklist and not self._is_pseudo(succ):
+                        if succ.node_id not in in_worklist and not self._is_pseudo(
+                            succ
+                        ):
                             worklist.append(succ)
                             in_worklist.add(succ.node_id)
             else:
@@ -251,13 +277,19 @@ class TreeSitterDataFlowAnalyzer(Generic[T]):
                     for succ in node.successors
                     if not self._is_pseudo(succ)
                 ]
-                out_fact = self.merge(succ_facts) if succ_facts else self._copy_fact(initial_fact)
+                out_fact = (
+                    self.merge(succ_facts)
+                    if succ_facts
+                    else self._copy_fact(initial_fact)
+                )
                 self.out_facts[node.node_id] = out_fact
                 in_fact = self.transfer(node, out_fact)
                 if not self._facts_equal(in_fact, self.in_facts[node.node_id]):
                     self.in_facts[node.node_id] = in_fact
                     for pred in node.predecessors:
-                        if pred.node_id not in in_worklist and not self._is_pseudo(pred):
+                        if pred.node_id not in in_worklist and not self._is_pseudo(
+                            pred
+                        ):
                             worklist.append(pred)
                             in_worklist.add(pred.node_id)
 
@@ -380,9 +412,7 @@ class TreeSitterLivenessAnalyzer(TreeSitterDataFlowAnalyzer[LivenessFact]):
     def analyze_liveness(self) -> dict[int, set[str]]:
         self.analyze(LivenessFact(), forward=False)
         self._detect_dead_code()
-        return {
-            node_id: fact.live_vars for node_id, fact in self.in_facts.items()
-        }
+        return {node_id: fact.live_vars for node_id, fact in self.in_facts.items()}
 
     def transfer(self, node: TSCFGNode, out_fact: LivenessFact) -> LivenessFact:
         in_fact = out_fact.copy()
@@ -419,15 +449,28 @@ class TreeSitterLivenessAnalyzer(TreeSitterDataFlowAnalyzer[LivenessFact]):
             in_fact.param_influenced_live.update(used & self.param_influenced)
             return
 
-        if ast_node.type in ("if_statement", "if_expression", "if", "while_statement", "while_expression", "while"):
-            test = ast_node.child_by_field_name("condition") or ast_node.child_by_field_name("test")
+        if ast_node.type in (
+            "if_statement",
+            "if_expression",
+            "if",
+            "while_statement",
+            "while_expression",
+            "while",
+        ):
+            test = ast_node.child_by_field_name(
+                "condition"
+            ) or ast_node.child_by_field_name("test")
             if test is not None:
                 used = _collect_identifiers(test, self.source_bytes)
                 in_fact.live_vars.update(used)
                 in_fact.param_influenced_live.update(used & self.param_influenced)
             return
 
-        if ast_node.type in ("expression_statement", "lexical_declaration", "variable_declaration"):
+        if ast_node.type in (
+            "expression_statement",
+            "lexical_declaration",
+            "variable_declaration",
+        ):
             for child in ast_node.children:
                 if child.type in _CALL_TYPES:
                     used = _collect_identifiers(child, self.source_bytes)
@@ -438,7 +481,9 @@ class TreeSitterLivenessAnalyzer(TreeSitterDataFlowAnalyzer[LivenessFact]):
                     if value is not None and value.type in _CALL_TYPES:
                         used = _collect_identifiers(value, self.source_bytes)
                         in_fact.live_vars.update(used)
-                        in_fact.param_influenced_live.update(used & self.param_influenced)
+                        in_fact.param_influenced_live.update(
+                            used & self.param_influenced
+                        )
 
     def merge(self, facts: list[LivenessFact]) -> LivenessFact:
         if not facts:
@@ -477,11 +522,11 @@ class TreeSitterAvailableExpressions(TreeSitterDataFlowAnalyzer[AvailableExprsFa
 
     def analyze_available_exprs(self) -> dict[int, set[str]]:
         self.analyze(AvailableExprsFact(), forward=True)
-        return {
-            node_id: fact.available for node_id, fact in self.out_facts.items()
-        }
+        return {node_id: fact.available for node_id, fact in self.out_facts.items()}
 
-    def transfer(self, node: TSCFGNode, in_fact: AvailableExprsFact) -> AvailableExprsFact:
+    def transfer(
+        self, node: TSCFGNode, in_fact: AvailableExprsFact
+    ) -> AvailableExprsFact:
         out_fact = in_fact.copy()
         if self._is_pseudo(node):
             return out_fact
@@ -490,10 +535,14 @@ class TreeSitterAvailableExpressions(TreeSitterDataFlowAnalyzer[AvailableExprsFa
         for target, value in _iter_assignments(ast_node, self.source_bytes):
             assigned = {target}
             out_fact.available = {
-                expr for expr in out_fact.available if not _expr_uses_vars(expr, assigned)
+                expr
+                for expr in out_fact.available
+                if not _expr_uses_vars(expr, assigned)
             }
             out_fact.param_exprs = {
-                expr for expr in out_fact.param_exprs if not _expr_uses_vars(expr, assigned)
+                expr
+                for expr in out_fact.param_exprs
+                if not _expr_uses_vars(expr, assigned)
             }
             if value.type in _EXPR_GEN_TYPES or value.type in _CALL_TYPES:
                 expr_str = _normalize_expr(value, self.source_bytes)
@@ -530,15 +579,25 @@ def analyze_treesitter_classic(
     function_node: Node,
     parameter_names: list[str],
     source_bytes: bytes,
-) -> tuple[TreeSitterReachingDefinitions, TreeSitterLivenessAnalyzer, TreeSitterAvailableExpressions]:
+) -> tuple[
+    TreeSitterReachingDefinitions,
+    TreeSitterLivenessAnalyzer,
+    TreeSitterAvailableExpressions,
+]:
     """Run reaching-defs, liveness, and available-expressions for one function."""
-    reaching = TreeSitterReachingDefinitions(language, function_node, source_bytes, parameter_names)
+    reaching = TreeSitterReachingDefinitions(
+        language, function_node, source_bytes, parameter_names
+    )
     reaching.analyze_reaching_defs()
 
-    liveness = TreeSitterLivenessAnalyzer(language, function_node, source_bytes, parameter_names)
+    liveness = TreeSitterLivenessAnalyzer(
+        language, function_node, source_bytes, parameter_names
+    )
     liveness.analyze_liveness()
 
-    available = TreeSitterAvailableExpressions(language, function_node, source_bytes, parameter_names)
+    available = TreeSitterAvailableExpressions(
+        language, function_node, source_bytes, parameter_names
+    )
     available.analyze_available_exprs()
 
     return reaching, liveness, available

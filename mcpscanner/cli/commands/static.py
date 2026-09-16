@@ -149,9 +149,7 @@ async def run(ctx: CommandContext) -> Optional[Any]:
     # Mirror Scanner.__init__'s ``(api_key or is_bedrock)`` rule so
     # ``--enable-meta`` with ``MCP_SCANNER_LLM_MODEL=bedrock/...`` and
     # an AWS profile works end-to-end.
-    _meta_is_bedrock = bool(
-        cfg.llm_model and "bedrock/" in cfg.llm_model
-    )
+    _meta_is_bedrock = bool(cfg.llm_model and "bedrock/" in cfg.llm_model)
     if AnalyzerEnum.META in selected_analyzers and (
         cfg.llm_provider_api_key or _meta_is_bedrock
     ):

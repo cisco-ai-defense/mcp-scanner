@@ -117,9 +117,7 @@ def is_missing_capability_error(error: Exception) -> bool:
     return any(token in combined_message for token in tokens)
 
 
-def server_supports_capability(
-    session: Any, capability: str
-) -> Optional[bool]:
+def server_supports_capability(session: Any, capability: str) -> Optional[bool]:
     """Check whether the server advertised support for a capability.
 
     Reads the ``InitializeResult.capabilities`` that ``_get_mcp_session``
@@ -183,7 +181,7 @@ async def close_mcp_session(client_context, session):
         except Exception as e:
             # Log unexpected errors
             if "cancel scope" not in str(e) and "TaskGroup" not in str(e):
-                logger.warning(f"Error closing session: {e}")
+                logger.warning("Error closing session: %s", e)
 
     # Close client context
     if client_context:
@@ -202,7 +200,7 @@ async def close_mcp_session(client_context, session):
         except Exception as e:
             # Log unexpected errors
             if "cancel scope" not in str(e) and "TaskGroup" not in str(e):
-                logger.warning(f"Error closing client context: {e}")
+                logger.warning("Error closing client context: %s", e)
 
         # Explicitly close the httpx.AsyncClient we created, in case the
         # MCP library's own cleanup failed (e.g. session termination
@@ -250,10 +248,7 @@ def _capture_http_status() -> Iterator[_HttpStatusProbe]:
 
     # Raise the level so the lines we need are emitted at all, and stop them
     # propagating so raising it does not spray httpx output onto the console.
-    if (
-        original_level > stdlib_logging.INFO
-        or original_level == stdlib_logging.NOTSET
-    ):
+    if original_level > stdlib_logging.INFO or original_level == stdlib_logging.NOTSET:
         httpx_logger.setLevel(stdlib_logging.INFO)
         httpx_logger.propagate = False
 
@@ -275,7 +270,8 @@ def _auth_headers(
     """
     if auth is None:
         logger.debug(
-            f'No explicit auth provided, connecting without authentication: server="{server_url}"'
+            'No explicit auth provided, connecting without authentication: server="%s"',
+            server_url,
         )
         return None, {}
 
@@ -284,7 +280,8 @@ def _auth_headers(
 
     if auth.type == AuthType.OAUTH:
         logger.debug(
-            f'Using explicit OAuth authentication for MCP server: server="{server_url}"'
+            'Using explicit OAuth authentication for MCP server: server="%s"',
+            server_url,
         )
         oauth_provider = create_oauth_provider_from_auth(auth, server_url)
     elif auth.type == AuthType.BEARER:
@@ -294,7 +291,8 @@ def _auth_headers(
             )
         extra_headers["Authorization"] = f"Bearer {auth.bearer_token}"
         logger.debug(
-            f'Using explicit Bearer authentication for MCP server: server="{server_url}"'
+            'Using explicit Bearer authentication for MCP server: server="%s"',
+            server_url,
         )
     elif auth.type == AuthType.APIKEY:
         if not getattr(auth, "api_key", None) or not getattr(
@@ -305,7 +303,7 @@ def _auth_headers(
             )
         extra_headers[auth.api_key_header] = auth.api_key
         logger.debug(
-            f'Using APIKEY authentication for MCP server: server="{server_url}"'
+            'Using APIKEY authentication for MCP server: server="%s"', server_url
         )
 
     # Custom headers ride along with any auth type.
@@ -330,7 +328,8 @@ def _build_client_context(
     """
     if not oauth_provider:
         logger.debug(
-            f'Using standard connection (no auth) for MCP server: server="{destination_url}"'
+            'Using standard connection (no auth) for MCP server: server="%s"',
+            destination_url,
         )
 
     httpx_client = None
@@ -423,7 +422,7 @@ async def get_mcp_session(
     )
     if is_hybrid_connector_id(connector_id):
         logger.debug(
-            f'Using hybrid proxy relay for MCP server: destination="{destination_url}"'
+            'Using hybrid proxy relay for MCP server: destination="%s"', destination_url
         )
 
     client_context = _build_client_context(
@@ -433,7 +432,7 @@ async def get_mcp_session(
 
     with _capture_http_status() as probe:
         try:
-            logger.debug(f'Attempting to connect to MCP server: server="{server_url}"')
+            logger.debug('Attempting to connect to MCP server: server="%s"', server_url)
             # Suppress async generator warnings from MCP library cleanup bugs
             with warnings.catch_warnings():
                 warnings.filterwarnings(
@@ -442,11 +441,11 @@ async def get_mcp_session(
                 read, write, *_ = await client_context.__aenter__()
                 session = ClientSession(read, write)
                 await session.__aenter__()
-                logger.debug(f'Initializing MCP session: server="{server_url}"')
+                logger.debug('Initializing MCP session: server="%s"', server_url)
                 # Stored on the session so instruction scans can read it later.
                 session._init_result = await session.initialize()
             logger.debug(
-                f'Successfully connected to MCP server: server="{server_url}"'
+                'Successfully connected to MCP server: server="%s"', server_url
             )
             return client_context, session
 
@@ -502,13 +501,13 @@ async def get_stdio_session(
     session = None
 
     try:
-        logger.debug(f"Creating stdio client for command: {server_config.command}")
+        logger.debug("Creating stdio client for command: %s", server_config.command)
 
         # Normalize and validate command/args to avoid FileNotFoundError ([Errno 2])
         # Expansion mode comes from StdioServer config; default is 'off'
         expand_mode = (server_config.expand_vars or "off").lower()
         logger.debug(
-            f"expand_mode='{expand_mode}' for command: {server_config.command}"
+            "expand_mode='%s' for command: %s", expand_mode, server_config.command
         )
         env_for_expansion = build_env_for_expansion(server_config.env)
         windows_semantics = decide_windows_semantics(expand_mode)
@@ -547,7 +546,9 @@ async def get_stdio_session(
 
         # Create client context and session with proper error handling
         # Pass errlog for stderr redirection (helps avoid JSON corruption from startup messages)
-        client_context = stdio_client(server_params, errlog=errlog if errlog else sys.stderr)
+        client_context = stdio_client(
+            server_params, errlog=errlog if errlog else sys.stderr
+        )
 
         # Use asyncio.wait_for for timeout instead of asyncio.timeout
         try:
@@ -566,22 +567,22 @@ async def get_stdio_session(
             raise
 
         logger.debug(
-            f"Successfully connected to stdio MCP server: {server_config.command}"
+            "Successfully connected to stdio MCP server: %s", server_config.command
         )
         return client_context, session
 
     except asyncio.TimeoutError:
         logger.error(
-            f"Timeout connecting to stdio server {server_config.command} after {timeout}s"
+            "Timeout connecting to stdio server %s after %ss",
+            server_config.command,
+            timeout,
         )
         raise MCPConnectionError(
             f"Timeout connecting to stdio MCP server with command {server_config.command}. "
             f"Server took longer than {timeout} seconds to start."
         )
     except asyncio.CancelledError:
-        logger.error(
-            f"Connection cancelled for stdio server {server_config.command}"
-        )
+        logger.error("Connection cancelled for stdio server %s", server_config.command)
         # Clean up resources on cancellation
         await close_mcp_session(client_context, session)
         raise MCPConnectionError(
@@ -590,7 +591,7 @@ async def get_stdio_session(
         )
     except Exception as e:
         logger.error(
-            f"Error connecting to stdio server {server_config.command}: {e}"
+            "Error connecting to stdio server %s: %s", server_config.command, e
         )
         # Clean up resources on error
         await close_mcp_session(client_context, session)

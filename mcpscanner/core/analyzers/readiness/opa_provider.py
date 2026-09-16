@@ -37,9 +37,13 @@ from ....utils.logging_config import get_logger
 
 # Default policies directory (relative to mcpscanner package root)
 if getattr(sys, "frozen", False):
-    DEFAULT_POLICIES_DIR = Path(sys._MEIPASS) / "mcpscanner" / "data" / "readiness_policies"
+    DEFAULT_POLICIES_DIR = (
+        Path(sys._MEIPASS) / "mcpscanner" / "data" / "readiness_policies"
+    )
 else:
-    DEFAULT_POLICIES_DIR = Path(__file__).parent.parent.parent.parent / "data" / "readiness_policies"
+    DEFAULT_POLICIES_DIR = (
+        Path(__file__).parent.parent.parent.parent / "data" / "readiness_policies"
+    )
 
 # Mapping from policy violation types to readiness threat categories
 POLICY_CATEGORY_MAP: Dict[str, str] = {
@@ -114,11 +118,11 @@ class OpaProvider:
             self._opa_path = shutil.which(self.opa_binary)
             self._availability_checked = True
             if self._opa_path:
-                self.logger.debug(f"OPA binary found at: {self._opa_path}")
+                self.logger.debug("OPA binary found at: %s", self._opa_path)
             else:
                 self.logger.debug(
-                    f"OPA binary '{self.opa_binary}' not found in PATH. "
-                    "OPA policy checks will be skipped."
+                    "OPA binary '%s' not found in PATH. OPA policy checks will be skipped.",
+                    self.opa_binary,
                 )
         return self._opa_path is not None
 
@@ -205,7 +209,13 @@ class OpaProvider:
                 break
 
         # Check for retry fields
-        retry_fields = ["retries", "maxRetries", "max_retries", "retryLimit", "retry_limit"]
+        retry_fields = [
+            "retries",
+            "maxRetries",
+            "max_retries",
+            "retryLimit",
+            "retry_limit",
+        ]
         retry_value = None
         has_retry_limit = False
         for field in retry_fields:
@@ -230,7 +240,9 @@ class OpaProvider:
         # Check for input schema
         input_schema = tool_definition.get("inputSchema", {})
         has_input_schema = bool(input_schema) and isinstance(input_schema, dict)
-        input_properties_count = len(input_schema.get("properties", {})) if has_input_schema else 0
+        input_properties_count = (
+            len(input_schema.get("properties", {})) if has_input_schema else 0
+        )
         has_required_fields = "required" in input_schema if has_input_schema else False
 
         # Check for description
@@ -239,7 +251,12 @@ class OpaProvider:
         description_length = len(description) if description else 0
 
         # Check for rate limiting
-        rate_limit_fields = ["rateLimit", "rate_limit", "throttle", "rateLimitPerMinute"]
+        rate_limit_fields = [
+            "rateLimit",
+            "rate_limit",
+            "throttle",
+            "rateLimitPerMinute",
+        ]
         has_rate_limit = any(f in tool_definition for f in rate_limit_fields)
 
         return {
@@ -272,7 +289,7 @@ class OpaProvider:
             List of raw violation dictionaries.
         """
         if not self.policies_dir.exists():
-            self.logger.debug(f"Policies directory not found: {self.policies_dir}")
+            self.logger.debug("Policies directory not found: %s", self.policies_dir)
             return []
 
         violations: List[Dict[str, Any]] = []
@@ -280,7 +297,7 @@ class OpaProvider:
         # Find all policy files
         policy_files = list(self.policies_dir.glob("*.rego"))
         if not policy_files:
-            self.logger.debug(f"No .rego files found in: {self.policies_dir}")
+            self.logger.debug("No .rego files found in: %s", self.policies_dir)
             return []
 
         # Create temporary file for input
@@ -336,9 +353,7 @@ class OpaProvider:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=30.0
-            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30.0)
 
             if process.returncode == 0:
                 result = json.loads(stdout.decode("utf-8"))
@@ -350,32 +365,42 @@ class OpaProvider:
                         value = expr.get("value", [])
                         if isinstance(value, list):
                             for msg in value:
-                                violations.append({
-                                    "message": msg if isinstance(msg, str) else str(msg),
-                                    "policy": policy_path.stem,
-                                })
+                                violations.append(
+                                    {
+                                        "message": (
+                                            msg if isinstance(msg, str) else str(msg)
+                                        ),
+                                        "policy": policy_path.stem,
+                                    }
+                                )
                         elif isinstance(value, str):
-                            violations.append({
-                                "message": value,
-                                "policy": policy_path.stem,
-                            })
+                            violations.append(
+                                {
+                                    "message": value,
+                                    "policy": policy_path.stem,
+                                }
+                            )
             else:
                 stderr_text = stderr.decode("utf-8") if stderr else ""
                 self.logger.debug(
-                    f"OPA returned non-zero exit code for {policy_path.name}: {stderr_text}"
+                    "OPA returned non-zero exit code for %s: %s",
+                    policy_path.name,
+                    stderr_text,
                 )
 
         except asyncio.TimeoutError:
-            self.logger.warning(f"OPA evaluation timed out for {policy_path.name}")
-            violations.append({
-                "message": f"OPA evaluation timed out for {policy_path.name}",
-                "policy": policy_path.stem,
-                "is_error": True,
-            })
+            self.logger.warning("OPA evaluation timed out for %s", policy_path.name)
+            violations.append(
+                {
+                    "message": f"OPA evaluation timed out for {policy_path.name}",
+                    "policy": policy_path.stem,
+                    "is_error": True,
+                }
+            )
         except json.JSONDecodeError as e:
-            self.logger.warning(f"Failed to parse OPA output: {e}")
+            self.logger.warning("Failed to parse OPA output: %s", e)
         except Exception as e:
-            self.logger.debug(f"OPA evaluation failed: {e}")
+            self.logger.debug("OPA evaluation failed: %s", e)
 
         return violations
 
@@ -419,4 +444,3 @@ class OpaProvider:
             "severity": severity,
             "rule_id": f"OPA-{policy}",
         }
-

@@ -33,9 +33,7 @@ async def run(ctx: CommandContext) -> Optional[Any]:
     cfg = _build_config(selected_analyzers)
     scanner = Scanner(cfg, rules_dir=args.rules_path)
     # Parse custom headers and create auth
-    custom_headers = _parse_custom_headers(
-        getattr(args, "custom_headers", None)
-    )
+    custom_headers = _parse_custom_headers(getattr(args, "custom_headers", None))
     auth = _create_auth_with_headers(args.bearer_token, custom_headers)
     results_raw = await scanner.scan_remote_server_tools(
         args.server_url, auth=auth, analyzers=selected_analyzers

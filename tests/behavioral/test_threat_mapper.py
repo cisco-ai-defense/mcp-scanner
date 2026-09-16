@@ -17,7 +17,6 @@
 """Tests for ThreatMapper component."""
 
 
-
 class TestThreatMapper:
     """Test ThreatMapper functionality."""
 

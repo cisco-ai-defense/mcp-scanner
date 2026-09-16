@@ -57,9 +57,7 @@ class TestCliHelperFunctions:
         analyzer = MagicMock()
         analyzer.analyzed_functions = []
 
-        results = _build_behavioral_results(
-            analyzer, [finding], source_path="/repo"
-        )
+        results = _build_behavioral_results(analyzer, [finding], source_path="/repo")
 
         assert len(results) == 1
         assert results[0]["tool_name"] == "leaky_tool"
@@ -262,7 +260,9 @@ class TestScanMcpServerDirect:
                 mock_scanner.scan_remote_server_tools.return_value = mock_scan_results
                 mock_scanner_class.return_value = mock_scanner
 
-                with patch("mcpscanner.cli.direct.results_to_json") as mock_results_to_json:
+                with patch(
+                    "mcpscanner.cli.direct.results_to_json"
+                ) as mock_results_to_json:
                     mock_results_to_json.return_value = [{"tool_name": "test"}]
 
                     with patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}):

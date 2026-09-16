@@ -156,7 +156,11 @@ def _iter_treesitter_assignments(
             value = _treesitter_value_node(node)
             if target and value is not None:
                 pairs.append((target, value))
-        elif node.type in ("assignment_expression", "assignment", "assignment_statement"):
+        elif node.type in (
+            "assignment_expression",
+            "assignment",
+            "assignment_statement",
+        ):
             left = node.child_by_field_name("left")
             right = node.child_by_field_name("right")
             if left is not None and right is not None:
@@ -233,9 +237,7 @@ def _run_reaching_definitions(
 
     initial_fact = ReachingDefsFact()
     for param_name in parameter_names:
-        initial_fact.defs.add(
-            Definition(var=param_name, node_id=-1, is_parameter=True)
-        )
+        initial_fact.defs.add(Definition(var=param_name, node_id=-1, is_parameter=True))
 
     analysis.analyze(initial_fact)
     analysis._compute_use_def_chains()
@@ -343,7 +345,9 @@ class ClassicDataflowEngine:
     def enrich_graph(self) -> None:
         """Run classic analyses and store summaries on supported function nodes."""
         for node_id, node in self._graph.nodes.items():
-            language = _normalize_language(node.language or self._graph.language or "python")
+            language = _normalize_language(
+                node.language or self._graph.language or "python"
+            )
             if language != "python" and language not in TREESITTER_LANGS:
                 continue
             summary = self.get_summary(node_id)
@@ -364,7 +368,9 @@ class ClassicDataflowEngine:
             self._cache[node_id] = summary
             return summary
 
-        language = _normalize_language(node.language or self._graph.language or "python")
+        language = _normalize_language(
+            node.language or self._graph.language or "python"
+        )
         caller_file, _, caller_label = _split_node_id(node_id)
         source = self._graph.source_registry.get(caller_file)
         if not source:
@@ -463,9 +469,9 @@ class ClassicDataflowEngine:
 
     @staticmethod
     def _treesitter_param_names(func_node: Node, source_bytes: bytes) -> list[str]:
-        params_node = func_node.child_by_field_name("parameters") or func_node.child_by_field_name(
-            "formal_parameters"
-        )
+        params_node = func_node.child_by_field_name(
+            "parameters"
+        ) or func_node.child_by_field_name("formal_parameters")
         if params_node is None:
             return []
         names: list[str] = []

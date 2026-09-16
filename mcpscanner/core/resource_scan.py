@@ -73,8 +73,8 @@ def extract_resource_text(contents: Any, uri: Any) -> Optional[str]:
             if hasattr(content, "text"):
                 text += content.text
             elif hasattr(content, "blob"):
-                logger.info(f"Skipping binary content for resource '{uri}'")
+                logger.info("Skipping binary content for resource '%s'", uri)
     except (AttributeError, TypeError) as e:
-        logger.warning(f"Error extracting content from resource '{uri}': {e}")
+        logger.warning("Error extracting content from resource '%s': %s", uri, e)
         return None
     return text

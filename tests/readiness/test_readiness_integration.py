@@ -69,10 +69,9 @@ class TestReadinessAnalyzerIntegration:
         scanner = Scanner(config)
 
         # Should not raise
-        scanner._validate_analyzer_requirements([
-            AnalyzerEnum.YARA,
-            AnalyzerEnum.READINESS
-        ])
+        scanner._validate_analyzer_requirements(
+            [AnalyzerEnum.YARA, AnalyzerEnum.READINESS]
+        )
 
     @pytest.mark.asyncio
     async def test_validate_api_without_key_raises(self):
@@ -93,15 +92,14 @@ class TestReadinessAnalyzerIntegration:
         mock_tool = MagicMock()
         mock_tool.name = "test_tool"
         mock_tool.description = "A test tool that does something useful"
-        mock_tool.model_dump_json.return_value = json.dumps({
-            "name": "test_tool",
-            "description": "A test tool that does something useful",
-        })
-
-        result = await scanner._analyze_tool(
-            mock_tool,
-            [AnalyzerEnum.READINESS]
+        mock_tool.model_dump_json.return_value = json.dumps(
+            {
+                "name": "test_tool",
+                "description": "A test tool that does something useful",
+            }
         )
+
+        result = await scanner._analyze_tool(mock_tool, [AnalyzerEnum.READINESS])
 
         assert result.tool_name == "test_tool"
         assert result.status == "completed"
@@ -121,14 +119,15 @@ class TestReadinessAnalyzerIntegration:
         mock_tool = MagicMock()
         mock_tool.name = "test_tool"
         mock_tool.description = "A test tool that does something useful"
-        mock_tool.model_dump_json.return_value = json.dumps({
-            "name": "test_tool",
-            "description": "A test tool that does something useful",
-        })
+        mock_tool.model_dump_json.return_value = json.dumps(
+            {
+                "name": "test_tool",
+                "description": "A test tool that does something useful",
+            }
+        )
 
         result = await scanner._analyze_tool(
-            mock_tool,
-            [AnalyzerEnum.YARA]  # Only YARA, no READINESS
+            mock_tool, [AnalyzerEnum.YARA]  # Only YARA, no READINESS
         )
 
         # Should not have readiness findings
@@ -144,15 +143,14 @@ class TestReadinessAnalyzerIntegration:
         mock_tool = MagicMock()
         mock_tool.name = "test_tool"
         mock_tool.description = "Short"  # Too short, triggers HEUR-009
-        mock_tool.model_dump_json.return_value = json.dumps({
-            "name": "test_tool",
-            "description": "Short",
-        })
-
-        result = await scanner._analyze_tool(
-            mock_tool,
-            [AnalyzerEnum.READINESS]
+        mock_tool.model_dump_json.return_value = json.dumps(
+            {
+                "name": "test_tool",
+                "description": "Short",
+            }
         )
+
+        result = await scanner._analyze_tool(mock_tool, [AnalyzerEnum.READINESS])
 
         for finding in result.findings:
             if "HEUR-" in str(finding.details.get("rule_id", "")):
@@ -185,14 +183,15 @@ class TestReadinessCombinedWithOtherAnalyzers:
         mock_tool = MagicMock()
         mock_tool.name = "test_tool"
         mock_tool.description = "A test tool that does something useful"
-        mock_tool.model_dump_json.return_value = json.dumps({
-            "name": "test_tool",
-            "description": "A test tool that does something useful",
-        })
+        mock_tool.model_dump_json.return_value = json.dumps(
+            {
+                "name": "test_tool",
+                "description": "A test tool that does something useful",
+            }
+        )
 
         result = await scanner._analyze_tool(
-            mock_tool,
-            [AnalyzerEnum.YARA, AnalyzerEnum.READINESS]
+            mock_tool, [AnalyzerEnum.YARA, AnalyzerEnum.READINESS]
         )
 
         assert AnalyzerEnum.YARA in result.analyzers
@@ -207,24 +206,24 @@ class TestReadinessCombinedWithOtherAnalyzers:
         mock_tool = MagicMock()
         mock_tool.name = "test_tool"
         mock_tool.description = "A test tool that does something useful"
-        mock_tool.model_dump_json.return_value = json.dumps({
-            "name": "test_tool",
-            "description": "A test tool that does something useful",
-        })
+        mock_tool.model_dump_json.return_value = json.dumps(
+            {
+                "name": "test_tool",
+                "description": "A test tool that does something useful",
+            }
+        )
 
         # Run with YARA only
-        yara_only_result = await scanner._analyze_tool(
-            mock_tool,
-            [AnalyzerEnum.YARA]
-        )
+        yara_only_result = await scanner._analyze_tool(mock_tool, [AnalyzerEnum.YARA])
         yara_findings = [f for f in yara_only_result.findings if f.analyzer == "YARA"]
 
         # Run with YARA and READINESS
         combined_result = await scanner._analyze_tool(
-            mock_tool,
-            [AnalyzerEnum.YARA, AnalyzerEnum.READINESS]
+            mock_tool, [AnalyzerEnum.YARA, AnalyzerEnum.READINESS]
         )
-        combined_yara_findings = [f for f in combined_result.findings if f.analyzer == "YARA"]
+        combined_yara_findings = [
+            f for f in combined_result.findings if f.analyzer == "YARA"
+        ]
 
         # YARA findings should be the same
         assert len(yara_findings) == len(combined_yara_findings)
@@ -252,21 +251,20 @@ class TestReadinessToolDefinitionParsing:
         mock_tool.description = tool_data["description"]
         mock_tool.model_dump_json.return_value = json.dumps(tool_data)
 
-        result = await scanner._analyze_tool(
-            mock_tool,
-            [AnalyzerEnum.READINESS]
-        )
+        result = await scanner._analyze_tool(mock_tool, [AnalyzerEnum.READINESS])
 
         # Should not have HEUR-001 (has timeout)
         timeout_findings = [
-            f for f in result.findings
+            f
+            for f in result.findings
             if f.details and f.details.get("rule_id") == "HEUR-001"
         ]
         assert len(timeout_findings) == 0
 
         # Should not have HEUR-003 (has maxRetries)
         retry_findings = [
-            f for f in result.findings
+            f
+            for f in result.findings
             if f.details and f.details.get("rule_id") == "HEUR-003"
         ]
         assert len(retry_findings) == 0
@@ -438,4 +436,3 @@ class TestReadinessDefaultAnalyzers:
         assert AnalyzerEnum.API in default_analyzers
         assert AnalyzerEnum.YARA in default_analyzers
         assert AnalyzerEnum.READINESS not in default_analyzers
-

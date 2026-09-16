@@ -48,7 +48,11 @@ def _match_sink(label: str, sinks: dict[str, set[str]]) -> tuple[str, str] | Non
         lower = candidate.lower()
         for category, names in sinks.items():
             for name in names:
-                if lower == name or lower.endswith(f".{name}") or lower.endswith(f"::{name}"):
+                if (
+                    lower == name
+                    or lower.endswith(f".{name}")
+                    or lower.endswith(f"::{name}")
+                ):
                     return category, name
     return None
 
@@ -111,9 +115,7 @@ class SinkAnalyzer:
             path = self._shortest_path(entry_id, node_id)
             if len(path) < 2 or path[-1] != node_id:
                 continue
-            edge = self._graph.edge_between(
-                path[-2], path[-1], relation=Relation.CALLS
-            )
+            edge = self._graph.edge_between(path[-2], path[-1], relation=Relation.CALLS)
             if edge is None:
                 continue
             provenance = edge.provenance if edge else Provenance.INFERRED

@@ -27,7 +27,18 @@ from ....utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 _TS_LANGS = frozenset(
-    {"javascript", "typescript", "tsx", "go", "rust", "java", "kotlin", "c_sharp", "ruby", "php"}
+    {
+        "javascript",
+        "typescript",
+        "tsx",
+        "go",
+        "rust",
+        "java",
+        "kotlin",
+        "c_sharp",
+        "ruby",
+        "php",
+    }
 )
 
 
@@ -101,7 +112,9 @@ class CrossFileSymbolResolver:
             type_analyzer = TypeAnalyzer(parser)
             type_analyzer.analyze()
             self._py_types[file_key] = type_analyzer
-            self._import_bindings[file_key] = self._parse_python_import_bindings(source, file_key)
+            self._import_bindings[file_key] = self._parse_python_import_bindings(
+                source, file_key
+            )
             self._export_bindings[file_key] = self._parse_python_export_bindings(
                 source, file_key
             )
@@ -141,7 +154,9 @@ class CrossFileSymbolResolver:
             )
             return
 
-    def _parse_python_import_bindings(self, source: str, file_key: str) -> dict[str, str]:
+    def _parse_python_import_bindings(
+        self, source: str, file_key: str
+    ) -> dict[str, str]:
         bindings: dict[str, str] = {}
         try:
             tree = ast.parse(source)
@@ -162,7 +177,11 @@ class CrossFileSymbolResolver:
                         bindings[local] = target
             elif isinstance(node, ast.ImportFrom):
                 module = node.module or ""
-                base = self.resolve_import_target(module, importer=file_key) if module else None
+                base = (
+                    self.resolve_import_target(module, importer=file_key)
+                    if module
+                    else None
+                )
                 for alias in node.names:
                     if alias.name == "*":
                         if base:
@@ -175,7 +194,9 @@ class CrossFileSymbolResolver:
                         bindings[local] = module
         return bindings
 
-    def _parse_python_export_bindings(self, source: str, file_key: str) -> dict[str, str]:
+    def _parse_python_export_bindings(
+        self, source: str, file_key: str
+    ) -> dict[str, str]:
         exports: dict[str, str] = {}
         try:
             tree = ast.parse(source)
@@ -193,7 +214,11 @@ class CrossFileSymbolResolver:
                     exports[node.name] = f"{file_key}::{node.name}"
             elif isinstance(node, ast.ImportFrom):
                 module = node.module or ""
-                base = self.resolve_import_target(module, importer=file_key) if module else None
+                base = (
+                    self.resolve_import_target(module, importer=file_key)
+                    if module
+                    else None
+                )
                 for alias in node.names:
                     if alias.name == "*":
                         if base:
@@ -215,9 +240,11 @@ class CrossFileSymbolResolver:
                 source_node = node.child_by_field_name("source")
                 if source_node is None:
                     return
-                import_path = source_bytes[
-                    source_node.start_byte : source_node.end_byte
-                ].decode("utf-8").strip("'\"")
+                import_path = (
+                    source_bytes[source_node.start_byte : source_node.end_byte]
+                    .decode("utf-8")
+                    .strip("'\"")
+                )
                 target_file = self.resolve_import_target(import_path, importer=file_key)
                 if not target_file:
                     return
@@ -268,10 +295,14 @@ class CrossFileSymbolResolver:
                     None,
                 )
                 if source_node is not None and export_clause is not None:
-                    import_path = source_bytes[
-                        source_node.start_byte : source_node.end_byte
-                    ].decode("utf-8").strip("'\"")
-                    target_file = self.resolve_import_target(import_path, importer=file_key)
+                    import_path = (
+                        source_bytes[source_node.start_byte : source_node.end_byte]
+                        .decode("utf-8")
+                        .strip("'\"")
+                    )
+                    target_file = self.resolve_import_target(
+                        import_path, importer=file_key
+                    )
                     if target_file:
                         for spec in export_clause.children:
                             if spec.type != "export_specifier":
@@ -282,16 +313,22 @@ class CrossFileSymbolResolver:
                                 continue
                             exported = name_node.text.decode("utf-8")
                             local = (
-                                alias_node.text.decode("utf-8") if alias_node else exported
+                                alias_node.text.decode("utf-8")
+                                if alias_node
+                                else exported
                             )
                             exports[local] = f"{target_file}::{exported}"
                 elif source_node is not None and any(
                     child.type == "*" for child in node.children
                 ):
-                    import_path = source_bytes[
-                        source_node.start_byte : source_node.end_byte
-                    ].decode("utf-8").strip("'\"")
-                    target_file = self.resolve_import_target(import_path, importer=file_key)
+                    import_path = (
+                        source_bytes[source_node.start_byte : source_node.end_byte]
+                        .decode("utf-8")
+                        .strip("'\"")
+                    )
+                    target_file = self.resolve_import_target(
+                        import_path, importer=file_key
+                    )
                     if target_file:
                         self._wildcard_export_targets[file_key].append(target_file)
                 else:
@@ -312,14 +349,18 @@ class CrossFileSymbolResolver:
         visit(root)
         return exports
 
-    def _exports_for_file(self, file_key: str, *, _visited: set[str] | None = None) -> dict[str, str]:
+    def _exports_for_file(
+        self, file_key: str, *, _visited: set[str] | None = None
+    ) -> dict[str, str]:
         visited = _visited or set()
         if file_key in visited:
             return {}
         visited.add(file_key)
         merged = dict(self._export_bindings.get(file_key, {}))
         for target in self._wildcard_export_targets.get(file_key, []):
-            for name, binding in self._exports_for_file(target, _visited=visited).items():
+            for name, binding in self._exports_for_file(
+                target, _visited=visited
+            ).items():
                 merged.setdefault(name, binding)
         return merged
 
@@ -335,7 +376,9 @@ class CrossFileSymbolResolver:
             if file_key not in self._export_bindings:
                 self._export_bindings[file_key] = self._exports_for_file(file_key)
 
-    def resolve_import_target(self, import_path: str, *, importer: str = "") -> str | None:
+    def resolve_import_target(
+        self, import_path: str, *, importer: str = ""
+    ) -> str | None:
         cleaned = import_path.strip().strip("'\"")
         if cleaned in self._import_map:
             return self._import_map[cleaned]
@@ -345,7 +388,9 @@ class CrossFileSymbolResolver:
                 return resolved
         if cleaned.startswith("."):
             for key, target in self._import_map.items():
-                if cleaned.endswith(Path(key).stem) or key.endswith(cleaned.lstrip("./")):
+                if cleaned.endswith(Path(key).stem) or key.endswith(
+                    cleaned.lstrip("./")
+                ):
                     return target
         candidate = cleaned.replace("/", ".").split(".")[-1]
         for key, target in self._import_map.items():
@@ -446,7 +491,9 @@ class CrossFileSymbolResolver:
             return exact[0]
         return None
 
-    def _semantic_for_file(self, file_key: str) -> TypeAnalyzer | TreeSitterSemanticAnalyzer | None:
+    def _semantic_for_file(
+        self, file_key: str
+    ) -> TypeAnalyzer | TreeSitterSemanticAnalyzer | None:
         return self._py_types.get(file_key) or self._ts_semantic.get(file_key)
 
     def _source_for_file(self, caller_file: str) -> str | None:
@@ -560,7 +607,9 @@ class CrossFileSymbolResolver:
         caller_file = caller_id.split("::", 1)[0] if "::" in caller_id else ""
 
         if not _skip_dynamic and is_dynamic_call_label(callee_label):
-            dispatch = self.resolve_callee_targets(caller_id, callee_label, known_functions)
+            dispatch = self.resolve_callee_targets(
+                caller_id, callee_label, known_functions
+            )
             primary = dispatch.primary()
             if primary:
                 return (
@@ -596,7 +645,11 @@ class CrossFileSymbolResolver:
             if binding:
                 if "::" in binding:
                     target_file, symbol = binding.split("::", 1)
-                    candidate = f"{target_file}::{symbol}.{member}" if member else f"{target_file}::{symbol}"
+                    candidate = (
+                        f"{target_file}::{symbol}.{member}"
+                        if member
+                        else f"{target_file}::{symbol}"
+                    )
                 else:
                     candidate = f"{binding}::{member}" if member else binding
                 if candidate in known_functions:
@@ -644,17 +697,25 @@ class CrossFileSymbolResolver:
         if callee_label in known_functions:
             return callee_label, Provenance.INFERRED, 0.75, None
 
-        imported = self._resolve_imported_symbol(caller_file, callee_label.split(".")[0])
+        imported = self._resolve_imported_symbol(
+            caller_file, callee_label.split(".")[0]
+        )
         if imported and not callee_label.startswith("external::"):
             short = callee_label.split(".")[-1]
             matched = self._match_known_function(
-                imported if "." not in callee_label else f"{imported.rsplit('::',1)[0]}::{short}",
+                (
+                    imported
+                    if "." not in callee_label
+                    else f"{imported.rsplit('::',1)[0]}::{short}"
+                ),
                 known_functions,
             )
             if matched:
                 return matched, Provenance.INFERRED, 0.9, "import_symbol"
             for fn in known_functions:
-                target_file = imported.split("::", 1)[0] if "::" in imported else imported
+                target_file = (
+                    imported.split("::", 1)[0] if "::" in imported else imported
+                )
                 if fn.startswith(f"{target_file}::") and fn.endswith(f"::{short}"):
                     return fn, Provenance.INFERRED, 0.85, "import_symbol"
 
@@ -672,7 +733,10 @@ class CrossFileSymbolResolver:
 
             for binding in self._import_bindings.get(file_key, {}).values():
                 target_file = binding.split("::", 1)[0]
-                resolved = self.resolve_import_target(target_file, importer=file_key) or target_file
+                resolved = (
+                    self.resolve_import_target(target_file, importer=file_key)
+                    or target_file
+                )
                 if resolved in known_files:
                     targets.add(resolved)
 

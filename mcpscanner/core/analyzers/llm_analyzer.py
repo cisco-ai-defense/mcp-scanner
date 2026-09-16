@@ -96,11 +96,18 @@ class LLMAnalyzer(BaseAnalyzer):
             if hasattr(config, "llm_provider_api_key") and config.llm_provider_api_key:
                 # Use Bedrock API key authentication (MCP_SCANNER_LLM_API_KEY)
                 self._api_key = config.llm_provider_api_key
-                self.logger.debug("Bedrock: Using API key authentication (MCP_SCANNER_LLM_API_KEY)")
-            elif hasattr(config, "aws_bearer_token_bedrock") and config.aws_bearer_token_bedrock:
+                self.logger.debug(
+                    "Bedrock: Using API key authentication (MCP_SCANNER_LLM_API_KEY)"
+                )
+            elif (
+                hasattr(config, "aws_bearer_token_bedrock")
+                and config.aws_bearer_token_bedrock
+            ):
                 # Use AWS Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK)
                 self._api_key = config.aws_bearer_token_bedrock
-                self.logger.debug("Bedrock: Using bearer token authentication (AWS_BEARER_TOKEN_BEDROCK)")
+                self.logger.debug(
+                    "Bedrock: Using bearer token authentication (AWS_BEARER_TOKEN_BEDROCK)"
+                )
             else:
                 # Use AWS credentials (profile/IAM/session token)
                 self._api_key = None
@@ -150,10 +157,10 @@ class LLMAnalyzer(BaseAnalyzer):
             return prompt_file.read_text(encoding="utf-8")
 
         except FileNotFoundError:
-            self.logger.error(f"Prompt file not found: {prompt_file_name}")
+            self.logger.error("Prompt file not found: %s", prompt_file_name)
             raise
         except Exception as e:
-            self.logger.error(f"Failed to load prompt {prompt_file_name}: {e}")
+            self.logger.error("Failed to load prompt %s: %s", prompt_file_name, e)
             raise IOError(f"Could not load prompt {prompt_file_name}: {e}")
 
     def _create_threat_analysis_prompt(
@@ -203,7 +210,8 @@ class LLMAnalyzer(BaseAnalyzer):
         prompt_injection_detected = False
         if start_tag in analysis_content or end_tag in analysis_content:
             self.logger.warning(
-                f"Potential prompt injection detected in tool {tool_name}: Input contains delimiter tags"
+                "Potential prompt injection detected in tool %s: Input contains delimiter tags",
+                tool_name,
             )
             prompt_injection_detected = True
 
@@ -274,15 +282,15 @@ class LLMAnalyzer(BaseAnalyzer):
             return json.loads(json_content)
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse LLM response as JSON: {e}")
+            self.logger.error("Failed to parse LLM response as JSON: %s", e)
             self.logger.error(
-                f"Response content length: {len(response_content)} characters"
+                "Response content length: %s characters", len(response_content)
             )
             raise ValueError(f"Invalid JSON in LLM response: {e}")
         except Exception as e:
-            self.logger.error(f"Unexpected error parsing LLM response: {e}")
+            self.logger.error("Unexpected error parsing LLM response: %s", e)
             self.logger.error(
-                f"Response content length: {len(response_content)} characters"
+                "Response content length: %s characters", len(response_content)
             )
             raise ValueError(f"Failed to parse LLM response: {e}")
 
@@ -296,9 +304,7 @@ class LLMAnalyzer(BaseAnalyzer):
         primary_threats = threat_analysis.get("primary_threats", [])
 
         # Only create findings if malicious content is detected AND primary threats are specified
-        if primary_threats and threat_analysis.get(
-            "malicious_content_detected", False
-        ):
+        if primary_threats and threat_analysis.get("malicious_content_detected", False):
             # Generate threat summary for all findings
             display_names = []
             for threat_name in primary_threats:
@@ -309,7 +315,9 @@ class LLMAnalyzer(BaseAnalyzer):
             if len(display_names) == 1:
                 threat_summary = f"Detected 1 threat: {display_names[0]}"
             else:
-                threat_summary = f"Detected {len(display_names)} threats: {', '.join(display_names)}"
+                threat_summary = (
+                    f"Detected {len(display_names)} threats: {', '.join(display_names)}"
+                )
 
             # Create specific findings for each detected threat
             for threat_name in primary_threats:
@@ -420,8 +428,8 @@ class LLMAnalyzer(BaseAnalyzer):
             return findings
 
         except Exception as e:
-            self.logger.error(f"LLM analysis failed for {tool_name}: {str(e)}")
-            self.logger.error(f"Full traceback for {tool_name}:", exc_info=True)
+            self.logger.error("LLM analysis failed for %s: %s", tool_name, str(e))
+            self.logger.error("Full traceback for %s:", tool_name, exc_info=True)
             return [
                 build_infrastructure_error_finding(
                     analyzer_name="LLM",
@@ -522,9 +530,7 @@ class LLMAnalyzer(BaseAnalyzer):
 
             return await acompletion(**request_params, drop_params=True)
 
-        async def on_retry(
-            exc: BaseException, attempt: int, delay: float
-        ) -> None:
+        async def on_retry(exc: BaseException, attempt: int, delay: float) -> None:
             self.logger.warning(
                 "LLM API transient error for %s, retrying in %.1fs "
                 "(attempt %d/%d): %s",

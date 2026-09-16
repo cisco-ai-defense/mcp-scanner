@@ -17,7 +17,6 @@
 """Tests for Behavioral Analyzer - Main test suite."""
 
 
-
 class TestBehavioralAnalyzerModule:
     """Test that behavioral analyzer module is importable."""
 

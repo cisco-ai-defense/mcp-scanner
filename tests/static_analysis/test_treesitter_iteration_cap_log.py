@@ -83,9 +83,7 @@ class TestTreeSitterIterationCapWarning:
             for r in caplog.records
             if "iteration_cap_hit" in r.getMessage()
         ]
-        assert cap_lines, (
-            f"expected iteration_cap_hit WARNING in {caplog.text!r}"
-        )
+        assert cap_lines, f"expected iteration_cap_hit WARNING in {caplog.text!r}"
         line = cap_lines[0]
         for needle in (
             "static_dataflow treesitter iteration_cap_hit",

@@ -61,33 +61,36 @@ from .taint.tracker import TaintStatus
 @dataclass
 class TaintInfo:
     """Simple taint information for fallback analysis."""
+
     status: TaintStatus = TaintStatus.UNTAINTED
     sources: Set[str] = field(default_factory=set)
-    
+
     def is_tainted(self) -> bool:
         return self.status == TaintStatus.TAINTED
-    
+
     def merge(self, other: "TaintInfo") -> "TaintInfo":
         """Merge two taint infos (union of taints)."""
         if self.status == TaintStatus.TAINTED or other.status == TaintStatus.TAINTED:
             return TaintInfo(
-                status=TaintStatus.TAINTED,
-                sources=self.sources | other.sources
+                status=TaintStatus.TAINTED, sources=self.sources | other.sources
             )
         return TaintInfo(status=self.status, sources=self.sources.copy())
 
+
 # Tree-sitter imports - each language is optional
 from tree_sitter import Language, Parser, Node  # noqa: F401,E402
+
 TREE_SITTER_AVAILABLE = True
 
 # Language modules - imported lazily
 _LANGUAGE_MODULES: Dict[str, Any] = {}
 
+
 def _get_language_module(lang: str) -> Optional[Any]:
     """Lazily import tree-sitter language module."""
     if lang in _LANGUAGE_MODULES:
         return _LANGUAGE_MODULES[lang]
-    
+
     try:
         if lang == "javascript":
             import tree_sitter_javascript as mod
@@ -233,6 +236,7 @@ _TS_MEMBER_EXPR_TYPES: Set[str] = {
 #   #[Tool]          PHP 8 attributes
 #   # @tool          Ruby comment-style annotation
 import re as _re  # noqa: E402  (local alias avoids polluting wider module namespace)
+
 # Notes for maintainers:
 # - The optional namespace path consumes ``::``, ``.``, *and* ``\\``
 #   separators so fully-qualified annotations like
@@ -311,11 +315,24 @@ def _classify_template_subtype(method_name: str) -> Optional[str]:
 # ``_path_endswith_suffix`` so the import-map disambiguator survives small
 # language differences (``.tsx`` vs ``.ts``, ``.pyi`` vs ``.py``, etc.).
 _SOURCE_FILE_EXTS: "tuple[str, ...]" = (
-    ".py", ".pyi", ".pyx",
-    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
-    ".go", ".rb", ".rs",
-    ".kt", ".kts",
-    ".java", ".cs", ".php", ".m",
+    ".py",
+    ".pyi",
+    ".pyx",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".go",
+    ".rb",
+    ".rs",
+    ".kt",
+    ".kts",
+    ".java",
+    ".cs",
+    ".php",
+    ".m",
 )
 
 
@@ -434,9 +451,7 @@ def _is_same_ts_node(a, b) -> bool:
     if a is None or b is None:
         return False
     return (
-        a.start_byte == b.start_byte
-        and a.end_byte == b.end_byte
-        and a.type == b.type
+        a.start_byte == b.start_byte and a.end_byte == b.end_byte and a.type == b.type
     )
 
 
@@ -563,23 +578,17 @@ _MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = {
         "rmcp",
         "modelcontextprotocol",
     ),
-    "kotlin": (
-        "io.modelcontextprotocol",
-    ),
+    "kotlin": ("io.modelcontextprotocol",),
     "java": (
         "io.modelcontextprotocol",
         "org.springframework.ai",
     ),
-    "c_sharp": (
-        "modelcontextprotocol",
-    ),
+    "c_sharp": ("modelcontextprotocol",),
     "php": (
         "phpmcp",
         "modelcontextprotocol",
     ),
-    "ruby": (
-        "mcp",
-    ),
+    "ruby": ("mcp",),
 }
 
 
@@ -715,7 +724,7 @@ def _classify_mcp_annotation(
             # text for ``::`` / ``\\`` / ``.`` separated segments.
             prefix = ann[: m.start(1)]
             ns_match = _re.search(r"((?:[\w]+(?:::|\\|\.))*)$", prefix)
-            namespace = (ns_match.group(1).rstrip(":\\.") if ns_match else "")
+            namespace = ns_match.group(1).rstrip(":\\.") if ns_match else ""
 
             cap = allowed.get(ident)
             if cap is None:
@@ -725,7 +734,14 @@ def _classify_mcp_annotation(
             # trusted namespace. Vendor-prefixed leaves (``McpServerTool``)
             # are accepted unconditionally because they only collide with
             # MCP itself.
-            is_generic = ident in {"Tool", "Prompt", "Resource", "tool", "prompt", "resource"}
+            is_generic = ident in {
+                "Tool",
+                "Prompt",
+                "Resource",
+                "tool",
+                "prompt",
+                "resource",
+            }
             if is_generic and namespace not in trusted_ns:
                 continue
 

@@ -369,9 +369,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         )
         non_safe_total = sum(v for k, v in severity_counts.items() if k != "SAFE")
         ordered_keys = [s for s in _SEVERITY_DISPLAY_ORDER if s in severity_counts]
-        ordered_keys += [
-            s for s in severity_counts if s not in _SEVERITY_DISPLAY_ORDER
-        ]
+        ordered_keys += [s for s in severity_counts if s not in _SEVERITY_DISPLAY_ORDER]
         sev_fields = " ".join(
             f"sev_{key}={severity_counts[key]}" for key in ordered_keys
         )
@@ -521,12 +519,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         shared read-only across the per-file tasks, which is what makes the
         files safe to analyze concurrently.
         """
-        self.logger.debug(f"Scanning directory: {content}")
+        self.logger.debug("Scanning directory: %s", content)
 
         source_files = self._find_source_files(content)
-        self.logger.debug(
-            f"Found {len(source_files)} source file(s) to analyze"
-        )
+        self.logger.debug("Found %s source file(s) to analyze", len(source_files))
 
         capability_files = self._prefilter_capability_files(source_files)
         self.logger.info(
@@ -576,7 +572,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
         async def _analyze_accepted(accepted: _AcceptedFile) -> List[SecurityFinding]:
             async with file_semaphore:
-                self.logger.debug(f"Analyzing file: {accepted.path}")
+                self.logger.debug("Analyzing file: %s", accepted.path)
                 ext = Path(accepted.path).suffix.lower()
                 if ext in self._PYTHON_EXTENSIONS:
                     file_cga = py_call_graph_analyzer
@@ -595,9 +591,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
                 file_ms = int((time.perf_counter() - file_start) * 1000)
                 non_safe = sum(
-                    1
-                    for f in file_findings
-                    if getattr(f, "severity", "") != "SAFE"
+                    1 for f in file_findings if getattr(f, "severity", "") != "SAFE"
                 )
                 self.logger.info(
                     "behavioral file done path=%s findings=%d non_safe=%d duration_ms=%d",
@@ -644,14 +638,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         if capability_files:
             lang_counts = {
                 "python": len(python_files),
-                **{lang: len(files) for lang, files in sorted(ts_files_by_lang.items())},
+                **{
+                    lang: len(files) for lang, files in sorted(ts_files_by_lang.items())
+                },
             }
             lang_fields = " ".join(
                 f"lang_{lang}={n}" for lang, n in lang_counts.items() if n
             )
-            self.logger.info(
-                "behavioral languages %s", lang_fields
-            )
+            self.logger.info("behavioral languages %s", lang_fields)
 
         return python_files, ts_files_by_lang
 
@@ -710,9 +704,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 ext = Path(accepted.path).suffix.lower()
                 if ext in self._PYTHON_EXTENSIONS and py_call_graph_analyzer:
-                    py_call_graph_analyzer.add_file(
-                        Path(accepted.path), source_code
-                    )
+                    py_call_graph_analyzer.add_file(Path(accepted.path), source_code)
                 elif ext in self._EXT_TO_TS_LANGUAGE:
                     lang = self._EXT_TO_TS_LANGUAGE[ext]
                     ts_call_graph_analyzers[lang].add_file(
@@ -739,13 +731,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         if py_call_graph_analyzer:
             call_graph = py_call_graph_analyzer.build_call_graph()
             self.logger.debug(
-                f"Built Python call graph with {len(call_graph.functions)} functions"
+                "Built Python call graph with %s functions", len(call_graph.functions)
             )
 
         for lang, ts_analyzer in ts_call_graph_analyzers.items():
             ts_cg = ts_analyzer.build_call_graph()
             self.logger.debug(
-                f"Built {lang} call graph with {len(ts_cg.functions)} functions"
+                "Built %s call graph with %s functions", lang, len(ts_cg.functions)
             )
 
         return py_call_graph_analyzer, ts_call_graph_analyzers, source_registry
@@ -779,9 +771,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 cross_file_analyzer = cga
 
             if cross_file_analyzer:
-                self.logger.debug(
-                    f"Built call graph for {content}"
-                )
+                self.logger.debug("Built call graph for %s", content)
         except Exception as e:
             self.logger.warning(
                 "behavioral call_graph_build failed path=%s error_type=%s error=%s",
@@ -829,9 +819,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 ts_cga.build_call_graph()
                 cross_file_analyzer = ts_cga
 
-            self.logger.debug(
-                "Built call graph for inline source"
-            )
+            self.logger.debug("Built call graph for inline source")
             context["cross_file_analyzer"] = cross_file_analyzer
             context["code_graphs"] = _code_graphs_for_file(
                 cross_file_analyzer,
@@ -839,22 +827,30 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 source_registry={str(temp_path): content},
             )
         except Exception as e:
-            self.logger.debug(
-                f"Could not build call graph for inline source: {e}"
-            )
+            self.logger.debug("Could not build call graph for inline source: %s", e)
 
         return await self._analyze_source_code(content, context)
 
     _EXT_TO_TS_LANGUAGE = {
-        ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
-        ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
+        ".js": "javascript",
+        ".jsx": "javascript",
+        ".mjs": "javascript",
+        ".cjs": "javascript",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".mts": "typescript",
+        ".cts": "typescript",
         ".go": "go",
         ".java": "java",
-        ".kt": "kotlin", ".kts": "kotlin",
+        ".kt": "kotlin",
+        ".kts": "kotlin",
         ".cs": "c_sharp",
-        ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
+        ".rb": "ruby",
+        ".rake": "ruby",
+        ".gemspec": "ruby",
         ".rs": "rust",
-        ".php": "php", ".phtml": "php",
+        ".php": "php",
+        ".phtml": "php",
     }
 
     _PYTHON_EXTENSIONS = {".py", ".pyw"}
@@ -863,7 +859,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     # with NativeAnalyzer; every other tree-sitter language relies on
     # NativeAnalyzer alone.
     _JS_TS_EXTENSIONS = {
-        ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".ts",
+        ".tsx",
+        ".mts",
+        ".cts",
     }
 
     def _find_source_files(self, directory: str) -> List[str]:
@@ -925,7 +928,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 with open(src_file, "rb") as f:
                     source_bytes = f.read()
             except OSError as e:
-                self.logger.debug(f"Prefilter could not read {src_file}: {e}")
+                self.logger.debug("Prefilter could not read %s: %s", src_file, e)
                 accepted.append(
                     _AcceptedFile(path=src_file, source_bytes=b"", source_text="")
                 )
@@ -1097,7 +1100,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             )
 
             if not func_contexts:
-                self.logger.debug(f"No functions found in {file_path}")
+                self.logger.debug("No functions found in %s", file_path)
                 return findings
 
             # Record every function we are about to analyze so that callers
@@ -1107,14 +1110,18 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 self.analyzed_functions.append(
                     {
                         "name": getattr(fc, "name", "unknown"),
-                        "decorator_types": list(getattr(fc, "decorator_types", []) or []),
+                        "decorator_types": list(
+                            getattr(fc, "decorator_types", []) or []
+                        ),
                         "line_number": getattr(fc, "line_number", 0),
                         "source_file": file_path,
                         "docstring": getattr(fc, "docstring", None) or "",
                     }
                 )
 
-            self.logger.debug(f"Analyzing {len(func_contexts)} functions in {file_path}")
+            self.logger.debug(
+                "Analyzing %s functions in %s", len(func_contexts), file_path
+            )
 
             for fc in func_contexts:
                 populate_taint_fields(fc)
@@ -1158,7 +1165,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         try:
             return extract(), False
         except Exception as e:
-            self.logger.debug(f"{label} failed for {file_path}: {e}")
+            self.logger.debug("%s failed for %s: %s", label, file_path, e)
             return [], True
 
     def _extract_function_contexts(
@@ -1176,11 +1183,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         file_ext = Path(file_path).suffix.lower()
 
         def _native() -> List[FunctionContext]:
-            return NativeAnalyzer(source_code, file_path).extract_mcp_capability_contexts(
+            return NativeAnalyzer(
+                source_code, file_path
+            ).extract_mcp_capability_contexts(
                 cross_file_analyzer=context.get("cross_file_analyzer")
             )
 
         if file_ext in self._PYTHON_EXTENSIONS:
+
             def language_extractor() -> List[FunctionContext]:
                 return ContextExtractor(
                     source_code, file_path
@@ -1189,7 +1199,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             label = "ContextExtractor"
         elif file_ext in self._JS_TS_EXTENSIONS:
             self.logger.debug(
-                f"Using JSContextExtractor + NativeAnalyzer for: {file_path}"
+                "Using JSContextExtractor + NativeAnalyzer for: %s", file_path
             )
 
             def language_extractor() -> List[FunctionContext]:
@@ -1205,15 +1215,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         else:
             # No language-specific extractor: NativeAnalyzer detects the
             # language itself and is the only source of contexts.
-            self.logger.debug(f"Unknown file type {file_path}, trying NativeAnalyzer")
+            self.logger.debug("Unknown file type %s, trying NativeAnalyzer", file_path)
             native_analyzer = NativeAnalyzer(source_code, file_path)
             func_contexts = native_analyzer.extract_mcp_capability_contexts(
                 cross_file_analyzer=context.get("cross_file_analyzer")
             )
             if func_contexts:
                 self.logger.debug(
-                    f"NativeAnalyzer detected {native_analyzer.language}, "
-                    f"extracted {len(func_contexts)} MCP capabilities"
+                    "NativeAnalyzer detected %s, extracted %s MCP capabilities",
+                    native_analyzer.language,
+                    len(func_contexts),
                 )
             return func_contexts
 
@@ -1222,7 +1233,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         )
         if language_contexts:
             self.logger.debug(
-                f"Found {len(language_contexts)} MCP functions in {file_path}"
+                "Found %s MCP functions in %s", len(language_contexts), file_path
             )
 
         native_contexts, native_failed = self._run_extractor(
@@ -1230,8 +1241,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         )
         if native_contexts:
             self.logger.debug(
-                f"NativeAnalyzer extracted {len(native_contexts)} MCP "
-                f"capabilities from {file_path}"
+                "NativeAnalyzer extracted %s MCP capabilities from %s",
+                len(native_contexts),
+                file_path,
             )
 
         if language_failed and native_failed:
@@ -1257,7 +1269,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 func_context.source_file = file_path
 
         if context.get("cross_file_analyzer"):
-            from ...static_analysis.graph.integration import enrich_with_cross_file_context
+            from ...static_analysis.graph.integration import (
+                enrich_with_cross_file_context,
+            )
 
             for func_context in func_contexts:
                 enrich_with_cross_file_context(
@@ -1271,7 +1285,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             code_graphs = context.get("code_graphs") or {}
             if is_graph_supported_language(lang) and lang in code_graphs:
                 code_graph = code_graphs[lang]
-            elif context.get("cross_file_analyzer") and is_graph_supported_language(lang):
+            elif context.get("cross_file_analyzer") and is_graph_supported_language(
+                lang
+            ):
                 code_graph = build_code_graph(
                     context["cross_file_analyzer"],
                     language=lang,
@@ -1355,7 +1371,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
                 elif func_line_count > 500:
                     self.logger.debug(
-                        f"Long function: {func_context.name} ({func_line_count} lines)"
+                        "Long function: %s (%s lines)",
+                        func_context.name,
+                        func_line_count,
                     )
 
                 result = await self.alignment_orchestrator.check_alignment(func_context)
@@ -1387,9 +1405,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         }
         funcs_with_findings.discard(None)
         errored_funcs = set(
-            getattr(
-                self.alignment_orchestrator, "errored_function_keys", set()
-            )
+            getattr(self.alignment_orchestrator, "errored_function_keys", set())
         )
         placeholders: List[SecurityFinding] = []
         for fc in func_contexts:
@@ -1483,7 +1499,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
             if not threat_name:
                 self.logger.warning(
-                    f"No threat_name in analysis for {func_context.name}"
+                    "No threat_name in analysis for %s", func_context.name
                 )
                 return None
 
@@ -1493,7 +1509,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     "behavioral", threat_name
                 )
             except ValueError as e:
-                self.logger.warning(f"Unknown threat name '{threat_name}': {e}")
+                self.logger.warning("Unknown threat name '%s': %s", threat_name, e)
                 return None
 
             severity = threat_info["severity"]
@@ -1503,12 +1519,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             if not is_python:
                 if severity == "INFO":
                     self.logger.debug(
-                        f"Skipping INFO finding for non-Python file: {file_path}"
+                        "Skipping INFO finding for non-Python file: %s", file_path
                     )
                     return None
                 if threat_name == "GENERAL DESCRIPTION-CODE MISMATCH":
                     self.logger.debug(
-                        f"Skipping GENERAL DESCRIPTION-CODE MISMATCH for non-Python file: {file_path}"
+                        "Skipping GENERAL DESCRIPTION-CODE MISMATCH for non-Python file: %s",
+                        file_path,
                     )
                     return None
 
@@ -1563,7 +1580,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             return finding
 
         except Exception as e:
-            self.logger.error(f"Failed to create security finding: {e}", exc_info=True)
+            self.logger.error("Failed to create security finding: %s", e, exc_info=True)
             return None
 
     def _enrich_with_cross_file_context(

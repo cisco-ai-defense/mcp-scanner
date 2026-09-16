@@ -94,9 +94,13 @@ def mock_mcp_client():
     patches = [
         patch("mcpscanner.core.session.sse_client", return_value=mock_stream_cm),
         patch(
-            "mcpscanner.core.session.streamable_http_client", return_value=mock_stream_cm
+            "mcpscanner.core.session.streamable_http_client",
+            return_value=mock_stream_cm,
         ),
-        patch("mcpscanner.core.session.create_mcp_http_client", return_value=mock_httpx_client),
+        patch(
+            "mcpscanner.core.session.create_mcp_http_client",
+            return_value=mock_httpx_client,
+        ),
         patch("mcpscanner.core.session.ClientSession", mock_client_session_class),
     ]
 
@@ -802,8 +806,13 @@ async def test_get_mcp_session_401_unauthorized_streamable_http(config):
     mock_httpx_client.is_closed = False
     mock_httpx_client.aclose = AsyncMock()
 
-    with patch("mcpscanner.core.session.create_mcp_http_client", return_value=mock_httpx_client), \
-         patch("mcpscanner.core.session.streamable_http_client") as mock_client:
+    with (
+        patch(
+            "mcpscanner.core.session.create_mcp_http_client",
+            return_value=mock_httpx_client,
+        ),
+        patch("mcpscanner.core.session.streamable_http_client") as mock_client,
+    ):
         mock_context = AsyncMock()
 
         # Create a mock HTTPStatusError with 401
@@ -861,8 +870,13 @@ async def test_get_mcp_session_403_forbidden(config):
     mock_httpx_client.is_closed = False
     mock_httpx_client.aclose = AsyncMock()
 
-    with patch("mcpscanner.core.session.create_mcp_http_client", return_value=mock_httpx_client), \
-         patch("mcpscanner.core.session.streamable_http_client") as mock_client:
+    with (
+        patch(
+            "mcpscanner.core.session.create_mcp_http_client",
+            return_value=mock_httpx_client,
+        ),
+        patch("mcpscanner.core.session.streamable_http_client") as mock_client,
+    ):
         mock_context = AsyncMock()
 
         class MockHTTPStatusError(Exception):
@@ -891,8 +905,13 @@ async def test_get_mcp_session_404_not_found(config):
     mock_httpx_client.is_closed = False
     mock_httpx_client.aclose = AsyncMock()
 
-    with patch("mcpscanner.core.session.create_mcp_http_client", return_value=mock_httpx_client), \
-         patch("mcpscanner.core.session.streamable_http_client") as mock_client:
+    with (
+        patch(
+            "mcpscanner.core.session.create_mcp_http_client",
+            return_value=mock_httpx_client,
+        ),
+        patch("mcpscanner.core.session.streamable_http_client") as mock_client,
+    ):
         mock_context = AsyncMock()
 
         class MockHTTPStatusError(Exception):
@@ -1165,6 +1184,7 @@ class TestServerSupportsCapability:
 # Capability gate wired into the four scan entrypoints
 # ---------------------------------------------------------------------------
 
+
 def _session_with_capabilities(**advertised):
     """Build a fake session whose InitializeResult advertises only the
     given capabilities (each key is a capability name; value is whatever
@@ -1195,10 +1215,13 @@ async def test_scan_resources_short_circuits_when_capability_not_advertised(conf
 
     mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
     mock_close = AsyncMock()
-    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
-         patch.object(scanner, "_close_mcp_session", mock_close):
+    with (
+        patch.object(scanner, "_get_mcp_session", mock_get_session),
+        patch.object(scanner, "_close_mcp_session", mock_close),
+    ):
         results = await scanner.scan_remote_server_resources(
-            "https://bigquery.googleapis.com/mcp", analyzers=_CAP_TEST_ANALYZERS,
+            "https://bigquery.googleapis.com/mcp",
+            analyzers=_CAP_TEST_ANALYZERS,
         )
 
     assert results == []
@@ -1214,10 +1237,13 @@ async def test_scan_prompts_short_circuits_when_capability_not_advertised(config
 
     mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
     mock_close = AsyncMock()
-    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
-         patch.object(scanner, "_close_mcp_session", mock_close):
+    with (
+        patch.object(scanner, "_get_mcp_session", mock_get_session),
+        patch.object(scanner, "_close_mcp_session", mock_close),
+    ):
         results = await scanner.scan_remote_server_prompts(
-            "https://bigquery.googleapis.com/mcp", analyzers=_CAP_TEST_ANALYZERS,
+            "https://bigquery.googleapis.com/mcp",
+            analyzers=_CAP_TEST_ANALYZERS,
         )
 
     assert results == []
@@ -1234,8 +1260,10 @@ async def test_scan_resource_raises_value_error_when_capability_not_advertised(c
     session = _session_with_capabilities(tools=SimpleNamespace())
 
     mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
-    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
-         patch.object(scanner, "_close_mcp_session", AsyncMock()):
+    with (
+        patch.object(scanner, "_get_mcp_session", mock_get_session),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+    ):
         with pytest.raises(ValueError, match="did not advertise resources capability"):
             await scanner.scan_remote_server_resource(
                 "https://bigquery.googleapis.com/mcp",
@@ -1251,8 +1279,10 @@ async def test_scan_prompt_raises_value_error_when_capability_not_advertised(con
     session = _session_with_capabilities(tools=SimpleNamespace())
 
     mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
-    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
-         patch.object(scanner, "_close_mcp_session", AsyncMock()):
+    with (
+        patch.object(scanner, "_get_mcp_session", mock_get_session),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+    ):
         with pytest.raises(ValueError, match="did not advertise prompts capability"):
             await scanner.scan_remote_server_prompt(
                 "https://bigquery.googleapis.com/mcp",
@@ -1280,10 +1310,13 @@ async def test_scan_resources_returns_empty_on_synthetic_session_terminated(conf
     session.list_resources.side_effect = _mcp_error(32600, "Session terminated")
 
     mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
-    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
-         patch.object(scanner, "_close_mcp_session", AsyncMock()):
+    with (
+        patch.object(scanner, "_get_mcp_session", mock_get_session),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+    ):
         results = await scanner.scan_remote_server_resources(
-            "https://bigquery.googleapis.com/mcp", analyzers=_CAP_TEST_ANALYZERS,
+            "https://bigquery.googleapis.com/mcp",
+            analyzers=_CAP_TEST_ANALYZERS,
         )
 
     assert results == []
@@ -1297,10 +1330,13 @@ async def test_scan_prompts_returns_empty_on_synthetic_session_terminated(config
     session.list_prompts.side_effect = _mcp_error(32600, "Session terminated")
 
     mock_get_session = AsyncMock(return_value=(AsyncMock(), session))
-    with patch.object(scanner, "_get_mcp_session", mock_get_session), \
-         patch.object(scanner, "_close_mcp_session", AsyncMock()):
+    with (
+        patch.object(scanner, "_get_mcp_session", mock_get_session),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+    ):
         results = await scanner.scan_remote_server_prompts(
-            "https://bigquery.googleapis.com/mcp", analyzers=_CAP_TEST_ANALYZERS,
+            "https://bigquery.googleapis.com/mcp",
+            analyzers=_CAP_TEST_ANALYZERS,
         )
 
     assert results == []
@@ -1312,7 +1348,9 @@ async def test_scan_remote_server_tool_runs_behavioral_finalize(config):
     """Single-tool remote scans must attach behavioral source findings like bulk scans."""
     mock_session = AsyncMock()
     mock_tool = MCPTool(name="safe_tool", description="tool", parameters=[])
-    mock_session.list_tools.return_value = type("ToolList", (), {"tools": [mock_tool]})()
+    mock_session.list_tools.return_value = type(
+        "ToolList", (), {"tools": [mock_tool]}
+    )()
 
     tool_result = ToolScanResult(
         tool_name="safe_tool",
@@ -1358,7 +1396,9 @@ async def test_scan_stdio_server_tool_runs_behavioral_finalize(config):
     """Single-tool stdio scans must attach behavioral source findings like bulk scans."""
     mock_session = AsyncMock()
     mock_tool = MCPTool(name="safe_tool", description="tool", parameters=[])
-    mock_session.list_tools.return_value = type("ToolList", (), {"tools": [mock_tool]})()
+    mock_session.list_tools.return_value = type(
+        "ToolList", (), {"tools": [mock_tool]}
+    )()
 
     tool_result = ToolScanResult(
         tool_name="safe_tool",
@@ -1550,7 +1590,9 @@ async def test_scan_remote_server_tool_attaches_behavioral_findings_e2e(config):
     )
     mock_session = AsyncMock()
     mock_tool = MCPTool(name="safe_tool", description="tool", parameters=[])
-    mock_session.list_tools.return_value = type("ToolList", (), {"tools": [mock_tool]})()
+    mock_session.list_tools.return_value = type(
+        "ToolList", (), {"tools": [mock_tool]}
+    )()
 
     tool_result = ToolScanResult(
         tool_name="safe_tool",
@@ -1597,7 +1639,9 @@ async def test_scan_stdio_server_tool_attaches_behavioral_findings_e2e(config):
     )
     mock_session = AsyncMock()
     mock_tool = MCPTool(name="safe_tool", description="tool", parameters=[])
-    mock_session.list_tools.return_value = type("ToolList", (), {"tools": [mock_tool]})()
+    mock_session.list_tools.return_value = type(
+        "ToolList", (), {"tools": [mock_tool]}
+    )()
 
     tool_result = ToolScanResult(
         tool_name="safe_tool",

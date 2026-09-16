@@ -117,7 +117,9 @@ def build_resource_description(
             )
         else:
             snippet = text
-        parts.append(f"--- Content (first {min(text_total, text_budget)} chars) ---\n{snippet}")
+        parts.append(
+            f"--- Content (first {min(text_total, text_budget)} chars) ---\n{snippet}"
+        )
 
     return "\n\n".join(parts)
 
@@ -182,7 +184,9 @@ def _resource_context(result: ResourceScanResult) -> Dict[str, Any]:
     }
 
 
-def _rebuild_resource(result: ResourceScanResult, kept: List[Any]) -> ResourceScanResult:
+def _rebuild_resource(
+    result: ResourceScanResult, kept: List[Any]
+) -> ResourceScanResult:
     return ResourceScanResult(
         resource_uri=result.resource_uri,
         resource_name=result.resource_name,
@@ -312,7 +316,7 @@ class MetaAnalysisRunner:
                 enriched.meta_filtered_findings = dropped
                 return enriched
             except Exception as e:
-                logger.error(f"Meta-analysis failed for {spec.label(result)}: {e}")
+                logger.error("Meta-analysis failed for %s: %s", spec.label(result), e)
                 result.meta_filtered_findings = []
                 return result
 

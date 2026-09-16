@@ -173,9 +173,7 @@ class TestPathSafetyHelper:
         candidates = [hostile_layout["benign"], hostile_layout["escape_link"]]
 
         with caplog.at_level("WARNING"):
-            safe, skipped = filter_safe_paths(
-                candidates, root, audit_label="unit-test"
-            )
+            safe, skipped = filter_safe_paths(candidates, root, audit_label="unit-test")
 
         assert hostile_layout["benign"] in safe
         assert hostile_layout["escape_link"] not in safe
@@ -186,9 +184,7 @@ class TestPathSafetyHelper:
         assert any("symlink that escapes scan root" in w for w in warnings)
         # And it must NOT echo the resolved escape target at WARNING — we
         # don't want to mirror sensitive paths into shared log streams.
-        assert not any(
-            str(hostile_layout["secret_target"]) in w for w in warnings
-        )
+        assert not any(str(hostile_layout["secret_target"]) in w for w in warnings)
 
 
 class TestConfinePath:
@@ -253,9 +249,7 @@ class TestConfinePath:
         with pytest.raises(ValueError, match="could not be resolved safely"):
             confine_path("loop_a", root)
 
-    def test_require_confined_path_returns_sanitized_missing_path(
-        self, tmp_path: Path
-    ):
+    def test_require_confined_path_returns_sanitized_missing_path(self, tmp_path: Path):
         from mcpscanner.utils.path_safety import require_confined_path
 
         root = tmp_path / "scanroot"
@@ -302,18 +296,14 @@ class TestBehavioralCodeAnalyzerSymlinkSafety:
         # we don't need here; the discovery method is pure.
         return BehavioralCodeAnalyzer.__new__(BehavioralCodeAnalyzer)
 
-    def test_escape_symlink_is_not_returned_by_find_source_files(
-        self, hostile_layout
-    ):
+    def test_escape_symlink_is_not_returned_by_find_source_files(self, hostile_layout):
         analyzer = self._new_analyzer()
         files = analyzer._find_source_files(str(hostile_layout["scanroot"]))
 
         assert str(hostile_layout["benign"]) in files
         assert str(hostile_layout["escape_link"]) not in files
 
-    def test_escape_symlink_is_not_returned_by_find_python_files(
-        self, hostile_layout
-    ):
+    def test_escape_symlink_is_not_returned_by_find_python_files(self, hostile_layout):
         analyzer = self._new_analyzer()
         files = analyzer._find_python_files(str(hostile_layout["scanroot"]))
 
@@ -374,9 +364,7 @@ class TestVirusTotalAnalyzerSymlinkSafety:
         assert str(broken_link_layout["real"]) in files
         assert str(broken_link_layout["dangling"]) not in files
 
-    def test_directory_symlink_pointing_outside_is_not_recursed(
-        self, tmp_path: Path
-    ):
+    def test_directory_symlink_pointing_outside_is_not_recursed(self, tmp_path: Path):
         """Defence-in-depth: even if a future ``rglob`` flag flips and
         starts following directory symlinks, the per-file resolution
         check here will still drop everything under an escaping link."""

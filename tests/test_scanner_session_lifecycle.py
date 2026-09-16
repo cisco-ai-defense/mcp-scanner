@@ -137,9 +137,7 @@ class TestNoHandRolledTeardown:
 
     def test_scan_methods_do_not_close_sessions_directly(self):
         offenders = [
-            m.name
-            for m in self.scan_methods()
-            if "_close_mcp_session" in ast.dump(m)
+            m.name for m in self.scan_methods() if "_close_mcp_session" in ast.dump(m)
         ]
         assert offenders == []
 

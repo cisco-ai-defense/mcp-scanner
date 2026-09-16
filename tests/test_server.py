@@ -26,6 +26,18 @@ from unittest.mock import patch, call
 from mcpscanner.server import main
 
 
+def rendered(mock_level):
+    """Log messages as an operator sees them.
+
+    Asserting on the rendered text rather than the call signature keeps
+    these tests indifferent to lazy ``%s`` arguments vs eager f-strings.
+    """
+    return [
+        (call.args[0] % call.args[1:]) if len(call.args) > 1 else call.args[0]
+        for call in mock_level.call_args_list
+    ]
+
+
 class TestServerMain:
     """Test cases for server main function."""
 
@@ -126,8 +138,8 @@ class TestServerMain:
                 main()
 
                 # Verify success message was logged
-                mock_logger.debug.assert_any_call(
-                    "Cisco AI Defense API key configured successfully."
+                assert "Cisco AI Defense API key configured successfully." in rendered(
+                    mock_logger.debug
                 )
 
     def test_main_without_api_key(
@@ -139,11 +151,13 @@ class TestServerMain:
                 main()
 
                 # Verify warning messages were logged
-                mock_logger.warning.assert_any_call(
+                assert (
                     "MCP_SCANNER_API_KEY is not set. Cisco AI Defense API analyzer will not work."
+                    in rendered(mock_logger.warning)
                 )
-                mock_logger.warning.assert_any_call(
+                assert (
                     "Please set MCP_SCANNER_API_KEY in your .env file or environment variables."
+                    in rendered(mock_logger.warning)
                 )
 
     def test_main_with_llm_api_key_configured(
@@ -155,8 +169,8 @@ class TestServerMain:
                 main()
 
                 # Verify success message was logged
-                mock_logger.debug.assert_any_call(
-                    "LLM API key configured successfully."
+                assert "LLM API key configured successfully." in rendered(
+                    mock_logger.debug
                 )
 
     def test_main_without_llm_api_key(
@@ -168,11 +182,13 @@ class TestServerMain:
                 main()
 
                 # Verify warning messages were logged
-                mock_logger.warning.assert_any_call(
+                assert (
                     "MCP_SCANNER_LLM_API_KEY is not set. LLM analyzer will not work."
+                    in rendered(mock_logger.warning)
                 )
-                mock_logger.warning.assert_any_call(
+                assert (
                     "Please set MCP_SCANNER_LLM_API_KEY in your .env file or environment variables."
+                    in rendered(mock_logger.warning)
                 )
 
     def test_main_endpoint_logging_default(
@@ -184,8 +200,9 @@ class TestServerMain:
                 main()
 
                 # Verify default endpoint was logged
-                mock_logger.debug.assert_any_call(
+                assert (
                     "Using endpoint: https://us.api.inspect.aidefense.security.cisco.com/api/v1"
+                    in rendered(mock_logger.debug)
                 )
 
     def test_main_endpoint_logging_custom(
@@ -199,8 +216,8 @@ class TestServerMain:
                 main()
 
                 # Verify custom endpoint was logged
-                mock_logger.debug.assert_any_call(
-                    "Using endpoint: https://custom.endpoint.com"
+                assert "Using endpoint: https://custom.endpoint.com" in rendered(
+                    mock_logger.debug
                 )
 
     def test_main_debug_logging_enabled(
@@ -219,8 +236,9 @@ class TestServerMain:
                     )
 
                     # Verify debug message was logged
-                    mock_logger.debug.assert_any_call(
+                    assert (
                         "Debug logging enabled - detailed analyzer logs will be shown"
+                        in rendered(mock_logger.debug)
                     )
 
     def test_main_info_logging_default(
@@ -254,14 +272,14 @@ class TestServerMain:
                 main()
 
                 # Verify all success messages were logged
-                mock_logger.debug.assert_any_call(
-                    "Cisco AI Defense API key configured successfully."
+                assert "Cisco AI Defense API key configured successfully." in rendered(
+                    mock_logger.debug
                 )
-                mock_logger.debug.assert_any_call(
-                    "LLM API key configured successfully."
+                assert "LLM API key configured successfully." in rendered(
+                    mock_logger.debug
                 )
-                mock_logger.debug.assert_any_call(
-                    "Using endpoint: https://custom.endpoint.com"
+                assert "Using endpoint: https://custom.endpoint.com" in rendered(
+                    mock_logger.debug
                 )
 
     def test_main_argument_parsing_error(self, mock_uvicorn_run, mock_load_dotenv):

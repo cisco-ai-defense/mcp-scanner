@@ -7,11 +7,24 @@ call graph, slice bounded evidence, and detect sinks without an external depende
 """
 
 from .builder import GRAPH_SUPPORTED_LANGUAGES, CodeGraphBuilder
-from .cache import GRAPH_EXTRACTOR_VERSION, CodeGraphCache, GraphCache, graph_cache_for_scan
+from .cache import (
+    GRAPH_EXTRACTOR_VERSION,
+    CodeGraphCache,
+    GraphCache,
+    graph_cache_for_scan,
+)
 from .cfg_fusion import CFGFusionEngine, ParamBinding, extract_function_parameters
-from .classic_dataflow import ClassicDataflowEngine, ClassicDataflowSummary, TREESITTER_LANGS
+from .classic_dataflow import (
+    ClassicDataflowEngine,
+    ClassicDataflowSummary,
+    TREESITTER_LANGS,
+)
 from .evidence import EvidenceFormatter
-from .fixpoint import call_edges_without_superseded_external, prune_redundant_external_edges, refine_call_graph
+from .fixpoint import (
+    call_edges_without_superseded_external,
+    prune_redundant_external_edges,
+    refine_call_graph,
+)
 from .interprocedural_taint import InterproceduralTaintAnalyzer
 from .models import (
     GRAPH_IR_VERSION,

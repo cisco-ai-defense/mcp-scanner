@@ -100,7 +100,9 @@ class TestReadAndAnalyzeErrorHandling:
         )
 
     @pytest.mark.asyncio
-    async def test_bulk_scan_absorbs_analysis_error(self, scanner, session, monkeypatch):
+    async def test_bulk_scan_absorbs_analysis_error(
+        self, scanner, session, monkeypatch
+    ):
         monkeypatch.setattr(
             scanner, "_analyze_resource", AsyncMock(side_effect=RuntimeError("boom"))
         )

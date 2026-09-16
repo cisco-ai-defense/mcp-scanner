@@ -305,10 +305,13 @@ class TestConfiguration:
             stderr="",
         )
 
-        with patch.dict("os.environ", {
-            "MCP_SCANNER_LLM_API_KEY": "test-key-123",
-            "MCP_SCANNER_LLM_MODEL": "gpt-4o",
-        }):
+        with patch.dict(
+            "os.environ",
+            {
+                "MCP_SCANNER_LLM_API_KEY": "test-key-123",
+                "MCP_SCANNER_LLM_MODEL": "gpt-4o",
+            },
+        ):
             scanner = PyPIPackageScanner()
             scanner.scan_package("test")
 
@@ -603,9 +606,7 @@ class TestArchiveResolution:
             ],
         }
         scanner = PyPIPackageScanner(use_docker=False)
-        with patch(
-            "mcpscanner.core.pypi_scanner._https_get_json", return_value=meta
-        ):
+        with patch("mcpscanner.core.pypi_scanner._https_get_json", return_value=meta):
             url, version, digest = scanner._resolve_pypi_archive_url("demo", None)
         assert version == "1.0.0"
         assert url.endswith(".whl")

@@ -109,9 +109,7 @@ async def run_legacy(ctx: CommandContext) -> Optional[Any]:
             # Add config path and server info to each result
             for result in scan_results:
                 # Extract server name from config path for display
-                config_name = (
-                    cfg_path.split("/")[-1] if "/" in cfg_path else cfg_path
-                )
+                config_name = cfg_path.split("/")[-1] if "/" in cfg_path else cfg_path
                 result.server_source = f"{config_name}"
             flattened.extend(scan_results)
         results = await results_to_json(flattened)

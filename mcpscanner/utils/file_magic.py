@@ -61,9 +61,27 @@ if _PUREMAGIC_AVAILABLE:
 
         _CUSTOM_SIGNATURES = [
             # Python bytecode variants not in puremagic's database
-            (b"\xa7\r\r\n", 0, ".pyc", "application/x-python-bytecode", "Python 3.11 bytecode"),
-            (b"\xcb\r\r\n", 0, ".pyc", "application/x-python-bytecode", "Python 3.12 bytecode"),
-            (b"\xef\r\r\n", 0, ".pyc", "application/x-python-bytecode", "Python 3.13 bytecode"),
+            (
+                b"\xa7\r\r\n",
+                0,
+                ".pyc",
+                "application/x-python-bytecode",
+                "Python 3.11 bytecode",
+            ),
+            (
+                b"\xcb\r\r\n",
+                0,
+                ".pyc",
+                "application/x-python-bytecode",
+                "Python 3.12 bytecode",
+            ),
+            (
+                b"\xef\r\r\n",
+                0,
+                ".pyc",
+                "application/x-python-bytecode",
+                "Python 3.13 bytecode",
+            ),
         ]
         _existing = {e.byte_match for e in magic_header_array}
         for bm, off, ext, mime, name in _CUSTOM_SIGNATURES:
@@ -129,9 +147,11 @@ def _classify_family(mime_type: str) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class MagicResult:
     """Result of a magic-byte detection."""
+
     mime_type: str
     extension: str
     name: str

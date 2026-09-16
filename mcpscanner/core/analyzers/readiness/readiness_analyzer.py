@@ -164,6 +164,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         self._opa_provider: Optional[OpaProvider] = None
         if enable_opa:
             from pathlib import Path
+
             policies_dir = Path(opa_policies_dir) if opa_policies_dir else None
             self._opa_provider = OpaProvider(policies_dir=policies_dir)
 
@@ -171,7 +172,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 self.logger.info("OPA provider enabled and available")
             else:
                 reason = self._opa_provider.get_unavailable_reason()
-                self.logger.debug(f"OPA not available: {reason}")
+                self.logger.debug("OPA not available: %s", reason)
 
         # Initialize LLM judge if enabled
         self._llm_judge = None
@@ -195,9 +196,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 self.logger.info("Readiness LLM judge enabled and available")
             else:
                 reason = self._llm_judge.get_unavailable_reason()
-                self.logger.debug(f"LLM judge not available: {reason}")
+                self.logger.debug("LLM judge not available: %s", reason)
         except ImportError as e:
-            self.logger.debug(f"Could not initialize LLM judge: {e}")
+            self.logger.debug("Could not initialize LLM judge: %s", e)
             self._llm_judge = None
 
     @property
@@ -239,7 +240,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
                     llm_findings = await self._llm_judge.analyze(tool_def, tool_name)
                     findings.extend(llm_findings)
                 except Exception as e:
-                    self.logger.warning(f"LLM judge analysis failed: {e}")
+                    self.logger.warning("LLM judge analysis failed: %s", e)
 
         # Calculate readiness score
         score = self._calculate_readiness_score(findings)
@@ -296,9 +297,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         findings.extend(self._check_no_idempotency_indication(tool_def, tool_name))
 
         # Safety
-        findings.extend(
-            self._check_dangerous_operation_keywords(tool_def, tool_name)
-        )
+        findings.extend(self._check_dangerous_operation_keywords(tool_def, tool_name))
         findings.extend(self._check_no_authentication_context(tool_def, tool_name))
         findings.extend(self._check_circular_dependency_risk(tool_def, tool_name))
 
@@ -395,7 +394,6 @@ class ReadinessAnalyzer(BaseAnalyzer):
             )
         ]
 
-
     # ===================================================================
     # HEUR-002: Timeout too long (MEDIUM)
     # ===================================================================
@@ -435,7 +433,6 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 )
 
         return findings
-
 
     # ===================================================================
     # HEUR-004: Unlimited retries (HIGH)
@@ -537,7 +534,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 "retryBackoff",
             ]
             has_backoff = any(field in tool_def for field in backoff_fields)
-            has_backoff = has_backoff or any(field in config for field in backoff_fields)
+            has_backoff = has_backoff or any(
+                field in config for field in backoff_fields
+            )
             has_backoff = has_backoff or (
                 isinstance(retry_policy, dict)
                 and any(field in retry_policy for field in backoff_fields)
@@ -565,7 +564,6 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 )
 
         return findings
-
 
     # ===================================================================
     # HEUR-007: Error schema missing code field (LOW)
@@ -606,7 +604,6 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 break  # Only check the first error schema found
 
         return findings
-
 
     # ===================================================================
     # HEUR-009: Vague description (MEDIUM)
@@ -895,9 +892,6 @@ class ReadinessAnalyzer(BaseAnalyzer):
 
         return findings
 
-
-
-
     # ===================================================================
     # HEUR-016: Resource cleanup not documented (MEDIUM)
     # ===================================================================
@@ -922,7 +916,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
             "database",
             "network",
         ]
-        uses_resources = any(indicator in description for indicator in resource_indicators)
+        uses_resources = any(
+            indicator in description for indicator in resource_indicators
+        )
 
         if uses_resources:
             # Check if cleanup is documented

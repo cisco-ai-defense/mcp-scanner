@@ -1168,7 +1168,7 @@ For functions with no issues, just include function_index, function_name, and mi
             raise
         except Exception as e:
             self.logger.error(
-                f"Failed to load prompt code_alignment_threat_analysis_prompt.md: {e}"
+                "Failed to load prompt code_alignment_threat_analysis_prompt.md: %s", e
             )
             raise IOError(
                 f"Could not load prompt code_alignment_threat_analysis_prompt.md: {e}"

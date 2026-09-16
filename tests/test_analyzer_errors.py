@@ -25,7 +25,9 @@ class TestClassifyAnalyzerError:
 
     def test_transient_rate_limit_message(self):
         assert (
-            classify_analyzer_error(RuntimeError("429 rate limit exceeded"), context="llm")
+            classify_analyzer_error(
+                RuntimeError("429 rate limit exceeded"), context="llm"
+            )
             is ErrorKind.TRANSIENT
         )
 
@@ -56,7 +58,9 @@ class TestClassifyAnalyzerError:
     def test_unknown_llm_error_defaults_final(self):
         """Unrecognized LLM failures fail fast instead of retrying."""
         assert (
-            classify_analyzer_error(RuntimeError("weird provider glitch"), context="llm")
+            classify_analyzer_error(
+                RuntimeError("weird provider glitch"), context="llm"
+            )
             is ErrorKind.FINAL
         )
 
@@ -82,9 +86,7 @@ class TestClassifyAnalyzerError:
 
     def test_local_attribute_error_is_final(self):
         assert (
-            classify_analyzer_error(
-                AttributeError("missing field"), context="local"
-            )
+            classify_analyzer_error(AttributeError("missing field"), context="local")
             is ErrorKind.FINAL
         )
 

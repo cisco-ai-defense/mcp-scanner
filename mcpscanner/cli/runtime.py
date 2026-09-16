@@ -44,14 +44,19 @@ def configure_runtime(
     invalid_analyzers = set(analyzer_names) - valid_analyzer_names
     if invalid_analyzers:
         parser.error(
-            f"Invalid analyzers: {', '.join(invalid_analyzers)}. Valid options: {', '.join(valid_analyzer_names)}"
+            "Invalid analyzers: %s. Valid options: %s",
+            ", ".join(invalid_analyzers),
+            ", ".join(valid_analyzer_names),
         )
 
     # Convert to AnalyzerEnum list
     selected_analyzers = [AnalyzerEnum(name) for name in analyzer_names]
 
     # Add META analyzer if --enable-meta flag is set
-    if getattr(args, "enable_meta", False) and AnalyzerEnum.META not in selected_analyzers:
+    if (
+        getattr(args, "enable_meta", False)
+        and AnalyzerEnum.META not in selected_analyzers
+    ):
         selected_analyzers.append(AnalyzerEnum.META)
 
     # Validate behavioral analyzer requirements

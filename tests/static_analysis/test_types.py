@@ -17,7 +17,6 @@
 """Tests for type inference components."""
 
 
-
 class TestTypes:
     """Test type inference functionality."""
 

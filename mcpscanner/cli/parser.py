@@ -225,9 +225,7 @@ def _add_resources(sub: argparse._SubParsersAction) -> None:
 
 
 def _add_instructions(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
-        "instructions", help="Scan server instructions on an MCP server"
-    )
+    p = sub.add_parser("instructions", help="Scan server instructions on an MCP server")
     _add_server_options(p, headers=False)
 
 

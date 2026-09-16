@@ -39,9 +39,7 @@ async def run(ctx: CommandContext) -> Optional[Any]:
     source_path = args.source_path
 
     # Analyze the source file
-    findings = await analyzer.analyze(
-        source_path, context={"file_path": source_path}
-    )
+    findings = await analyzer.analyze(source_path, context={"file_path": source_path})
 
     # Build a result entry for every analyzed MCP tool — including
     # tools with no findings (is_safe=True). This ensures the scan
@@ -58,9 +56,7 @@ async def run(ctx: CommandContext) -> Optional[Any]:
             filtered_results.append(result)
             continue
 
-        analyzer_data = result.get("findings", {}).get(
-            "behavioral_analyzer", {}
-        )
+        analyzer_data = result.get("findings", {}).get("behavioral_analyzer", {})
         classification = (
             analyzer_data.get("threat_vulnerability_classification") or ""
         ).upper()

@@ -47,7 +47,6 @@ import httpx
 from .base import BaseAnalyzer, SecurityFinding
 
 
-
 class ProtocolAnalyzer(BaseAnalyzer):
     """Analyzes live MCP server endpoints for protocol-level security controls.
 
@@ -154,7 +153,7 @@ class ProtocolAnalyzer(BaseAnalyzer):
             )
             return resp
         except Exception as e:
-            self.logger.debug(f"RPC call {method} failed: {e}")
+            self.logger.debug("RPC call %s failed: %s", method, e)
             return None
 
     def _parse_body(self, resp: Optional[httpx.Response]) -> Any:
@@ -296,6 +295,22 @@ class ProtocolAnalyzer(BaseAnalyzer):
 
     # ── MCPS-004: Replay Protection ─────────────────────────────
 
+    def _log_check_aborted(self, check_id: str, name: str, exc: Exception) -> None:
+        """Record that a check could not finish.
+
+        These checks report "no findings" when they abort, which reads
+        identically to a server that passed. Without this line an operator
+        cannot tell a clean result from one that never ran.
+        """
+        self.logger.warning(
+            "protocol check incomplete check_id=%s check=%s error_type=%s error=%s "
+            "-- reporting no findings for this check; the server was not actually verified",
+            check_id,
+            name,
+            type(exc).__name__,
+            exc,
+        )
+
     async def _check_replay(
         self, client: httpx.AsyncClient, target: str
     ) -> List[SecurityFinding]:
@@ -336,8 +351,8 @@ class ProtocolAnalyzer(BaseAnalyzer):
                         },
                     )
                 ]
-        except Exception:
-            pass
+        except Exception as e:
+            self._log_check_aborted("MCPS-004", "replay protection", e)
         return []
 
     # ── MCPS-005: Tool Integrity ────────────────────────────────
@@ -407,8 +422,8 @@ class ProtocolAnalyzer(BaseAnalyzer):
                             },
                         )
                     ]
-        except Exception:
-            pass
+        except Exception as e:
+            self._log_check_aborted("MCPS-007", "identity spoofing", e)
         return []
 
     # ── MCPS-008: Fail-Open Semantics ───────────────────────────
@@ -418,7 +433,12 @@ class ProtocolAnalyzer(BaseAnalyzer):
     ) -> List[SecurityFinding]:
         """Check if the server fails open on invalid input."""
         invalid_payloads = [
-            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "../../../../etc/passwd", "arguments": {}}},
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "../../../../etc/passwd", "arguments": {}},
+            },
             {"not_jsonrpc": True},
             "this is not json",
         ]
@@ -452,7 +472,12 @@ class ProtocolAnalyzer(BaseAnalyzer):
                                 },
                             )
                         ]
-            except Exception:
+            except Exception as e:
+                self.logger.debug(
+                    "protocol check probe_failed check_id=MCPS-008 error_type=%s error=%s",
+                    type(e).__name__,
+                    e,
+                )
                 continue
         return []
 
@@ -474,7 +499,8 @@ class ProtocolAnalyzer(BaseAnalyzer):
                     break
                 if resp.status_code == 200:
                     accepted += 1
-            except Exception:
+            except Exception as e:
+                self._log_check_aborted("MCPS-009", "rate limiting", e)
                 break
 
         if not rate_limited and accepted >= 10:

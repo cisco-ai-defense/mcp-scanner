@@ -104,7 +104,9 @@ class CodeGraphCache:
         self._memory.clear()
 
     def merged_key(self, language: str, files: dict[str, str]) -> str:
-        parts = sorted(f"{path}:{GraphCache.file_hash(source)}" for path, source in files.items())
+        parts = sorted(
+            f"{path}:{GraphCache.file_hash(source)}" for path, source in files.items()
+        )
         digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
         return f"{self.version}:merged:{language}:{digest}"
 
@@ -131,7 +133,9 @@ class CodeGraphCache:
         self._memory._store[key] = graph
         return graph
 
-    def put_merged(self, language: str, files: dict[str, str], value: CodeGraph) -> None:
+    def put_merged(
+        self, language: str, files: dict[str, str], value: CodeGraph
+    ) -> None:
         key = self.merged_key(language, files)
         self._memory._store[key] = value
         if self.cache_dir is None:

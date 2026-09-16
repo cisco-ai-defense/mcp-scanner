@@ -201,7 +201,10 @@ class MetaAnalyzer:
         else:
             if config.llm_provider_api_key:
                 self._api_key = config.llm_provider_api_key
-            elif hasattr(config, "aws_bearer_token_bedrock") and config.aws_bearer_token_bedrock:
+            elif (
+                hasattr(config, "aws_bearer_token_bedrock")
+                and config.aws_bearer_token_bedrock
+            ):
                 self._api_key = config.aws_bearer_token_bedrock
             else:
                 self._api_key = None
@@ -239,13 +242,8 @@ class MetaAnalyzer:
             self._timeout = 120.0
         else:
             self._timeout = configured_timeout
-            operator_supplied_timeout = bool(
-                os.environ.get("MCP_SCANNER_LLM_TIMEOUT")
-            )
-            if (
-                operator_supplied_timeout
-                and configured_timeout < recommended_floor
-            ):
+            operator_supplied_timeout = bool(os.environ.get("MCP_SCANNER_LLM_TIMEOUT"))
+            if operator_supplied_timeout and configured_timeout < recommended_floor:
                 self._logger.warning(
                     "Meta-analyzer timeout=%.1fs (from MCP_SCANNER_LLM_TIMEOUT) "
                     "is below the recommended %ss floor for LLM round-trips "
@@ -261,7 +259,9 @@ class MetaAnalyzer:
     def _load_prompt(self) -> str:
         """Load meta-analysis prompt template from file."""
         try:
-            prompt_file = MCPScannerConstants.get_prompts_path() / "meta_analysis_prompt.md"
+            prompt_file = (
+                MCPScannerConstants.get_prompts_path() / "meta_analysis_prompt.md"
+            )
             if hasattr(prompt_file, "read_text"):
                 return prompt_file.read_text(encoding="utf-8")
             with open(str(prompt_file), encoding="utf-8") as f:
@@ -354,7 +354,11 @@ class MetaAnalyzer:
                     entry["threat_type"] = f.details["threat_type"]
                 if "evidence" in f.details:
                     evidence = f.details["evidence"]
-                    entry["evidence"] = evidence[:300] if isinstance(evidence, str) else str(evidence)[:300]
+                    entry["evidence"] = (
+                        evidence[:300]
+                        if isinstance(evidence, str)
+                        else str(evidence)[:300]
+                    )
                 if "tool_name" in f.details:
                     entry["tool_name"] = f.details["tool_name"]
             findings_list.append(entry)
@@ -418,7 +422,9 @@ class MetaAnalyzer:
         entity_desc = self._scrub_sentinel(entity_context.get("description", "N/A"))
         parameters = entity_context.get("parameters")
 
-        context_block = f"**{entity_type.title()}:** {entity_name}\n**Description:** {entity_desc}"
+        context_block = (
+            f"**{entity_type.title()}:** {entity_name}\n**Description:** {entity_desc}"
+        )
         if parameters:
             params_json = self._scrub_sentinel(json.dumps(parameters, indent=2))
             context_block += f"\n**Parameters Schema:**\n```json\n{params_json}\n```"
@@ -510,9 +516,7 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
             response = await acompletion(**api_params, drop_params=True)
             return response.choices[0].message.content or ""
 
-        async def on_retry(
-            exc: BaseException, attempt: int, delay: float
-        ) -> None:
+        async def on_retry(exc: BaseException, attempt: int, delay: float) -> None:
             self._logger.warning(
                 "Meta-analysis LLM request failed (transient, attempt %d): %s; "
                 "retrying in %.1fs",
@@ -678,8 +682,8 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
                     # was sliced from the original (possibly contains
                     # complete string literals with literal braces).
                     masked_repaired = _STRING_LITERAL_RE.sub('""', repaired)
-                    final_unclosed = (
-                        masked_repaired.count("{") - masked_repaired.count("}")
+                    final_unclosed = masked_repaired.count("{") - masked_repaired.count(
+                        "}"
                     )
                     repaired += "}" * max(0, final_unclosed)
                     try:
@@ -827,9 +831,7 @@ def apply_meta_analysis(
             # True`` for findings the second pass actually kept. Build a
             # new ``SecurityFinding`` with a copied ``details`` dict so
             # the mutation cannot leak into other references.
-            base_details = (
-                copy.copy(finding.details) if finding.details else {}
-            )
+            base_details = copy.copy(finding.details) if finding.details else {}
             base_details["meta_false_positive"] = True
             base_details["meta_reason"] = fp_data[i]["reason"]
             if fp_data[i].get("confidence") is not None:
@@ -883,9 +885,7 @@ def build_meta_audit_payload(
         # delegate to this helper). Fall through with the default
         # reason so the audit block stays well-formed.
         raw_details = getattr(finding, "details", None)
-        details: Dict[str, Any] = (
-            raw_details if isinstance(raw_details, dict) else {}
-        )
+        details: Dict[str, Any] = raw_details if isinstance(raw_details, dict) else {}
         filtered.append(
             {
                 "analyzer": finding.analyzer,

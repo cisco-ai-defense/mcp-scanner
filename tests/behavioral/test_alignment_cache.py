@@ -84,9 +84,7 @@ class TestAlignmentOrchestratorCache:
             "threat_name": "DATA EXFILTRATION",
             "summary": "cached",
         }
-        cache_key = orch._result_cache.key_for(
-            ctx, prompt_builder=orch.prompt_builder
-        )
+        cache_key = orch._result_cache.key_for(ctx, prompt_builder=orch.prompt_builder)
         orch._result_cache.put(cache_key, mismatch)
 
         result = await orch.check_alignment(ctx)
@@ -101,9 +99,7 @@ class TestAlignmentOrchestratorCache:
         monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_CACHE_ENABLED", True)
         orch = self._new_orchestrator()
         ctx = _minimal_function_context()
-        cache_key = orch._result_cache.key_for(
-            ctx, prompt_builder=orch.prompt_builder
-        )
+        cache_key = orch._result_cache.key_for(ctx, prompt_builder=orch.prompt_builder)
         orch._result_cache.put(
             cache_key,
             {"mismatch_detected": False, "threat_name": ""},

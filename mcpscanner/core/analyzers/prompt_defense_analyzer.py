@@ -336,7 +336,9 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
                 else:
                     summary = rule["summary_partial"]
 
-                defense_score = match_count / len(rule["patterns"]) if rule["patterns"] else 0.0
+                defense_score = (
+                    match_count / len(rule["patterns"]) if rule["patterns"] else 0.0
+                )
 
                 finding = self.create_security_finding(
                     severity=rule["severity"],
@@ -375,10 +377,11 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
             )
 
         self.logger.debug(
-            f"Prompt defense analysis for '{tool_name}': "
-            f"{len(findings)} finding(s), "
-            f"{len(self._rules) - len([f for f in findings if f.severity != 'INFO'])} "
-            f"defenses present out of {len(self._rules)}"
+            "Prompt defense analysis for '%s': %s finding(s), %s defenses present out of %s",
+            tool_name,
+            len(findings),
+            len(self._rules) - len([f for f in findings if f.severity != "INFO"]),
+            len(self._rules),
         )
 
         return findings

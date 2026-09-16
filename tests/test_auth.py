@@ -15,7 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from mcpscanner.core.auth import Auth, AuthType, BearerAuth, InMemoryTokenStorage, create_oauth_provider_from_auth
+from mcpscanner.core.auth import (
+    Auth,
+    AuthType,
+    BearerAuth,
+    InMemoryTokenStorage,
+    create_oauth_provider_from_auth,
+)
 
 
 class TestAuthType:

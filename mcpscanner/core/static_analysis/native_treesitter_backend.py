@@ -51,9 +51,7 @@ from .native_common import (
 class TreeSitterBackendMixin:
     """Tree-sitter capability extraction, mixed into ``NativeAnalyzer``."""
 
-    def _ts_collect_import_targets(
-        self, stmt: str, out: Dict[str, List[str]]
-    ) -> None:
+    def _ts_collect_import_targets(self, stmt: str, out: Dict[str, List[str]]) -> None:
         """Populate ``out`` from one TS/JS import statement."""
         # ``import <clause> from "<module>"``
         m = _re.match(
@@ -85,11 +83,7 @@ class TreeSitterBackendMixin:
                     if not piece:
                         continue
                     parts = _re.split(r"\s+as\s+", piece, maxsplit=1)
-                    bound = (
-                        parts[1].strip()
-                        if len(parts) > 1
-                        else parts[0].strip()
-                    )
+                    bound = parts[1].strip() if len(parts) > 1 else parts[0].strip()
                     if bound:
                         out.setdefault(bound, []).append(path)
             return
@@ -103,6 +97,7 @@ class TreeSitterBackendMixin:
             path = _normalize_module_specifier(m.group(2))
             if path:
                 out.setdefault(bound, []).append(path)
+
     def _ts_find_enclosing_class_name(self, node: "Node") -> str:
         """Walk up parents to find the nearest enclosing class-like name.
 
@@ -127,6 +122,7 @@ class TreeSitterBackendMixin:
                 return ""
             cur = cur.parent
         return ""
+
     def _ts_build_annotation_index(
         self, root: "Node", func_types: Set[str]
     ) -> Dict[int, List[str]]:
@@ -157,10 +153,7 @@ class TreeSitterBackendMixin:
         index: Dict[int, List[str]] = {}
 
         def visit(node: "Node") -> None:
-            if (
-                node.type in func_types
-                and node.type not in _TS_NON_FUNCTION_NODE_TYPES
-            ):
+            if node.type in func_types and node.type not in _TS_NON_FUNCTION_NODE_TYPES:
                 annotations = self._ts_collect_function_annotations(node)
                 if annotations:
                     index[node.start_byte] = annotations
@@ -170,6 +163,7 @@ class TreeSitterBackendMixin:
         visit(root)
         store[cache_key] = index
         return index
+
     def _ts_collect_function_annotations(self, fn_node: "Node") -> List[str]:
         """Collect annotation/attribute/macro text strings on a function.
 
@@ -229,6 +223,7 @@ class TreeSitterBackendMixin:
                         out.append(self._ts_get_node_text(sub))
 
         return out
+
     def _ts_find_mcp_registrations(
         self,
         root: "Node",
@@ -359,9 +354,7 @@ class TreeSitterBackendMixin:
                                 break
 
                     if reg.get("name") is None and args_node is not None:
-                        reg["name"] = self._ts_first_string_literal_in_args(
-                            args_node
-                        )
+                        reg["name"] = self._ts_first_string_literal_in_args(args_node)
 
                     if (
                         reg.get("handler_node") is not None
@@ -373,6 +366,7 @@ class TreeSitterBackendMixin:
 
         visit(root, None)
         return registrations
+
     def _ts_receiver_is_trusted(
         self,
         call_node: "Node",
@@ -407,6 +401,7 @@ class TreeSitterBackendMixin:
             # import of the SDK function.
             return True
         return receiver in trusted_receivers
+
     def _ts_call_receiver_name(self, call_node: "Node") -> Optional[str]:
         """Return the receiver expression of a ``X.method(...)`` call.
 
@@ -445,9 +440,8 @@ class TreeSitterBackendMixin:
             if child.is_named:
                 return self._ts_get_node_text(child).strip().split(".")[0]
         return None
-    def _ts_low_level_capability(
-        self, args_node: Optional["Node"]
-    ) -> Optional[str]:
+
+    def _ts_low_level_capability(self, args_node: Optional["Node"]) -> Optional[str]:
         """Return the capability for ``setRequestHandler(<Schema>, ...)``.
 
         Inspects the first positional argument: if it's an identifier
@@ -473,6 +467,7 @@ class TreeSitterBackendMixin:
             # we don't keep scanning.
             return None
         return None
+
     def _ts_is_mcp_instantiation(
         self, expr_node: "Node", sdk_classes: Set[str]
     ) -> bool:
@@ -487,9 +482,7 @@ class TreeSitterBackendMixin:
                         cls = c
                         break
             if cls is not None:
-                cls_name = (
-                    self._ts_get_node_text(cls).strip().split(".")[-1]
-                )
+                cls_name = self._ts_get_node_text(cls).strip().split(".")[-1]
                 return cls_name in sdk_classes
         if expr_node.type == "call_expression":
             callee = expr_node.child_by_field_name("function")
@@ -503,9 +496,8 @@ class TreeSitterBackendMixin:
                 leaf = callee_text.rsplit(".", 1)[-1]
                 return leaf in sdk_classes
         return False
-    def _ts_is_mcp_factory_call(
-        self, expr_node: "Node", sdk_aliases: Set[str]
-    ) -> bool:
+
+    def _ts_is_mcp_factory_call(self, expr_node: "Node", sdk_aliases: Set[str]) -> bool:
         """Recognize ``mcp.NewServer(...)`` Go-style factory calls."""
         if not sdk_aliases:
             return False
@@ -523,10 +515,10 @@ class TreeSitterBackendMixin:
         if "." not in text:
             return False
         receiver, _, method = text.partition(".")
-        return (
-            receiver in sdk_aliases
-            and ("server" in method.lower() or "newserver" in method.lower())
+        return receiver in sdk_aliases and (
+            "server" in method.lower() or "newserver" in method.lower()
         )
+
     def _ts_call_method_name(self, call_node: "Node") -> Optional[str]:
         """Return the method name from a ``<expr>.method(...)`` call, or None.
 
@@ -584,6 +576,7 @@ class TreeSitterBackendMixin:
                 ):
                     return self._ts_get_node_text(child)
         return None
+
     def _ts_call_arguments_node(self, call_node: "Node") -> Optional["Node"]:
         """Return the call's argument list node, regardless of grammar shape.
 
@@ -603,9 +596,8 @@ class TreeSitterBackendMixin:
             ):
                 return child
         return None
-    def _ts_is_callee_of_parent(
-        self, node: "Node", parent: "Node"
-    ) -> bool:
+
+    def _ts_is_callee_of_parent(self, node: "Node", parent: "Node") -> bool:
         """Return True if ``node`` is the callee position of ``parent``.
 
         Two-step check that supports both field-typed grammars (JS/TS/Go,
@@ -620,6 +612,7 @@ class TreeSitterBackendMixin:
             if child.is_named:
                 return _is_same_ts_node(child, node)
         return False
+
     def _ts_unwrap_trailing_lambda(self, node: "Node") -> Optional["Node"]:
         """Return a lambda node from a Kotlin trailing-lambda position.
 
@@ -650,9 +643,8 @@ class TreeSitterBackendMixin:
                     return lambda_node
             return node if node.type == "annotated_lambda" else None
         return None
-    def _ts_first_string_literal_in_args(
-        self, args_node: "Node"
-    ) -> Optional[str]:
+
+    def _ts_first_string_literal_in_args(self, args_node: "Node") -> Optional[str]:
         """Return the first string-literal value inside an arguments list.
 
         Used as a fallback after the structured parse misses (e.g. Kotlin's
@@ -664,9 +656,8 @@ class TreeSitterBackendMixin:
             if stripped is not None:
                 return stripped
         return None
-    def _ts_extract_string_literal_text(
-        self, node: "Node"
-    ) -> Optional[str]:
+
+    def _ts_extract_string_literal_text(self, node: "Node") -> Optional[str]:
         """If ``node`` (or its single value child) is a string literal, return
         the unquoted text; otherwise ``None``.
 
@@ -690,6 +681,7 @@ class TreeSitterBackendMixin:
                 if sub.type in string_node_types:
                     return _strip_string_quotes(self._ts_get_node_text(sub))
         return None
+
     def _ts_parse_registration_args(
         self,
         args_node: Optional["Node"],
@@ -810,11 +802,13 @@ class TreeSitterBackendMixin:
             return None
 
         return {
-            "capability": override_capability or _normalize_capability(capability_method),
+            "capability": override_capability
+            or _normalize_capability(capability_method),
             "name": name,
             "handler_node": handler_node,
             "handler_name": handler_name,
         }
+
     _TS_ENDPOINT_NAME_FIELDS: tuple[str, ...] = (
         "name",
         "alias",
@@ -832,6 +826,7 @@ class TreeSitterBackendMixin:
         "inputSchema",
         "parameters",
     }
+
     def _ts_collect_static_endpoint_tool_names(
         self,
         root: "Node",
@@ -874,6 +869,7 @@ class TreeSitterBackendMixin:
 
         visit(root)
         return names
+
     def _ts_endpoint_names_in_array(self, array_node: "Node") -> List[str]:
         """Return string tool names from object elements in an array literal."""
         out: List[str] = []
@@ -895,6 +891,7 @@ class TreeSitterBackendMixin:
                 continue
             out.append(tool_name)
         return out
+
     def _ts_build_simple_value_bindings(self, root: "Node") -> Dict[str, "Node"]:
         """Map ``const foo = ...`` initializer nodes for simple resolution."""
         bindings: Dict[str, "Node"] = {}
@@ -923,6 +920,7 @@ class TreeSitterBackendMixin:
 
         visit(root)
         return bindings
+
     def _ts_for_in_source_node(self, for_node: "Node") -> Optional["Node"]:
         """Return the iterable expression in a ``for...of`` loop."""
         src = for_node.child_by_field_name("right")
@@ -947,6 +945,7 @@ class TreeSitterBackendMixin:
             if seen_of and child.type not in skip_types:
                 return child
         return None
+
     def _ts_resolve_to_array_node(
         self,
         expr: "Node",
@@ -981,6 +980,7 @@ class TreeSitterBackendMixin:
                     ):
                         return field_val
         return None
+
     def _ts_object_field_value_node(
         self, obj_node: "Node", field: str
     ) -> Optional["Node"]:
@@ -1003,6 +1003,7 @@ class TreeSitterBackendMixin:
             if key == field:
                 return value_node
         return None
+
     def _ts_resolve_cross_file_endpoint_array(
         self,
         expr: "Node",
@@ -1024,7 +1025,11 @@ class TreeSitterBackendMixin:
         elif expr.type in _TS_MEMBER_EXPR_TYPES:
             obj_node = expr.child_by_field_name("object")
             prop_node = expr.child_by_field_name("property")
-            if obj_node is not None and obj_node.type == "identifier" and prop_node is not None:
+            if (
+                obj_node is not None
+                and obj_node.type == "identifier"
+                and prop_node is not None
+            ):
                 base_name = self._ts_get_node_text(obj_node)
                 prop_name = self._ts_get_node_text(prop_node)
         if not base_name:
@@ -1073,9 +1078,8 @@ class TreeSitterBackendMixin:
                 return value_node
 
         return None
-    def _ts_find_exported_binding(
-        self, root: "Node", symbol: str
-    ) -> Optional["Node"]:
+
+    def _ts_find_exported_binding(self, root: "Node", symbol: str) -> Optional["Node"]:
         """Return the initializer for ``export const symbol = ...`` if present."""
         found: Optional["Node"] = None
 
@@ -1104,9 +1108,8 @@ class TreeSitterBackendMixin:
 
         visit(root)
         return found
-    def _ts_object_string_field(
-        self, obj_node: "Node", field: str
-    ) -> Optional[str]:
+
+    def _ts_object_string_field(self, obj_node: "Node", field: str) -> Optional[str]:
         """Return a string literal value for ``field`` on an object literal."""
         pair_types = {
             "pair",
@@ -1135,9 +1138,8 @@ class TreeSitterBackendMixin:
             if value_node.type in string_node_types:
                 return _strip_string_quotes(self._ts_get_node_text(value_node))
         return None
-    def _ts_object_has_any_field(
-        self, obj_node: "Node", fields: Set[str]
-    ) -> bool:
+
+    def _ts_object_has_any_field(self, obj_node: "Node", fields: Set[str]) -> bool:
         """Return True when ``obj_node`` defines any key in ``fields``."""
         pair_types = {
             "pair",
@@ -1156,6 +1158,7 @@ class TreeSitterBackendMixin:
             if key in fields:
                 return True
         return False
+
     def _ts_extract_handler_from_object(
         self, obj_node: "Node", func_types: Set[str]
     ) -> "tuple[Optional[str], Optional[Node]]":
@@ -1201,6 +1204,7 @@ class TreeSitterBackendMixin:
                 obj_handler = value_node
 
         return obj_name, obj_handler
+
     def _ts_find_function_def_by_name(
         self, root: "Node", target_name: str, func_types: Set[str]
     ) -> Optional["Node"]:
@@ -1218,6 +1222,7 @@ class TreeSitterBackendMixin:
 
         index = self._ts_build_function_index(root, func_types)
         return index.get(target_name)
+
     def _ts_build_function_index(
         self, root: "Node", func_types: Set[str]
     ) -> Dict[str, "Node"]:
@@ -1260,15 +1265,14 @@ class TreeSitterBackendMixin:
                         if parent_name is None:
                             parent_name = parent.child_by_field_name("left")
                         if parent_name is not None:
-                            index.setdefault(
-                                self._ts_get_node_text(parent_name), node
-                            )
+                            index.setdefault(self._ts_get_node_text(parent_name), node)
             for child in node.children:
                 visit(child)
 
         visit(root)
         cached[cache_key] = index
         return index
+
     def _ts_extract_imports(self, root: "Node") -> List[str]:
         """Extract all imports from tree-sitter AST."""
         imports = []
@@ -1287,8 +1291,13 @@ class TreeSitterBackendMixin:
 
         visit(root)
         return imports
+
     def _ts_extract_functions(
-        self, node: "Node", imports: List[str], functions: List[FunctionContext], class_name: str = ""
+        self,
+        node: "Node",
+        imports: List[str],
+        functions: List[FunctionContext],
+        class_name: str = "",
     ):
         """Recursively extract all functions from tree-sitter AST."""
         # Get function types for this language
@@ -1301,7 +1310,7 @@ class TreeSitterBackendMixin:
                 if ctx:
                     functions.append(ctx)
             except Exception as e:
-                self.logger.warning(f"Failed to extract function: {e}")
+                self.logger.warning("Failed to extract function: %s", e)
 
         # Track class context
         current_class = class_name
@@ -1313,13 +1322,14 @@ class TreeSitterBackendMixin:
         # Recurse
         for child in node.children:
             self._ts_extract_functions(child, imports, functions, current_class)
+
     def _ts_extract_function_context(
         self, node: "Node", imports: List[str], class_name: str
     ) -> Optional[FunctionContext]:
         """Extract FunctionContext from tree-sitter function node with dataflow."""
         # Reset taint environment for this function
         self._taint_env = {}
-        
+
         # Get function name
         name = self._ts_get_function_name(node)
         if class_name:
@@ -1332,7 +1342,9 @@ class TreeSitterBackendMixin:
         parameters = self._ts_extract_parameters(node)
         param_names = [p.get("name", "") for p in parameters if p.get("name")]
         for pname in param_names:
-            self._taint_env[pname] = TaintInfo(status=TaintStatus.TAINTED, sources={pname})
+            self._taint_env[pname] = TaintInfo(
+                status=TaintStatus.TAINTED, sources={pname}
+            )
 
         # Extract return type from AST (TypeScript)
         return_type = self._ts_extract_return_type(node)
@@ -1366,24 +1378,27 @@ class TreeSitterBackendMixin:
 
         # Calculate complexity from AST
         complexity = self._ts_calculate_complexity(node)
-        
+
         # Perform full CFG-based dataflow analysis
         parameter_flows = self._ts_analyze_dataflow_full(node, param_names)
-        
+
         # Detect security operations
         security_ops = self._ts_detect_security_ops(node)
-        
+
         # Extract raw context for LLM to parse tool descriptions
         raw_context = self._ts_extract_raw_context(node)
-        
+
         # Build dataflow summary with raw context for LLM
         dataflow_summary = {
             "complexity": complexity,
-            "param_flows": {p["parameter_name"]: {
-                "reaches_calls": p.get("reaches_calls", []),
-                "reaches_returns": p.get("reaches_returns", False),
-                "reaches_external": p.get("reaches_external", False),
-            } for p in parameter_flows},
+            "param_flows": {
+                p["parameter_name"]: {
+                    "reaches_calls": p.get("reaches_calls", []),
+                    "reaches_returns": p.get("reaches_returns", False),
+                    "reaches_external": p.get("reaches_external", False),
+                }
+                for p in parameter_flows
+            },
             # Include raw context so LLM can parse tool descriptions
             "raw_decorator_context": raw_context,
         }
@@ -1416,12 +1431,14 @@ class TreeSitterBackendMixin:
             global_writes=[],
             attribute_access=[],
         )
+
     def _ts_get_node_text(self, node: "Node") -> str:
         """Get text content of a tree-sitter node."""
         node_text = getattr(node, "text", None)
         if node_text is not None:
             return node_text.decode("utf-8")
-        return self.source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+        return self.source_bytes[node.start_byte : node.end_byte].decode("utf-8")
+
     def _ts_get_function_name(self, node: "Node") -> str:
         """Extract function name from tree-sitter node."""
         # Try name field
@@ -1437,6 +1454,7 @@ class TreeSitterBackendMixin:
                     return self._ts_get_node_text(name_node)
 
         return "<anonymous>"
+
     def _ts_extract_parameters(self, node: "Node") -> List[Dict[str, Any]]:
         """Extract parameters from tree-sitter function node."""
         params = []
@@ -1451,21 +1469,27 @@ class TreeSitterBackendMixin:
         if params_node:
             for child in params_node.children:
                 param_info: Dict[str, Any] = {}
-                
+
                 # Handle different parameter node types across languages
                 if child.type == "identifier":
                     # Simple identifier (JS/TS)
                     param_info["name"] = self._ts_get_node_text(child)
-                
-                elif child.type in ("required_parameter", "optional_parameter", "rest_parameter"):
+
+                elif child.type in (
+                    "required_parameter",
+                    "optional_parameter",
+                    "rest_parameter",
+                ):
                     # TypeScript parameters
-                    name_node = child.child_by_field_name("pattern") or child.child_by_field_name("name")
+                    name_node = child.child_by_field_name(
+                        "pattern"
+                    ) or child.child_by_field_name("name")
                     if name_node:
                         param_info["name"] = self._ts_get_node_text(name_node)
                     type_node = child.child_by_field_name("type")
                     if type_node:
                         param_info["type"] = self._ts_get_node_text(type_node)
-                
+
                 elif child.type == "parameter_declaration":
                     # Go parameters
                     for subchild in child.children:
@@ -1477,7 +1501,7 @@ class TreeSitterBackendMixin:
                         if subchild.type not in ("identifier", ","):
                             param_info["type"] = self._ts_get_node_text(subchild)
                             break
-                
+
                 elif child.type == "formal_parameter":
                     # Java/Kotlin parameters
                     name_node = child.child_by_field_name("name")
@@ -1486,33 +1510,37 @@ class TreeSitterBackendMixin:
                         param_info["name"] = self._ts_get_node_text(name_node)
                     if type_node:
                         param_info["type"] = self._ts_get_node_text(type_node)
-                
+
                 elif child.type == "simple_parameter":
                     # Ruby parameters
                     param_info["name"] = self._ts_get_node_text(child)
-                
+
                 elif child.type == "parameter":
                     # Rust/PHP/Swift parameters
-                    name_node = child.child_by_field_name("pattern") or child.child_by_field_name("name")
+                    name_node = child.child_by_field_name(
+                        "pattern"
+                    ) or child.child_by_field_name("name")
                     if name_node:
                         param_info["name"] = self._ts_get_node_text(name_node)
                     type_node = child.child_by_field_name("type")
                     if type_node:
                         param_info["type"] = self._ts_get_node_text(type_node)
-                
+
                 if param_info.get("name"):
                     params.append(param_info)
-        
+
         return params
+
     def _ts_extract_return_type(self, node: "Node") -> Optional[str]:
         """Extract return type annotation from tree-sitter node."""
         return_type = node.child_by_field_name("return_type")
         if return_type:
             return self._ts_get_node_text(return_type)
         return None
+
     def _ts_extract_docstring(self, node: "Node") -> Optional[str]:
         """Extract JSDoc/doc comment from tree-sitter node.
-        
+
         Captures comments that may contain tool descriptions for LLM analysis.
         """
         # Look for comment before function (JSDoc, block comment, etc.)
@@ -1521,22 +1549,23 @@ class TreeSitterBackendMixin:
             if sib.type in ("comment", "block_comment", "line_comment"):
                 text = self._ts_get_node_text(sib)
                 return text
-        
+
         # Look for doc comment inside function (Go, Rust style)
         for child in node.children:
             if child.type in ("comment", "block_comment"):
                 text = self._ts_get_node_text(child)
                 return text
-        
+
         return None
+
     def _ts_extract_decorators(self, node: "Node") -> List[str]:
         """Extract decorators/attributes from tree-sitter node.
-        
+
         Captures full decorator text including arguments so LLM can parse
         tool descriptions like @tool(description="...") or #[tool(desc = "...")]
         """
         decorators = []
-        
+
         # Check preceding siblings for decorators (TypeScript/Python style)
         sib = node.prev_sibling
         while sib:
@@ -1546,7 +1575,7 @@ class TreeSitterBackendMixin:
                 # Stop at comments (they're handled separately)
                 break
             sib = sib.prev_sibling
-        
+
         # Check children for decorators (some grammars nest them)
         for child in node.children:
             if child.type in ("decorator", "attribute", "annotation", "decorator_list"):
@@ -1555,38 +1584,44 @@ class TreeSitterBackendMixin:
                         decorators.append(self._ts_get_node_text(dec))
                 else:
                     decorators.append(self._ts_get_node_text(child))
-        
+
         # Reverse to get original order
         decorators.reverse()
         return decorators
+
     def _ts_extract_raw_context(self, node: "Node") -> str:
         """Extract raw context around function for LLM to parse tool descriptions.
-        
+
         Captures surrounding code context so LLM can figure out tool descriptions
         from any pattern (decorators, call arguments, comments, etc.)
         """
         lines = self.source_bytes.decode("utf-8").split("\n")
-        
+
         # For arrow functions/callbacks, find the parent call expression
         # This captures patterns like: server.registerTool('name', { description: '...' }, async () => {})
         parent_start = node.start_point[0]
         parent = node.parent
         while parent:
-            if parent.type in ("call_expression", "expression_statement", "variable_declaration"):
+            if parent.type in (
+                "call_expression",
+                "expression_statement",
+                "variable_declaration",
+            ):
                 parent_start = parent.start_point[0]
                 break
             parent = parent.parent
-        
+
         # Get context: from parent start (or 10 lines before) to function start + 1
         start_line = max(0, min(parent_start, node.start_point[0] - 10))
         end_line = min(len(lines), node.start_point[0] + 2)
-        
+
         context_lines = []
         for i in range(start_line, end_line):
             if i < len(lines):
                 context_lines.append(lines[i])
-        
+
         return "\n".join(context_lines)
+
     def _ts_extract_calls(self, node: "Node") -> List[Dict[str, Any]]:
         """Extract ALL function calls from tree-sitter AST."""
         calls = []
@@ -1595,16 +1630,19 @@ class TreeSitterBackendMixin:
             if n.type == "call_expression":
                 func = n.child_by_field_name("function")
                 args = n.child_by_field_name("arguments")
-                calls.append({
-                    "name": self._ts_get_node_text(func) if func else "<unknown>",
-                    "args": self._ts_get_node_text(args) if args else "()",
-                    "line": n.start_point[0] + 1,
-                })
+                calls.append(
+                    {
+                        "name": self._ts_get_node_text(func) if func else "<unknown>",
+                        "args": self._ts_get_node_text(args) if args else "()",
+                        "line": n.start_point[0] + 1,
+                    }
+                )
             for child in n.children:
                 visit(child)
 
         visit(node)
         return calls
+
     def _ts_extract_assignments(self, node: "Node") -> List[Dict[str, Any]]:
         """Extract ALL assignments from tree-sitter AST."""
         assignments = []
@@ -1613,25 +1651,30 @@ class TreeSitterBackendMixin:
             if n.type == "assignment_expression":
                 left = n.child_by_field_name("left")
                 right = n.child_by_field_name("right")
-                assignments.append({
-                    "target": self._ts_get_node_text(left) if left else "",
-                    "value": self._ts_get_node_text(right) if right else "",
-                    "line": n.start_point[0] + 1,
-                })
+                assignments.append(
+                    {
+                        "target": self._ts_get_node_text(left) if left else "",
+                        "value": self._ts_get_node_text(right) if right else "",
+                        "line": n.start_point[0] + 1,
+                    }
+                )
             elif n.type == "variable_declarator":
                 name = n.child_by_field_name("name")
                 value = n.child_by_field_name("value")
                 if name:
-                    assignments.append({
-                        "target": self._ts_get_node_text(name),
-                        "value": self._ts_get_node_text(value) if value else None,
-                        "line": n.start_point[0] + 1,
-                    })
+                    assignments.append(
+                        {
+                            "target": self._ts_get_node_text(name),
+                            "value": self._ts_get_node_text(value) if value else None,
+                            "line": n.start_point[0] + 1,
+                        }
+                    )
             for child in n.children:
                 visit(child)
 
         visit(node)
         return assignments
+
     def _ts_extract_control_flow(self, node: "Node") -> Dict[str, Any]:
         """Extract control flow from tree-sitter AST."""
         control_flow: Dict[str, List[Dict[str, Any]]] = {
@@ -1645,21 +1688,27 @@ class TreeSitterBackendMixin:
         def visit(n: "Node"):
             if n.type == "if_statement":
                 cond = n.child_by_field_name("condition")
-                control_flow["if_statements"].append({
-                    "line": n.start_point[0] + 1,
-                    "condition": self._ts_get_node_text(cond) if cond else "",
-                })
+                control_flow["if_statements"].append(
+                    {
+                        "line": n.start_point[0] + 1,
+                        "condition": self._ts_get_node_text(cond) if cond else "",
+                    }
+                )
             elif n.type in ("for_statement", "for_in_statement"):
-                control_flow["for_loops"].append({
-                    "line": n.start_point[0] + 1,
-                    "header": self._ts_get_node_text(n)[:100],
-                })
+                control_flow["for_loops"].append(
+                    {
+                        "line": n.start_point[0] + 1,
+                        "header": self._ts_get_node_text(n)[:100],
+                    }
+                )
             elif n.type == "while_statement":
                 cond = n.child_by_field_name("condition")
-                control_flow["while_loops"].append({
-                    "line": n.start_point[0] + 1,
-                    "condition": self._ts_get_node_text(cond) if cond else "",
-                })
+                control_flow["while_loops"].append(
+                    {
+                        "line": n.start_point[0] + 1,
+                        "condition": self._ts_get_node_text(cond) if cond else "",
+                    }
+                )
             elif n.type == "try_statement":
                 control_flow["try_blocks"].append({"line": n.start_point[0] + 1})
             elif n.type == "switch_statement":
@@ -1669,6 +1718,7 @@ class TreeSitterBackendMixin:
 
         visit(node)
         return control_flow
+
     def _ts_extract_strings(self, node: "Node") -> List[str]:
         """Extract ALL string literals from tree-sitter AST."""
         strings = []
@@ -1683,6 +1733,7 @@ class TreeSitterBackendMixin:
 
         visit(node)
         return dedupe(strings)[:50]
+
     def _ts_extract_returns(self, node: "Node") -> List[str]:
         """Extract return expressions from tree-sitter AST."""
         returns = []
@@ -1699,6 +1750,7 @@ class TreeSitterBackendMixin:
 
         visit(node)
         return returns
+
     def _ts_extract_catch_clauses(self, node: "Node") -> List[Dict[str, Any]]:
         """Extract catch clauses from tree-sitter AST."""
         handlers = []
@@ -1706,15 +1758,18 @@ class TreeSitterBackendMixin:
         def visit(n: "Node"):
             if n.type == "catch_clause":
                 param = n.child_by_field_name("parameter")
-                handlers.append({
-                    "line": n.start_point[0] + 1,
-                    "parameter": self._ts_get_node_text(param) if param else None,
-                })
+                handlers.append(
+                    {
+                        "line": n.start_point[0] + 1,
+                        "parameter": self._ts_get_node_text(param) if param else None,
+                    }
+                )
             for child in n.children:
                 visit(child)
 
         visit(node)
         return handlers
+
     def _ts_extract_constants(self, node: "Node") -> Dict[str, Any]:
         """Extract constants from tree-sitter AST."""
         constants: Dict[str, Any] = {}
@@ -1723,19 +1778,32 @@ class TreeSitterBackendMixin:
             if n.type == "variable_declarator":
                 name = n.child_by_field_name("name")
                 value = n.child_by_field_name("value")
-                if name and value and value.type in ("number", "string", "true", "false", "null"):
-                    constants[self._ts_get_node_text(name)] = self._ts_get_node_text(value)
+                if (
+                    name
+                    and value
+                    and value.type in ("number", "string", "true", "false", "null")
+                ):
+                    constants[self._ts_get_node_text(name)] = self._ts_get_node_text(
+                        value
+                    )
             for child in n.children:
                 visit(child)
 
         visit(node)
         return constants
+
     def _ts_calculate_complexity(self, node: "Node") -> int:
         """Calculate cyclomatic complexity from tree-sitter AST."""
         complexity = 1
         branch_types = {
-            "if_statement", "for_statement", "for_in_statement", "while_statement",
-            "do_statement", "switch_case", "catch_clause", "ternary_expression",
+            "if_statement",
+            "for_statement",
+            "for_in_statement",
+            "while_statement",
+            "do_statement",
+            "switch_case",
+            "catch_clause",
+            "ternary_expression",
             "binary_expression",  # for && and ||
         }
 
@@ -1753,9 +1821,12 @@ class TreeSitterBackendMixin:
 
         visit(node)
         return complexity
-    def _ts_analyze_dataflow_full(self, node: "Node", param_names: List[str]) -> List[Dict[str, Any]]:
+
+    def _ts_analyze_dataflow_full(
+        self, node: "Node", param_names: List[str]
+    ) -> List[Dict[str, Any]]:
         """Perform full CFG-based dataflow analysis using TreeSitterDataflowAnalysis.
-        
+
         This leverages the CFG builder and dataflow infrastructure to provide
         the same level of analysis as Python's ForwardDataflowAnalysis.
         """
@@ -1768,31 +1839,59 @@ class TreeSitterBackendMixin:
                 source_bytes=self.source_bytes,
             )
             flows = analyzer.analyze()
-            
+
             # Convert TSFlowPath objects to dicts
             return [flow.to_dict() for flow in flows]
         except Exception as e:
-            self.logger.debug(f"Full tree-sitter dataflow analysis failed, using simple: {e}")
+            self.logger.debug(
+                "Full tree-sitter dataflow analysis failed, using simple: %s", e
+            )
             # Fallback to simple analysis
             return self._ts_analyze_dataflow_simple(node, param_names)
-    def _ts_analyze_dataflow_simple(self, node: "Node", param_names: List[str]) -> List[Dict[str, Any]]:
+
+    def _ts_analyze_dataflow_simple(
+        self, node: "Node", param_names: List[str]
+    ) -> List[Dict[str, Any]]:
         """Simple fallback dataflow analysis when full analysis fails."""
         # Reset taint environment
         self._taint_env = {}
         for pname in param_names:
-            self._taint_env[pname] = TaintInfo(status=TaintStatus.TAINTED, sources={pname})
-        
-        flows = {name: {"parameter_name": name, "operations": [], "reaches_calls": [],
-                       "reaches_assignments": [], "reaches_returns": False, "reaches_external": False}
-                for name in param_names}
-        
-        external_patterns = {"open", "read", "write", "fetch", "exec", "spawn", "system", "eval"}
-        
+            self._taint_env[pname] = TaintInfo(
+                status=TaintStatus.TAINTED, sources={pname}
+            )
+
+        flows = {
+            name: {
+                "parameter_name": name,
+                "operations": [],
+                "reaches_calls": [],
+                "reaches_assignments": [],
+                "reaches_returns": False,
+                "reaches_external": False,
+            }
+            for name in param_names
+        }
+
+        external_patterns = {
+            "open",
+            "read",
+            "write",
+            "fetch",
+            "exec",
+            "spawn",
+            "system",
+            "eval",
+        }
+
         def visit(n: "Node"):
-            if n.type in ("assignment_expression", "variable_declarator", "short_var_declaration"):
+            if n.type in (
+                "assignment_expression",
+                "variable_declarator",
+                "short_var_declaration",
+            ):
                 target = n.child_by_field_name("left") or n.child_by_field_name("name")
                 value = n.child_by_field_name("right") or n.child_by_field_name("value")
-                
+
                 if target and value:
                     target_name = self._ts_get_node_text(target)
                     taint = self._ts_eval_taint(value, param_names)
@@ -1802,9 +1901,11 @@ class TreeSitterBackendMixin:
                         for param in param_names:
                             if param in taint.sources:
                                 flows[param]["reaches_assignments"].append(target_name)
-            
+
             elif n.type in ("call_expression", "new_expression", "method_invocation"):
-                func = n.child_by_field_name("function") or n.child_by_field_name("name")
+                func = n.child_by_field_name("function") or n.child_by_field_name(
+                    "name"
+                )
                 args = n.child_by_field_name("arguments")
                 if func and args:
                     call_name = self._ts_get_node_text(func)
@@ -1815,7 +1916,7 @@ class TreeSitterBackendMixin:
                                 flows[param]["reaches_calls"].append(call_name)
                                 if any(p in call_name for p in external_patterns):
                                     flows[param]["reaches_external"] = True
-            
+
             elif n.type == "return_statement":
                 for child in n.children:
                     if child.type not in ("return", ";", "keyword"):
@@ -1825,48 +1926,52 @@ class TreeSitterBackendMixin:
                                 if param in ret_taint.sources:
                                     flows[param]["reaches_returns"] = True
                         break
-            
+
             for child in n.children:
                 visit(child)
-        
+
         visit(node)
         return list(flows.values())
+
     def _ts_eval_taint(self, node: "Node", param_names: List[str]) -> TaintInfo:
         """Evaluate taint of tree-sitter expression via AST traversal."""
-        
+
         def visit(n: "Node") -> TaintInfo:
             """Recursively evaluate taint of AST node."""
             node_taint = TaintInfo()
-            
+
             # Check if this is an identifier
             if n.type == "identifier":
                 var_name = self._ts_get_node_text(n)
                 # Direct parameter reference
                 if var_name in param_names:
-                    node_taint = TaintInfo(status=TaintStatus.TAINTED, sources={var_name})
+                    node_taint = TaintInfo(
+                        status=TaintStatus.TAINTED, sources={var_name}
+                    )
                 # Variable in taint environment
                 elif var_name in self._taint_env:
                     node_taint = self._taint_env[var_name]
-            
+
             # For compound expressions, merge taint from children
             for child in n.children:
                 child_taint = visit(child)
                 node_taint = node_taint.merge(child_taint)
-            
+
             return node_taint
-        
+
         return visit(node)
+
     def _ts_detect_security_ops(self, node: "Node") -> Dict[str, bool]:
         """Detect security-relevant operations via AST traversal."""
         from .taint.patterns import get_all_sinks_for_language
-        
+
         has_file = False
         has_network = False
         has_subprocess = False
         has_eval = False
         has_sql = False
         has_deserialization = False
-        
+
         # Get comprehensive sink patterns for this language
         sinks = get_all_sinks_for_language(self.language)
         command_sinks = sinks.get("command", set())
@@ -1875,20 +1980,20 @@ class TreeSitterBackendMixin:
         file_sinks = sinks.get("file", set())
         network_sinks = sinks.get("network", set())
         deser_sinks = sinks.get("deserialization", set())
-        
+
         def matches_sink(func_text: str, sink_set: set) -> bool:
             """Check if function text matches any sink pattern."""
             # Normalize the function text
             normalized = func_text.replace("::", ".").replace("->", ".")
             parts = normalized.split(".")
             func_name = parts[-1] if parts else normalized
-            
+
             for sink in sink_set:
                 # Normalize sink pattern too
                 sink_normalized = sink.replace("::", ".").replace("->", ".")
                 sink_parts = sink_normalized.split(".")
                 sink_func = sink_parts[-1] if sink_parts else sink_normalized
-                
+
                 # Exact match (normalized)
                 if normalized == sink_normalized:
                     return True
@@ -1899,20 +2004,33 @@ class TreeSitterBackendMixin:
                 if sink_normalized in normalized:
                     return True
             return False
-        
+
         def visit(n: "Node"):
             nonlocal has_file, has_network, has_subprocess, has_eval, has_sql, has_deserialization
-            
+
             # Check call expressions (expanded for all languages)
-            if n.type in ("call_expression", "method_invocation", "function_call_expression",
-                         "member_call_expression", "scoped_call_expression", "call", "method_call",
-                         "invocation_expression", "object_creation_expression", "new_expression"):
-                func = n.child_by_field_name("function") or n.child_by_field_name("name") or n.child_by_field_name("method")
+            if n.type in (
+                "call_expression",
+                "method_invocation",
+                "function_call_expression",
+                "member_call_expression",
+                "scoped_call_expression",
+                "call",
+                "method_call",
+                "invocation_expression",
+                "object_creation_expression",
+                "new_expression",
+            ):
+                func = (
+                    n.child_by_field_name("function")
+                    or n.child_by_field_name("name")
+                    or n.child_by_field_name("method")
+                )
                 if func:
                     func_text = self._ts_get_node_text(func)
                 else:
                     func_text = self._ts_get_node_text(n)
-                
+
                 # Check against sink patterns
                 if matches_sink(func_text, command_sinks):
                     has_subprocess = True
@@ -1926,12 +2044,12 @@ class TreeSitterBackendMixin:
                     has_network = True
                 if matches_sink(func_text, deser_sinks):
                     has_deserialization = True
-            
+
             for child in n.children:
                 visit(child)
-        
+
         visit(node)
-        
+
         return {
             "has_file_operations": has_file,
             "has_network_operations": has_network,

@@ -33,6 +33,7 @@ Layout:
 from dotenv import load_dotenv
 
 from .app import cli_entry_point, main
+
 # Underscore-prefixed names are re-exported because callers outside this
 # package already import them from ``mcpscanner.cli``.
 from .config import (  # noqa: F401

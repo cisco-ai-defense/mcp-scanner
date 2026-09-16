@@ -223,7 +223,7 @@ class BaseAnalyzer(ABC):
 
         if len(content) > 100000:  # 100KB limit
             self.logger.warning(
-                f"Content is very large ({len(content)} chars), analysis may be slow"
+                "Content is very large (%s chars), analysis may be slow", len(content)
             )
 
     def create_security_finding(
@@ -271,11 +271,11 @@ class BaseAnalyzer(ABC):
             # Analysis starting
             findings = await self.analyze(content, context)
             self.logger.debug(
-                f"Analysis complete: found {len(findings)} potential threats"
+                "Analysis complete: found %s potential threats", len(findings)
             )
             return findings
         except Exception as e:
-            self.logger.error(f"Analysis failed: {e}")
+            self.logger.error("Analysis failed: %s", e)
             return []
 
     @abstractmethod

@@ -692,7 +692,7 @@ class ContextExtractor:
             try:
                 func_source = ast.unparse(node)
             except (AttributeError, TypeError, ValueError) as e:
-                self.logger.error(f"Failed to unparse function AST: {e}")
+                self.logger.error("Failed to unparse function AST: %s", e)
                 return []
 
             func_analyzer = PythonParser(self.file_path, func_source)
@@ -720,7 +720,7 @@ class ContextExtractor:
 
             return flow_data
         except Exception as e:
-            self.logger.error(f"Forward flow analysis failed: {e}")
+            self.logger.error("Forward flow analysis failed: %s", e)
             return []
 
     def _extract_constants(self, node: ast.FunctionDef) -> Dict[str, Any]:

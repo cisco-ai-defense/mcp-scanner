@@ -53,12 +53,16 @@ def leaky(path: str) -> str:
             self.analyzed_functions = []
             return [finding]
 
-        with patch.object(
-            BehavioralCodeAnalyzer, "analyze", fake_analyze
-        ), patch.dict(
-            os.environ,
-            {"MCP_SCANNER_LLM_API_KEY": "test-key", "MCP_SCANNER_LLM_PROVIDER": "openai"},
-            clear=False,
+        with (
+            patch.object(BehavioralCodeAnalyzer, "analyze", fake_analyze),
+            patch.dict(
+                os.environ,
+                {
+                    "MCP_SCANNER_LLM_API_KEY": "test-key",
+                    "MCP_SCANNER_LLM_PROVIDER": "openai",
+                },
+                clear=False,
+            ),
         ):
             test_args = [
                 "mcp-scanner",
@@ -94,6 +98,7 @@ async def test_raw_cli_excludes_vulnerability_only_tools(capsys):
         temp_path = f.name
 
     try:
+
         async def fake_analyze(self, content, context):
             self.analyzed_functions = []
             return [
@@ -110,12 +115,16 @@ async def test_raw_cli_excludes_vulnerability_only_tools(capsys):
                 )
             ]
 
-        with patch.object(
-            BehavioralCodeAnalyzer, "analyze", fake_analyze
-        ), patch.dict(
-            os.environ,
-            {"MCP_SCANNER_LLM_API_KEY": "test-key", "MCP_SCANNER_LLM_PROVIDER": "openai"},
-            clear=False,
+        with (
+            patch.object(BehavioralCodeAnalyzer, "analyze", fake_analyze),
+            patch.dict(
+                os.environ,
+                {
+                    "MCP_SCANNER_LLM_API_KEY": "test-key",
+                    "MCP_SCANNER_LLM_PROVIDER": "openai",
+                },
+                clear=False,
+            ),
         ):
             test_args = ["mcp-scanner", "behavioral", temp_path, "--raw"]
             with restore_mcpscanner_logging():

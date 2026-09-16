@@ -41,6 +41,7 @@ from mcpscanner.core.analyzers.meta_analyzer import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_finding(
     severity="HIGH",
     summary="Test finding",
@@ -74,6 +75,7 @@ def _mock_llm_response(json_body: dict) -> MagicMock:
 # ---------------------------------------------------------------------------
 # MetaAnalysisResult
 # ---------------------------------------------------------------------------
+
 
 class TestMetaAnalysisResult:
     """Tests for the MetaAnalysisResult dataclass."""
@@ -132,14 +134,15 @@ class TestMetaAnalysisResult:
         d = MetaAnalysisResult().to_dict()
         # Drop the operator-summary block; it's metadata, not contract.
         emitted_data = set(d.keys()) - {"summary"}
-        assert emitted_data == set(MetaAnalysisResult.CONSUMED_FIELDS), (
-            "to_dict() drifted from CONSUMED_FIELDS — update both at once."
-        )
+        assert emitted_data == set(
+            MetaAnalysisResult.CONSUMED_FIELDS
+        ), "to_dict() drifted from CONSUMED_FIELDS — update both at once."
 
 
 # ---------------------------------------------------------------------------
 # MetaAnalyzer — Initialization
 # ---------------------------------------------------------------------------
+
 
 class TestMetaAnalyzerInit:
     """Tests for MetaAnalyzer construction."""
@@ -162,7 +165,9 @@ class TestMetaAnalyzerInit:
     def test_init_without_api_key_raises(self):
         """MetaAnalyzer raises ValueError without an API key."""
         config = Config()
-        with pytest.raises(ValueError, match="Meta-Analyzer LLM API key not configured"):
+        with pytest.raises(
+            ValueError, match="Meta-Analyzer LLM API key not configured"
+        ):
             MetaAnalyzer(config)
 
     def test_init_loads_system_prompt(self):
@@ -193,6 +198,7 @@ class TestMetaAnalyzerInit:
 # MetaAnalyzer — Serialization & Prompt Building
 # ---------------------------------------------------------------------------
 
+
 class TestMetaAnalyzerPrompts:
     """Tests for finding serialization and prompt construction."""
 
@@ -220,7 +226,9 @@ class TestMetaAnalyzerPrompts:
         analyzer = MetaAnalyzer(config)
 
         findings = [
-            _make_finding(details={"threat_type": "DATA EXFILTRATION", "evidence": "reads ~/.ssh"}),
+            _make_finding(
+                details={"threat_type": "DATA EXFILTRATION", "evidence": "reads ~/.ssh"}
+            ),
         ]
         serialized = json.loads(analyzer._serialize_findings(findings))
         assert serialized[0]["threat_type"] == "DATA EXFILTRATION"
@@ -243,7 +251,11 @@ class TestMetaAnalyzerPrompts:
 
         findings_data = json.dumps([{"_index": 0, "analyzer": "YARA"}])
         prompt = analyzer._build_user_prompt(
-            entity_context={"type": "tool", "name": "my_tool", "description": "does stuff"},
+            entity_context={
+                "type": "tool",
+                "name": "my_tool",
+                "description": "does stuff",
+            },
             findings_data=findings_data,
             num_findings=1,
             analyzers_used=["YARA", "LLM"],
@@ -302,6 +314,7 @@ class TestMetaAnalyzerPrompts:
 # MetaAnalyzer — JSON Extraction
 # ---------------------------------------------------------------------------
 
+
 class TestExtractJsonFromResponse:
     """Tests for _extract_json_from_response strategies."""
 
@@ -336,7 +349,9 @@ class TestExtractJsonFromResponse:
     def test_no_json_raises(self):
         """Pure prose with no JSON raises ValueError."""
         with pytest.raises(ValueError, match="No valid JSON"):
-            self.analyzer._extract_json_from_response("This is just text with no braces.")
+            self.analyzer._extract_json_from_response(
+                "This is just text with no braces."
+            )
 
     # P2-8: truncation repair coverage. The previous test suite had zero
     # tests for Strategy 4. Without these the path was dead code from an
@@ -453,9 +468,7 @@ class TestExtractJsonFromResponse:
             '{"_index": 0, "false_positive_reason": "matched {alpha} {beta} on key"}'
             "]"  # missing outer ``}``
         )
-        result = self.analyzer._extract_json_from_response(
-            truncated_with_literals
-        )
+        result = self.analyzer._extract_json_from_response(truncated_with_literals)
         assert isinstance(result, dict)
         assert list(result.keys()) == ["false_positives"], (
             "Strategy 4 must not introduce extra top-level keys; the "
@@ -531,9 +544,7 @@ class TestExtractJsonFromResponse:
             '{"_index": 1, "false_positive_reason": "matched'
         )
         try:
-            result = self.analyzer._extract_json_from_response(
-                truncated_in_string
-            )
+            result = self.analyzer._extract_json_from_response(truncated_in_string)
         except ValueError as e:
             # Preferred branch: clean failure with the documented msg.
             assert "No valid JSON" in str(e)
@@ -545,8 +556,7 @@ class TestExtractJsonFromResponse:
         assert isinstance(result, dict)
         assert list(result.keys()) == ["false_positives"]
         assert all(
-            isinstance(fp, dict) and "_index" in fp
-            for fp in result["false_positives"]
+            isinstance(fp, dict) and "_index" in fp for fp in result["false_positives"]
         ), (
             "Strategy 4 must never return a dict whose values are "
             "the open-string fragment. If the mask grew support for "
@@ -586,14 +596,15 @@ class TestExtractJsonFromResponse:
             target.removeHandler(h)
 
         msgs = [r.getMessage() for r in records]
-        assert any("truncated" in m.lower() for m in msgs), (
-            f"Repair path must log a warning. Saw: {msgs!r}"
-        )
+        assert any(
+            "truncated" in m.lower() for m in msgs
+        ), f"Repair path must log a warning. Saw: {msgs!r}"
 
 
 # ---------------------------------------------------------------------------
 # MetaAnalyzer — Response Parsing (false_positives only)
 # ---------------------------------------------------------------------------
+
 
 class TestParseResponse:
     """_parse_response only consumes the false_positives field."""
@@ -604,15 +615,17 @@ class TestParseResponse:
 
     def test_parses_false_positives(self):
         """Only false_positives is consumed; other fields are dropped."""
-        response = json.dumps({
-            "false_positives": [{"_index": 1, "false_positive_reason": "benign"}],
-            "validated_findings": [{"_index": 0, "confidence": "HIGH"}],
-            "missed_threats": [{"severity": "HIGH"}],
-            "priority_order": [0, 1],
-            "correlations": [{"group": "x"}],
-            "recommendations": [{"action": "y"}],
-            "overall_risk_assessment": {"risk_level": "HIGH"},
-        })
+        response = json.dumps(
+            {
+                "false_positives": [{"_index": 1, "false_positive_reason": "benign"}],
+                "validated_findings": [{"_index": 0, "confidence": "HIGH"}],
+                "missed_threats": [{"severity": "HIGH"}],
+                "priority_order": [0, 1],
+                "correlations": [{"group": "x"}],
+                "recommendations": [{"action": "y"}],
+                "overall_risk_assessment": {"risk_level": "HIGH"},
+            }
+        )
         result = self.analyzer._parse_response(response, self.findings)
         assert len(result.false_positives) == 1
         assert result.false_positives[0]["_index"] == 1
@@ -640,6 +653,7 @@ class TestParseResponse:
 # MetaAnalyzer — analyze_findings (async, mocked LLM)
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyzeFindings:
     """Tests for the full analyze_findings pipeline."""
 
@@ -660,9 +674,11 @@ class TestAnalyzeFindings:
     @patch("mcpscanner.core.analyzers.meta_analyzer.acompletion")
     async def test_no_followup_request_is_made(self, mock_completion):
         """The follow-up coverage pass has been removed; only one LLM call."""
-        mock_completion.return_value = _mock_llm_response({
-            "false_positives": [{"_index": 1, "false_positive_reason": "benign"}],
-        })
+        mock_completion.return_value = _mock_llm_response(
+            {
+                "false_positives": [{"_index": 1, "false_positive_reason": "benign"}],
+            }
+        )
         analyzer = MetaAnalyzer(_make_config())
         findings = [_make_finding(), _make_finding(analyzer="LLM")]
         result = await analyzer.analyze_findings(
@@ -693,11 +709,16 @@ class TestAnalyzeFindings:
     @patch("mcpscanner.core.analyzers.meta_analyzer.acompletion")
     async def test_with_false_positive_detection(self, mock_completion):
         """Meta-analysis identifies a finding as false positive."""
-        mock_completion.return_value = _mock_llm_response({
-            "false_positives": [
-                {"_index": 1, "false_positive_reason": "Benign calculator operation"},
-            ],
-        })
+        mock_completion.return_value = _mock_llm_response(
+            {
+                "false_positives": [
+                    {
+                        "_index": 1,
+                        "false_positive_reason": "Benign calculator operation",
+                    },
+                ],
+            }
+        )
 
         analyzer = MetaAnalyzer(_make_config())
         findings = [
@@ -722,9 +743,7 @@ class TestMetaAnalyzerLLMRequestShape:
     @patch("mcpscanner.core.analyzers.meta_analyzer.acompletion")
     async def test_make_llm_request_applies_gpt5_constraints(self, mock_completion):
         mock_completion.return_value = _mock_llm_response({"false_positives": []})
-        analyzer = MetaAnalyzer(
-            _make_config(llm_model="openai/gpt-5.6-terra")
-        )
+        analyzer = MetaAnalyzer(_make_config(llm_model="openai/gpt-5.6-terra"))
         await analyzer._make_llm_request("system", "user")
 
         kwargs = mock_completion.call_args.kwargs
@@ -738,6 +757,7 @@ class TestMetaAnalyzerLLMRequestShape:
 # ---------------------------------------------------------------------------
 # apply_meta_analysis — strict FP-only filtering
 # ---------------------------------------------------------------------------
+
 
 class TestApplyMetaAnalysis:
     """apply_meta_analysis only filters false positives — nothing else.
@@ -844,9 +864,7 @@ class TestApplyMetaAnalysis:
             kept, dropped = apply_meta_analysis(
                 findings,
                 MetaAnalysisResult(
-                    false_positives=[
-                        {"_index": -1, "false_positive_reason": "bogus"}
-                    ]
+                    false_positives=[{"_index": -1, "false_positive_reason": "bogus"}]
                 ),
             )
         finally:
@@ -864,9 +882,7 @@ class TestApplyMetaAnalysis:
             kept, dropped = apply_meta_analysis(
                 [_make_finding(summary="only one")],
                 MetaAnalysisResult(
-                    false_positives=[
-                        {"_index": 99, "false_positive_reason": "bogus"}
-                    ]
+                    false_positives=[{"_index": 99, "false_positive_reason": "bogus"}]
                 ),
             )
         finally:
@@ -949,9 +965,7 @@ class TestApplyMetaAnalysis:
         assert "are kept" not in msg
         # The pure-duplicate case must not trigger the unusable-index
         # warning either.
-        unusable_warnings = [
-            r for r in records if "NOT filtered" in r.getMessage()
-        ]
+        unusable_warnings = [r for r in records if "NOT filtered" in r.getMessage()]
         assert unusable_warnings == [], (
             "Pure-duplicate case must not emit the unusable-index "
             "warning — H4 split makes the two cases distinguishable."
@@ -1025,9 +1039,7 @@ class TestApplyMetaAnalysis:
         kept, dropped = apply_meta_analysis(
             [original],
             MetaAnalysisResult(
-                false_positives=[
-                    {"_index": 0, "false_positive_reason": "schema field"}
-                ]
+                false_positives=[{"_index": 0, "false_positive_reason": "schema field"}]
             ),
         )
         assert kept == []
@@ -1072,9 +1084,7 @@ class TestApplyMetaAnalysis:
         kept1, dropped1 = apply_meta_analysis(
             [original],
             MetaAnalysisResult(
-                false_positives=[
-                    {"_index": 0, "false_positive_reason": "benign"}
-                ]
+                false_positives=[{"_index": 0, "false_positive_reason": "benign"}]
             ),
         )
         assert kept1 == []
@@ -1091,7 +1101,9 @@ class TestApplyMetaAnalysis:
         )
         assert kept2 == [original]
         assert dropped2 == []
-        meta_keys = {k for k in (original.details or {}).keys() if k.startswith("meta_")}
+        meta_keys = {
+            k for k in (original.details or {}).keys() if k.startswith("meta_")
+        }
         assert meta_keys == set(), (
             f"In-place mutation regression: original finding sprouted {meta_keys!r} "
             "after a previous apply_meta_analysis. The defensive shallow-copy "
@@ -1299,9 +1311,7 @@ class TestResourceDescriptionForMeta:
     """
 
     @staticmethod
-    def _resource(
-        description: str = "", text: str = ""
-    ):
+    def _resource(description: str = "", text: str = ""):
         from mcpscanner.core.result import ResourceScanResult
 
         return ResourceScanResult(
@@ -1334,9 +1344,7 @@ class TestResourceDescriptionForMeta:
         from mcpscanner.core.scanner import Scanner
 
         text = "hello world"
-        out = Scanner._build_resource_description_for_meta(
-            self._resource(text=text)
-        )
+        out = Scanner._build_resource_description_for_meta(self._resource(text=text))
         # The "Content (first N chars)" marker tells the LLM this is the
         # actual analyzed content, not metadata.
         assert "--- Content (first" in out
@@ -1346,7 +1354,9 @@ class TestResourceDescriptionForMeta:
         from mcpscanner.core.scanner import Scanner
 
         out = Scanner._build_resource_description_for_meta(
-            self._resource(description="Safe README.", text="apiKey is just a JSON Schema key.")
+            self._resource(
+                description="Safe README.", text="apiKey is just a JSON Schema key."
+            )
         )
         assert out.startswith("Safe README.")
         assert "--- Content (first" in out
@@ -1548,9 +1558,7 @@ class TestResourceDescriptionForMeta:
 
         async def _drops_first(findings, analyzers_used, entity_context):
             return MetaAnalysisResult(
-                false_positives=[
-                    {"_index": 0, "false_positive_reason": "benign"}
-                ]
+                false_positives=[{"_index": 0, "false_positive_reason": "benign"}]
             )
 
         scanner._meta_analyzer.analyze_findings = _drops_first
@@ -1661,9 +1669,7 @@ class TestMetaAnalyzerTimeoutConfig:
         finally:
             target.removeHandler(h)
         assert analyzer._timeout == 30.0
-        assert not any(
-            "below the recommended" in r.getMessage() for r in records
-        ), (
+        assert not any("below the recommended" in r.getMessage() for r in records), (
             "Default-config MetaAnalyzer must not emit the floor warning "
             "when MCP_SCANNER_LLM_TIMEOUT is unset — the warning is for "
             "operator overrides, not the project default."
@@ -1795,9 +1801,9 @@ class TestMetaAnalyzerPromptInjection:
 
         # Single finding whose summary contains the substring ``"_index"``
         # — the old count() hack would say 2 findings instead of 1.
-        findings_data = json.dumps([
-            {"_index": 0, "summary": 'this string contains "_index" twice "_index"'}
-        ])
+        findings_data = json.dumps(
+            [{"_index": 0, "summary": 'this string contains "_index" twice "_index"'}]
+        )
         prompt = analyzer._build_user_prompt(
             entity_context={"type": "tool", "name": "x", "description": "y"},
             findings_data=findings_data,
@@ -1889,6 +1895,7 @@ class TestMetaConcurrency:
         from mcpscanner.core.scanner import Scanner
 
         scanner = Scanner(_make_config())
+
         # Replace the LLM call with a deterministic sleep.
         async def _slow(findings, analyzers_used, entity_context):
             await asyncio.sleep(0.05)
@@ -1965,16 +1972,16 @@ class TestMetaConcurrency:
                 analyzers=["yara"],
                 findings=[
                     SecurityFinding(
-                        severity="LOW", summary="m", analyzer="YARA",
+                        severity="LOW",
+                        summary="m",
+                        analyzer="YARA",
                         threat_category="X",
                     )
                 ],
             )
             for i in range(50)
         ]
-        asyncio.run(
-            scanner._run_meta_analysis_on_results(results, [AnalyzerEnum.META])
-        )
+        asyncio.run(scanner._run_meta_analysis_on_results(results, [AnalyzerEnum.META]))
 
         assert max_in_flight <= Scanner._META_CONCURRENCY
 
@@ -2055,9 +2062,7 @@ class TestApplyMetaToResults:
             ),
         ]
 
-        out = asyncio.run(
-            scanner.apply_meta_to_results(results, [AnalyzerEnum.META])
-        )
+        out = asyncio.run(scanner.apply_meta_to_results(results, [AnalyzerEnum.META]))
 
         # All four types saw the meta-analyzer.
         assert sorted(seen_types) == sorted(
@@ -2455,7 +2460,9 @@ class TestFPReasonCanonicalKey:
             false_positives=[{"_index": 0}],  # no reason at all
         )
         _, dropped = apply_meta_analysis([finding], meta_result)
-        assert "Identified as likely false positive" in dropped[0].details["meta_reason"]
+        assert (
+            "Identified as likely false positive" in dropped[0].details["meta_reason"]
+        )
 
     def test_prompt_template_uses_canonical_key(self):
         """The prompt asked of the LLM must use the canonical name. If
@@ -2464,9 +2471,7 @@ class TestFPReasonCanonicalKey:
         """
         from mcpscanner.config.constants import MCPScannerConstants
 
-        prompt_path = (
-            MCPScannerConstants.get_prompts_path() / "meta_analysis_prompt.md"
-        )
+        prompt_path = MCPScannerConstants.get_prompts_path() / "meta_analysis_prompt.md"
         contents = prompt_path.read_text(encoding="utf-8")
         assert "false_positive_reason" in contents, (
             "meta_analysis_prompt.md must instruct the LLM to use the "
@@ -2476,23 +2481,21 @@ class TestFPReasonCanonicalKey:
             "meta_analysis_prompt.md must document when LLM prompt-injection "
             "on first-party usage docs may be filtered as a false positive."
         )
-        assert "There is **no** jailbreak or override language" in contents, (
-            "publisher-usage FP rule must require absence of jailbreak language."
-        )
+        assert (
+            "There is **no** jailbreak or override language" in contents
+        ), "publisher-usage FP rule must require absence of jailbreak language."
         assert (
             "hidden context into parameters for exfiltration" in contents
-        ), (
-            "publisher-usage FP rule must require absence of context-harvesting."
-        )
-        assert "No other analyzer corroborates a distinct" in contents, (
-            "publisher-usage FP rule must keep corroborated threats."
-        )
-        assert "Examples that are **NOT** false positives" in contents, (
-            "meta_analysis_prompt.md must document threats that must not be filtered."
-        )
-        assert "context-harvesting language" in contents, (
-            "NOT-false-positive guidance must call out context-harvesting threats."
-        )
+        ), "publisher-usage FP rule must require absence of context-harvesting."
+        assert (
+            "No other analyzer corroborates a distinct" in contents
+        ), "publisher-usage FP rule must keep corroborated threats."
+        assert (
+            "Examples that are **NOT** false positives" in contents
+        ), "meta_analysis_prompt.md must document threats that must not be filtered."
+        assert (
+            "context-harvesting language" in contents
+        ), "NOT-false-positive guidance must call out context-harvesting threats."
 
 
 # ---------------------------------------------------------------------------
@@ -2535,9 +2538,7 @@ class TestIsSafeAfterMetaFiltering:
         assert result.is_safe is False
 
         meta_result = MetaAnalysisResult(
-            false_positives=[
-                {"_index": 0, "false_positive_reason": "benign"}
-            ],
+            false_positives=[{"_index": 0, "false_positive_reason": "benign"}],
         )
         kept, dropped = apply_meta_analysis(result.findings, meta_result)
         result.findings = kept
@@ -2579,9 +2580,7 @@ class TestIsSafeAfterMetaFiltering:
         """
         from mcpscanner.core.analyzers.meta_analyzer import MetaAnalysisResult
 
-        assert MetaAnalysisResult.CONSUMED_FIELDS == frozenset(
-            {"false_positives"}
-        ), (
+        assert MetaAnalysisResult.CONSUMED_FIELDS == frozenset({"false_positives"}), (
             "If you intentionally widened the meta-analysis contract, "
             "update both CONSUMED_FIELDS and meta_analysis_prompt.md."
         )
@@ -2612,12 +2611,10 @@ class TestIsSafeAfterMetaFiltering:
         kept, _ = apply_meta_analysis([finding], meta_result)
 
         assert kept == [finding]
-        leaked = {
-            k for k in (kept[0].details or {}).keys() if k.startswith("meta_")
-        }
-        assert leaked == set(), (
-            f"Diagnostic-only fields leaked into kept finding details: {leaked!r}"
-        )
+        leaked = {k for k in (kept[0].details or {}).keys() if k.startswith("meta_")}
+        assert (
+            leaked == set()
+        ), f"Diagnostic-only fields leaked into kept finding details: {leaked!r}"
 
     def test_filtered_list_does_not_flip_is_safe(self):
         """Pure attribute test: even with a populated
@@ -2672,7 +2669,10 @@ class TestBuildMetaAuditPayload:
             summary="apparent api key",
             analyzer="YARA",
             threat_category="CREDENTIAL_HARVESTING",
-            details={"meta_reason": "JSON Schema field, not a creden", "meta_confidence": "HIGH"},
+            details={
+                "meta_reason": "JSON Schema field, not a creden",
+                "meta_confidence": "HIGH",
+            },
         )
         out = build_meta_audit_payload([finding])
         assert out is not None
@@ -2716,9 +2716,7 @@ class TestBuildMetaAuditPayload:
         assert out is not None
         assert out["filtered_count"] == 1
         # Falls back to the default reason rather than AttributeError.
-        assert (
-            out["filtered_findings"][0]["meta_reason"] == DEFAULT_META_REASON
-        )
+        assert out["filtered_findings"][0]["meta_reason"] == DEFAULT_META_REASON
         assert out["filtered_findings"][0]["meta_confidence"] is None
 
     def test_router_and_report_generator_produce_byte_identical_blocks(self):
@@ -2741,7 +2739,10 @@ class TestBuildMetaAuditPayload:
             summary="apparent token",
             analyzer="YARA",
             threat_category="CREDENTIAL_HARVESTING",
-            details={"meta_reason": "ck_test_ token in fixture", "meta_confidence": "MEDIUM"},
+            details={
+                "meta_reason": "ck_test_ token in fixture",
+                "meta_confidence": "MEDIUM",
+            },
         )
         result = ToolScanResult(
             tool_name="t",

@@ -3,7 +3,10 @@
 
 """Tests for CFG builder component"""
 
-from mcpscanner.core.static_analysis.cfg.builder import ControlFlowGraph, DataFlowAnalyzer
+from mcpscanner.core.static_analysis.cfg.builder import (
+    ControlFlowGraph,
+    DataFlowAnalyzer,
+)
 
 
 class TestCFGBuilder:

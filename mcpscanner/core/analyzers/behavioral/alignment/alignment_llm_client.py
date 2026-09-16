@@ -224,9 +224,7 @@ class AlignmentLLMClient:
             attempts_used += 1
             return await self._make_llm_request(prompt, request_id, attempts_used)
 
-        async def on_retry(
-            exc: BaseException, attempt: int, delay: float
-        ) -> None:
+        async def on_retry(exc: BaseException, attempt: int, delay: float) -> None:
             self.logger.warning(
                 "LLM request_id=%d retry attempt=%d/%d error_kind=%s "
                 "error_type=%s error=%s backoff_s=%.1f model=%s",
@@ -264,7 +262,9 @@ class AlignmentLLMClient:
         except Exception as e:
             kind = classify_analyzer_error(e, context="llm", model=self._model)
             total_ms = int((time.perf_counter() - verify_start) * 1000)
-            error_kind = ERROR_KIND_FINAL if kind is ErrorKind.FINAL else ERROR_KIND_TRANSIENT
+            error_kind = (
+                ERROR_KIND_FINAL if kind is ErrorKind.FINAL else ERROR_KIND_TRANSIENT
+            )
             self.logger.error(
                 "LLM request_id=%d failed%s attempts=%d duration_ms=%d "
                 "error_kind=%s error_type=%s error=%s model=%s",

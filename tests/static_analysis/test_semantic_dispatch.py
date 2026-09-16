@@ -62,7 +62,7 @@ def handler(path: str, pick_a: bool) -> None:
     )
     result = engine.resolve(
         caller_label="handler",
-        callee_label='getattr(worker, method)',
+        callee_label="getattr(worker, method)",
         receiver="worker",
         method=None,
         kind="getattr_variable",

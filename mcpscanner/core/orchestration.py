@@ -82,7 +82,7 @@ async def run_analyzer_pass(
         text = content() if callable(content) else content
         findings = await analyzer.analyze(text, context)
     except Exception as e:
-        logger.error(f'{failure_log}, error="{e}"')
+        logger.error('%s, error="%s"', failure_log, e)
         return []
     for finding in findings:
         finding.analyzer = label
@@ -112,7 +112,10 @@ async def run_custom_analyzers(
             findings = await analyzer.analyze(content, custom_context)
         except Exception as e:
             logger.error(
-                f'Custom analyzer "{analyzer.name}" failed{failure_subject}, error="{e}"'
+                'Custom analyzer "%s" failed%s, error="%s"',
+                analyzer.name,
+                failure_subject,
+                e,
             )
             continue
         for finding in findings:
@@ -124,8 +127,8 @@ async def run_custom_analyzers(
 
 def _warn_llm_uninitialized(entity: str) -> None:
     logger.warning(
-        f"LLM scan requested for {entity} but LLM analyzer not initialized "
-        "(MCP_SCANNER_LLM_API_KEY missing)"
+        "LLM scan requested for %s but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)",
+        entity,
     )
 
 
@@ -190,9 +193,7 @@ async def analyze_tool(
             content = f"Tool Name: {name}\n"
             content += f"Description: {description}\n"
             if "inputSchema" in tool_data:
-                content += (
-                    f"Parameters Schema: {json.dumps(tool_data['inputSchema'], indent=2)}\n"
-                )
+                content += f"Parameters Schema: {json.dumps(tool_data['inputSchema'], indent=2)}\n"
             return content
 
         all_findings += await run_analyzer_pass(
@@ -260,7 +261,9 @@ async def analyze_prompt(
         prompt_json = prompt.model_dump_json()
         prompt_data = json.loads(prompt_json)
     except (json.JSONDecodeError, AttributeError, TypeError) as e:
-        logger.warning(f"Error parsing prompt '{name}' data: {e}. Using minimal data.")
+        logger.warning(
+            "Error parsing prompt '%s' data: %s. Using minimal data.", name, e
+        )
         prompt_data = {"name": name, "description": description}
 
     if AnalyzerEnum.API in analyzers and bundle.api:
@@ -427,16 +430,22 @@ def _extract_resource_text(content: str, uri: str, mime_type: str) -> str:
     try:
         from bs4 import BeautifulSoup
 
-        text = BeautifulSoup(content, "html.parser").get_text(separator="\n", strip=True)
-        logger.info(f"Extracted text from HTML resource: {uri}")
+        text = BeautifulSoup(content, "html.parser").get_text(
+            separator="\n", strip=True
+        )
+        logger.info("Extracted text from HTML resource: %s", uri)
         return text
     except ImportError:
         logger.warning("BeautifulSoup not installed, analyzing raw HTML content")
     except (ValueError, TypeError) as e:
-        logger.warning(f"Error parsing HTML for resource '{uri}': {e}. Using raw content.")
+        logger.warning(
+            "Error parsing HTML for resource '%s': %s. Using raw content.", uri, e
+        )
     except Exception as e:
         logger.error(
-            f"Unexpected error extracting text from HTML '{uri}': {e}. Using raw content."
+            "Unexpected error extracting text from HTML '%s': %s. Using raw content.",
+            uri,
+            e,
         )
     return content
 

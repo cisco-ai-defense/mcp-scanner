@@ -23,9 +23,7 @@ class TestReadinessLLMJudgeRequestShape:
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.readiness.llm_judge.acompletion")
     async def test_run_evaluation_applies_gpt5_constraints(self, mock_completion):
-        mock_completion.return_value = _mock_llm_response(
-            {"readiness_analysis": {}}
-        )
+        mock_completion.return_value = _mock_llm_response({"readiness_analysis": {}})
         judge = ReadinessLLMJudge(
             model="openai/gpt-5.6-terra",
             api_key="test-key",

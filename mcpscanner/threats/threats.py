@@ -570,5 +570,9 @@ YARA_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.YARA_THREATS)
 API_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.AI_DEFENSE_THREATS)
 BEHAVIORAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.BEHAVIORAL_THREATS)
 VIRUSTOTAL_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VIRUSTOTAL_THREATS)
-PROMPT_DEFENSE_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.PROMPT_DEFENSE_THREATS)
-VULNERABLE_PACKAGE_THREAT_MAPPING = _create_simple_mapping(ThreatMapping.VULNERABLE_PACKAGE_THREATS)
+PROMPT_DEFENSE_THREAT_MAPPING = _create_simple_mapping(
+    ThreatMapping.PROMPT_DEFENSE_THREATS
+)
+VULNERABLE_PACKAGE_THREAT_MAPPING = _create_simple_mapping(
+    ThreatMapping.VULNERABLE_PACKAGE_THREATS
+)

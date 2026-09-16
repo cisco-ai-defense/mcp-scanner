@@ -48,7 +48,9 @@ async def run(ctx: CommandContext) -> Optional[Any]:
 
     vt_enabled_env = os.environ.get("MCP_SCANNER_VIRUSTOTAL_ENABLED", "true").lower()
     vt_enabled = vt_enabled_env != "false"
-    vt_upload = os.environ.get("MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false").lower() == "true"
+    vt_upload = (
+        os.environ.get("MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false").lower() == "true"
+    )
 
     analyzer = VirusTotalAnalyzer(
         api_key=vt_api_key,
@@ -72,32 +74,40 @@ async def run(ctx: CommandContext) -> Optional[Any]:
     results = []
     if findings:
         for finding in findings:
-            file_path = finding.details.get("file_path", scan_path) if finding.details else scan_path
+            file_path = (
+                finding.details.get("file_path", scan_path)
+                if finding.details
+                else scan_path
+            )
             analyzer_finding = analyzer_finding_payload(finding)
 
-            results.append({
-                "tool_name": file_path,
-                "tool_description": f"VirusTotal scan of {os.path.basename(file_path)}",
-                "status": "completed",
-                "is_safe": False,
-                "findings": {"virustotal_analyzer": analyzer_finding},
-            })
-    else:
-        results.append({
-            "tool_name": scan_path,
-            "tool_description": f"VirusTotal scan of {os.path.basename(scan_path)}",
-            "status": "completed",
-            "is_safe": True,
-            "findings": {
-                "virustotal_analyzer": {
-                    "severity": "SAFE",
-                    "threat_summary": "No threats detected",
-                    "threat_names": [],
-                    "total_findings": 0,
-                    "mcp_taxonomies": [],
+            results.append(
+                {
+                    "tool_name": file_path,
+                    "tool_description": f"VirusTotal scan of {os.path.basename(file_path)}",
+                    "status": "completed",
+                    "is_safe": False,
+                    "findings": {"virustotal_analyzer": analyzer_finding},
                 }
-            },
-        })
+            )
+    else:
+        results.append(
+            {
+                "tool_name": scan_path,
+                "tool_description": f"VirusTotal scan of {os.path.basename(scan_path)}",
+                "status": "completed",
+                "is_safe": True,
+                "findings": {
+                    "virustotal_analyzer": {
+                        "severity": "SAFE",
+                        "threat_summary": "No threats detected",
+                        "threat_names": [],
+                        "total_findings": 0,
+                        "mcp_taxonomies": [],
+                    }
+                },
+            }
+        )
 
     # Add scan summary if directory scan
     if os.path.isdir(scan_path) and analyzer.last_scan_summary:

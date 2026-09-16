@@ -179,8 +179,18 @@ class StaticAnalyzer:
                 findings = await analyzer.analyze(content, context)
                 all_findings.extend(findings)
             except Exception as e:
-                # Log error but continue with other analyzers
-                print(f"Warning: {analyzer.name} failed: {e}")
+                # Continue with the other analyzers, but say so: the caller
+                # gets a short findings list either way, and without this
+                # there is nothing to distinguish "analyzer found nothing"
+                # from "analyzer never ran".
+                logger.error(
+                    "analyzer failed analyzer=%s error_type=%s error=%s "
+                    "-- its findings are missing from this result",
+                    analyzer.name,
+                    type(e).__name__,
+                    e,
+                    exc_info=True,
+                )
 
         return all_findings
 
@@ -262,7 +272,9 @@ class StaticAnalyzer:
                 "is_safe": len(all_findings) == 0,
                 "findings": all_findings,
                 "status": "completed",
-                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
+                "analyzers": [
+                    self._get_finding_analyzer_name(a) for a in self.analyzers
+                ],
             }
 
             results.append(result)
@@ -333,7 +345,9 @@ class StaticAnalyzer:
                 "is_safe": len(findings) == 0,
                 "findings": findings,
                 "status": "completed",
-                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
+                "analyzers": [
+                    self._get_finding_analyzer_name(a) for a in self.analyzers
+                ],
             }
 
             results.append(result)

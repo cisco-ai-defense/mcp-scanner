@@ -58,7 +58,7 @@ class RemoteServer(BaseModel):
     @classmethod
     def normalize_url_field(cls, data: Any) -> Any:
         """Normalize different URL field names to 'url' (case-insensitive).
-        
+
         MCP configs may use 'url', 'Url', 'URL', 'serverUrl', 'serverURL', etc.
         """
         if isinstance(data, dict):

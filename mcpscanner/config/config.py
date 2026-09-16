@@ -123,7 +123,9 @@ class Config:
         )
         self._aws_session_token = aws_session_token or os.getenv("AWS_SESSION_TOKEN")
         self._aws_profile_name = aws_profile_name or os.getenv("AWS_PROFILE")
-        self._aws_bearer_token_bedrock = aws_bearer_token_bedrock or os.getenv("AWS_BEARER_TOKEN_BEDROCK")
+        self._aws_bearer_token_bedrock = aws_bearer_token_bedrock or os.getenv(
+            "AWS_BEARER_TOKEN_BEDROCK"
+        )
 
         self._llm_timeout = llm_timeout or CONSTANTS.DEFAULT_LLM_TIMEOUT
         self._stdio_timeout = stdio_timeout or CONSTANTS.DEFAULT_STDIO_TIMEOUT
@@ -134,9 +136,7 @@ class Config:
 
         # VirusTotal configuration with environment variable fallback via constants
         # Treat empty string as None to avoid enabling VT with a blank key
-        _raw_vt_key = virustotal_api_key or os.getenv(
-            CONSTANTS.ENV_VIRUSTOTAL_API_KEY
-        )
+        _raw_vt_key = virustotal_api_key or os.getenv(CONSTANTS.ENV_VIRUSTOTAL_API_KEY)
         self._virustotal_api_key = _raw_vt_key if _raw_vt_key else None
         # Respect explicit enable/disable from env var (True/False).
         # If not explicitly set (None), auto-enable when API key is present.
@@ -148,7 +148,8 @@ class Config:
             virustotal_upload_files or CONSTANTS.VIRUSTOTAL_UPLOAD_FILES
         )
         self._virustotal_max_files = (
-            virustotal_max_files if virustotal_max_files is not None
+            virustotal_max_files
+            if virustotal_max_files is not None
             else CONSTANTS.VIRUSTOTAL_MAX_FILES
         )
         self._virustotal_inclusion_extensions = (

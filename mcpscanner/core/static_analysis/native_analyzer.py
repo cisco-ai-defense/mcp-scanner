@@ -97,7 +97,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
 
     The output format matches FunctionContext for compatibility with
     the existing analysis pipeline.
-    
+
     Key difference from basic NativeAnalyzer:
     - Performs taint tracking from function parameters
     - Detects security-relevant operations via dataflow (not hardcoded patterns)
@@ -107,37 +107,68 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
     # File extension to language mapping
     EXTENSION_MAP = {
         # Python
-        ".py": "python", ".pyw": "python",
+        ".py": "python",
+        ".pyw": "python",
         # TypeScript
-        ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".mts": "typescript",
+        ".cts": "typescript",
         # JavaScript
-        ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+        ".js": "javascript",
+        ".jsx": "javascript",
+        ".mjs": "javascript",
+        ".cjs": "javascript",
         # Go
         ".go": "go",
         # Java
         ".java": "java",
         # Kotlin
-        ".kt": "kotlin", ".kts": "kotlin",
+        ".kt": "kotlin",
+        ".kts": "kotlin",
         # Swift
         ".swift": "swift",
         # C#
         ".cs": "c_sharp",
         # Ruby
-        ".rb": "ruby", ".rake": "ruby", ".gemspec": "ruby",
+        ".rb": "ruby",
+        ".rake": "ruby",
+        ".gemspec": "ruby",
         # Rust
         ".rs": "rust",
         # PHP
-        ".php": "php", ".phtml": "php",
+        ".php": "php",
+        ".phtml": "php",
     }
     # Function node types per language (for tree-sitter)
     FUNCTION_NODE_TYPES = {
-        "javascript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
-        "typescript": {"function_declaration", "function_expression", "arrow_function", "method_definition"},
+        "javascript": {
+            "function_declaration",
+            "function_expression",
+            "arrow_function",
+            "method_definition",
+        },
+        "typescript": {
+            "function_declaration",
+            "function_expression",
+            "arrow_function",
+            "method_definition",
+        },
         "go": {"function_declaration", "method_declaration"},
         "java": {"method_declaration", "constructor_declaration"},
-        "kotlin": {"function_declaration", "secondary_constructor", "primary_constructor", "lambda_literal", "anonymous_function"},
+        "kotlin": {
+            "function_declaration",
+            "secondary_constructor",
+            "primary_constructor",
+            "lambda_literal",
+            "anonymous_function",
+        },
         "swift": {"function_declaration", "initializer_declaration"},
-        "c_sharp": {"method_declaration", "constructor_declaration", "local_function_statement"},
+        "c_sharp": {
+            "method_declaration",
+            "constructor_declaration",
+            "local_function_statement",
+        },
         "ruby": {"method", "singleton_method"},
         "rust": {"function_item", "impl_item"},
         "php": {"function_definition", "method_declaration"},
@@ -155,6 +186,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
         "rust": {"struct_item", "impl_item"},
         "php": {"class_declaration", "interface_declaration"},
     }
+
     def __init__(self, source_code: str, file_path: str = "unknown"):
         """Initialize native analyzer.
 
@@ -168,9 +200,10 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
         self.lines = source_code.split("\n")
         self.logger = logging.getLogger(__name__)
         self.language = self._detect_language()
-        
+
         # Taint tracking state (reset per function)
         self._taint_env: Dict[str, TaintInfo] = {}
+
     def _detect_language(self) -> str:
         """Detect programming language from file extension."""
         ext = self.file_path.suffix.lower()
@@ -187,6 +220,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
             pass
 
         return "unknown"
+
     def analyze(self) -> NativeAnalysisResult:
         """Analyze source code and extract function contexts.
 
@@ -204,6 +238,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
                 language=self.language,
                 errors=[f"Unsupported language: {self.language}"],
             )
+
     def extract_all_function_contexts(self) -> List[FunctionContext]:
         """Extract contexts for ALL functions.
 
@@ -214,6 +249,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
         """
         result = self.analyze()
         return result.functions
+
     def extract_mcp_capability_contexts(
         self,
         cross_file_analyzer: Optional[Any] = None,
@@ -322,7 +358,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
             return tree, self._ts_extract_imports(tree.root_node)
         except Exception as e:
             self.logger.warning(
-                f"MCP capability extraction failed for {self.file_path}: {e}"
+                "MCP capability extraction failed for %s: %s", self.file_path, e
             )
             return None
 
@@ -488,6 +524,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
                 source_kind="registration.table",
                 handler_name_hint=tool_name,
             )
+
     def _resolve_cross_file_handler(
         self,
         handler_name: str,
@@ -568,6 +605,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
                 matches[0][0],
             )
         return matches[0]
+
     def _build_import_target_map(
         self,
         imports: Optional[List[str]],
@@ -606,13 +644,10 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
             except Exception:
                 # Robust to malformed import lines — fall back to bare
                 # suffix matching for affected symbols.
-                self.logger.debug(
-                    "Failed to parse import for target map: %r", s
-                )
+                self.logger.debug("Failed to parse import for target map: %r", s)
         return out
-    def _go_collect_import_targets(
-        self, stmt: str, out: Dict[str, List[str]]
-    ) -> None:
+
+    def _go_collect_import_targets(self, stmt: str, out: Dict[str, List[str]]) -> None:
         """Populate ``out`` from one Go import statement."""
         # ``import "github.com/foo/bar"`` or ``import alias "..."``.
         for m in _re.finditer(
@@ -625,6 +660,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
                 continue
             bound = alias or path.rsplit("/", 1)[-1]
             out.setdefault(bound, []).append(path)
+
     def _append_unresolved_capability(
         self,
         out: List[FunctionContext],
@@ -674,6 +710,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
             # the unresolved handler actually lives.
             ctx.source_file = str(source_file)
         out.append(ctx)
+
     def _has_mcp_markers(self) -> bool:
         """Cheap byte-level prefilter (Gap 12).
 
@@ -700,6 +737,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
         result = bool(_MCP_PREFILTER_RE.search(self.source_bytes or b""))
         self._mcp_prefilter_cache = result
         return result
+
     def _append_capability_context(
         self,
         out: List[FunctionContext],
@@ -728,7 +766,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
                 handler_node, imports, class_name=class_name
             )
         except Exception as e:
-            self.logger.debug(f"Failed to extract MCP handler context: {e}")
+            self.logger.debug("Failed to extract MCP handler context: %s", e)
             return
         if ctx is None:
             return
@@ -748,9 +786,8 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
             ctx.decorator_types.append(cap_tag)
 
         out.append(ctx)
-    def _collect_mcp_instances(
-        self, root: "Node", imports: List[str]
-    ) -> Set[str]:
+
+    def _collect_mcp_instances(self, root: "Node", imports: List[str]) -> Set[str]:
         """Identify local names that bind to MCP server instances.
 
         Two-stage detection:
@@ -806,9 +843,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
             elif self.language == "python":
                 # ``from fastmcp import FastMCP`` or
                 # ``from mcp.server import Server``
-                m = _re.match(
-                    r"\s*from\s+([\w\.]+)\s+import\s+([\w\s,]+)", stmt
-                )
+                m = _re.match(r"\s*from\s+([\w\.]+)\s+import\s+([\w\s,]+)", stmt)
                 if m:
                     for sym in m.group(2).split(","):
                         sym = sym.strip().split(" as ")[0].strip()
@@ -876,6 +911,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
 
         visit(root)
         return trusted
+
     def _analyze_python(self) -> NativeAnalysisResult:
         """Analyze Python source code using built-in ast module."""
         functions = []
@@ -909,6 +945,7 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
                 language="python",
                 errors=[f"Syntax error: {e}"],
             )
+
     def _analyze_tree_sitter(self) -> NativeAnalysisResult:
         """Analyze source code using tree-sitter AST (generic for all languages)."""
         # Get the language module
@@ -917,7 +954,9 @@ class NativeAnalyzer(PythonBackendMixin, TreeSitterBackendMixin):
             return NativeAnalysisResult(
                 success=False,
                 language=self.language,
-                errors=[f"tree-sitter-{self.language} not available. Install: pip install tree-sitter-{self.language.replace('_', '-')}"],
+                errors=[
+                    f"tree-sitter-{self.language} not available. Install: pip install tree-sitter-{self.language.replace('_', '-')}"
+                ],
             )
 
         functions = []

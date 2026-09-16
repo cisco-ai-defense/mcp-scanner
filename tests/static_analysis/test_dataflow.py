@@ -17,7 +17,6 @@
 """Tests for dataflow analysis components."""
 
 
-
 class TestDataflow:
     """Test dataflow analysis functionality."""
 

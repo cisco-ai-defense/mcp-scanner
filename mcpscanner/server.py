@@ -75,10 +75,12 @@ def main():
     api_key = os.environ.get(CONSTANTS.ENV_API_KEY)
     if not api_key:
         logger.warning(
-            f"{CONSTANTS.ENV_API_KEY} is not set. Cisco AI Defense API analyzer will not work."
+            "%s is not set. Cisco AI Defense API analyzer will not work.",
+            CONSTANTS.ENV_API_KEY,
         )
         logger.warning(
-            f"Please set {CONSTANTS.ENV_API_KEY} in your .env file or environment variables."
+            "Please set %s in your .env file or environment variables.",
+            CONSTANTS.ENV_API_KEY,
         )
     else:
         logger.debug("Cisco AI Defense API key configured successfully.")
@@ -87,17 +89,18 @@ def main():
     llm_api_key = os.environ.get(CONSTANTS.ENV_LLM_API_KEY)
     if not llm_api_key:
         logger.warning(
-            f"{CONSTANTS.ENV_LLM_API_KEY} is not set. LLM analyzer will not work."
+            "%s is not set. LLM analyzer will not work.", CONSTANTS.ENV_LLM_API_KEY
         )
         logger.warning(
-            f"Please set {CONSTANTS.ENV_LLM_API_KEY} in your .env file or environment variables."
+            "Please set %s in your .env file or environment variables.",
+            CONSTANTS.ENV_LLM_API_KEY,
         )
     else:
         logger.debug("LLM API key configured successfully.")
 
     # Log the configured endpoint
     endpoint = os.environ.get(CONSTANTS.ENV_ENDPOINT, CONSTANTS.API_BASE_URL)
-    logger.debug(f"Using endpoint: {endpoint}")
+    logger.debug("Using endpoint: %s", endpoint)
 
     if args.debug:
         # Set root logger to DEBUG first

@@ -125,7 +125,9 @@ class TestAlignmentPromptBudget:
     def test_sink_hints_preserved_when_analysis_truncated(self, monkeypatch):
         monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 3000)
         builder = AlignmentPromptBuilder()
-        sink_marker = "**CODE GRAPH SINK HINTS (deterministic, verify against docstring):**"
+        sink_marker = (
+            "**CODE GRAPH SINK HINTS (deterministic, verify against docstring):**"
+        )
         sink_body = '"sink_name": "os.remove"'
         analysis = (
             "M" * 10_000
@@ -378,9 +380,7 @@ class TestBatchGraphEvidence:
     ):
         import mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder as apb
 
-        monkeypatch.setattr(
-            MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000
-        )
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000)
         monkeypatch.setattr(
             apb.MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000
         )

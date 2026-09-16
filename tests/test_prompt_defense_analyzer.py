@@ -30,6 +30,7 @@ from mcpscanner.core.analyzers.prompt_defense_analyzer import PromptDefenseAnaly
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def analyzer() -> PromptDefenseAnalyzer:
     """Create a fresh PromptDefenseAnalyzer instance."""
@@ -95,8 +96,14 @@ class TestPromptDefenseAnalyzerInit:
     def test_rules_structure(self, analyzer: PromptDefenseAnalyzer) -> None:
         """Each rule has all required keys."""
         required_keys = {
-            "id", "severity", "threat_category", "taxonomy_key",
-            "patterns", "min_matches", "summary_missing", "summary_partial",
+            "id",
+            "severity",
+            "threat_category",
+            "taxonomy_key",
+            "patterns",
+            "min_matches",
+            "summary_missing",
+            "summary_partial",
         }
         for rule in analyzer._rules:
             assert required_keys.issubset(rule.keys()), (
@@ -141,7 +148,9 @@ class TestAnalyzeDefended:
         assert "All prompt defenses present" in findings[0].summary
 
     @pytest.mark.asyncio
-    async def test_defended_finding_details(self, analyzer: PromptDefenseAnalyzer) -> None:
+    async def test_defended_finding_details(
+        self, analyzer: PromptDefenseAnalyzer
+    ) -> None:
         """INFO finding contains correct detail values."""
         findings = await analyzer.analyze(
             FULLY_DEFENDED_CONTENT, {"tool_name": "secure_tool"}
@@ -213,9 +222,9 @@ class TestFindingTaxonomy:
             UNDEFENDED_CONTENT, {"tool_name": "test_tool"}
         )
         for f in findings:
-            assert "threat_type" in f.details, (
-                f"Finding {f.details.get('defense_id')} missing threat_type"
-            )
+            assert (
+                "threat_type" in f.details
+            ), f"Finding {f.details.get('defense_id')} missing threat_type"
             # The taxonomy lookup should succeed for known threat types
             if f.mcp_taxonomy is not None:
                 assert "aitech" in f.mcp_taxonomy
@@ -338,13 +347,9 @@ class TestContextHandling:
         assert findings[0].details["tool_name"] == "unknown"
 
     @pytest.mark.asyncio
-    async def test_tool_name_propagated(
-        self, analyzer: PromptDefenseAnalyzer
-    ) -> None:
+    async def test_tool_name_propagated(self, analyzer: PromptDefenseAnalyzer) -> None:
         """tool_name from context appears in finding details."""
-        findings = await analyzer.analyze(
-            UNDEFENDED_CONTENT, {"tool_name": "my_tool"}
-        )
+        findings = await analyzer.analyze(UNDEFENDED_CONTENT, {"tool_name": "my_tool"})
         for f in findings:
             assert f.details["tool_name"] == "my_tool"
 
@@ -361,9 +366,7 @@ class TestSafeAnalyze:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_safe_analyze_valid(
-        self, analyzer: PromptDefenseAnalyzer
-    ) -> None:
+    async def test_safe_analyze_valid(self, analyzer: PromptDefenseAnalyzer) -> None:
         """safe_analyze returns findings for valid content."""
         result = await analyzer.safe_analyze(UNDEFENDED_CONTENT)
         assert len(result) == 12

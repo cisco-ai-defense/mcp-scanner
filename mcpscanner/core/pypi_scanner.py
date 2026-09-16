@@ -159,7 +159,8 @@ class PyPIPackageScanner(PackageScannerBase):
         self.build_image()
 
         cmd = [
-            "docker", "run",
+            "docker",
+            "run",
             "--rm",
             "--network=bridge",
             *docker_run_hardening_flags(),
@@ -244,9 +245,7 @@ class PyPIPackageScanner(PackageScannerBase):
     # Local (no-Docker) SDK mode
     # ------------------------------------------------------------------
 
-    async def _scan_locally(
-        self, package: str, version: Optional[str]
-    ) -> dict:
+    async def _scan_locally(self, package: str, version: Optional[str]) -> dict:
         """In-process PyPI scan: download → safe-extract → analyse.
 
         Code from the downloaded package is never executed. Only the
@@ -275,8 +274,8 @@ class PyPIPackageScanner(PackageScannerBase):
         )
 
         try:
-            url, resolved_version, expected_digest = (
-                self._resolve_pypi_archive_url(package, version)
+            url, resolved_version, expected_digest = self._resolve_pypi_archive_url(
+                package, version
             )
         except PackageDownloadError as e:
             raise PyPIScanError(str(e)) from e
@@ -295,13 +294,9 @@ class PyPIPackageScanner(PackageScannerBase):
                     expected_digest_algo="sha256" if expected_digest else None,
                     allowed_hosts=pypi_tarball_allowed_hosts(CONSTANTS.PYPI_INDEX_URL),
                 )
-                source_root = safe_extract_archive(
-                    archive, extract_dir, only_dirs=True
-                )
+                source_root = safe_extract_archive(archive, extract_dir, only_dirs=True)
             except (PackageDownloadError, PackageExtractionError) as e:
-                raise PyPIScanError(
-                    f"failed to fetch/extract {spec}: {e}"
-                ) from e
+                raise PyPIScanError(f"failed to fetch/extract {spec}: {e}") from e
 
             analyzer = BehavioralCodeAnalyzer(config)
             findings = await analyzer.analyze(str(source_root), {})
@@ -360,9 +355,7 @@ def resolve_pypi_archive_url(
     """
     index = (index_url or CONSTANTS.PYPI_INDEX_URL).rstrip("/")
     meta_url = (
-        f"{index}/{package}/{version}/json"
-        if version
-        else f"{index}/{package}/json"
+        f"{index}/{package}/{version}/json" if version else f"{index}/{package}/json"
     )
     if not meta_url.lower().startswith("https://"):
         raise PackageDownloadError(
@@ -388,16 +381,12 @@ def resolve_pypi_archive_url(
         ) from e
 
     info = meta.get("info") or {}
-    resolved_version = (info.get("version") or version or "unknown")
+    resolved_version = info.get("version") or version or "unknown"
     urls = meta.get("urls") or []
 
     def _pick(packagetype: str) -> Optional[dict]:
         return next(
-            (
-                u
-                for u in urls
-                if u.get("packagetype") == packagetype and u.get("url")
-            ),
+            (u for u in urls if u.get("packagetype") == packagetype and u.get("url")),
             None,
         )
 
@@ -423,9 +412,7 @@ def _build_config_from_env() -> Config:
     api_key = os.environ.get(CONSTANTS.ENV_LLM_API_KEY, "")
     return Config(
         llm_provider_api_key=api_key,
-        llm_model=os.environ.get(
-            CONSTANTS.ENV_LLM_MODEL, CONSTANTS.DEFAULT_LLM_MODEL
-        ),
+        llm_model=os.environ.get(CONSTANTS.ENV_LLM_MODEL, CONSTANTS.DEFAULT_LLM_MODEL),
         llm_base_url=os.environ.get(CONSTANTS.ENV_LLM_BASE_URL, "") or "",
         llm_api_version=os.environ.get(CONSTANTS.ENV_LLM_API_VERSION, "") or "",
     )
@@ -466,9 +453,7 @@ def _https_get_json(
         for _hop in range(10):
             resp = client.get(current)
             if resp.is_redirect:
-                current, _ = _next_redirect_target(
-                    current, resp, allowed_hosts
-                )
+                current, _ = _next_redirect_target(current, resp, allowed_hosts)
                 continue
             resp.raise_for_status()
             return resp.json()
@@ -569,7 +554,9 @@ def _build_scan_result(
     for f in reportable:
         serialised.append(
             {
-                "analyzer": f.analyzer.lower() if getattr(f, "analyzer", None) else "behavioral",
+                "analyzer": (
+                    f.analyzer.lower() if getattr(f, "analyzer", None) else "behavioral"
+                ),
                 "severity": getattr(f, "severity", "UNKNOWN"),
                 "threat_category": getattr(f, "threat_category", None),
                 "summary": getattr(f, "summary", ""),
@@ -579,9 +566,7 @@ def _build_scan_result(
     ecosystem_field = (
         "python_files_scanned"
         if ecosystem == "pypi"
-        else "js_files_scanned"
-        if ecosystem == "npm"
-        else f"{ecosystem}_files_scanned"
+        else "js_files_scanned" if ecosystem == "npm" else f"{ecosystem}_files_scanned"
     )
     result: Dict[str, Any] = {
         "ecosystem": ecosystem,

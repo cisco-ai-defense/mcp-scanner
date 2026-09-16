@@ -129,9 +129,7 @@ class AlignmentResponseValidator:
                 self.logger.warning(
                     "validator invalid_json response_length=%d", response_length
                 )
-                self.logger.debug(
-                    "validator raw_response_prefix=%r", response[:500]
-                )
+                self.logger.debug("validator raw_response_prefix=%r", response[:500])
                 return None
 
             # Validate it's a dictionary
@@ -271,7 +269,9 @@ class AlignmentResponseValidator:
 
         return finding
 
-    def validate_batch(self, response: str, expected_count: int) -> Optional[List[Dict[str, Any]]]:
+    def validate_batch(
+        self, response: str, expected_count: int
+    ) -> Optional[List[Dict[str, Any]]]:
         """Parse and validate batched alignment check response.
 
         Args:
@@ -432,8 +432,7 @@ class AlignmentResponseValidator:
             # single-item path.
             if item.get("mismatch_detected"):
                 missing = [
-                    field for field in ("threat_name", "summary")
-                    if field not in item
+                    field for field in ("threat_name", "summary") if field not in item
                 ]
                 if missing:
                     self.logger.warning(
@@ -491,7 +490,9 @@ class AlignmentResponseValidator:
         )
         return results
 
-    def _extract_json_array_from_markdown(self, response: str) -> Optional[List[Dict[str, Any]]]:
+    def _extract_json_array_from_markdown(
+        self, response: str
+    ) -> Optional[List[Dict[str, Any]]]:
         """Try to extract JSON array from markdown code blocks.
 
         Args:

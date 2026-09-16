@@ -285,7 +285,7 @@ class OAuthHandler:
         Args:
             auth_url (str): The authorization URL to display to the user.
         """
-        logger.info(f"OAuth authorization required. Visit: {auth_url}")
+        logger.info("OAuth authorization required. Visit: %s", auth_url)
         print(f"Visit the following URL to authorize the application: {auth_url}")
 
     async def handle_callback(self) -> Tuple[str, Optional[str]]:
@@ -303,7 +303,7 @@ class OAuthHandler:
         code = params["code"][0]
         state = params.get("state", [None])[0]
 
-        logger.debug(f"OAuth callback processed: code received, state={state}")
+        logger.debug("OAuth callback processed: code received, state=%s", state)
         return code, state
 
     def create_oauth_provider(
@@ -350,9 +350,11 @@ class OAuthHandler:
             scope=scope,
         )
 
-        logger.debug(f"Creating OAuth provider for server: {server_url}")
+        logger.debug("Creating OAuth provider for server: %s", server_url)
         logger.debug(
-            f"OAuth metadata: client_name={client_metadata.client_name}, scope={scope}"
+            "OAuth metadata: client_name=%s, scope=%s",
+            client_metadata.client_name,
+            scope,
         )
 
         return OAuthClientProvider(
@@ -445,9 +447,11 @@ def create_oauth_provider_from_auth(
         scope=scope,
     )
 
-    logger.info(f"Creating OAuth provider from Auth parameter for server: {server_url}")
+    logger.info(
+        "Creating OAuth provider from Auth parameter for server: %s", server_url
+    )
     logger.debug(
-        f"OAuth metadata: client_name={client_metadata.client_name}, scope={scope}"
+        "OAuth metadata: client_name=%s, scope=%s", client_metadata.client_name, scope
     )
 
     return OAuthClientProvider(

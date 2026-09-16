@@ -127,9 +127,7 @@ class PackageScannerBase:
         """
         profile = self.PROFILE
         self._image_name = image_name or profile.default_image_name
-        self._image_tag = image_tag or default_scanner_image_tag(
-            ecosystem=profile.name
-        )
+        self._image_tag = image_tag or default_scanner_image_tag(ecosystem=profile.name)
         self._timeout = timeout or profile.default_timeout
         self._full_image = f"{self._image_name}:{self._image_tag}"
         self._use_docker = use_docker
@@ -199,9 +197,12 @@ class PackageScannerBase:
             raise self.PROFILE.scan_error(str(exc)) from exc
 
         cmd = [
-            "docker", "build",
-            "-t", self._full_image,
-            "-f", str(dockerfile),
+            "docker",
+            "build",
+            "-t",
+            self._full_image,
+            "-f",
+            str(dockerfile),
         ]
         for key, value in build_args.items():
             cmd.extend(["--build-arg", f"{key}={value}"])

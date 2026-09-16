@@ -32,9 +32,7 @@ async def run(ctx: CommandContext) -> Optional[Any]:
     cfg = _build_config(selected_analyzers)
     scanner = Scanner(cfg, rules_dir=args.rules_path)
     # Parse custom headers and create auth
-    custom_headers = _parse_custom_headers(
-        getattr(args, "custom_headers", None)
-    )
+    custom_headers = _parse_custom_headers(getattr(args, "custom_headers", None))
     auth = _create_auth_with_headers(args.bearer_token, custom_headers)
 
     # Parse MIME types
@@ -56,9 +54,7 @@ async def run(ctx: CommandContext) -> Optional[Any]:
                 "resource_name": result.resource_name,
                 "resource_mime_type": result.resource_mime_type,
                 "status": result.status,
-                "is_safe": (
-                    result.is_safe if result.status == "completed" else None
-                ),
+                "is_safe": (result.is_safe if result.status == "completed" else None),
                 "findings": [
                     {
                         "severity": f.severity,
@@ -66,9 +62,7 @@ async def run(ctx: CommandContext) -> Optional[Any]:
                         "analyzer": f.analyzer,
                         "details": f.details,
                         "mcp_taxonomy": (
-                            f.mcp_taxonomy
-                            if hasattr(f, "mcp_taxonomy")
-                            else None
+                            f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None
                         ),
                     }
                     for f in result.findings
@@ -97,9 +91,7 @@ async def run(ctx: CommandContext) -> Optional[Any]:
                         "analyzer": f.analyzer,
                         "details": f.details,
                         "mcp_taxonomy": (
-                            f.mcp_taxonomy
-                            if hasattr(f, "mcp_taxonomy")
-                            else None
+                            f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None
                         ),
                     }
                     for f in r.findings
