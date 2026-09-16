@@ -150,7 +150,7 @@ def _registration_names_align(primary_name: str, supplemental_name: str) -> bool
     return primary_name.startswith(reverse_prefix) and primary_name.endswith(")")
 
 
-def _is_duplicate_native_registration_stub(
+def _describes_same_registration(
     primary: FunctionContext,
     supplemental: FunctionContext,
 ) -> bool:
@@ -174,6 +174,26 @@ def _is_duplicate_native_registration_stub(
     return False
 
 
+def _has_handler_evidence(ctx: FunctionContext) -> bool:
+    """True when a context carries the handler body, not just its registration.
+
+    ``server.tool("name", "description", namedHandler)`` splits a tool across
+    two extractors: JSContextExtractor sees only the call site (it resolves
+    inline function literals, not named symbols) and NativeAnalyzer resolves
+    the handler. Telling the halves apart decides which one may be dropped.
+    """
+    return bool(
+        ctx.function_calls
+        or ctx.assignments
+        or ctx.parameters
+        or (getattr(ctx, "source", "") or "").strip()
+        or ctx.has_file_operations
+        or ctx.has_network_operations
+        or ctx.has_subprocess_calls
+        or ctx.has_eval_exec
+    )
+
+
 def _merge_mcp_function_contexts(
     primary: List[FunctionContext],
     supplemental: List[FunctionContext],
@@ -190,7 +210,27 @@ def _merge_mcp_function_contexts(
         key = _context_dedupe_key(ctx)
         if key in seen:
             continue
-        if any(_is_duplicate_native_registration_stub(p, ctx) for p in primary):
+        stub_index = next(
+            (
+                i
+                for i, existing in enumerate(merged)
+                if _describes_same_registration(existing, ctx)
+            ),
+            None,
+        )
+        if stub_index is not None:
+            # One registration, two half-contexts. Drop the one without a
+            # handler body: keeping the call site alone would hand alignment
+            # a tool name and its self-declared description with nothing to
+            # check them against, so every named handler would read clean.
+            # The survivor inherits the registered name and description so
+            # the claim still meets the behaviour in one prompt.
+            stub = merged[stub_index]
+            if _has_handler_evidence(ctx) and not _has_handler_evidence(stub):
+                ctx.name = stub.name
+                ctx.docstring = stub.docstring
+                merged[stub_index] = ctx
+                seen.add(_context_dedupe_key(ctx))
             continue
         seen.add(key)
         merged.append(ctx)
