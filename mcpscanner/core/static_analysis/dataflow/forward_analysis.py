@@ -25,12 +25,12 @@ This module implements the REVERSED approach:
 import ast
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List
 
-from ..cfg.builder import CFGNode, DataFlowAnalyzer
+from ..cfg.builder import CFGNode
 from ..taint.tracker import ShapeEnvironment, Taint, TaintStatus
 from ..parser.base import BaseParser
-from ..parser.python_parser import PythonParser
+from .python_base import PythonDataFlowAnalyzer
 from ....utils.log_format import sanitize_log_value
 from ....utils.logging_config import get_logger
 
@@ -109,7 +109,7 @@ class ForwardFlowFact:
         return True
 
 
-class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
+class ForwardDataflowAnalysis(PythonDataFlowAnalyzer[ForwardFlowFact]):
     """Track all forward flows from MCP entry point parameters.
 
     This is the REVERSED approach:
@@ -145,10 +145,7 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
             )
             return self.all_flows
 
-        # Preserve a function-scoped CFG from ``build_cfg_for_function``;
-        # rebuilding here would silently widen the analysis to the module.
-        if not self.cfg:
-            self.build_cfg()
+        self._ensure_cfg()
 
         # Initialize: mark all parameters as tainted with unique labels
         initial_fact = ForwardFlowFact()
@@ -180,31 +177,15 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
         )
         return self.all_flows
 
-    def transfer(self, node: CFGNode, in_fact: ForwardFlowFact) -> ForwardFlowFact:
-        """Transfer function tracking parameter flows.
+    def _transfer_python(self, cfg_node: CFGNode, fact: ForwardFlowFact) -> None:
+        """Propagate parameter taint across one node.
 
         Args:
-            node: CFG node
-            in_fact: Input flow fact
-
-        Returns:
-            Output flow fact
-        """
-        out_fact = in_fact.copy()
-        ast_node = node.ast_node
-
-        if isinstance(self.analyzer, PythonParser):
-            self._transfer_python(ast_node, out_fact)
-
-        return out_fact
-
-    def _transfer_python(self, node: ast.AST, fact: ForwardFlowFact) -> None:
-        """Transfer function for Python nodes.
-
-        Args:
-            node: Python AST node
+            cfg_node: CFG node
             fact: Flow fact to update
         """
+        node = cfg_node.ast_node
+
         # Track assignments
         if isinstance(node, ast.Assign):
             for target in node.targets:

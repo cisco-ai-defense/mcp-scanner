@@ -22,11 +22,11 @@ variables are live (used later) at each program point.
 
 import ast
 from dataclasses import dataclass, field
-from typing import Any
 
-from ..cfg.builder import CFGNode, DataFlowAnalyzer
+from ..cfg.builder import CFGNode
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from .python_base import PythonDataFlowAnalyzer
 
 
 @dataclass
@@ -55,7 +55,7 @@ class LivenessFact:
         )
 
 
-class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
+class LivenessAnalyzer(PythonDataFlowAnalyzer[LivenessFact]):
     """Analyzes which variables are live (will be used later) at each program point.
 
     REVERSED APPROACH: Specifically tracks MCP parameter liveness.
@@ -80,10 +80,7 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
         Returns:
             Mapping of node_id -> set of live variables
         """
-        # Preserve a function-scoped CFG from ``build_cfg_for_function``;
-        # rebuilding here would silently widen the analysis to the module.
-        if not self.cfg:
-            self.build_cfg()
+        self._ensure_cfg()
 
         # Run BACKWARD dataflow analysis
         initial_fact = LivenessFact()
@@ -94,35 +91,18 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
 
         return {node_id: fact.live_vars for node_id, fact in self.in_facts.items()}
 
-    def transfer(self, node: CFGNode, out_fact: LivenessFact) -> LivenessFact:
-        """Transfer function for liveness (BACKWARD).
+    def _transfer_python(self, cfg_node: CFGNode, fact: LivenessFact) -> None:
+        """Apply one node's liveness effect (BACKWARD).
 
-        Formula: in = (out - kill) ∪ gen
-        - kill = variables defined
-        - gen = variables used
-
-        Args:
-            node: CFG node
-            out_fact: Variables live after this node
-
-        Returns:
-            Variables live before this node
-        """
-        in_fact = out_fact.copy()
-        ast_node = node.ast_node
-
-        if isinstance(self.analyzer, PythonParser):
-            self._transfer_python(ast_node, in_fact)
-
-        return in_fact
-
-    def _transfer_python(self, ast_node: ast.AST, fact: LivenessFact) -> None:
-        """Transfer function for Python nodes.
+        Formula: in = (out - kill) ∪ gen, where kill is the set of variables
+        defined by this node and gen the set it reads.
 
         Args:
-            ast_node: Python AST node
+            cfg_node: CFG node
             fact: Liveness fact to update (in-place)
         """
+        ast_node = cfg_node.ast_node
+
         if isinstance(ast_node, ast.Assign):
             # KILL: Remove defined variables
             for target in ast_node.targets:
@@ -131,7 +111,7 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
                     fact.param_influenced_live.discard(target.id)
 
             # GEN: Add used variables from RHS
-            used_vars = self._find_used_vars(ast_node.value)
+            used_vars = self._used_names(ast_node.value)
             fact.live_vars.update(used_vars)
 
             # Track parameter-influenced liveness
@@ -151,26 +131,26 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
                 if var_name in self.param_influenced:
                     fact.param_influenced_live.add(var_name)
 
-            used_vars = self._find_used_vars(ast_node.value)
+            used_vars = self._used_names(ast_node.value)
             fact.live_vars.update(used_vars)
             param_used = used_vars & self.param_influenced
             fact.param_influenced_live.update(param_used)
 
         elif isinstance(ast_node, ast.Return):
             if ast_node.value:
-                used_vars = self._find_used_vars(ast_node.value)
+                used_vars = self._used_names(ast_node.value)
                 fact.live_vars.update(used_vars)
                 param_used = used_vars & self.param_influenced
                 fact.param_influenced_live.update(param_used)
 
         elif isinstance(ast_node, ast.If):
-            used_vars = self._find_used_vars(ast_node.test)
+            used_vars = self._used_names(ast_node.test)
             fact.live_vars.update(used_vars)
             param_used = used_vars & self.param_influenced
             fact.param_influenced_live.update(param_used)
 
         elif isinstance(ast_node, ast.While):
-            used_vars = self._find_used_vars(ast_node.test)
+            used_vars = self._used_names(ast_node.test)
             fact.live_vars.update(used_vars)
             param_used = used_vars & self.param_influenced
             fact.param_influenced_live.update(param_used)
@@ -180,31 +160,16 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
                 fact.live_vars.discard(ast_node.target.id)
                 fact.param_influenced_live.discard(ast_node.target.id)
 
-            used_vars = self._find_used_vars(ast_node.iter)
+            used_vars = self._used_names(ast_node.iter)
             fact.live_vars.update(used_vars)
             param_used = used_vars & self.param_influenced
             fact.param_influenced_live.update(param_used)
 
         elif isinstance(ast_node, ast.Expr):
-            used_vars = self._find_used_vars(ast_node.value)
+            used_vars = self._used_names(ast_node.value)
             fact.live_vars.update(used_vars)
             param_used = used_vars & self.param_influenced
             fact.param_influenced_live.update(param_used)
-
-    def _find_used_vars(self, node: ast.AST) -> set[str]:
-        """Find all variables used (read) in an AST node.
-
-        Args:
-            node: AST node
-
-        Returns:
-            Set of variable names used
-        """
-        used = set()
-        for child in ast.walk(node):
-            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
-                used.add(child.id)
-        return used
 
     def merge(self, facts: list[LivenessFact]) -> LivenessFact:
         """Merge multiple liveness facts (UNION).

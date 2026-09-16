@@ -22,11 +22,10 @@ available (already computed) at each program point.
 
 import ast
 from dataclasses import dataclass, field
-from typing import Any
 
-from ..cfg.builder import CFGNode, DataFlowAnalyzer
+from ..cfg.builder import CFGNode
 from ..parser.base import BaseParser
-from ..parser.python_parser import PythonParser
+from .python_base import PythonDataFlowAnalyzer
 
 
 @dataclass
@@ -53,7 +52,7 @@ class AvailableExprsFact:
         )
 
 
-class AvailableExpressionsAnalyzer(DataFlowAnalyzer[AvailableExprsFact]):
+class AvailableExpressionsAnalyzer(PythonDataFlowAnalyzer[AvailableExprsFact]):
     """Analyzes which expressions are available at each program point.
 
     REVERSED APPROACH: Specifically tracks expressions involving MCP parameters.
@@ -76,45 +75,24 @@ class AvailableExpressionsAnalyzer(DataFlowAnalyzer[AvailableExprsFact]):
         Returns:
             Mapping of node_id -> set of available expressions
         """
-        # Preserve a function-scoped CFG from ``build_cfg_for_function``;
-        # rebuilding here would silently widen the analysis to the module.
-        if not self.cfg:
-            self.build_cfg()
+        self._ensure_cfg()
 
         initial_fact = AvailableExprsFact()
         self.analyze(initial_fact, forward=True)
 
         return {node_id: fact.available for node_id, fact in self.out_facts.items()}
 
-    def transfer(
-        self, node: CFGNode, in_fact: AvailableExprsFact
-    ) -> AvailableExprsFact:
-        """Transfer function for available expressions.
+    def _transfer_python(self, cfg_node: CFGNode, fact: AvailableExprsFact) -> None:
+        """Apply one node's effect on available expressions.
 
-        Formula: out = (in - kill) ∪ gen
+        Formula: out = (in - kill) ∪ gen.
 
         Args:
-            node: CFG node
-            in_fact: Available expressions before this node
-
-        Returns:
-            Available expressions after this node
-        """
-        out_fact = in_fact.copy()
-        ast_node = node.ast_node
-
-        if isinstance(self.analyzer, PythonParser):
-            self._transfer_python(ast_node, out_fact)
-
-        return out_fact
-
-    def _transfer_python(self, ast_node: ast.AST, fact: AvailableExprsFact) -> None:
-        """Transfer function for Python nodes.
-
-        Args:
-            ast_node: Python AST node
+            cfg_node: CFG node
             fact: Available expressions fact to update
         """
+        ast_node = cfg_node.ast_node
+
         if isinstance(ast_node, ast.Assign):
             assigned_vars = set()
             for target in ast_node.targets:
