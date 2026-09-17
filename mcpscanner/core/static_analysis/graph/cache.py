@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 # Bump when graph extraction semantics change.
-GRAPH_EXTRACTOR_VERSION = "18"
+GRAPH_EXTRACTOR_VERSION = "19"
 
 
 @dataclass

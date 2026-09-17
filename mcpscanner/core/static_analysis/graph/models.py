@@ -218,6 +218,7 @@ class CodeGraph:
     source_registry: dict[str, str] = field(default_factory=dict)
     taint_flows: list[TaintFlowRecord] = field(default_factory=list)
     version: str = GRAPH_IR_VERSION
+    classic_dataflow_enriched: bool = False
 
     def add_node(self, node: CodeNode) -> None:
         """
@@ -366,6 +367,7 @@ class CodeGraph:
             "entry_points": sorted(self.entry_points),
             "taint_flows": [flow.to_dict() for flow in self.taint_flows],
             "source_registry": self.source_registry,
+            "classic_dataflow_enriched": self.classic_dataflow_enriched,
         }
 
     @classmethod
@@ -403,4 +405,11 @@ class CodeGraph:
         registry = data.get("source_registry")
         if isinstance(registry, dict):
             graph.source_registry = {str(k): str(v) for k, v in registry.items()}
+        if data.get("classic_dataflow_enriched"):
+            graph.classic_dataflow_enriched = True
+        elif any(
+            isinstance((node.metadata or {}).get("classic_dataflow"), dict)
+            for node in graph.nodes.values()
+        ):
+            graph.classic_dataflow_enriched = True
         return graph

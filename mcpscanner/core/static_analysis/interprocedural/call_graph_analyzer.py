@@ -305,6 +305,8 @@ class CallGraphAnalyzer:
             Call graph
         """
         build_start = time.perf_counter()
+        # Re-extract call edges on every build; drop stale edges from prior builds.
+        self.call_graph.calls.clear()
         # Extract function calls from each file
         for file_path, analyzer in self.analyzers.items():
             self._extract_python_calls(file_path, analyzer)

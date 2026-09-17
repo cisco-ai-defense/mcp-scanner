@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from .cfg_fusion import CFGFusionEngine, ParamBinding
 from .fixpoint import call_edges_without_superseded_external
+from .classic_dataflow import ensure_classic_dataflow_enriched
 from .models import CodeGraph, CodeEdge, Provenance, Relation
 
 
@@ -67,10 +68,7 @@ class InterproceduralTaintAnalyzer:
         	fusion (CFGFusionEngine | None): Optional engine for resolving parameter bindings.
         """
         self._graph = graph
-        from .classic_dataflow import ClassicDataflowEngine
-
-        self._classic = ClassicDataflowEngine(graph)
-        self._classic.enrich_graph()
+        self._classic = ensure_classic_dataflow_enriched(graph)
         self._fusion = fusion or CFGFusionEngine(graph, classic=self._classic)
 
     def analyze_entry(self, entry_id: str) -> InterproceduralTaintResult:
@@ -117,26 +115,6 @@ class InterproceduralTaintAnalyzer:
                         caller_taint=binding.caller_taint,
                     )
                     result.flows.append(step)
-                    flow_context = f"{binding.caller_taint}->{binding.callee_param}"
-                    target_id = edge.target
-                    if not any(
-                        existing.relation == Relation.TAINT_FLOW
-                        and existing.source == node_id
-                        and existing.target == target_id
-                        and existing.context == flow_context
-                        for existing in self._graph.edges
-                    ):
-                        self._graph.add_edge(
-                            CodeEdge(
-                                source=node_id,
-                                target=target_id,
-                                relation=Relation.TAINT_FLOW,
-                                provenance=binding.provenance,
-                                confidence_score=binding.confidence,
-                                line=step.line,
-                                context=flow_context,
-                            )
-                        )
                     key = (edge.target, binding.callee_param)
                     if key not in seen:
                         seen.add(key)

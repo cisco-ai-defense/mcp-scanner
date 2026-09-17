@@ -149,6 +149,8 @@ class SinkAnalyzer:
 
         reachable = [entry_id] + self._graph.reachable(entry_id)
         for node_id in reachable:
+            if node_id == entry_id:
+                continue
             node = self._graph.nodes.get(node_id)
             if not node:
                 continue
@@ -157,11 +159,13 @@ class SinkAnalyzer:
                 continue
             category, sink_name = match
             path = self._shortest_path(entry_id, node_id)
-            edge = (
-                self._graph.edge_between(path[-2], path[-1], relation=Relation.CALLS)
-                if len(path) >= 2
-                else None
+            if len(path) < 2 or path[-1] != node_id:
+                continue
+            edge = self._graph.edge_between(
+                path[-2], path[-1], relation=Relation.CALLS
             )
+            if edge is None:
+                continue
             provenance = edge.provenance if edge else Provenance.INFERRED
             hit = SinkHit(
                 entry_id=entry_id,
@@ -212,4 +216,4 @@ class SinkAnalyzer:
                     return next_path
                 visited.add(callee)
                 queue.append(next_path)
-        return [start, goal]
+        return []

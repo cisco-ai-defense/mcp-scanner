@@ -16,6 +16,7 @@ from ..interprocedural.treesitter_call_graph import (
 from ..native_analyzer import NativeAnalyzer
 from .cache import GRAPH_EXTRACTOR_VERSION, CodeGraphCache, GraphCache, graph_cache_for_scan
 from .cfg_fusion import extract_function_parameters
+from .classic_dataflow import ensure_classic_dataflow_enriched
 from .fixpoint import refine_call_graph
 from .models import CodeEdge, CodeGraph, CodeNode, Provenance, Relation
 from .resolver import CrossFileSymbolResolver, module_id_for
@@ -144,6 +145,7 @@ class CodeGraphBuilder:
             elif ts_buckets:
                 graph.language = next(iter(ts_buckets))
 
+        ensure_classic_dataflow_enriched(graph)
         logger.info(
             "code_graph built nodes=%d edges=%d entry_points=%d language=%s",
             len(graph.nodes),
@@ -187,16 +189,35 @@ class CodeGraphBuilder:
         return partial
 
     def _merge_graphs(self, target: CodeGraph, other: CodeGraph) -> None:
-        """Merge nodes, edges, entry points, and taint flows from one code graph into another.
-        
-        Existing nodes in the target graph are preserved when both graphs contain the same node ID.
+        """Merge nodes, edges, entry points, and taint flows from one graph into another.
+
+        Existing nodes in the target are preserved when both graphs carry the
+        same node ID. Edges and taint flows are deduplicated, so merging the
+        same partial graph twice does not inflate either list.
         """
+        seen_edges: set[tuple[str, str, Relation]] = {
+            (edge.source, edge.target, edge.relation) for edge in target.edges
+        }
         for node_id, node in other.nodes.items():
             if node_id not in target.nodes:
                 target.add_node(node)
-        target.edges.extend(other.edges)
+        for edge in other.edges:
+            key = (edge.source, edge.target, edge.relation)
+            if key in seen_edges:
+                continue
+            target.edges.append(edge)
+            seen_edges.add(key)
         target.entry_points.update(other.entry_points)
-        target.taint_flows.extend(other.taint_flows)
+        seen_taint: set[tuple[str, str, str]] = {
+            (flow.source_id, flow.target_id, flow.parameter)
+            for flow in target.taint_flows
+        }
+        for flow in other.taint_flows:
+            key = (flow.source_id, flow.target_id, flow.parameter)
+            if key in seen_taint:
+                continue
+            target.taint_flows.append(flow)
+            seen_taint.add(key)
 
     def _ingest_python(self, files: dict[Path, str], graph: CodeGraph) -> None:
         def _build(single_files: dict[Path, str]) -> CodeGraph:
@@ -547,6 +568,7 @@ class CodeGraphBuilder:
             mcp_entries=mcp_entries,
             resolver=resolver,
         )
+        ensure_classic_dataflow_enriched(graph)
         logger.info(
             "code_graph built_from_analyzer nodes=%d edges=%d entry_points=%d language=%s",
             len(graph.nodes),

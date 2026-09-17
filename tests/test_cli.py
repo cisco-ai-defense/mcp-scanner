@@ -28,7 +28,9 @@ from mcpscanner.cli import (
     _build_config,
     scan_mcp_server_direct,
     display_results,
+    _build_behavioral_results,
 )
+from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner import Config, ToolScanResult
 from mcpscanner.core.models import AnalyzerEnum
 from mcpscanner.core.exceptions import MCPConnectionError
@@ -36,6 +38,73 @@ from mcpscanner.core.exceptions import MCPConnectionError
 
 class TestCliHelperFunctions:
     """Test cases for CLI helper functions."""
+
+    def test_build_behavioral_results_from_findings_when_analyzed_functions_empty(
+        self,
+    ):
+        """CLI --raw must not drop real findings when analyzed_functions is empty."""
+        finding = SecurityFinding(
+            severity="HIGH",
+            summary="Line 1: DATA EXFILTRATION - mismatch",
+            threat_category="DATA EXFILTRATION",
+            analyzer="Behavioral",
+            details={
+                "function_name": "leaky_tool",
+                "source_file": "/repo/tools.py",
+                "decorator_type": "@mcp.tool",
+                "line_number": 1,
+            },
+        )
+        analyzer = MagicMock()
+        analyzer.analyzed_functions = []
+
+        results = _build_behavioral_results(
+            analyzer, [finding], source_path="/repo"
+        )
+
+        assert len(results) == 1
+        assert results[0]["tool_name"] == "leaky_tool"
+        assert results[0]["is_safe"] is False
+        behavioral = results[0]["findings"]["behavioral_analyzer"]
+        assert behavioral["severity"] == "HIGH"
+        assert behavioral.get("threat_vulnerability_classification") == "THREAT"
+
+    def test_infer_classification_prefers_threat_over_vulnerability(self):
+        """Non-raw THREAT filter must not drop a tool that has both classes."""
+        vuln = SecurityFinding(
+            severity="MEDIUM",
+            summary="Vulnerability finding",
+            threat_category="",
+            analyzer="Behavioral",
+            details={
+                "function_name": "mixed_tool",
+                "source_file": "/repo/tools.py",
+                "threat_vulnerability_classification": "VULNERABILITY",
+            },
+        )
+        threat = SecurityFinding(
+            severity="HIGH",
+            summary="Threat finding",
+            threat_category="DATA EXFILTRATION",
+            analyzer="Behavioral",
+            details={
+                "function_name": "mixed_tool",
+                "source_file": "/repo/tools.py",
+                "threat_vulnerability_classification": "THREAT",
+            },
+        )
+        analyzer = MagicMock()
+        analyzer.analyzed_functions = []
+
+        results = _build_behavioral_results(
+            analyzer, [vuln, threat], source_path="/repo"
+        )
+        assert len(results) == 1
+        behavioral = results[0]["findings"]["behavioral_analyzer"]
+        assert behavioral["threat_vulnerability_classification"] == "THREAT"
+        assert behavioral["total_findings"] == 1
+        assert behavioral["threat_summary"] == "Threat finding"
+        assert behavioral["severity"] == "HIGH"
 
     def test_get_endpoint_from_env_with_value(self):
         """Test _get_endpoint_from_env with environment variable set."""

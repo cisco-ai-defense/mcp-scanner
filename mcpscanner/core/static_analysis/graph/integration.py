@@ -17,7 +17,7 @@ from ..context_extractor import FunctionContext
 from ..native_analyzer import NativeAnalyzer
 from .builder import GRAPH_SUPPORTED_LANGUAGES, CodeGraphBuilder
 from .evidence import EvidenceFormatter
-from .models import CodeGraph, SinkHit
+from .models import CodeGraph, CodeNode, SinkHit
 from .sink_analyzer import SinkAnalysisResult, SinkAnalyzer
 from .slicer import GraphSlicer
 from .taint_context import populate_taint_fields
@@ -79,15 +79,19 @@ def build_code_graph(
     language: str,
     source_registry: dict[str, str] | None = None,
 ) -> CodeGraph:
-    """
-    Build a code graph for the specified language.
-    
+    """Build or reuse a language-scoped graph for behavioral enrichment.
+
+    Prefer pre-built graphs from ``build_code_graphs_for_registry`` for directory
+    scans. This path calls ``build_call_graph()`` on the analyzer and must not
+    run concurrently on the same analyzer instance.
+
     Parameters:
-    	language (str): The analyzer language used to select or build the graph.
-    	source_registry (dict[str, str] | None): Optional mapping of file paths to source content used to build language-specific graphs.
-    
+        language (str): The analyzer language used to select or build the graph.
+        source_registry (dict[str, str] | None): Optional mapping of file paths
+            to source content used to build language-specific graphs.
+
     Returns:
-    	CodeGraph: The code graph for the requested language.
+        CodeGraph: The code graph for the requested language.
     """
     if source_registry:
         graphs = build_code_graphs_for_registry(source_registry)
@@ -111,6 +115,18 @@ def build_code_graph(
         len(graph.entry_points),
     )
     return graph
+
+
+def _normalized_source_registry(files: dict[str, str]) -> dict[str, str]:
+    """Alias registry keys to resolved paths for snippet lookup."""
+    registry: dict[str, str] = dict(files)
+    for path, source in files.items():
+        try:
+            resolved = str(Path(path).resolve(strict=False))
+        except (OSError, RuntimeError, ValueError):
+            continue
+        registry.setdefault(resolved, source)
+    return registry
 
 
 def build_code_graphs_for_registry(
@@ -147,7 +163,7 @@ def build_code_graphs_for_registry(
             merged = cache.get_merged(lang, files)
             if merged is not None:
                 if not merged.source_registry:
-                    merged.source_registry = dict(files)
+                    merged.source_registry = _normalized_source_registry(files)
                 graphs[lang] = merged
                 logger.debug(
                     "code_graph cache hit merged language=%s files=%d nodes=%d",
@@ -175,15 +191,19 @@ def build_code_graphs_for_registry(
 
 
 def _resolved_path(file_path: str) -> Path:
-    """Resolve a file path to its absolute path.
-    
+    """Resolve a file path to an absolute path without touching the filesystem.
+
+    Resolution is non-strict on purpose: a missing path must resolve rather
+    than raise, and probing for existence here is what the path-injection
+    hardening removed.
+
     Parameters:
         file_path (str): Path to resolve.
-    
+
     Returns:
         Path: The resolved absolute path.
     """
-    return Path(file_path).resolve()
+    return Path(file_path).resolve(strict=False)
 
 
 def _node_file_path(node_id: str) -> Optional[Path]:
@@ -198,7 +218,38 @@ def _node_file_path(node_id: str) -> Optional[Path]:
     """
     if "::" not in node_id:
         return None
-    return Path(node_id.split("::", 1)[0]).resolve()
+    return Path(node_id.split("::", 1)[0]).resolve(strict=False)
+
+
+def _paths_refer_to_same_file(left: Path, right: Path) -> bool:
+    """True when two paths denote the same file (symlinks, macOS /private/var)."""
+    if left == right:
+        return True
+    left_resolved = left.resolve(strict=False)
+    right_resolved = right.resolve(strict=False)
+    if left_resolved == right_resolved:
+        return True
+    try:
+        if left_resolved.is_file() and right_resolved.is_file():
+            return left_resolved.samefile(right_resolved)
+    except OSError:
+        return False
+    return False
+
+
+def _node_matches_scan_file(node: CodeNode, scan_path: Path) -> bool:
+    """Match graph node to the file being scanned."""
+    candidates: list[Path] = []
+    if node.source_file:
+        candidates.append(Path(node.source_file))
+    if "::" in node.node_id:
+        candidates.append(Path(node.node_id.split("::", 1)[0]))
+    for candidate in candidates:
+        if _paths_refer_to_same_file(
+            candidate.resolve(strict=False), scan_path.resolve(strict=False)
+        ):
+            return True
+    return False
 
 
 def _decorator_registered_name(func_context: FunctionContext) -> str | None:
@@ -211,12 +262,45 @@ def _decorator_registered_name(func_context: FunctionContext) -> str | None:
     return None
 
 
+def _label_matches_node(node: CodeNode, candidate: str) -> bool:
+    label = node.label
+    short = label.split(".")[-1] if "." in label else label
+    return label == candidate or short == candidate
+
+
+def _select_best_node_match(
+    matches: list[tuple[str, CodeNode]],
+    *,
+    line_number: int | None,
+) -> Optional[str]:
+    """Pick one graph node when several share the same short name."""
+    if not matches:
+        return None
+
+    def _filter_by_line(pool: list[tuple[str, CodeNode]]) -> list[str]:
+        if line_number and line_number > 0:
+            on_line = [nid for nid, node in pool if node.line == line_number]
+            if on_line:
+                return on_line
+        return [nid for nid, _ in pool]
+
+    mcp_entries = [(nid, node) for nid, node in matches if node.is_mcp_entry]
+    for pool in (mcp_entries, matches):
+        if not pool:
+            continue
+        narrowed = _filter_by_line(pool)
+        if narrowed:
+            return narrowed[0]
+    return matches[0][0]
+
+
 def resolve_entry_id(
     graph: CodeGraph,
     file_path: str,
     func_name: str,
     *,
     decorator_name: str | None = None,
+    line_number: int | None = None,
 ) -> Optional[str]:
     """
     Resolve a function context to its corresponding graph node in the specified file, preferring MCP entry nodes.
@@ -238,20 +322,23 @@ def resolve_entry_id(
         candidates.append(decorator_name)
 
     for candidate in candidates:
+        matches: list[tuple[str, CodeNode]] = []
         for node_id, node in graph.nodes.items():
-            label = node.label
-            short = label.split(".")[-1] if "." in label else label
-            if label != candidate and short != candidate:
+            if not _label_matches_node(node, candidate):
                 continue
-            node_file = _node_file_path(node_id)
-            if node_file is None or node_file != resolved:
+            if not _node_matches_scan_file(node, resolved):
                 continue
-            if node.is_mcp_entry:
-                entry_match = node_id
-            elif name_match is None:
-                name_match = node_id
-        if entry_match:
+            matches.append((node_id, node))
+        if not matches:
+            continue
+        picked = _select_best_node_match(matches, line_number=line_number)
+        if not picked:
+            continue
+        if graph.nodes[picked].is_mcp_entry:
+            entry_match = picked
             break
+        if name_match is None:
+            name_match = picked
 
     return entry_match or name_match
 
@@ -352,17 +439,20 @@ def create_sink_finding(
     *,
     evidence: str = "",
 ) -> Optional[SecurityFinding]:
-    """
-    Build a security finding from a recognized deterministic graph sink hit.
-    
+    """Build a SecurityFinding from a deterministic graph sink hit.
+
+    Not used by ``partition_functions_by_graph`` (graph enriches LLM context only).
+    Sink hits are surfaced as ``code_graph_sink_hints`` on ``dataflow_summary``.
+
     Parameters:
-    	hit (SinkHit): Sink hit containing the category, name, path, and provenance.
-    	func_context (FunctionContext): Function context associated with the sink.
-    	file_path (str): Source file containing the function.
-    	evidence (str): Optional formatted code graph evidence.
-    
+        hit (SinkHit): Sink hit containing the category, name, path, and provenance.
+        func_context (FunctionContext): Function context associated with the sink.
+        file_path (str): Source file containing the function.
+        evidence (str): Optional formatted code graph evidence.
+
     Returns:
-    	Optional[SecurityFinding]: A security finding for the mapped sink category, or `None` when the category or threat mapping is unavailable.
+        Optional[SecurityFinding]: A finding for the mapped sink category, or
+            ``None`` when the category or threat mapping is unavailable.
     """
     threat_name = _SINK_CATEGORY_TO_THREAT.get(hit.category)
     if not threat_name:
@@ -438,9 +528,12 @@ def partition_functions_by_graph(
             file_path,
             func_context.name,
             decorator_name=decorator_name,
+            line_number=func_context.line_number,
         )
         if entry_id:
             resolved_count += 1
+            func_context.dataflow_summary = dict(func_context.dataflow_summary or {})
+            func_context.dataflow_summary["code_graph_status"] = "mapped"
             sink_result = attach_graph_evidence(func_context, graph, entry_id)
             actionable = [
                 hit for hit in sink_result.hits if is_actionable_sink_hit(hit)
@@ -461,7 +554,9 @@ def partition_functions_by_graph(
                 ]
         else:
             unresolved_count += 1
-            logger.debug(
+            func_context.dataflow_summary = dict(func_context.dataflow_summary or {})
+            func_context.dataflow_summary["code_graph_status"] = "entry_unresolved"
+            logger.warning(
                 "code_graph entry_unresolved file=%s function=%s decorator_name=%s",
                 sanitize_log_value(file_path),
                 func_context.name,

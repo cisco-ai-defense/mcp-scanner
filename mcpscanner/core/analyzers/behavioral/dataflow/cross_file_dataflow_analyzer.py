@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Union
 
 from .....utils.analyzer_errors import classify_analyzer_error
@@ -18,6 +19,62 @@ from .....utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def _paths_equivalent(left: str, right: str) -> bool:
+    """True when two path strings denote the same file."""
+    if left == right:
+        return True
+    try:
+        left_path = Path(left).resolve(strict=False)
+        right_path = Path(right).resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if left_path == right_path:
+        return True
+    try:
+        return left_path.is_file() and right_path.is_file() and left_path.samefile(right_path)
+    except OSError:
+        return False
+
+
+def _call_graph_entry_id(
+    file_path: str,
+    func_name: str,
+    call_graph_analyzer: Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer],
+) -> str:
+    """Map a scan path + function onto the analyzer's call-graph key.
+
+    Directory scans key functions with the original ``add_file`` path, while
+    ``_analyze_file`` stores a resolved path on the context. Try both, then
+    any stored key whose file is path-equivalent.
+    """
+    suffix = f"::{func_name}"
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for raw in (file_path,):
+        if raw and raw not in seen:
+            seen.add(raw)
+            candidates.append(f"{raw}{suffix}")
+    try:
+        resolved = str(Path(file_path).resolve(strict=False))
+    except (OSError, RuntimeError, ValueError):
+        resolved = ""
+    if resolved and resolved not in seen:
+        candidates.append(f"{resolved}{suffix}")
+
+    functions = getattr(getattr(call_graph_analyzer, "call_graph", None), "functions", None)
+    if isinstance(functions, dict) and functions:
+        for key in candidates:
+            if key in functions:
+                return key
+        for key in functions:
+            if not isinstance(key, str) or not key.endswith(suffix):
+                continue
+            key_file = key[: -len(suffix)]
+            if _paths_equivalent(key_file, file_path):
+                return key
+    return candidates[0] if candidates else f"{file_path}{suffix}"
+
+
 def enrich_with_cross_file_context(
     func_context: FunctionContext,
     file_path: str,
@@ -25,7 +82,9 @@ def enrich_with_cross_file_context(
 ) -> None:
     """Populate cross-file reachability and parameter-flow metadata on a context."""
     try:
-        full_func_name = f"{file_path}::{func_context.name}"
+        full_func_name = _call_graph_entry_id(
+            file_path, func_context.name, call_graph_analyzer
+        )
 
         reachable = call_graph_analyzer.get_reachable_functions(full_func_name)
         if reachable:

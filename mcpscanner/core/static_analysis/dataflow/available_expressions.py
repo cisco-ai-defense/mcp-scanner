@@ -76,7 +76,10 @@ class AvailableExpressionsAnalyzer(DataFlowAnalyzer[AvailableExprsFact]):
         Returns:
             Mapping of node_id -> set of available expressions
         """
-        self.build_cfg()
+        # Preserve a function-scoped CFG from ``build_cfg_for_function``;
+        # rebuilding here would silently widen the analysis to the module.
+        if not self.cfg:
+            self.build_cfg()
 
         initial_fact = AvailableExprsFact()
         self.analyze(initial_fact, forward=True)

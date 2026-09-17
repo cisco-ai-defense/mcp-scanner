@@ -481,6 +481,16 @@ def analyze_treesitter_function(
     )
 
 
+def ensure_classic_dataflow_enriched(graph: CodeGraph) -> ClassicDataflowEngine:
+    """Run classic dataflow once per graph (safe for shared scan graphs)."""
+    engine = ClassicDataflowEngine(graph)
+    if graph.classic_dataflow_enriched:
+        return engine
+    engine.enrich_graph()
+    graph.classic_dataflow_enriched = True
+    return engine
+
+
 class ClassicDataflowEngine:
     """Cache and expose classic dataflow facts for graph nodes."""
 

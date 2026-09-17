@@ -152,6 +152,67 @@ def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
     return ("full", ctx.name, ctx.line_number, decs)
 
 
+def _registration_names_align(primary_name: str, supplemental_name: str) -> bool:
+    """True when two extractor names refer to the same MCP registration.
+
+    NativeAnalyzer rewrites named JS handlers to ``{registered} ({symbol})``
+    while JSContextExtractor keeps the registered tool name.
+    """
+    if not primary_name or not supplemental_name:
+        return False
+    if primary_name == supplemental_name:
+        return True
+    prefix = f"{primary_name} ("
+    if supplemental_name.startswith(prefix) and supplemental_name.endswith(")"):
+        return True
+    reverse_prefix = f"{supplemental_name} ("
+    return primary_name.startswith(reverse_prefix) and primary_name.endswith(")")
+
+
+def _describes_same_registration(
+    primary: FunctionContext,
+    supplemental: FunctionContext,
+) -> bool:
+    """Return True when NativeAnalyzer repeats a tool the primary extractor already captured.
+
+    JS/TS ``server.tool(name, description, …)`` registrations are surfaced by
+    JSContextExtractor at the call site (with the description string) while
+    NativeAnalyzer also emits a handler stub at the callback line with
+    ``<registration>.tool`` and no docstring. Keeping both forces batched
+    alignment and can hide mismatches behind aggressive batch truncation.
+    """
+    if not _registration_names_align(primary.name, supplemental.name):
+        return False
+    primary_doc = (primary.docstring or "").strip()
+    supplemental_doc = (supplemental.docstring or "").strip()
+    if primary_doc and not supplemental_doc:
+        return True
+    supplemental_decs = tuple(supplemental.decorator_types or ())
+    if primary_doc and "<registration>.tool" in supplemental_decs:
+        return True
+    return False
+
+
+def _has_handler_evidence(ctx: FunctionContext) -> bool:
+    """True when a context carries the handler body, not just its registration.
+
+    ``server.tool("name", "description", namedHandler)`` splits a tool across
+    two extractors: JSContextExtractor sees only the call site (it resolves
+    inline function literals, not named symbols) and NativeAnalyzer resolves
+    the handler. Telling the halves apart decides which one may be dropped.
+    """
+    return bool(
+        ctx.function_calls
+        or ctx.assignments
+        or ctx.parameters
+        or (getattr(ctx, "source", "") or "").strip()
+        or ctx.has_file_operations
+        or ctx.has_network_operations
+        or ctx.has_subprocess_calls
+        or ctx.has_eval_exec
+    )
+
+
 def _merge_mcp_function_contexts(
     primary: List[FunctionContext],
     supplemental: List[FunctionContext],
@@ -168,6 +229,28 @@ def _merge_mcp_function_contexts(
         key = _context_dedupe_key(ctx)
         if key in seen:
             continue
+        stub_index = next(
+            (
+                i
+                for i, existing in enumerate(merged)
+                if _describes_same_registration(existing, ctx)
+            ),
+            None,
+        )
+        if stub_index is not None:
+            # One registration, two half-contexts. Drop the one without a
+            # handler body: keeping the call site alone would hand alignment
+            # a tool name and its self-declared description with nothing to
+            # check them against, so every named handler would read clean.
+            # The survivor inherits the registered name and description so
+            # the claim still meets the behaviour in one prompt.
+            stub = merged[stub_index]
+            if _has_handler_evidence(ctx) and not _has_handler_evidence(stub):
+                ctx.name = stub.name
+                ctx.docstring = stub.docstring
+                merged[stub_index] = ctx
+                seen.add(_context_dedupe_key(ctx))
+            continue
         seen.add(key)
         merged.append(ctx)
     return merged
@@ -181,6 +264,19 @@ _SEVERITY_DISPLAY_ORDER = (
     "SAFE",
     "ERROR",
     "UNKNOWN",
+)
+
+# Directories skipped while walking a scan root. Keep in sync with
+# ``js_code_analyzer._SKIP_DIRS`` / npm ``js_files_scanned`` counting.
+_SKIP_SOURCE_DIRS = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        "dist",
+        "build",
+        "out",
+        "coverage",
+    }
 )
 
 
@@ -515,6 +611,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 scan_context = {
                     **context,
+                    "source_registry": source_registry,
                     "code_graphs": _build_directory_code_graphs(
                         py_call_graph_analyzer,
                         ts_call_graph_analyzers,
@@ -522,7 +619,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     ),
                 }
 
-                # Analyze files concurrently (shared call graphs are read-only).
+                # Analyze files concurrently (shared call graphs + code graphs are read-only).
                 file_concurrency = max(
                     1,
                     int(
@@ -673,6 +770,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                 all_findings = await self._analyze_source_code(content, context)
 
+            self._backfill_analyzed_functions_from_findings(all_findings)
             self._log_scan_summary(
                 scan_mode=scan_mode,
                 scan_target=scan_target,
@@ -744,12 +842,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # TMPDIR) as reason to skip every file, silently emptying
                 # the scan.
                 rel_parts = _relative_parts(source_file, path)
-                if (
-                    "__pycache__" not in rel_parts
-                    and "node_modules" not in rel_parts
-                    and not any(part.startswith(".") for part in rel_parts)
-                ):
-                    candidates.append(source_file)
+                if any(part in _SKIP_SOURCE_DIRS for part in rel_parts):
+                    continue
+                if any(part.startswith(".") for part in rel_parts):
+                    continue
+                candidates.append(source_file)
 
         safe_candidates, _skipped = filter_safe_paths(
             candidates, resolved_root, audit_label="behavioral"
@@ -826,6 +923,41 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             python_files.append(str(py_file))
 
         return sorted(python_files)
+
+    def _backfill_analyzed_functions_from_findings(
+        self, findings: List[SecurityFinding]
+    ) -> None:
+        """Ensure ``analyzed_functions`` covers every tool in ``findings``.
+
+        ``analyze()`` now returns one ``SecurityFinding`` per scanned tool, so
+        the findings list is authoritative. Some callers (notably the CLI
+        ``--raw`` formatter) still enumerate ``analyzed_functions``; backfill
+        from findings when extraction did not populate that side-channel.
+        """
+        seen = {
+            (entry.get("source_file"), entry.get("name"))
+            for entry in self.analyzed_functions
+        }
+        for finding in findings:
+            details = finding.details or {}
+            name = details.get("function_name")
+            if not name:
+                continue
+            source_file = details.get("source_file") or "unknown"
+            key = (source_file, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            decorator = details.get("decorator_type") or "unknown"
+            self.analyzed_functions.append(
+                {
+                    "name": name,
+                    "decorator_types": [decorator],
+                    "line_number": details.get("line_number", 0),
+                    "source_file": source_file,
+                    "docstring": "",
+                }
+            )
 
     async def _analyze_file(
         self,
@@ -1051,6 +1183,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     code_graph = build_code_graph(
                         context["cross_file_analyzer"],
                         language=lang,
+                        source_registry=context.get("source_registry"),
                     )
                 if code_graph is not None:
                     try:
@@ -1151,7 +1284,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 # SecurityFinding framework accepts here) so the reporter
                 # doesn't claim we successfully analysed something we
                 # never did.
-                if (file_path, name) in errored_funcs:
+                if self._alignment_errored(fc, name, file_path, errored_funcs):
                     findings.append(
                         SecurityFinding(
                             severity="UNKNOWN",
@@ -1208,6 +1341,29 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             )
 
         return findings
+
+    def _alignment_errored(
+        self,
+        func_context: Any,
+        name: str,
+        file_path: str,
+        errored_keys: set,
+    ) -> bool:
+        """Whether this capability's alignment check failed during the scan.
+
+        The orchestrator keys failures by the function's *defining* file.
+        For a cross-file handler registration (``server.tool("x", handler)``
+        where ``handler`` lives elsewhere) that is not ``file_path``, so ask
+        the orchestrator to key the context the same way it did when it
+        recorded the failure; ``file_path`` is only the fallback for
+        contexts it never saw.
+        """
+        if not errored_keys:
+            return False
+        failed = getattr(self.alignment_orchestrator, "alignment_failed", None)
+        if callable(failed) and failed(func_context):
+            return True
+        return (file_path, name) in errored_keys
 
     def _create_security_finding(
         self, analysis: Dict[str, Any], func_context, file_path: str

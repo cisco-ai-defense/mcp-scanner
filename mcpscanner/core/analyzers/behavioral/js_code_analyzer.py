@@ -19,16 +19,15 @@
 from __future__ import annotations
 
 from ....config.config import Config
-from .code_analyzer import BehavioralCodeAnalyzer
+from .code_analyzer import BehavioralCodeAnalyzer, _SKIP_SOURCE_DIRS
 
 # Source extensions we treat as JS/TS. Keep in sync with
 # ``NativeAnalyzer`` / ``BehavioralCodeAnalyzer`` path handling.
 _JS_EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
 
-# Directories we never recurse into during npm scans.
-_SKIP_DIRS = frozenset(
-    {"node_modules", "dist", "build", "out", ".git", ".next", ".turbo", "coverage"}
-)
+# Directories we never recurse into during npm scans. Includes the shared
+# behavioral walker skip list plus JS-only build caches.
+_SKIP_DIRS = _SKIP_SOURCE_DIRS | frozenset({".git", ".next", ".turbo"})
 
 
 class JSBehavioralCodeAnalyzer(BehavioralCodeAnalyzer):

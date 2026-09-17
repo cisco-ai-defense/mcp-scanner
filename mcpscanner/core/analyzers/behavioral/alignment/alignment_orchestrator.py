@@ -109,6 +109,16 @@ class AlignmentOrchestrator:
         if name:
             self.errored_function_keys.add(self._function_key(func_context))
 
+    def alignment_failed(self, func_context: Any) -> bool:
+        """Whether ``func_context``'s alignment check failed in this scan.
+
+        Failures are keyed by the function's *defining* file, which for a
+        cross-file handler registration is not the file being scanned, so
+        callers must ask through the context rather than rebuild the key
+        from the path they happen to be iterating.
+        """
+        return self._function_key(func_context) in self.errored_function_keys
+
     @property
     def errored_function_names(self) -> Set[str]:
         """Function names that errored (any source file). Test/diagnostic helper."""

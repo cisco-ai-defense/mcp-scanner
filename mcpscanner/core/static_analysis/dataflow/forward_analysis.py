@@ -145,7 +145,10 @@ class ForwardDataflowAnalysis(DataFlowAnalyzer[ForwardFlowFact]):
             )
             return self.all_flows
 
-        self.build_cfg()
+        # Preserve a function-scoped CFG from ``build_cfg_for_function``;
+        # rebuilding here would silently widen the analysis to the module.
+        if not self.cfg:
+            self.build_cfg()
 
         # Initialize: mark all parameters as tainted with unique labels
         initial_fact = ForwardFlowFact()
