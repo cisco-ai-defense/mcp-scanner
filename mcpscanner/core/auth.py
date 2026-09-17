@@ -351,11 +351,11 @@ class OAuthHandler:
         )
 
         logger.debug("Creating OAuth provider for server: %s", server_url)
-        logger.debug(
-            "OAuth metadata: client_name=%s, scope=%s",
-            client_metadata.client_name,
-            scope,
-        )
+        # Only the scope count, never the scopes themselves. They are not
+        # secret, but they are read off the same Auth object that carries
+        # client_secret, and a log line whose value is a count is not worth
+        # the standing question of whether it leaks the neighbouring field.
+        logger.debug("OAuth metadata: scope_count=%d", len(scopes))
 
         return OAuthClientProvider(
             server_url=server_url,
@@ -450,9 +450,7 @@ def create_oauth_provider_from_auth(
     logger.info(
         "Creating OAuth provider from Auth parameter for server: %s", server_url
     )
-    logger.debug(
-        "OAuth metadata: client_name=%s, scope=%s", client_metadata.client_name, scope
-    )
+    logger.debug("OAuth metadata: scope_count=%d", len(scopes))
 
     return OAuthClientProvider(
         server_url=server_url,
