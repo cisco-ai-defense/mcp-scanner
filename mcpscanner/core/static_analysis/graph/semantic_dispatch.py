@@ -17,6 +17,7 @@ from ..semantic.treesitter_analyzer import TreeSitterSemanticAnalyzer
 from ..semantic.type_analyzer import TypeAnalyzer
 from .models import Provenance
 
+
 def _function_body_node(func: Node) -> Node | None:
     return (
         func.child_by_field_name("body")
@@ -81,7 +82,11 @@ def _class_from_new_node(node: Node, source_bytes: bytes) -> str | None:
             if part.type == "name":
                 return source_bytes[part.start_byte : part.end_byte].decode("utf-8")
             if part.type in ("identifier", "type_identifier"):
-                return source_bytes[part.start_byte : part.end_byte].decode("utf-8").split(".")[-1]
+                return (
+                    source_bytes[part.start_byte : part.end_byte]
+                    .decode("utf-8")
+                    .split(".")[-1]
+                )
         return None
     return source_bytes[ctor.start_byte : ctor.end_byte].decode("utf-8").split(".")[-1]
 
@@ -177,7 +182,9 @@ class TypeHierarchy:
 
     def resolve_virtual(self, static_type: str, method: str) -> set[str]:
         """Return concrete class names that may implement ``method``."""
-        candidates = {static_type} | self.all_subtypes(static_type) | self.all_bases(static_type)
+        candidates = (
+            {static_type} | self.all_subtypes(static_type) | self.all_bases(static_type)
+        )
         out: set[str] = set()
         for cls in candidates:
             methods = self.methods.get(cls, set())
@@ -233,7 +240,9 @@ def build_python_hierarchy(source: str) -> TypeHierarchy:
     return hierarchy
 
 
-def build_treesitter_hierarchy(language: str, root: Node, source_bytes: bytes) -> TypeHierarchy:
+def build_treesitter_hierarchy(
+    language: str, root: Node, source_bytes: bytes
+) -> TypeHierarchy:
     hierarchy = TypeHierarchy()
 
     def text(node: Node) -> str:
@@ -249,7 +258,11 @@ def build_treesitter_hierarchy(language: str, root: Node, source_bytes: bytes) -
             for child in node.children:
                 if child.type in ("class_heritage", "extends_clause", "superclass"):
                     for part in child.children:
-                        if part.type in ("identifier", "type_identifier", "nested_type_identifier"):
+                        if part.type in (
+                            "identifier",
+                            "type_identifier",
+                            "nested_type_identifier",
+                        ):
                             bases.append(text(part).split(".")[-1])
                 if child.type == "implements_clause":
                     for part in child.children:
@@ -290,26 +303,46 @@ def _python_function_state(
                 if not isinstance(target, ast.Name):
                     continue
                 name = target.id
-                if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
-                    state.instance_classes.setdefault(name, set()).add(node.value.func.id)
+                if isinstance(node.value, ast.Call) and isinstance(
+                    node.value.func, ast.Name
+                ):
+                    state.instance_classes.setdefault(name, set()).add(
+                        node.value.func.id
+                    )
                 elif isinstance(node.value, ast.IfExp):
                     for branch in (node.value.body, node.value.orelse):
-                        if isinstance(branch, ast.Call) and isinstance(branch.func, ast.Name):
-                            state.instance_classes.setdefault(name, set()).add(branch.func.id)
+                        if isinstance(branch, ast.Call) and isinstance(
+                            branch.func, ast.Name
+                        ):
+                            state.instance_classes.setdefault(name, set()).add(
+                                branch.func.id
+                            )
                 elif isinstance(node.value, ast.Name):
                     state.union_alias(name, node.value.id)
-                elif isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                elif isinstance(node.value, ast.Constant) and isinstance(
+                    node.value.value, str
+                ):
                     state.string_consts[name] = node.value.value
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             name = node.target.id
-            if node.value and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+            if (
+                node.value
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+            ):
                 state.instance_classes.setdefault(name, set()).add(node.value.func.id)
             elif node.value and isinstance(node.value, ast.Name):
                 state.union_alias(name, node.value.id)
-            elif node.value and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            elif (
+                node.value
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
                 state.string_consts[name] = node.value.value
         elif isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
-            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            if isinstance(node.value, ast.Constant) and isinstance(
+                node.value.value, str
+            ):
                 state.string_consts[node.target.id] = node.value.value
     for var, cls in seed_instances.items():
         state.instance_classes.setdefault(var, set()).add(cls)
@@ -356,7 +389,9 @@ def _treesitter_function_state(
                                         ctor = child
                                         break
                             if ctor:
-                                state.instance_classes.setdefault(name, set()).add(text(ctor))
+                                state.instance_classes.setdefault(name, set()).add(
+                                    text(ctor)
+                                )
                 elif value.type == "identifier":
                     state.union_alias(name, text(value))
                 elif value.type == "string":
@@ -392,7 +427,9 @@ def _treesitter_function_state(
                     else:
                         callee = _treesitter_call_name(right, source_bytes)
                         if callee and callee[0].isupper():
-                            state.instance_classes.setdefault(left_name, set()).add(callee)
+                            state.instance_classes.setdefault(left_name, set()).add(
+                                callee
+                            )
         for child in node.children:
             walk(child)
 
@@ -482,7 +519,9 @@ class SemanticDispatchEngine:
             hierarchy = TypeHierarchy()
             if lang is not None:
                 root = Parser(lang).parse(source.encode("utf-8")).root_node
-                hierarchy = build_treesitter_hierarchy(language, root, source.encode("utf-8"))
+                hierarchy = build_treesitter_hierarchy(
+                    language, root, source.encode("utf-8")
+                )
         return cls(
             language=language,
             source=source,
@@ -533,7 +572,9 @@ class SemanticDispatchEngine:
         state = self._function_state(caller_label)
         if state is None:
             return DispatchResult()
-        return self._resolve_static_receiver(state, receiver, method, "virtual", virtual=True)
+        return self._resolve_static_receiver(
+            state, receiver, method, "virtual", virtual=True
+        )
 
     def _function_state(self, caller_label: str) -> FunctionSemanticState | None:
         if self.language == "python":
@@ -555,7 +596,9 @@ class SemanticDispatchEngine:
             func = _find_treesitter_function(root, caller_label, source_bytes)
             if func is None:
                 return None
-            state = _treesitter_function_state(func, source_bytes, seed_instances=self.seed_instances)
+            state = _treesitter_function_state(
+                func, source_bytes, seed_instances=self.seed_instances
+            )
 
         if self.program_facts and self.caller_node_id:
             self.program_facts.merge_into_state(self.caller_node_id, state)
@@ -618,19 +661,27 @@ class SemanticDispatchEngine:
             else:
                 qualified.add(f"{cls}.{method}")
 
-        matches = _match_qualified_methods(qualified, self.known_functions, self.caller_file)
+        matches = _match_qualified_methods(
+            qualified, self.known_functions, self.caller_file
+        )
         if not matches:
             return DispatchResult()
 
         ctx_prefix = "virtual_dispatch" if virtual else f"semantic_{kind}"
         if from_const:
             ctx_prefix = "const_prop_" + ctx_prefix
-        conf = _confidence_for_target(len(matches), literal_method=not virtual, virtual=virtual)
+        conf = _confidence_for_target(
+            len(matches), literal_method=not virtual, virtual=virtual
+        )
         targets = [
             DispatchTarget(
                 node_id=fn,
                 confidence=conf,
-                context=f"{ctx_prefix}:{method}" if len(matches) == 1 else f"{ctx_prefix}_multi:{len(matches)}",
+                context=(
+                    f"{ctx_prefix}:{method}"
+                    if len(matches) == 1
+                    else f"{ctx_prefix}_multi:{len(matches)}"
+                ),
             )
             for fn in matches
         ]
@@ -679,12 +730,17 @@ def _find_python_function(tree: ast.Module, label: str) -> ast.FunctionDef | Non
                             return item
         return None
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == label:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == label
+        ):
             return node
     return None
 
 
-def _find_treesitter_function(root: Node, label: str, source_bytes: bytes) -> Node | None:
+def _find_treesitter_function(
+    root: Node, label: str, source_bytes: bytes
+) -> Node | None:
     def text(node: Node) -> str:
         return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
@@ -748,7 +804,9 @@ class ProgramFacts:
     instances: dict[str, dict[str, set[str]]] = field(
         default_factory=lambda: defaultdict(lambda: defaultdict(set))
     )
-    strings: dict[str, dict[str, str]] = field(default_factory=lambda: defaultdict(dict))
+    strings: dict[str, dict[str, str]] = field(
+        default_factory=lambda: defaultdict(dict)
+    )
 
     def add_instance(self, func_id: str, var: str, class_name: str) -> bool:
         bucket = self.instances[func_id][var]
@@ -801,7 +859,9 @@ class ProgramFacts:
                 continue
             callee_short = edge.target.split("::", 1)[-1].split(".")[-1]
             for binding in caller_summary.call_bindings:
-                if not callee_name_matches(binding.callee_name, callee_short, edge.target):
+                if not callee_name_matches(
+                    binding.callee_name, callee_short, edge.target
+                ):
                     continue
                 for cls in callee_summary.return_classes:
                     if self.add_instance(edge.source, binding.target_var, cls):
@@ -812,7 +872,9 @@ class ProgramFacts:
         return changed
 
 
-def callee_name_matches(binding_name: str, callee_short: str, callee_node_id: str) -> bool:
+def callee_name_matches(
+    binding_name: str, callee_short: str, callee_node_id: str
+) -> bool:
     label = callee_node_id.split("::", 1)[-1]
     return (
         binding_name == callee_short
@@ -864,7 +926,9 @@ def _extract_function_summary(
         if func is None:
             return None
         state = _python_function_state(func, seed_instances={})
-        summary.instance_classes = {k: set(v) for k, v in state.instance_classes.items()}
+        summary.instance_classes = {
+            k: set(v) for k, v in state.instance_classes.items()
+        }
         summary.string_consts = dict(state.string_consts)
         summary.return_classes = _python_return_classes(func)
         summary.return_strings = _python_return_strings(func)
@@ -897,7 +961,9 @@ def _python_call_name(node: ast.Call) -> str | None:
     return None
 
 
-def _python_call_bindings(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[CallSiteBinding]:
+def _python_call_bindings(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[CallSiteBinding]:
     bindings: list[CallSiteBinding] = []
     for node in ast.walk(func):
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
@@ -905,12 +971,16 @@ def _python_call_bindings(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[
             if isinstance(target, ast.Name) and isinstance(node.value, ast.Call):
                 callee = _python_call_name(node.value)
                 if callee:
-                    bindings.append(CallSiteBinding(target_var=target.id, callee_name=callee))
+                    bindings.append(
+                        CallSiteBinding(target_var=target.id, callee_name=callee)
+                    )
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             if node.value and isinstance(node.value, ast.Call):
                 callee = _python_call_name(node.value)
                 if callee:
-                    bindings.append(CallSiteBinding(target_var=node.target.id, callee_name=callee))
+                    bindings.append(
+                        CallSiteBinding(target_var=node.target.id, callee_name=callee)
+                    )
     return bindings
 
 
@@ -992,7 +1062,9 @@ def _treesitter_call_bindings(func: Node, source_bytes: bytes) -> list[CallSiteB
                         callee = _treesitter_call_name(right, source_bytes)
                         if left_name and callee:
                             bindings.append(
-                                CallSiteBinding(target_var=left_name, callee_name=callee)
+                                CallSiteBinding(
+                                    target_var=left_name, callee_name=callee
+                                )
                             )
             else:
                 for child in node.children:
@@ -1095,4 +1167,3 @@ def _treesitter_return_strings(func: Node, source_bytes: bytes) -> set[str]:
             if child.type in ("string", "encapsed_string"):
                 strings.add(text(child).strip("'\""))
     return strings
-

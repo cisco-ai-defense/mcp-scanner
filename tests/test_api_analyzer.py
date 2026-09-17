@@ -19,12 +19,10 @@
 import pytest
 import httpx
 import respx
-from unittest.mock import patch, AsyncMock
-from typing import Dict, Any
+from unittest.mock import patch
 
 from mcpscanner.config.config import Config
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer, enabled_rules
-from mcpscanner.core.analyzers.base import SecurityFinding
 
 
 class TestApiAnalyzer:

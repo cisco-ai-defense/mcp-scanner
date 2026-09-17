@@ -36,6 +36,7 @@ from mcpscanner.core.static_analysis.native_analyzer import _MCP_ANNOTATION_RE
 # Annotation regex covers ``::``, ``.``, ``\\`` namespace separators.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "annotation, expected_leaf",
     [
@@ -167,6 +168,7 @@ server.registerTool("add", { description: "x" }, addHandler);
 # ---------------------------------------------------------------------------
 # Python decorator receiver verification.
 # ---------------------------------------------------------------------------
+
 
 def test_python_decorator_rejected_when_receiver_is_unrelated_dsl():
     """``@toolbar.tool(...)`` on an unrelated DSL must NOT classify

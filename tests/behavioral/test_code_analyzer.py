@@ -98,7 +98,9 @@ class TestBehavioralCodeAnalyzerFileDetection:
 
             files = analyzer._find_source_files(str(root))
             assert any(Path(f).name == "index.ts" for f in files)
-            assert not any(Path(f).name in {"bundle.js", "out.js", "report.js"} for f in files)
+            assert not any(
+                Path(f).name in {"bundle.js", "out.js", "report.js"} for f in files
+            )
 
 
 class TestBehavioralCodeAnalyzerMCPDetection:
@@ -243,9 +245,7 @@ def add(a: float, b: float) -> float:
             ) as mock_batch:
                 mock_batch.return_value = []
 
-                findings = await analyzer.analyze(
-                    temp_path, {"file_path": temp_path}
-                )
+                findings = await analyzer.analyze(temp_path, {"file_path": temp_path})
 
             assert isinstance(findings, list)
             assert all(isinstance(f, SecurityFinding) for f in findings)
@@ -254,23 +254,25 @@ def add(a: float, b: float) -> float:
             # mismatch findings expected.
             safe_findings = [f for f in findings if f.severity == "SAFE"]
             mismatch_findings = [f for f in findings if f.severity != "SAFE"]
-            assert len(mismatch_findings) == 0, (
-                f"unexpected mismatch findings: {[(f.severity, f.summary) for f in mismatch_findings]}"
-            )
-            assert len(safe_findings) == 2, (
-                f"expected 2 SAFE findings (one per tool), got {len(safe_findings)}"
-            )
+            assert (
+                len(mismatch_findings) == 0
+            ), f"unexpected mismatch findings: {[(f.severity, f.summary) for f in mismatch_findings]}"
+            assert (
+                len(safe_findings) == 2
+            ), f"expected 2 SAFE findings (one per tool), got {len(safe_findings)}"
 
             # Per-tool details must carry function_name + source_file
             # (so SDK consumers can group by tool without parsing summaries).
-            func_names = sorted((f.details or {}).get("function_name") for f in safe_findings)
+            func_names = sorted(
+                (f.details or {}).get("function_name") for f in safe_findings
+            )
             assert func_names == ["add", "echo"], func_names
             for f in safe_findings:
                 d = f.details or {}
                 assert d.get("source_file") == str(Path(temp_path).resolve())
-                assert d.get("no_findings") is True, (
-                    "synthesized SAFE finding must be marked with no_findings=True"
-                )
+                assert (
+                    d.get("no_findings") is True
+                ), "synthesized SAFE finding must be marked with no_findings=True"
                 # threat_category empty so SAFE rows don't pollute
                 # downstream threat-name aggregates.
                 assert f.threat_category == ""
@@ -330,9 +332,7 @@ def echo(text: str) -> str:
                 # exactly the case the SAFE-fill code path covers.
                 mock_batch.return_value = [(mock_analysis, mock_exfil_ctx)]
 
-                findings = await analyzer.analyze(
-                    temp_path, {"file_path": temp_path}
-                )
+                findings = await analyzer.analyze(temp_path, {"file_path": temp_path})
 
             assert isinstance(findings, list)
             by_name = {(f.details or {}).get("function_name"): f for f in findings}
@@ -366,22 +366,22 @@ class TestBehavioralCodeAnalyzerDirectoryIO:
     PY_TOOL_TEMPLATE = (
         "from mcp.server.fastmcp import FastMCP\n"
         "\n"
-        "mcp = FastMCP(\"demo-{idx}\")\n"
+        'mcp = FastMCP("demo-{idx}")\n'
         "\n"
         "@mcp.tool()\n"
         "def add_{idx}(a: int, b: int) -> int:\n"
-        "    \"\"\"Add two numbers.\"\"\"\n"
+        '    """Add two numbers."""\n'
         "    return a + b\n"
     )
 
     TS_TOOL_TEMPLATE = (
-        "import {{ McpServer }} from \"@modelcontextprotocol/sdk/server/mcp.js\";\n"
+        'import {{ McpServer }} from "@modelcontextprotocol/sdk/server/mcp.js";\n'
         "\n"
-        "const server_{idx} = new McpServer({{ name: \"demo-{idx}\", version: \"1.0\" }});\n"
+        'const server_{idx} = new McpServer({{ name: "demo-{idx}", version: "1.0" }});\n'
         "\n"
         "server_{idx}.registerTool(\n"
-        "    \"add_{idx}\",\n"
-        "    {{ description: \"Add two numbers\" }},\n"
+        '    "add_{idx}",\n'
+        '    {{ description: "Add two numbers" }},\n'
         "    async (input: {{ a: number; b: number }}) => input.a + input.b,\n"
         ");\n"
     )
@@ -666,7 +666,9 @@ server.tool(
         source = self._JS_SERVER_TOOL_SOURCE
         file_path = "copy_file.js"
         primary = JSContextExtractor(source, file_path).extract_mcp_function_contexts()
-        supplemental = NativeAnalyzer(source, file_path).extract_mcp_capability_contexts()
+        supplemental = NativeAnalyzer(
+            source, file_path
+        ).extract_mcp_capability_contexts()
         merged = _merge_mcp_function_contexts(primary, supplemental)
         assert len(merged) == 1
         assert merged[0].name == "copy_file"
@@ -698,7 +700,9 @@ server.tool(
 """
         file_path = "copy_file.js"
         primary = JSContextExtractor(source, file_path).extract_mcp_function_contexts()
-        supplemental = NativeAnalyzer(source, file_path).extract_mcp_capability_contexts()
+        supplemental = NativeAnalyzer(
+            source, file_path
+        ).extract_mcp_capability_contexts()
         merged = _merge_mcp_function_contexts(primary, supplemental)
         assert len(merged) == 1
         assert merged[0].name == "copy_file"
@@ -737,7 +741,9 @@ server.tool(
 """
         file_path = "copy_file.js"
         primary = JSContextExtractor(source, file_path).extract_mcp_function_contexts()
-        supplemental = NativeAnalyzer(source, file_path).extract_mcp_capability_contexts()
+        supplemental = NativeAnalyzer(
+            source, file_path
+        ).extract_mcp_capability_contexts()
         merged = _merge_mcp_function_contexts(primary, supplemental)
 
         assert len(merged) == 1
@@ -761,7 +767,9 @@ server.tool(
         source = self._JS_SERVER_TOOL_SOURCE
         file_path = "copy_file.js"
         primary = JSContextExtractor(source, file_path).extract_mcp_function_contexts()
-        supplemental = NativeAnalyzer(source, file_path).extract_mcp_capability_contexts()
+        supplemental = NativeAnalyzer(
+            source, file_path
+        ).extract_mcp_capability_contexts()
         merged = _merge_mcp_function_contexts(primary, supplemental)
 
         assert len(merged) == 1
@@ -801,9 +809,7 @@ def echo(text: str) -> str:
                 new_callable=AsyncMock,
             ) as mock_batch:
                 mock_batch.return_value = []
-                findings = await analyzer.analyze(
-                    temp_path, {"file_path": temp_path}
-                )
+                findings = await analyzer.analyze(temp_path, {"file_path": temp_path})
 
             assert len(findings) >= 1
             assert len(analyzer.analyzed_functions) >= 1

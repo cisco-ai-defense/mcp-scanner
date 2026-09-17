@@ -105,9 +105,7 @@ _TRANSIENT_KEYWORDS = (
     "internal server error",
 )
 
-_BEDROCK_TRANSIENT_KEYWORDS = (
-    "throttlingexception",
-)
+_BEDROCK_TRANSIENT_KEYWORDS = ("throttlingexception",)
 
 _LITELLM_TRANSIENT_TYPES: tuple[type[BaseException], ...] | None = None
 _LITELLM_FINAL_TYPES: tuple[type[BaseException], ...] | None = None
@@ -144,9 +142,9 @@ def _exception_message(exc: BaseException) -> str:
     return " ".join(parts)
 
 
-def _get_litellm_type_tuples() -> tuple[
-    tuple[type[BaseException], ...], tuple[type[BaseException], ...]
-]:
+def _get_litellm_type_tuples() -> (
+    tuple[tuple[type[BaseException], ...], tuple[type[BaseException], ...]]
+):
     global _LITELLM_TRANSIENT_TYPES, _LITELLM_FINAL_TYPES
     if _LITELLM_TRANSIENT_TYPES is not None and _LITELLM_FINAL_TYPES is not None:
         return _LITELLM_TRANSIENT_TYPES, _LITELLM_FINAL_TYPES
@@ -241,16 +239,13 @@ def classify_analyzer_error(
     if _message_has_transient_keyword(msg, model=model):
         return ErrorKind.TRANSIENT
     if any(
-        _message_contains_status_code(msg, code)
-        for code in _TRANSIENT_STATUS_CODES
+        _message_contains_status_code(msg, code) for code in _TRANSIENT_STATUS_CODES
     ):
         return ErrorKind.TRANSIENT
 
     if any(kw in msg for kw in _FINAL_KEYWORDS):
         return ErrorKind.FINAL
-    if any(
-        _message_contains_status_code(msg, code) for code in _FINAL_STATUS_CODES
-    ):
+    if any(_message_contains_status_code(msg, code) for code in _FINAL_STATUS_CODES):
         return ErrorKind.FINAL
 
     if context == "parse":
@@ -261,7 +256,9 @@ def classify_analyzer_error(
     return ErrorKind.FINAL
 
 
-def compute_backoff_delay(attempt: int, base_delay: float, *, cap: float = 60.0) -> float:
+def compute_backoff_delay(
+    attempt: int, base_delay: float, *, cap: float = 60.0
+) -> float:
     """Exponential backoff delay for attempt index ``attempt`` (0-based)."""
     delay = base_delay * (2**attempt)
     return min(delay, cap)
@@ -332,9 +329,7 @@ def build_infrastructure_error_finding(
         details["model"] = model
     return SecurityFinding(
         severity="INFO",
-        summary=(
-            f"{analyzer_name} analysis did not complete for {subject}: {message}"
-        ),
+        summary=(f"{analyzer_name} analysis did not complete for {subject}: {message}"),
         analyzer=analyzer_name,
         threat_category=INFRASTRUCTURE_THREAT_CATEGORY,
         details=details,

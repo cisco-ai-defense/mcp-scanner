@@ -1218,4 +1218,3 @@ class TestFixtureFiles:
         finding = find_finding_by_rule(findings, "HEUR-020")
         assert finding is not None
         assert finding.severity == "MEDIUM"
-

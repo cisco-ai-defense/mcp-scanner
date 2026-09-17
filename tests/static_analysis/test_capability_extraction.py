@@ -38,7 +38,7 @@ from mcpscanner.core.static_analysis import NativeAnalyzer
 # capability contexts even when it defines several plain functions.
 # ---------------------------------------------------------------------------
 
-HELPERS_ONLY_PYTHON = '''
+HELPERS_ONLY_PYTHON = """
 def _internal_normalize(s: str) -> str:
     return s.strip().lower()
 
@@ -48,7 +48,7 @@ def _validate_number(name, v):
 
 def util_format(label, value):
     return f"{label}={value}"
-'''
+"""
 
 HELPERS_ONLY_JAVASCRIPT = """\
 function _validate(v) { return v; }
@@ -360,9 +360,9 @@ def test_mixed_files_return_only_capabilities(
     analyzer = NativeAnalyzer(source, path)
     capabilities = analyzer.extract_mcp_capability_contexts()
     actual = {c.name for c in capabilities}
-    assert actual == expected_names, (
-        f"{path!r}: got {actual!r} but expected {expected_names!r}"
-    )
+    assert (
+        actual == expected_names
+    ), f"{path!r}: got {actual!r} but expected {expected_names!r}"
 
     # Sanity: the source file does define more than one function. If we
     # ever return *all* of them we'd be regressing the original bug — the
@@ -390,8 +390,7 @@ def test_python_capability_keeps_decorator_metadata() -> None:
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1
     assert any(
-        d.endswith("tool") or d.endswith("tool()")
-        for d in caps[0].decorator_types
+        d.endswith("tool") or d.endswith("tool()") for d in caps[0].decorator_types
     ), caps[0].decorator_types
 
 
@@ -615,13 +614,13 @@ def test_non_mcp_receiver_does_not_classify(monkeypatch) -> None:
     # accepts the registration; this test asserts that once an MCP import
     # IS present, ANY registration whose receiver is *not* an MCP server
     # is rejected.
-    src = '''import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+    src = """import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Toolbar } from "./toolbar.js";
 
 const server = new McpServer({ name: "demo", version: "1.0" });
 const toolbar = new Toolbar();
 toolbar.tool("save", () => {});
-'''
+"""
     analyzer = NativeAnalyzer(src, "non_mcp.ts")
     caps = analyzer.extract_mcp_capability_contexts()
     # ``server`` is bound to McpServer, ``toolbar`` is not. The Toolbar
@@ -657,9 +656,9 @@ def test_kotlin_addtool_without_trailing_lambda() -> None:
     if names:
         assert "handle" in names, names
         cap = caps[0]
-        assert any("registration" in t for t in cap.decorator_types), (
-            cap.decorator_types
-        )
+        assert any(
+            "registration" in t for t in cap.decorator_types
+        ), cap.decorator_types
 
 
 # ---------------------------------------------------------------------------
@@ -670,10 +669,7 @@ def test_kotlin_addtool_without_trailing_lambda() -> None:
 # A 1000-line file with ZERO MCP markers must short-circuit to ``[]``
 # without ever invoking tree-sitter or the Python AST extractor.
 HELPERS_ONLY_LARGE_PYTHON = "\n".join(
-    [
-        "def helper_{i}(x):\n    return x + {i}\n".format(i=i)
-        for i in range(1000)
-    ]
+    ["def helper_{i}(x):\n    return x + {i}\n".format(i=i) for i in range(1000)]
 )
 
 
@@ -714,14 +710,12 @@ def test_python_lazy_extraction_skips_helpers_dataflow() -> None:
     ForwardDataflowAnalysis. We assert correctness (only the tool is
     returned) — the perf property is asserted in
     ``test_prefilter_skips_helpers_only_python``."""
-    helpers = "\n".join(
-        f"def _helper_{i}(x):\n    return x + {i}\n" for i in range(50)
-    )
+    helpers = "\n".join(f"def _helper_{i}(x):\n    return x + {i}\n" for i in range(50))
     src = (
         "from fastmcp import FastMCP\n"
         'mcp = FastMCP("demo")\n'
         + helpers
-        + '\n@mcp.tool()\n'
+        + "\n@mcp.tool()\n"
         + "def real_tool(a: int, b: int) -> int:\n"
         + "    return a + b\n"
     )
@@ -894,9 +888,9 @@ def test_config_arrays_are_not_mcp_tools() -> None:
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1, [(c.name, c.decorator_types) for c in caps]
     assert caps[0].name == "add", caps[0].name
-    assert not any(
-        "registration.table" in t for t in caps[0].decorator_types
-    ), caps[0].decorator_types
+    assert not any("registration.table" in t for t in caps[0].decorator_types), caps[
+        0
+    ].decorator_types
 
 
 def test_two_inline_handlers_pick_last() -> None:

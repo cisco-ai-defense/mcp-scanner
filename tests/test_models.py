@@ -16,7 +16,6 @@
 
 import pytest
 from pydantic import ValidationError
-from typing import List
 
 from mcpscanner.core.models import (
     AnalyzerEnum,
@@ -28,33 +27,6 @@ from mcpscanner.core.models import (
     AllToolsScanResponse,
     FormattedToolScanResponse,
 )
-
-
-class TestSeverityFilter:
-    """Test cases for SeverityFilter enum."""
-
-    def test_severity_filter_values(self):
-        """Test all SeverityFilter enum values."""
-        assert SeverityFilter.ALL == "all"
-        assert SeverityFilter.HIGH == "high"
-        assert SeverityFilter.UNKNOWN == "unknown"
-        assert SeverityFilter.MEDIUM == "medium"
-        assert SeverityFilter.LOW == "low"
-        assert SeverityFilter.SAFE == "safe"
-
-    def test_severity_filter_ordering(self):
-        """Test severity filter values are distinct."""
-        severities = [
-            SeverityFilter.ALL,
-            SeverityFilter.HIGH,
-            SeverityFilter.UNKNOWN,
-            SeverityFilter.MEDIUM,
-            SeverityFilter.LOW,
-            SeverityFilter.SAFE,
-        ]
-
-        # Test that all values are distinct
-        assert len(set(severities)) == len(severities)
 
 
 class TestAnalyzerEnum:
@@ -98,6 +70,19 @@ class TestSeverityFilter:
         assert SeverityFilter.LOW == "low"
         assert SeverityFilter.UNKNOWN == "unknown"
         assert SeverityFilter.SAFE == "safe"
+
+    def test_severity_filter_values_are_distinct(self):
+        """Every filter is its own value; none collapse onto another."""
+        severities = [
+            SeverityFilter.ALL,
+            SeverityFilter.HIGH,
+            SeverityFilter.UNKNOWN,
+            SeverityFilter.MEDIUM,
+            SeverityFilter.LOW,
+            SeverityFilter.SAFE,
+        ]
+
+        assert len(set(severities)) == len(severities)
 
 
 class TestAPIScanRequest:

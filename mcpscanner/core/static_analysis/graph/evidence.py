@@ -29,7 +29,9 @@ class EvidenceFormatter:
         node_path = Path(node.source_file).resolve(strict=False)
         for key, source in self._graph.source_registry.items():
             try:
-                if _paths_refer_to_same_file(Path(key).resolve(strict=False), node_path):
+                if _paths_refer_to_same_file(
+                    Path(key).resolve(strict=False), node_path
+                ):
                     return source
             except (OSError, RuntimeError, ValueError):
                 continue

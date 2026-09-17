@@ -71,48 +71,36 @@ def behavioral_app(api_root, monkeypatch):
 
 class TestBehavioralSourceEndpoint:
     def test_disabled_returns_403_without_scanner_override(self, api_root, monkeypatch):
-        monkeypatch.setattr(
-            MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", False
-        )
+        monkeypatch.setattr(MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", False)
         monkeypatch.setattr(
             MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ROOT", str(api_root)
         )
         app = FastAPI()
         app.include_router(router)
         client = TestClient(app)
-        resp = client.post(
-            "/scan-behavioral-source", json={"source_path": "server.py"}
-        )
+        resp = client.post("/scan-behavioral-source", json={"source_path": "server.py"})
         assert resp.status_code == 403
         assert "disabled" in resp.json()["detail"].lower()
 
     def test_missing_root_returns_503_without_scanner_override(self, monkeypatch):
-        monkeypatch.setattr(
-            MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", True
-        )
+        monkeypatch.setattr(MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", True)
         monkeypatch.setattr(MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ROOT", "")
         app = FastAPI()
         app.include_router(router)
         client = TestClient(app)
-        resp = client.post(
-            "/scan-behavioral-source", json={"source_path": "server.py"}
-        )
+        resp = client.post("/scan-behavioral-source", json={"source_path": "server.py"})
         assert resp.status_code == 503
         assert "root" in resp.json()["detail"].lower()
 
     def test_enabled_without_scanner_factory_returns_503(self, api_root, monkeypatch):
-        monkeypatch.setattr(
-            MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", True
-        )
+        monkeypatch.setattr(MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", True)
         monkeypatch.setattr(
             MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ROOT", str(api_root)
         )
         app = FastAPI()
         app.include_router(router)
         client = TestClient(app)
-        resp = client.post(
-            "/scan-behavioral-source", json={"source_path": "server.py"}
-        )
+        resp = client.post("/scan-behavioral-source", json={"source_path": "server.py"})
         assert resp.status_code == 503
         assert "dependency_overrides" in resp.json()["detail"]
 
@@ -141,9 +129,7 @@ class TestBehavioralSourceEndpoint:
         (api_root / "leak.py").symlink_to(outside)
 
         client = TestClient(app)
-        resp = client.post(
-            "/scan-behavioral-source", json={"source_path": "leak.py"}
-        )
+        resp = client.post("/scan-behavioral-source", json={"source_path": "leak.py"})
         assert resp.status_code == 400
         assert "outside" in resp.json()["detail"].lower()
         assert str(outside) not in resp.json()["detail"]
@@ -160,9 +146,7 @@ class TestBehavioralSourceEndpoint:
         (api_root / "linked").symlink_to(outside_dir, target_is_directory=True)
 
         client = TestClient(app)
-        resp = client.post(
-            "/scan-behavioral-source", json={"source_path": "linked"}
-        )
+        resp = client.post("/scan-behavioral-source", json={"source_path": "linked"})
         assert resp.status_code == 400
         behavioral.analyze.assert_not_awaited()
 
@@ -175,9 +159,7 @@ class TestBehavioralSourceEndpoint:
                 build_infrastructure_error_finding(
                     analyzer_name="Behavioral",
                     subject="missing.py",
-                    error=FileNotFoundError(
-                        "Path not found under configured API root"
-                    ),
+                    error=FileNotFoundError("Path not found under configured API root"),
                     context="local",
                 )
             ]
@@ -189,9 +171,7 @@ class TestBehavioralSourceEndpoint:
         assert resp.status_code == 404
 
     def test_missing_behavioral_analyzer_returns_400(self, api_root, monkeypatch):
-        monkeypatch.setattr(
-            MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", True
-        )
+        monkeypatch.setattr(MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ENABLED", True)
         monkeypatch.setattr(
             MCPScannerConstants, "BEHAVIORAL_SOURCE_API_ROOT", str(api_root)
         )
@@ -203,9 +183,7 @@ class TestBehavioralSourceEndpoint:
 
         app = _app_with_factory(factory, api_root=str(api_root))
         client = TestClient(app)
-        resp = client.post(
-            "/scan-behavioral-source", json={"source_path": "server.py"}
-        )
+        resp = client.post("/scan-behavioral-source", json={"source_path": "server.py"})
         assert resp.status_code == 400
         assert "llm" in resp.json()["detail"].lower()
 
@@ -222,9 +200,7 @@ class TestBehavioralSourceEndpoint:
     def test_happy_path_returns_findings(self, behavioral_app):
         app, behavioral, api_root = behavioral_app
         client = TestClient(app)
-        resp = client.post(
-            "/scan-behavioral-source", json={"source_path": "server.py"}
-        )
+        resp = client.post("/scan-behavioral-source", json={"source_path": "server.py"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["finding_count"] == 1

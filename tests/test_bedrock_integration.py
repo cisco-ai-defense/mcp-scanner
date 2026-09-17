@@ -28,7 +28,7 @@ Mark with @pytest.mark.integration to run separately from unit tests.
 
 import os
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 import json
 
 from mcpscanner.config import Config
@@ -74,7 +74,7 @@ class TestBedrockAPIKeyAuthentication:
         # Test analysis
         content = "This tool reads a file"
         context = {"tool_name": "file_reader"}
-        findings = await analyzer.analyze(content, context)
+        await analyzer.analyze(content, context)
 
         # Verify API was called with correct parameters
         mock_completion.assert_called_once()
@@ -138,7 +138,7 @@ class TestBedrockAWSProfileAuthentication:
         # Test analysis
         content = "This tool writes a file"
         context = {"tool_name": "file_writer"}
-        findings = await analyzer.analyze(content, context)
+        await analyzer.analyze(content, context)
 
         # Verify API was called with correct parameters
         mock_completion.assert_called_once()
@@ -189,7 +189,7 @@ class TestBedrockSessionTokenAuthentication:
         # Test analysis
         content = "This tool executes system commands"
         context = {"tool_name": "command_executor"}
-        findings = await analyzer.analyze(content, context)
+        await analyzer.analyze(content, context)
 
         # Verify API was called with correct parameters
         mock_completion.assert_called_once()

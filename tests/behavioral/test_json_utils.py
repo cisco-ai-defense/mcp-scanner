@@ -18,7 +18,6 @@
 
 import json
 
-import pytest
 
 from mcpscanner.core.analyzers.behavioral.alignment.json_utils import (
     parse_json_from_llm,

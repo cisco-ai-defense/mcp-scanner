@@ -137,7 +137,7 @@ class TestToolsScanning:
 
         assert len(results) == 1
         assert results[0]["tool_name"] == "add"
-        assert results[0]["is_safe"] == True
+        assert results[0]["is_safe"] is True
         assert results[0]["status"] == "completed"
         assert len(results[0]["findings"]) == 0
 
@@ -164,7 +164,7 @@ class TestToolsScanning:
 
         assert len(results) == 1
         assert results[0]["tool_name"] == "dangerous_tool"
-        assert results[0]["is_safe"] == False
+        assert results[0]["is_safe"] is False
         assert results[0]["status"] == "completed"
         assert len(results[0]["findings"]) > 0
 
@@ -198,9 +198,9 @@ class TestToolsScanning:
 
         assert len(results) == 2
         assert results[0]["tool_name"] == "safe_tool"
-        assert results[0]["is_safe"] == True
+        assert results[0]["is_safe"] is True
         assert results[1]["tool_name"] == "unsafe_tool"
-        assert results[1]["is_safe"] == False
+        assert results[1]["is_safe"] is False
 
     @pytest.mark.asyncio
     async def test_scan_invalid_tools_structure(self, static_analyzer, temp_json_file):
@@ -254,7 +254,7 @@ class TestPromptsScanning:
 
         assert len(results) == 1
         assert results[0]["prompt_name"] == "greet_user"
-        assert results[0]["is_safe"] == True
+        assert results[0]["is_safe"] is True
         assert results[0]["status"] == "completed"
 
     @pytest.mark.asyncio
@@ -277,7 +277,7 @@ class TestPromptsScanning:
 
         assert len(results) == 1
         assert results[0]["prompt_name"] == "evil_prompt"
-        assert results[0]["is_safe"] == False
+        assert results[0]["is_safe"] is False
         assert len(results[0]["findings"]) > 0
 
     @pytest.mark.asyncio
@@ -318,7 +318,7 @@ class TestResourcesScanning:
 
         assert len(results) == 1
         assert results[0]["resource_name"] == "Annual Report"
-        assert results[0]["is_safe"] == True
+        assert results[0]["is_safe"] is True
         assert results[0]["status"] == "completed"
 
     @pytest.mark.asyncio
@@ -375,7 +375,7 @@ class TestResourcesScanning:
 
         assert len(results) == 1
         assert results[0]["resource_name"] == "System Passwords"
-        assert results[0]["is_safe"] == False
+        assert results[0]["is_safe"] is False
         assert len(results[0]["findings"]) > 0
 
     @pytest.mark.asyncio
@@ -402,7 +402,7 @@ class TestResourcesScanning:
 
         assert len(results) == 1
         assert results[0]["resource_name"] == "Annual Report"
-        assert results[0]["is_safe"] == False
+        assert results[0]["is_safe"] is False
         assert results[0]["findings"][0].analyzer == "Marker"
         assert "Content:\nHidden payload calls subprocess.run()" in marker.seen[0][0]
         assert marker.seen[0][1]["has_resource_content"] is True
@@ -430,7 +430,7 @@ class TestResourcesScanning:
         assert len(results) == 1
         assert results[0]["resource_uri"] == "file:///documents/notes.txt"
         assert results[0]["resource_name"] == "file:///documents/notes.txt"
-        assert results[0]["is_safe"] == False
+        assert results[0]["is_safe"] is False
         assert (
             "Content:\nThis resource body mentions subprocess.run()"
             in marker.seen[0][0]
@@ -468,7 +468,7 @@ class TestResourcesScanning:
 
         assert len(results) == 1
         assert results[0]["resource_name"] == "Notes"
-        assert results[0]["is_safe"] == False
+        assert results[0]["is_safe"] is False
         assert "Name: Notes" in marker.seen[0][0]
         assert "Content:\nThe body contains subprocess.run()." in marker.seen[0][0]
 
@@ -678,7 +678,7 @@ class TestEdgeCases:
 
         # Without analyzers, everything appears safe
         assert len(results) == 1
-        assert results[0]["is_safe"] == True
+        assert results[0]["is_safe"] is True
         assert len(results[0]["findings"]) == 0
 
 
@@ -722,7 +722,7 @@ class TestResultGeneration:
         assert tool_result.tool_name == "safe_tool"
         assert tool_result.tool_description == "A safe tool description"
         assert tool_result.status == "completed"
-        assert tool_result.is_safe == True
+        assert tool_result.is_safe is True
 
     @pytest.mark.asyncio
     async def test_prompt_result_generation(self, tmp_path):
@@ -761,7 +761,7 @@ class TestResultGeneration:
         assert prompt_result.prompt_name == "safe_prompt"
         assert prompt_result.prompt_description == "A safe prompt description"
         assert prompt_result.status == "completed"
-        assert prompt_result.is_safe == True
+        assert prompt_result.is_safe is True
 
     @pytest.mark.asyncio
     async def test_resource_result_generation(self, tmp_path):
@@ -803,7 +803,7 @@ class TestResultGeneration:
         assert resource_result.resource_name == "test_resource"
         assert resource_result.resource_mime_type == "text/plain"
         assert resource_result.status == "completed"
-        assert resource_result.is_safe == True
+        assert resource_result.is_safe is True
 
     @pytest.mark.asyncio
     async def test_result_generation_with_findings(self, tmp_path):
@@ -840,6 +840,6 @@ class TestResultGeneration:
         )
 
         assert tool_result.tool_name == "malicious_tool"
-        assert tool_result.is_safe == False
+        assert tool_result.is_safe is False
         assert len(tool_result.findings) > 0
         assert tool_result.status == "completed"

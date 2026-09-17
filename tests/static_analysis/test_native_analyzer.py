@@ -149,13 +149,13 @@ def complex_function(x: int) -> int:
         """Test that assignments are extracted from AST."""
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
-        code = '''
+        code = """
 def process():
     x = 10
     y: int = 20
     z = x + y
     return z
-'''
+"""
         analyzer = NativeAnalyzer(code, "test.py")
         result = analyzer.analyze()
 
@@ -172,12 +172,12 @@ def process():
         """Test that string literals are extracted from AST."""
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
-        code = '''
+        code = """
 def make_request():
     url = "https://api.example.com/data"
     headers = {"Authorization": "Bearer token123"}
     return url, headers
-'''
+"""
         analyzer = NativeAnalyzer(code, "test.py")
         result = analyzer.analyze()
 
@@ -193,7 +193,7 @@ def make_request():
         """Test that exception handlers are extracted from AST."""
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
-        code = '''
+        code = """
 def safe_divide(a, b):
     try:
         return a / b
@@ -201,7 +201,7 @@ def safe_divide(a, b):
         return None
     except Exception:
         raise
-'''
+"""
         analyzer = NativeAnalyzer(code, "test.py")
         result = analyzer.analyze()
 
@@ -218,14 +218,14 @@ def safe_divide(a, b):
         """Test that security flags are NOT set by hardcoded patterns."""
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
-        code = '''
+        code = """
 def dangerous_function():
     import subprocess
     subprocess.run(["ls", "-la"])
     eval("1+1")
     with open("/etc/passwd") as f:
         return f.read()
-'''
+"""
         analyzer = NativeAnalyzer(code, "test.py")
         result = analyzer.analyze()
 
@@ -262,10 +262,10 @@ def dangerous_function():
         """Test that syntax errors are handled gracefully."""
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
-        code = '''
+        code = """
 def broken function(
     this is not valid python
-'''
+"""
         analyzer = NativeAnalyzer(code, "test.py")
         result = analyzer.analyze()
 
@@ -280,13 +280,15 @@ class TestNativeAnalyzerJavaScript:
     def test_js_analysis_requires_tree_sitter(self):
         """Test that JS analysis reports if tree-sitter is missing."""
         from mcpscanner.core.static_analysis import NativeAnalyzer
-        from mcpscanner.core.static_analysis.native_analyzer import TREE_SITTER_AVAILABLE
+        from mcpscanner.core.static_analysis.native_analyzer import (
+            TREE_SITTER_AVAILABLE,
+        )
 
-        code = '''
+        code = """
 function greet(name) {
     return "Hello, " + name;
 }
-'''
+"""
         analyzer = NativeAnalyzer(code, "test.js")
         result = analyzer.analyze()
 
@@ -299,13 +301,13 @@ function greet(name) {
 
     @pytest.mark.skipif(
         not pytest.importorskip("tree_sitter", reason="tree-sitter not installed"),
-        reason="tree-sitter not installed"
+        reason="tree-sitter not installed",
     )
     def test_js_function_extraction(self):
         """Test extracting JavaScript functions via tree-sitter AST."""
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
-        code = '''
+        code = """
 function fetchData(url) {
     return fetch(url).then(r => r.json());
 }
@@ -314,7 +316,7 @@ const processData = async (data) => {
     const result = await transform(data);
     return result;
 };
-'''
+"""
         analyzer = NativeAnalyzer(code, "test.js")
         result = analyzer.analyze()
 
@@ -331,7 +333,6 @@ class TestNativeAnalyzerIntegration:
     def test_output_matches_function_context(self):
         """Test that output matches FunctionContext dataclass."""
         from mcpscanner.core.static_analysis import NativeAnalyzer, FunctionContext
-        from dataclasses import fields
 
         code = '''
 def example():
@@ -348,7 +349,6 @@ def example():
         assert isinstance(func, FunctionContext)
 
         # Verify all required fields are present
-        required_fields = {f.name for f in fields(FunctionContext) if f.default is f.default_factory}
         for field_name in ["name", "decorator_types", "imports", "function_calls"]:
             assert hasattr(func, field_name)
 
@@ -356,7 +356,7 @@ def example():
         """Test the main entry point method."""
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
-        code = '''
+        code = """
 def func1():
     pass
 
@@ -366,7 +366,7 @@ def func2():
 class MyClass:
     def method1(self):
         pass
-'''
+"""
         analyzer = NativeAnalyzer(code, "test.py")
         contexts = analyzer.extract_all_function_contexts()
 
@@ -375,3 +375,46 @@ class MyClass:
         assert "func1" in names
         assert "func2" in names
         assert "method1" in names
+
+    def test_global_statement_does_not_rename_function(self):
+        """A ``global`` declaration must not become the function's name.
+
+        The Python extractor once ran its global/nonlocal collection in the
+        same scope as the function name, so ``for name in child.names`` left
+        ``name`` pointing at the last global declared. A tool using ``global``
+        was reported to operators under the global variable's name.
+        """
+        from mcpscanner.core.static_analysis import NativeAnalyzer
+
+        code = '''
+COUNTER = 0
+
+def record_event(payload):
+    """Records an event."""
+    global COUNTER
+    COUNTER += 1
+    return payload
+'''
+        contexts = NativeAnalyzer(code, "test.py").extract_all_function_contexts()
+        func = next(c for c in contexts if c.line_number == 4)
+
+        assert func.name == "record_event"
+        assert func.global_writes == [{"type": "global", "name": "COUNTER", "line": 6}]
+
+    def test_decorator_name_still_overrides_function_name(self):
+        """``@tool(name=...)`` wins over the Python identifier, globals aside."""
+        from mcpscanner.core.static_analysis import NativeAnalyzer
+
+        code = '''
+COUNTER = 0
+
+@mcp.tool(name="record")
+def record_event(payload):
+    """Records an event."""
+    global COUNTER
+    return payload
+'''
+        contexts = NativeAnalyzer(code, "test.py").extract_all_function_contexts()
+        func = next(c for c in contexts if c.line_number == 5)
+
+        assert func.name == "record"

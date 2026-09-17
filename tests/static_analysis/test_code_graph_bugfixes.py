@@ -15,7 +15,12 @@ from mcpscanner.core.static_analysis.graph.integration import (
     partition_functions_by_graph,
     resolve_entry_id,
 )
-from mcpscanner.core.static_analysis.graph.models import CodeEdge, CodeGraph, CodeNode, Relation
+from mcpscanner.core.static_analysis.graph.models import (
+    CodeEdge,
+    CodeGraph,
+    CodeNode,
+    Relation,
+)
 from mcpscanner.core.static_analysis.graph.sink_analyzer import SinkAnalyzer
 from mcpscanner.core.static_analysis.interprocedural.call_graph_analyzer import (
     CallGraphAnalyzer,
@@ -227,9 +232,7 @@ def test_resolve_entry_id_prefers_line_number(tmp_path: Path) -> None:
         )
     )
     graph.entry_points.add(high)
-    assert (
-        resolve_entry_id(graph, str(sample), "tool_alpha", line_number=20) == high
-    )
+    assert resolve_entry_id(graph, str(sample), "tool_alpha", line_number=20) == high
 
 
 def test_graph_slicer_dedupes_edges() -> None:

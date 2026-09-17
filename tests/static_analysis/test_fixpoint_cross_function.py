@@ -16,7 +16,9 @@ from mcpscanner.core.static_analysis.graph import (
     SinkAnalyzer,
 )
 from mcpscanner.core.static_analysis.graph.builder import GRAPH_SUPPORTED_LANGUAGES
-from mcpscanner.core.static_analysis.graph.fixpoint import call_edges_without_superseded_external
+from mcpscanner.core.static_analysis.graph.fixpoint import (
+    call_edges_without_superseded_external,
+)
 from mcpscanner.core.static_analysis.graph.models import CodeEdge, Provenance
 from mcpscanner.core.static_analysis.native_analyzer import NativeAnalyzer
 
@@ -338,9 +340,7 @@ def handler(path: str) -> None:
     taint = InterproceduralTaintAnalyzer(graph).analyze_entry(handler_id)
     assert any(step.target_id.endswith("::FileWorker.run") for step in taint.flows)
     assert any("os.remove" in step.target_id for step in taint.flows)
-    assert not any(
-        "external::getattr" in step.target_id for step in taint.flows
-    )
+    assert not any("external::getattr" in step.target_id for step in taint.flows)
 
     sinks = SinkAnalyzer(graph).analyze_entry(handler_id)
     assert any(hit.sink_name == "os.remove" for hit in sinks.hits)

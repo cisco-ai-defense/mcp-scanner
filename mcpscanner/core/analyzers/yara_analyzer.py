@@ -67,12 +67,12 @@ class YaraAnalyzer(BaseAnalyzer):
             else:
                 self._rules_dir = rules_dir
             self.logger.debug(
-                f'Using custom YARA rules directory: rules_dir="{self._rules_dir}"'
+                'Using custom YARA rules directory: rules_dir="%s"', self._rules_dir
             )
         else:
             self._rules_dir = MCPScannerConstants.get_yara_rules_path()
             self.logger.debug(
-                f'Using default YARA rules directory: rules_dir="{self._rules_dir}"'
+                'Using default YARA rules directory: rules_dir="%s"', self._rules_dir
             )
 
         self._rules = self._load_rules()
@@ -90,29 +90,31 @@ class YaraAnalyzer(BaseAnalyzer):
         rule_sources = {}
 
         if not self._rules_dir.is_dir():
-            self.logger.error(f"YARA rules directory not found at: {self._rules_dir}")
+            self.logger.error("YARA rules directory not found at: %s", self._rules_dir)
             raise FileNotFoundError(
                 f"YARA rules directory not found at: {self._rules_dir}"
             )
 
         for item in self._rules_dir.iterdir():
             if item.name.endswith((".yara", ".yar")):
-                self.logger.debug(f"Found rule file: {item.name}")
+                self.logger.debug("Found rule file: %s", item.name)
                 rule_sources[item.name] = item.read_text(encoding="utf-8")
 
         if not rule_sources:
-            self.logger.error(f"No YARA rule files found in '{self._rules_dir}'")
+            self.logger.error("No YARA rule files found in '%s'", self._rules_dir)
             raise FileNotFoundError(f"No YARA rule files found in '{self._rules_dir}'")
 
         self.logger.debug(
-            f"Compiling {len(rule_sources)} rule file(s): {list(rule_sources.keys())}"
+            "Compiling %s rule file(s): %s",
+            len(rule_sources),
+            list(rule_sources.keys()),
         )
         try:
             rules = yara.compile(sources=rule_sources)
             self.logger.debug("YARA rules compiled successfully")
             return rules
         except yara.Error as e:
-            self.logger.error(f"Error compiling YARA rules: {e}")
+            self.logger.error("Error compiling YARA rules: %s", e)
             raise
 
     async def analyze(
@@ -192,7 +194,7 @@ class YaraAnalyzer(BaseAnalyzer):
                 )
 
         except Exception as e:
-            self.logger.error(f"YARA analysis failed for tool '{tool_name}': {e}")
+            self.logger.error("YARA analysis failed for tool '%s': %s", tool_name, e)
             raise
 
         return findings

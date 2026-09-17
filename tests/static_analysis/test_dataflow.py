@@ -16,8 +16,6 @@
 
 """Tests for dataflow analysis components."""
 
-import pytest
-
 
 class TestDataflow:
     """Test dataflow analysis functionality."""

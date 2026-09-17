@@ -19,4 +19,9 @@
 from .call_graph_analyzer import CallGraph, CallGraphAnalyzer
 from .treesitter_call_graph import TSCallGraph, TreeSitterCallGraphAnalyzer
 
-__all__ = ["CallGraph", "CallGraphAnalyzer", "TSCallGraph", "TreeSitterCallGraphAnalyzer"]
+__all__ = [
+    "CallGraph",
+    "CallGraphAnalyzer",
+    "TSCallGraph",
+    "TreeSitterCallGraphAnalyzer",
+]

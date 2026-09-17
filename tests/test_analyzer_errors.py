@@ -4,7 +4,6 @@
 
 """Tests for analyzer error classification and backoff helpers."""
 
-import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -26,7 +25,9 @@ class TestClassifyAnalyzerError:
 
     def test_transient_rate_limit_message(self):
         assert (
-            classify_analyzer_error(RuntimeError("429 rate limit exceeded"), context="llm")
+            classify_analyzer_error(
+                RuntimeError("429 rate limit exceeded"), context="llm"
+            )
             is ErrorKind.TRANSIENT
         )
 
@@ -57,7 +58,9 @@ class TestClassifyAnalyzerError:
     def test_unknown_llm_error_defaults_final(self):
         """Unrecognized LLM failures fail fast instead of retrying."""
         assert (
-            classify_analyzer_error(RuntimeError("weird provider glitch"), context="llm")
+            classify_analyzer_error(
+                RuntimeError("weird provider glitch"), context="llm"
+            )
             is ErrorKind.FINAL
         )
 
@@ -83,9 +86,7 @@ class TestClassifyAnalyzerError:
 
     def test_local_attribute_error_is_final(self):
         assert (
-            classify_analyzer_error(
-                AttributeError("missing field"), context="local"
-            )
+            classify_analyzer_error(AttributeError("missing field"), context="local")
             is ErrorKind.FINAL
         )
 
@@ -176,31 +177,6 @@ class TestRetryTransientAsync:
                 sleep=AsyncMock(return_value=None),
             )
         assert calls["n"] == 1
-
-    @pytest.mark.asyncio
-    async def test_on_retry_callback_invoked_before_sleep(self):
-        retries: list[tuple[int, float]] = []
-
-        async def on_retry(_exc: BaseException, attempt: int, delay: float) -> None:
-            retries.append((attempt, delay))
-
-        calls = {"n": 0}
-
-        async def op():
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise RuntimeError("503 service unavailable")
-            return "ok"
-
-        result = await retry_transient_async(
-            op,
-            max_attempts=3,
-            base_delay=0.0,
-            sleep=AsyncMock(return_value=None),
-            on_retry=on_retry,
-        )
-        assert result == "ok"
-        assert retries == [(1, 0.0)]
 
     @pytest.mark.asyncio
     async def test_on_retry_callback_invoked_before_sleep(self):

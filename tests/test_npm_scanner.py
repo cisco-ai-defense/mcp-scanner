@@ -79,7 +79,6 @@ def _build_npm_tarball(dest_path: Path, *, package_name: str, sources: dict) -> 
     """Write a minimal npm-style tgz to ``dest_path``. ``sources`` maps
     ``package/path`` → file content (str). npm tarballs are always
     rooted at ``package/`` regardless of the package name."""
-    bio = io.BytesIO()
     with tarfile.open(dest_path, "w:gz") as tf:
         package_json = json.dumps({"name": package_name, "version": "0.0.1"})
         info = tarfile.TarInfo(name="package/package.json")
@@ -172,17 +171,13 @@ def test_local_mode_runs_full_pipeline_and_returns_finding(
     tarball, _pkg, tarball_bytes = fake_npm_tarball
 
     # 1. npm registry manifest lookup.
-    respx.get(
-        "https://registry.npmjs.org/demo/latest"
-    ).mock(
+    respx.get("https://registry.npmjs.org/demo/latest").mock(
         return_value=httpx.Response(
             200,
             json={
                 "name": "demo",
                 "version": "0.0.1",
-                "dist": {
-                    "tarball": "https://registry.npmjs.org/demo/-/demo-0.0.1.tgz"
-                },
+                "dist": {"tarball": "https://registry.npmjs.org/demo/-/demo-0.0.1.tgz"},
             },
         )
     )
@@ -281,9 +276,7 @@ def test_sync_scan_in_async_context_raises_clear_error():
 
 
 @respx.mock
-def test_async_scan_composes_with_existing_event_loop(
-    fake_npm_tarball, monkeypatch
-):
+def test_async_scan_composes_with_existing_event_loop(fake_npm_tarball, monkeypatch):
     """The async entrypoint must work from inside an active loop. This
     is the supported SDK shape for FastAPI / async batch jobs."""
     tarball, _pkg, tarball_bytes = fake_npm_tarball
@@ -293,9 +286,7 @@ def test_async_scan_composes_with_existing_event_loop(
             json={
                 "name": "demo",
                 "version": "0.0.1",
-                "dist": {
-                    "tarball": "https://registry.npmjs.org/demo/-/demo-0.0.1.tgz"
-                },
+                "dist": {"tarball": "https://registry.npmjs.org/demo/-/demo-0.0.1.tgz"},
             },
         )
     )
@@ -345,9 +336,7 @@ def test_local_mode_refuses_redirect_to_http(monkeypatch):
 
 
 @respx.mock
-def test_local_mode_refuses_tarball_at_foreign_host(
-    fake_npm_tarball, monkeypatch
-):
+def test_local_mode_refuses_tarball_at_foreign_host(fake_npm_tarball, monkeypatch):
     """A compromised registry response that points the tarball at an
     arbitrary HTTPS host must be rejected, even though plain HTTPS
     transport would otherwise allow it."""
@@ -406,12 +395,19 @@ def test_local_mode_verifies_integrity_when_registry_publishes_it(
 def test_redact_argv_masks_sensitive_env_pairs():
     """The docker argv we log MUST NOT leak credentials."""
     argv = [
-        "docker", "run", "--rm",
-        "-e", "LLM_API_KEY=sk-real-secret",
-        "-e", "LLM_MODEL=gpt-4o-mini",
-        "-e", "MCP_SCANNER_API_KEY=another-secret",
-        "-e", "AZURE_OPENAI_API_KEY=third-secret",
-        "mcp-scanner-npm:latest", "demo",
+        "docker",
+        "run",
+        "--rm",
+        "-e",
+        "LLM_API_KEY=sk-real-secret",
+        "-e",
+        "LLM_MODEL=gpt-4o-mini",
+        "-e",
+        "MCP_SCANNER_API_KEY=another-secret",
+        "-e",
+        "AZURE_OPENAI_API_KEY=third-secret",
+        "mcp-scanner-npm:latest",
+        "demo",
     ]
     rendered = redact_argv_for_logging(argv)
     assert "sk-real-secret" not in rendered
@@ -426,7 +422,8 @@ def test_redact_argv_masks_combined_option_equals_form():
     form (rather than ``-e KEY=VALUE`` split tokens) must still get the
     credential masked."""
     argv = [
-        "docker", "run",
+        "docker",
+        "run",
         "--env=LLM_API_KEY=sk-combined-secret",
         "--env=LLM_MODEL=gpt-4o-mini",
         "image",
@@ -634,9 +631,9 @@ def test_safe_extract_archive_default_keeps_dest_when_root_has_sibling_files(
     dest.mkdir()
     root = safe_extract_archive(archive, dest)
     # Default: dest_dir, because there are two siblings at root.
-    assert root == dest, (
-        f"default only_dirs=False should fall back to dest_dir, got {root!r}"
-    )
+    assert (
+        root == dest
+    ), f"default only_dirs=False should fall back to dest_dir, got {root!r}"
 
 
 def test_safe_extract_tar_gz_ignores_pax_global_header(tmp_path: Path):
@@ -717,9 +714,7 @@ def test_download_archive_rejects_private_resolved_host(tmp_path: Path):
     dest.mkdir()
     with patch(
         "mcpscanner.core.package_sandbox.socket.getaddrinfo",
-        return_value=[
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
-        ],
+        return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))],
     ):
         with pytest.raises(PackageDownloadError, match="private/link-local"):
             _validate_https_url(
@@ -794,9 +789,7 @@ def test_download_archive_strips_query_string_from_filename(tmp_path: Path):
     )
     dest = tmp_path / "dl"
     dest.mkdir()
-    out = download_archive(
-        "https://example.org/path/file.tgz?signature=abc#frag", dest
-    )
+    out = download_archive("https://example.org/path/file.tgz?signature=abc#frag", dest)
     assert out.name == "file.tgz"
 
 
@@ -1027,9 +1020,9 @@ def test_download_archive_removes_partial_on_integrity_failure(tmp_path: Path):
             expected_digest_algo="sha256",
         )
     leftovers = list(dest.iterdir())
-    assert leftovers == [], (
-        f"download_archive left files on disk after integrity failure: {leftovers!r}"
-    )
+    assert (
+        leftovers == []
+    ), f"download_archive left files on disk after integrity failure: {leftovers!r}"
 
 
 @respx.mock
@@ -1051,9 +1044,9 @@ def test_download_archive_atomically_renames_after_verification(tmp_path: Path):
     )
     assert out.exists()
     siblings = {p.name for p in dest.iterdir()}
-    assert siblings == {"file.tgz"}, (
-        f"unexpected leftover files after successful download: {siblings!r}"
-    )
+    assert siblings == {
+        "file.tgz"
+    }, f"unexpected leftover files after successful download: {siblings!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1061,9 +1054,7 @@ def test_download_archive_atomically_renames_after_verification(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_entrypoint_emits_llm_not_configured_error_code(
-    monkeypatch, capsys
-):
+def test_entrypoint_emits_llm_not_configured_error_code(monkeypatch, capsys):
     """End-to-end: invoking ``entrypoint_npm.main`` with no ``LLM_API_KEY``
     in the environment must write a JSON line to stdout containing
     ``error_code: "llm_not_configured"`` and exit non-zero. This is the
@@ -1179,9 +1170,9 @@ def test_classify_exception_logs_and_falls_back_on_import_error(monkeypatch, cap
     with caplog.at_level(logging.WARNING, logger="mcpscanner.core.package_sandbox"):
         code = classify_exception(PackageDownloadError("anything"))
 
-    assert code == "scan_failed", (
-        "expected fallback code when the typed classes can't be imported"
-    )
+    assert (
+        code == "scan_failed"
+    ), "expected fallback code when the typed classes can't be imported"
     assert any(
         "classify_exception fell back to scan_failed" in rec.message
         for rec in caplog.records
@@ -1202,7 +1193,9 @@ def test_format_final_url_strips_userinfo_from_log_output():
 
     from mcpscanner.core.package_sandbox import _format_final_url
 
-    parsed = urlparse("https://alice:hunter2@private.example.org:8443/path/file.tgz?x=1")
+    parsed = urlparse(
+        "https://alice:hunter2@private.example.org:8443/path/file.tgz?x=1"
+    )
     rendered = _format_final_url(parsed)
 
     assert "alice" not in rendered, f"userinfo leaked: {rendered!r}"
@@ -1246,8 +1239,7 @@ def test_analysis_scan_status_findings_present_is_completed():
     from mcpscanner.core.pypi_scanner import analysis_scan_status
 
     assert (
-        analysis_scan_status(_analyzer_with_error_stats(9), ["finding"])
-        == "completed"
+        analysis_scan_status(_analyzer_with_error_stats(9), ["finding"]) == "completed"
     )
 
 
@@ -1393,9 +1385,7 @@ def test_analysis_scan_status_fails_closed_when_stats_unreadable():
 
 
 @respx.mock
-def test_local_mode_degraded_analysis_not_reported_safe(
-    fake_npm_tarball, monkeypatch
-):
+def test_local_mode_degraded_analysis_not_reported_safe(fake_npm_tarball, monkeypatch):
     """End-to-end: when the alignment orchestrator hit infrastructure
     failures (e.g. LLM unreachable) and surfaced zero findings, the npm
     local scan must report ``scan_status='error'`` and ``is_safe=None``
@@ -1408,9 +1398,7 @@ def test_local_mode_degraded_analysis_not_reported_safe(
             json={
                 "name": "demo",
                 "version": "0.0.1",
-                "dist": {
-                    "tarball": "https://registry.npmjs.org/demo/-/demo-0.0.1.tgz"
-                },
+                "dist": {"tarball": "https://registry.npmjs.org/demo/-/demo-0.0.1.tgz"},
             },
         )
     )
@@ -1495,9 +1483,7 @@ def test_subdomain_npmjs_registry_keeps_cdn_allowlist(fake_npm_tarball):
             json={
                 "name": "demo",
                 "version": "0.0.1",
-                "dist": {
-                    "tarball": "https://registry.npmjs.com/demo/-/demo-0.0.1.tgz"
-                },
+                "dist": {"tarball": "https://registry.npmjs.com/demo/-/demo-0.0.1.tgz"},
             },
         )
     )
@@ -1520,8 +1506,9 @@ def test_subdomain_npmjs_registry_keeps_cdn_allowlist(fake_npm_tarball):
         "mcpscanner.core.analyzers.behavioral.js_code_analyzer."
         "JSBehavioralCodeAnalyzer"
     )
-    with patch(f"{monkeypatch_attrs}.__init__", fake_init), patch(
-        f"{monkeypatch_attrs}.analyze", AsyncMock(return_value=[])
+    with (
+        patch(f"{monkeypatch_attrs}.__init__", fake_init),
+        patch(f"{monkeypatch_attrs}.analyze", AsyncMock(return_value=[])),
     ):
         scanner = NPMPackageScanner(
             use_docker=False,
@@ -1610,16 +1597,12 @@ server.tool("handler", {}, async () => 42);
     def boom(self, *args, **kwargs):
         raise RuntimeError("tree-sitter unavailable")
 
-    monkeypatch.setattr(
-        namod.NativeAnalyzer, "extract_mcp_capability_contexts", boom
-    )
+    monkeypatch.setattr(namod.NativeAnalyzer, "extract_mcp_capability_contexts", boom)
     from mcpscanner.core.static_analysis.javascript import (
         js_context_extractor as jsmod,
     )
 
-    monkeypatch.setattr(
-        jsmod.JSContextExtractor, "extract_mcp_function_contexts", boom
-    )
+    monkeypatch.setattr(jsmod.JSContextExtractor, "extract_mcp_function_contexts", boom)
 
     analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
     findings = asyncio.run(analyzer.analyze(str(tmp_path), {}))

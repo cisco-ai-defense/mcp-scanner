@@ -28,7 +28,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..utils.logging_config import get_logger
-from .auth import APIAuthConfig, AuthType
+from .auth import APIAuthConfig
 
 # L1 fix: keep the module-level logger BELOW every ``from`` /
 # ``import`` so flake8 / pyflakes doesn't flag E402 (module-level
@@ -352,9 +352,7 @@ class APIScanRequest(BaseModel):
 
     @field_validator("analyzers")
     @classmethod
-    def _enforce_api_allowlist(
-        cls, value: List[AnalyzerEnum]
-    ) -> List[AnalyzerEnum]:
+    def _enforce_api_allowlist(cls, value: List[AnalyzerEnum]) -> List[AnalyzerEnum]:
         """Reject analyzers that are not exposed over the HTTP surface.
 
         We validate at the request boundary rather than silently filtering
@@ -365,9 +363,7 @@ class APIScanRequest(BaseModel):
         """
         if not value:
             return value
-        rejected = sorted(
-            {a.value for a in value if a not in API_ALLOWED_ANALYZERS}
-        )
+        rejected = sorted({a.value for a in value if a not in API_ALLOWED_ANALYZERS})
         if rejected:
             allowed = sorted(a.value for a in API_ALLOWED_ANALYZERS)
             raise ValueError(
@@ -400,10 +396,7 @@ class APIScanRequest(BaseModel):
         without breaking the existing pattern of explicitly listing
         META in ``analyzers`` (which predates the flag).
         """
-        if (
-            not self.enable_meta
-            and AnalyzerEnum.META in self.analyzers
-        ):
+        if not self.enable_meta and AnalyzerEnum.META in self.analyzers:
             cls = type(self)
             level = logging.WARNING
             if cls._disagreement_warning_emitted:

@@ -31,7 +31,11 @@ def _paths_equivalent(left: str, right: str) -> bool:
     if left_path == right_path:
         return True
     try:
-        return left_path.is_file() and right_path.is_file() and left_path.samefile(right_path)
+        return (
+            left_path.is_file()
+            and right_path.is_file()
+            and left_path.samefile(right_path)
+        )
     except OSError:
         return False
 
@@ -61,7 +65,9 @@ def _call_graph_entry_id(
     if resolved and resolved not in seen:
         candidates.append(f"{resolved}{suffix}")
 
-    functions = getattr(getattr(call_graph_analyzer, "call_graph", None), "functions", None)
+    functions = getattr(
+        getattr(call_graph_analyzer, "call_graph", None), "functions", None
+    )
     if isinstance(functions, dict) and functions:
         for key in candidates:
             if key in functions:
@@ -149,7 +155,9 @@ class CrossFileDataflowAnalyzer:
         call_graph_analyzer: Union[CallGraphAnalyzer, TreeSitterCallGraphAnalyzer],
     ) -> dict[str, Any]:
         if isinstance(call_graph_analyzer, TreeSitterCallGraphAnalyzer):
-            return call_graph_analyzer.analyze_cross_file_flows(entry_point, param_names)
+            return call_graph_analyzer.analyze_cross_file_flows(
+                entry_point, param_names
+            )
         return call_graph_analyzer.analyze_parameter_flow_across_files(
             entry_point, param_names
         )

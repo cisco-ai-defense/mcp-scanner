@@ -10,7 +10,7 @@ from pathlib import Path
 from ....config.constants import MCPScannerConstants
 from ....utils.logging_config import get_logger
 from .dynamic_dispatch import is_dynamic_call_label
-from .models import CodeEdge, CodeGraph, CodeNode, Provenance, Relation
+from .models import CodeEdge, CodeGraph, CodeNode, Relation
 from .resolver import CrossFileSymbolResolver
 from .semantic_dispatch import (
     ProgramFacts,

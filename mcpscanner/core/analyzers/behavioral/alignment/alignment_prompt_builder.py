@@ -29,16 +29,14 @@ import json
 import logging
 import re
 import secrets
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .....config.constants import MCPScannerConstants
 from .....utils.log_format import truncate
 from ....static_analysis.context_extractor import FunctionContext
 
-_GRAPH_EVIDENCE_HEADER = (
-    "\n**CODE GRAPH EVIDENCE (deterministic static analysis):**\n"
-)
+_GRAPH_EVIDENCE_HEADER = "\n**CODE GRAPH EVIDENCE (deterministic static analysis):**\n"
 _CLASSIC_DATAFLOW_HEADER = (
     "\n**CLASSIC DATAFLOW (reaching-defs / liveness / available-exprs):**\n"
 )
@@ -115,9 +113,7 @@ def _cap_preserved_sections(preserved: str, max_preserved: int) -> str:
             priority = (
                 0
                 if header == _SINK_HINTS_HEADER
-                else 1
-                if header == _GRAPH_EVIDENCE_HEADER
-                else 2
+                else 1 if header == _GRAPH_EVIDENCE_HEADER else 2
             )
             chunks.append((priority, chunk))
             preserved = preserved[:pos] + preserved[end:]
@@ -180,9 +176,108 @@ _RESPONSE_FORMAT_MARKER = "## Required Output Format"
 _PROMPT_FRAME_CHARS = 5
 
 
-def _cap_prompt_preserving_end_tag(
-    prompt: str, *, max_total: int, end_tag: str
-) -> str:
+def _truncate_with_suffix(text: str, limit: int) -> str:
+    """Cut ``text`` to ``limit``, spending the tail on the truncation notice.
+
+    A limit too small to hold the notice yields the bare notice: saying the
+    text was cut matters more than the handful of characters that would fit.
+    """
+    suffix_len = len(_ANALYSIS_TRUNCATION_SUFFIX)
+    if limit <= suffix_len:
+        return _ANALYSIS_TRUNCATION_SUFFIX.strip()
+    return text[: limit - suffix_len] + _ANALYSIS_TRUNCATION_SUFFIX
+
+
+def _shave(text: str, amount: int) -> str:
+    """Drop ``amount`` characters off the end, keeping the truncation notice."""
+    text = text[: max(0, len(text) - amount)]
+    if not text.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
+        text += _ANALYSIS_TRUNCATION_SUFFIX
+    return text
+
+
+@dataclass
+class _PromptFit:
+    """Working state while fitting one prompt into the alignment budget.
+
+    ``guidance`` is the truncatable head of the template and ``pinned`` the
+    response schema that must survive intact; ``main`` and ``preserved`` are
+    the same split applied to the analysis, where ``preserved`` holds the
+    deterministic graph evidence. ``main`` and ``preserved`` are only
+    populated when the caller asked to relocate preserved sections -- without
+    that, ``analysis`` is one opaque string and truncation just eats its tail.
+    """
+
+    prefix: str
+    start_tag: str
+    end_tag: str
+    log_label: str
+    relocate_preserved: bool
+    max_total: int
+    available: int
+    guidance: str
+    pinned: str
+    guidance_used: str
+    main: str
+    preserved: str
+    analysis: str
+
+    @property
+    def template_used(self) -> str:
+        return self.guidance_used + self.pinned
+
+    def max_analysis(self) -> int:
+        """How many characters the analysis may use, given the template.
+
+        Never drops below the preserved length: graph evidence is not
+        negotiable, and a caller that cannot fit it will hard-cap instead.
+        """
+        return max(
+            len(self.preserved),
+            self.available - len(self.template_used) - len(_ANALYSIS_TRUNCATION_SUFFIX),
+        )
+
+    def fit_analysis(self, limit: int) -> str:
+        """Render the analysis body cut down to ``limit`` characters."""
+        if self.relocate_preserved:
+            return _truncate_analysis_preserving_graph(self.main, self.preserved, limit)
+        if len(self.analysis) <= limit:
+            return self.analysis
+        return _truncate_with_suffix(self.analysis, limit)
+
+    def shave_analysis(self, amount: int, *, floor: int) -> bool:
+        """Take another bite out of the analysis, reporting whether it moved.
+
+        Only the text before the preserved sections is eaten, so repeated
+        calls converge on "graph evidence and nothing else" rather than on
+        the empty string. Returns False once what remains is down to
+        ``floor``, which is how the callers know to stop asking.
+        """
+        target = self.analysis
+        preserved_live = ""
+        if self.relocate_preserved:
+            _, preserved_live = _split_preserved_sections(self.analysis)
+            target = self.analysis[: len(self.analysis) - len(preserved_live)]
+
+        if len(target) <= floor:
+            return False
+
+        self.analysis = _shave(target, amount) + preserved_live
+        return True
+
+    def build(self) -> str:
+        """Frame the template and analysis into the final prompt string."""
+        return (
+            f"""{self.template_used}
+
+{self.prefix}{self.start_tag}
+{self.analysis}
+{self.end_tag}
+"""
+        ).strip()
+
+
+def _cap_prompt_preserving_end_tag(prompt: str, *, max_total: int, end_tag: str) -> str:
     """Hard-cap prompt length while keeping the untrusted-input closing fence."""
     if len(prompt) <= max_total:
         return prompt
@@ -306,17 +401,51 @@ class AlignmentPromptBuilder:
         return "".join(parts)
 
     def build_analysis_content(self, func_context: FunctionContext) -> str:
-        """Build deterministic alignment evidence (no random delimiters)."""
+        """Build deterministic alignment evidence (no random delimiters).
+
+        Each section is a builder returning its text, or ``None`` when it has
+        no evidence to contribute. Listing the builders here rather than
+        appending to an accumulator is the point: the one bug this function
+        has produced was a section built into a local list and then never
+        appended, which this shape makes impossible.
+        """
+        builders = (
+            self._section_entry_point,
+            self._section_imports,
+            self._section_dataflow_preamble,
+            self._section_parameter_flows,
+            self._section_variable_dependencies,
+            self._section_function_calls,
+            self._section_assignments,
+            self._section_control_flow,
+            self._section_cross_file_calls,
+            self._section_reachability,
+            self._section_constants,
+            self._section_string_literals,
+            self._section_return_expressions,
+            self._section_exception_handlers,
+            self._section_env_var_access,
+            self._section_global_writes,
+            self._section_attribute_writes,
+            self._format_graph_evidence_section,
+        )
+        return "".join(
+            section
+            for section in (build(func_context) for build in builders)
+            if section
+        )
+
+    def _section_entry_point(self, func_context: FunctionContext) -> Optional[str]:
+        """Function identity, docstring and signature. Always present."""
         docstring = func_context.docstring or "No docstring provided"
-
-        # Build the analysis content using list accumulation for efficiency
-        content_parts = []
-
-        # Entry point information
-        content_parts.append(
-            f"""**ENTRY POINT INFORMATION:**
+        decorator = (
+            func_context.decorator_types[0]
+            if func_context.decorator_types
+            else "unknown"
+        )
+        return f"""**ENTRY POINT INFORMATION:**
 - Function Name: {func_context.name}
-- Decorator: {func_context.decorator_types[0] if func_context.decorator_types else 'unknown'}
+- Decorator: {decorator}
 - Line: {func_context.line_number}
 - Docstring/Description: {docstring}
 
@@ -326,276 +455,315 @@ class AlignmentPromptBuilder:
 - Parameters: {json.dumps(func_context.parameters, indent=2)}
 - Return Type: {func_context.return_type or 'Not specified'}
 """
-        )
 
-        # Add imports section
-        if func_context.imports:
-            import_parts = ["\n**IMPORTS:**\n"]
-            import_parts.append("The following libraries and modules are imported:\n")
-            for imp in func_context.imports:
-                import_parts.append(f"  {imp}\n")
-            import_parts.append("\n")
-            content_parts.append("".join(import_parts))
+    def _section_imports(self, func_context: FunctionContext) -> Optional[str]:
+        """Libraries the function pulls in."""
+        if not func_context.imports:
+            return None
 
-        content_parts.append(
-            """
+        import_parts = ["\n**IMPORTS:**\n"]
+        import_parts.append("The following libraries and modules are imported:\n")
+        for imp in func_context.imports:
+            import_parts.append(f"  {imp}\n")
+        import_parts.append("\n")
+        return "".join(import_parts)
+
+    def _section_dataflow_preamble(
+        self, func_context: FunctionContext
+    ) -> Optional[str]:
+        """States the untrusted-input assumption. Always present."""
+        return """
 **DATAFLOW ANALYSIS:**
 All parameters are treated as untrusted input (MCP entry points receive external data).
 
 Parameter Flow Tracking:
 """
+
+    def _section_parameter_flows(self, func_context: FunctionContext) -> Optional[str]:
+        """Where each parameter travels and what it reaches."""
+        if not func_context.parameter_flows:
+            return None
+
+        param_parts = ["\n**PARAMETER FLOW TRACKING:**\n"]
+        for flow in func_context.parameter_flows:
+            param_name = flow.get("parameter", "unknown")
+            param_parts.append(f"\nParameter '{param_name}' flows through:\n")
+
+            if flow.get("operations"):
+                param_parts.append(f"  Operations ({len(flow['operations'])} total):\n")
+                for op in flow["operations"][: self.MAX_OPERATIONS_PER_PARAM]:
+                    op_type = op.get("type", "unknown")
+                    line = op.get("line", 0)
+                    if op_type == "assignment":
+                        param_parts.append(
+                            f"    Line {line}: {op.get('target')} = {op.get('value')}\n"
+                        )
+                    elif op_type == "function_call":
+                        param_parts.append(
+                            f"    Line {line}: {op.get('function')}({op.get('argument')})\n"
+                        )
+                    elif op_type == "return":
+                        param_parts.append(
+                            f"    Line {line}: return {op.get('value')}\n"
+                        )
+
+            if flow.get("reaches_calls"):
+                param_parts.append(
+                    f"  Reaches function calls: {', '.join(flow['reaches_calls'][:self.MAX_REACHES_CALLS])}\n"
+                )
+
+            if flow.get("reaches_external"):
+                param_parts.append(
+                    "  ⚠️  REACHES EXTERNAL OPERATIONS (file/network/subprocess)\n"
+                )
+
+            if flow.get("reaches_returns"):
+                param_parts.append("  Returns to caller\n")
+
+        return "".join(param_parts)
+
+    def _section_variable_dependencies(
+        self, func_context: FunctionContext
+    ) -> Optional[str]:
+        """Which variables derive from which."""
+        if not func_context.variable_dependencies:
+            return None
+
+        var_parts = ["\n**VARIABLE DEPENDENCIES:**\n"]
+        for var, deps in func_context.variable_dependencies.items():
+            var_parts.append(f"  {var} depends on: {', '.join(deps)}\n")
+        return "".join(var_parts)
+
+    def _section_function_calls(self, func_context: FunctionContext) -> Optional[str]:
+        """Calls made, capped at ``MAX_FUNCTION_CALLS``."""
+        if not func_context.function_calls:
+            return None
+
+        call_parts = [
+            f"\n**FUNCTION CALLS ({len(func_context.function_calls)} total):**\n"
+        ]
+        for call in func_context.function_calls[: self.MAX_FUNCTION_CALLS]:
+            try:
+                call_name = call.get("name", "unknown")
+                call_args = call.get("args", [])
+                call_line = call.get("line", 0)
+                call_parts.append(
+                    f"  Line {call_line}: {call_name}({', '.join(str(a) for a in call_args)})\n"
+                )
+            except Exception as exc:
+                self.logger.debug(
+                    "alignment prompt skipped_malformed kind=function_call error_type=%s error=%s",
+                    type(exc).__name__,
+                    truncate(exc),
+                )
+                continue
+        return "".join(call_parts)
+
+    def _section_assignments(self, func_context: FunctionContext) -> Optional[str]:
+        """Assignments made, capped at ``MAX_ASSIGNMENTS``."""
+        if not func_context.assignments:
+            return None
+
+        assign_parts = [f"\n**ASSIGNMENTS ({len(func_context.assignments)} total):**\n"]
+        for assign in func_context.assignments[: self.MAX_ASSIGNMENTS]:
+            try:
+                line = assign.get("line", 0)
+                var = assign.get("variable", "unknown")
+                val = assign.get("value", "unknown")
+                assign_parts.append(f"  Line {line}: {var} = {val}\n")
+            except Exception as exc:
+                self.logger.debug(
+                    "alignment prompt skipped_malformed kind=assignment error_type=%s error=%s",
+                    type(exc).__name__,
+                    truncate(exc),
+                )
+                continue
+        return "".join(assign_parts)
+
+    def _section_control_flow(self, func_context: FunctionContext) -> Optional[str]:
+        """Branching structure as raw JSON."""
+        if not func_context.control_flow:
+            return None
+
+        return (
+            f"\n**CONTROL FLOW:**\n{json.dumps(func_context.control_flow, indent=2)}\n"
         )
 
-        # Add parameter flow tracking
-        if func_context.parameter_flows:
-            param_parts = ["\n**PARAMETER FLOW TRACKING:**\n"]
-            for flow in func_context.parameter_flows:
-                param_name = flow.get("parameter", "unknown")
-                param_parts.append(f"\nParameter '{param_name}' flows through:\n")
+    def _section_cross_file_calls(self, func_context: FunctionContext) -> Optional[str]:
+        """Calls leaving this file, with their transitive chains."""
+        if not func_context.cross_file_calls:
+            return None
 
-                if flow.get("operations"):
-                    param_parts.append(
-                        f"  Operations ({len(flow['operations'])} total):\n"
+        cross_file_parts = [
+            f"\n**CROSS-FILE CALL CHAINS ({len(func_context.cross_file_calls)} calls to other files):**\n"
+        ]
+        cross_file_parts.append(
+            "⚠️  This function calls functions from other files. Full call chains shown:\n\n"
+        )
+        for call in func_context.cross_file_calls[: self.MAX_CROSS_FILE_CALLS]:
+            try:
+                # Handle both old format (function, file) and new format (from_function, to_function, etc.)
+                if "to_function" in call:
+                    cross_file_parts.append(
+                        f"  {call.get('from_function', 'unknown')} → {call.get('to_function', 'unknown')}\n"
                     )
-                    for op in flow["operations"][: self.MAX_OPERATIONS_PER_PARAM]:
-                        op_type = op.get("type", "unknown")
-                        line = op.get("line", 0)
-                        if op_type == "assignment":
-                            param_parts.append(
-                                f"    Line {line}: {op.get('target')} = {op.get('value')}\n"
-                            )
-                        elif op_type == "function_call":
-                            param_parts.append(
-                                f"    Line {line}: {op.get('function')}({op.get('argument')})\n"
-                            )
-                        elif op_type == "return":
-                            param_parts.append(
-                                f"    Line {line}: return {op.get('value')}\n"
-                            )
-
-                if flow.get("reaches_calls"):
-                    param_parts.append(
-                        f"  Reaches function calls: {', '.join(flow['reaches_calls'][:self.MAX_REACHES_CALLS])}\n"
+                    cross_file_parts.append(
+                        f"    From: {call.get('from_file', 'unknown')}\n"
                     )
-
-                if flow.get("reaches_external"):
-                    param_parts.append(
-                        f"  ⚠️  REACHES EXTERNAL OPERATIONS (file/network/subprocess)\n"
+                    cross_file_parts.append(
+                        f"    To: {call.get('to_file', 'unknown')}\n"
                     )
-
-                if flow.get("reaches_returns"):
-                    param_parts.append(f"  Returns to caller\n")
-
-            content_parts.append("".join(param_parts))
-
-        # Add variable dependencies
-        if func_context.variable_dependencies:
-            var_parts = ["\n**VARIABLE DEPENDENCIES:**\n"]
-            for var, deps in func_context.variable_dependencies.items():
-                var_parts.append(f"  {var} depends on: {', '.join(deps)}\n")
-            content_parts.append("".join(var_parts))
-
-        # Add function calls
-        if func_context.function_calls:
-            call_parts = [
-                f"\n**FUNCTION CALLS ({len(func_context.function_calls)} total):**\n"
-            ]
-            for call in func_context.function_calls[: self.MAX_FUNCTION_CALLS]:
-                try:
-                    call_name = call.get("name", "unknown")
-                    call_args = call.get("args", [])
-                    call_line = call.get("line", 0)
-                    call_parts.append(
-                        f"  Line {call_line}: {call_name}({', '.join(str(a) for a in call_args)})\n"
-                    )
-                except Exception as exc:
-                    self.logger.debug(
-                        "alignment prompt skipped_malformed kind=function_call error_type=%s error=%s",
-                        type(exc).__name__,
-                        truncate(exc),
-                    )
-                    continue
-            content_parts.append("".join(call_parts))
-
-        # Add assignments
-        if func_context.assignments:
-            assign_parts = [
-                f"\n**ASSIGNMENTS ({len(func_context.assignments)} total):**\n"
-            ]
-            for assign in func_context.assignments[: self.MAX_ASSIGNMENTS]:
-                try:
-                    line = assign.get("line", 0)
-                    var = assign.get("variable", "unknown")
-                    val = assign.get("value", "unknown")
-                    assign_parts.append(f"  Line {line}: {var} = {val}\n")
-                except Exception as exc:
-                    self.logger.debug(
-                        "alignment prompt skipped_malformed kind=assignment error_type=%s error=%s",
-                        type(exc).__name__,
-                        truncate(exc),
-                    )
-                    continue
-            content_parts.append("".join(assign_parts))
-
-        # Add control flow information
-        if func_context.control_flow:
-            content_parts.append(
-                f"\n**CONTROL FLOW:**\n{json.dumps(func_context.control_flow, indent=2)}\n"
-            )
-
-        # Add cross-file analysis with transitive call chains
-        if func_context.cross_file_calls:
-            cross_file_parts = [
-                f"\n**CROSS-FILE CALL CHAINS ({len(func_context.cross_file_calls)} calls to other files):**\n"
-            ]
-            cross_file_parts.append(
-                "⚠️  This function calls functions from other files. Full call chains shown:\n\n"
-            )
-            for call in func_context.cross_file_calls[: self.MAX_CROSS_FILE_CALLS]:
-                try:
-                    # Handle both old format (function, file) and new format (from_function, to_function, etc.)
-                    if "to_function" in call:
-                        cross_file_parts.append(
-                            f"  {call.get('from_function', 'unknown')} → {call.get('to_function', 'unknown')}\n"
-                        )
-                        cross_file_parts.append(
-                            f"    From: {call.get('from_file', 'unknown')}\n"
-                        )
-                        cross_file_parts.append(
-                            f"    To: {call.get('to_file', 'unknown')}\n"
-                        )
-                    else:
-                        func_name = call.get("function", "unknown")
-                        file_name = call.get("file", "unknown")
-                        cross_file_parts.append(f"  {func_name}() in {file_name}\n")
-                        # Show transitive calls
-                        if call.get("call_chain"):
-                            cross_file_parts.append(
-                                self._format_call_chain(call["call_chain"], indent=4)
-                            )
-                    cross_file_parts.append("\n")
-                except Exception as exc:
-                    self.logger.debug(
-                        "alignment prompt skipped_malformed kind=cross_file_call error_type=%s error=%s",
-                        type(exc).__name__,
-                        truncate(exc),
-                    )
-                    continue
-            cross_file_parts.append(
-                "Note: Analyze the entire call chain to understand what operations are performed.\n"
-            )
-            content_parts.append("".join(cross_file_parts))
-
-        # Add detailed reachability analysis
-        if func_context.reachable_functions:
-            total_reachable = len(func_context.reachable_functions)
-            # Group reachable functions by file
-            functions_by_file = {}
-            for func in func_context.reachable_functions:
-                if "::" in func:
-                    file_path, func_name = func.rsplit("::", 1)
-                    if file_path not in functions_by_file:
-                        functions_by_file[file_path] = []
-                    functions_by_file[file_path].append(func_name)
-
-            if len(functions_by_file) > 1:  # More than just the current file
-                reach_parts = [f"\n**REACHABILITY ANALYSIS:**\n"]
-                reach_parts.append(
-                    f"Total reachable functions: {total_reachable} across {len(functions_by_file)} file(s)\n\n"
-                )
-                for file_path, funcs in list(functions_by_file.items())[
-                    : self.MAX_REACHABLE_FILES
-                ]:
-                    file_name = (
-                        file_path.split("/")[-1] if "/" in file_path else file_path
-                    )
-                    reach_parts.append(f"  {file_name}: {', '.join(funcs[:10])}\n")
-                    if len(funcs) > 10:
-                        reach_parts.append(f"    ... and {len(funcs) - 10} more\n")
-                content_parts.append("".join(reach_parts))
-
-        # Add constants
-        if func_context.constants:
-            const_parts = [f"\n**CONSTANTS:**\n"]
-            for var, val in list(func_context.constants.items())[: self.MAX_CONSTANTS]:
-                const_parts.append(f"  {var} = {val}\n")
-            content_parts.append("".join(const_parts))
-
-        # Add string literals (high-value security indicator)
-        if func_context.string_literals:
-            lit_parts = [
-                f"\n**STRING LITERALS ({len(func_context.string_literals)} total):**\n"
-            ]
-            for literal in func_context.string_literals[: self.MAX_STRING_LITERALS]:
-                # Escape and truncate for safety
-                safe_literal = literal.replace("\n", "\\n").replace("\r", "\\r")[:150]
-                lit_parts.append(f'  "{safe_literal}"\n')
-            content_parts.append("".join(lit_parts))
-
-        # Add return expressions
-        if func_context.return_expressions:
-            ret_parts = [f"\n**RETURN EXPRESSIONS:**\n"]
-            if func_context.return_type:
-                ret_parts.append(f"Declared return type: {func_context.return_type}\n")
-            for ret_expr in func_context.return_expressions:
-                ret_parts.append(f"  return {ret_expr}\n")
-            content_parts.append("".join(ret_parts))
-
-        # Add exception handling details
-        if func_context.exception_handlers:
-            exc_parts = [f"\n**EXCEPTION HANDLING:**\n"]
-            for handler in func_context.exception_handlers:
-                exc_type = handler.get('exception_type', 'Exception')
-                line = handler.get('line', '?')
-                exc_parts.append(
-                    f"  Line {line}: except {exc_type}"
-                )
-                if handler.get("is_silent", False):
-                    exc_parts.append(" (⚠️  SILENT - just 'pass')\n")
                 else:
-                    exc_parts.append("\n")
-            content_parts.append("".join(exc_parts))
-
-        # Add environment variable access
-        if func_context.env_var_access:
-            env_parts = [f"\n**ENVIRONMENT VARIABLE ACCESS:**\n"]
-            env_parts.append("⚠️  This function accesses environment variables:\n")
-            for env_access in func_context.env_var_access:
-                env_parts.append(f"  {env_access}\n")
-            content_parts.append("".join(env_parts))
-
-        # Add global variable writes
-        if func_context.global_writes:
-            global_parts = [f"\n**GLOBAL VARIABLE WRITES:**\n"]
-            global_parts.append("⚠️  This function modifies global state:\n")
-            for gwrite in func_context.global_writes:
-                global_parts.append(
-                    f"  Line {gwrite['line']}: global {gwrite['variable']} = {gwrite['value']}\n"
+                    func_name = call.get("function", "unknown")
+                    file_name = call.get("file", "unknown")
+                    cross_file_parts.append(f"  {func_name}() in {file_name}\n")
+                    # Show transitive calls
+                    if call.get("call_chain"):
+                        cross_file_parts.append(
+                            self._format_call_chain(call["call_chain"], indent=4)
+                        )
+                cross_file_parts.append("\n")
+            except Exception as exc:
+                self.logger.debug(
+                    "alignment prompt skipped_malformed kind=cross_file_call error_type=%s error=%s",
+                    type(exc).__name__,
+                    truncate(exc),
                 )
-            content_parts.append("".join(global_parts))
+                continue
+        cross_file_parts.append(
+            "Note: Analyze the entire call chain to understand what operations are performed.\n"
+        )
+        return "".join(cross_file_parts)
 
-        # Add attribute access (self.attr, obj.attr)
-        if func_context.attribute_access:
-            writes = [
-                op for op in func_context.attribute_access if op.get("type") == "write"
-            ]
-            if writes:
-                attr_parts = [f"\n**ATTRIBUTE WRITES:**\n"]
-                for op in writes[:10]:
-                    line = op.get('line', '?')
-                    obj = op.get('object', '?')
-                    attr = op.get('attribute', '?')
-                    val = op.get('value', '?')
-                    attr_parts.append(
-                        f"  Line {line}: {obj}.{attr} = {val}\n"
-                    )
-                content_parts.append("".join(attr_parts))
+    def _section_reachability(self, func_context: FunctionContext) -> Optional[str]:
+        """Reachable functions, grouped by file.
 
-        graph_section = self._format_graph_evidence_section(func_context)
-        if graph_section:
-            content_parts.append(graph_section)
+        Omitted when everything reachable lives in the current file, where
+        the grouping is noise rather than evidence."""
+        if not func_context.reachable_functions:
+            return None
 
-        return "".join(content_parts)
+        total_reachable = len(func_context.reachable_functions)
+        # Group reachable functions by file
+        functions_by_file = {}
+        for func in func_context.reachable_functions:
+            if "::" in func:
+                file_path, func_name = func.rsplit("::", 1)
+                if file_path not in functions_by_file:
+                    functions_by_file[file_path] = []
+                functions_by_file[file_path].append(func_name)
+
+        if len(functions_by_file) > 1:  # More than just the current file
+            reach_parts = ["\n**REACHABILITY ANALYSIS:**\n"]
+            reach_parts.append(
+                f"Total reachable functions: {total_reachable} across {len(functions_by_file)} file(s)\n\n"
+            )
+            for file_path, funcs in list(functions_by_file.items())[
+                : self.MAX_REACHABLE_FILES
+            ]:
+                file_name = file_path.split("/")[-1] if "/" in file_path else file_path
+                reach_parts.append(f"  {file_name}: {', '.join(funcs[:10])}\n")
+                if len(funcs) > 10:
+                    reach_parts.append(f"    ... and {len(funcs) - 10} more\n")
+            return "".join(reach_parts)
+
+    def _section_constants(self, func_context: FunctionContext) -> Optional[str]:
+        """Constant values defined in the function."""
+        if not func_context.constants:
+            return None
+
+        const_parts = ["\n**CONSTANTS:**\n"]
+        for var, val in list(func_context.constants.items())[: self.MAX_CONSTANTS]:
+            const_parts.append(f"  {var} = {val}\n")
+        return "".join(const_parts)
+
+    def _section_string_literals(self, func_context: FunctionContext) -> Optional[str]:
+        """String literals, escaped and truncated. A high-value indicator."""
+        if not func_context.string_literals:
+            return None
+
+        lit_parts = [
+            f"\n**STRING LITERALS ({len(func_context.string_literals)} total):**\n"
+        ]
+        for literal in func_context.string_literals[: self.MAX_STRING_LITERALS]:
+            # Escape and truncate for safety
+            safe_literal = literal.replace("\n", "\\n").replace("\r", "\\r")[:150]
+            lit_parts.append(f'  "{safe_literal}"\n')
+        return "".join(lit_parts)
+
+    def _section_return_expressions(
+        self, func_context: FunctionContext
+    ) -> Optional[str]:
+        """What the function returns, and its declared type."""
+        if not func_context.return_expressions:
+            return None
+
+        ret_parts = ["\n**RETURN EXPRESSIONS:**\n"]
+        if func_context.return_type:
+            ret_parts.append(f"Declared return type: {func_context.return_type}\n")
+        for ret_expr in func_context.return_expressions:
+            ret_parts.append(f"  return {ret_expr}\n")
+        return "".join(ret_parts)
+
+    def _section_exception_handlers(
+        self, func_context: FunctionContext
+    ) -> Optional[str]:
+        """Handlers, flagging any that silently swallow."""
+        if not func_context.exception_handlers:
+            return None
+
+        exc_parts = ["\n**EXCEPTION HANDLING:**\n"]
+        for handler in func_context.exception_handlers:
+            exc_type = handler.get("exception_type", "Exception")
+            line = handler.get("line", "?")
+            exc_parts.append(f"  Line {line}: except {exc_type}")
+            if handler.get("is_silent", False):
+                exc_parts.append(" (⚠️  SILENT - just 'pass')\n")
+            else:
+                exc_parts.append("\n")
+        return "".join(exc_parts)
+
+    def _section_env_var_access(self, func_context: FunctionContext) -> Optional[str]:
+        """Environment variables the function reads."""
+        if not func_context.env_var_access:
+            return None
+
+        env_parts = ["\n**ENVIRONMENT VARIABLE ACCESS:**\n"]
+        env_parts.append("⚠️  This function accesses environment variables:\n")
+        for env_access in func_context.env_var_access:
+            env_parts.append(f"  {env_access}\n")
+        return "".join(env_parts)
+
+    def _section_global_writes(self, func_context: FunctionContext) -> Optional[str]:
+        """Global state the function modifies."""
+        if not func_context.global_writes:
+            return None
+
+        global_parts = ["\n**GLOBAL VARIABLE WRITES:**\n"]
+        global_parts.append("⚠️  This function modifies global state:\n")
+        for gwrite in func_context.global_writes:
+            global_parts.append(
+                f"  Line {gwrite['line']}: global {gwrite['variable']} = {gwrite['value']}\n"
+            )
+        return "".join(global_parts)
+
+    def _section_attribute_writes(self, func_context: FunctionContext) -> Optional[str]:
+        """Attribute writes only; reads are not evidence of mutation."""
+        if not func_context.attribute_access:
+            return None
+
+        writes = [
+            op for op in func_context.attribute_access if op.get("type") == "write"
+        ]
+        if writes:
+            attr_parts = ["\n**ATTRIBUTE WRITES:**\n"]
+            for op in writes[:10]:
+                line = op.get("line", "?")
+                obj = op.get("object", "?")
+                attr = op.get("attribute", "?")
+                val = op.get("value", "?")
+                attr_parts.append(f"  Line {line}: {obj}.{attr} = {val}\n")
+            return "".join(attr_parts)
 
     def build_prompt(self, func_context: FunctionContext) -> str:
         """Build comprehensive alignment verification prompt.
@@ -628,9 +796,7 @@ Parameter Flow Tracking:
             log_label=f"function={func_context.name}",
         )
 
-    def build_batch_analysis_content(
-        self, func_contexts: List[FunctionContext]
-    ) -> str:
+    def build_batch_analysis_content(self, func_contexts: List[FunctionContext]) -> str:
         """Build deterministic batch body (no random delimiters).
 
         Reused across batch parse retries; only delimiter tags change.
@@ -647,9 +813,7 @@ Parameter Flow Tracking:
         for idx, func_context in enumerate(func_contexts):
             docstring = func_context.docstring or "No docstring provided"
 
-            all_content.append(
-                f"=== FUNCTION {idx + 1} of {len(func_contexts)} ===\n"
-            )
+            all_content.append(f"=== FUNCTION {idx + 1} of {len(func_contexts)} ===\n")
             all_content.append(f"**Function Name:** {func_context.name}\n")
             all_content.append(f"**Line:** {func_context.line_number}\n")
             all_content.append(
@@ -677,9 +841,7 @@ Parameter Flow Tracking:
             if getattr(func_context, "has_eval_exec", False):
                 security_flags.append("EVAL/EXEC")
             if security_flags:
-                all_content.append(
-                    f"**Security Flags:** {', '.join(security_flags)}\n"
-                )
+                all_content.append(f"**Security Flags:** {', '.join(security_flags)}\n")
 
             source = getattr(func_context, "source", "")
             if source:
@@ -756,8 +918,54 @@ For functions with no issues, just include function_index, function_name, and mi
         prefix: str = "",
         relocate_preserved: bool = True,
     ) -> str:
-        """Build the final prompt and enforce the alignment context budget."""
-        original_analysis_content = analysis_content
+        """Build the final prompt and enforce the alignment context budget.
+
+        Fitting happens in four stages, each giving up less than the last:
+        trim the template guidance, trim the analysis, shrink both in a loop
+        while the assembled prompt is still over, and finally hard-cap the
+        string. Graph evidence is held back from every stage when
+        ``relocate_preserved`` is set, because a prompt that lost its
+        deterministic evidence is worse than a shorter one.
+        """
+        fit = self._plan_prompt_fit(
+            template=template,
+            analysis_content=analysis_content,
+            start_tag=start_tag,
+            end_tag=end_tag,
+            log_label=log_label,
+            prefix=prefix,
+            relocate_preserved=relocate_preserved,
+        )
+        self._trim_guidance(fit)
+        self._trim_analysis(fit, analysis_content)
+
+        prompt = fit.build()
+        prompt = self._shrink_to_fit(fit, prompt)
+        prompt = self._hard_cap(fit, prompt)
+
+        self.logger.debug(
+            "prompt built label=%s prompt_length=%d analysis_content_length=%d "
+            "preserved_length=%d pinned_length=%d",
+            fit.log_label,
+            len(prompt),
+            len(fit.analysis),
+            len(fit.preserved),
+            len(fit.pinned),
+        )
+        return prompt
+
+    @staticmethod
+    def _plan_prompt_fit(
+        *,
+        template: str,
+        analysis_content: str,
+        start_tag: str,
+        end_tag: str,
+        log_label: str,
+        prefix: str,
+        relocate_preserved: bool,
+    ) -> "_PromptFit":
+        """Work out the character budget and split the inputs along it."""
         max_total = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
         frame_overhead = (
             len(prefix) + len(start_tag) + len(end_tag) + _PROMPT_FRAME_CHARS
@@ -765,216 +973,152 @@ For functions with no issues, just include function_index, function_name, and mi
         available = max(0, max_total - frame_overhead)
 
         guidance, pinned = _split_template(template)
-        pinned_len = len(pinned)
 
         main = ""
         preserved = ""
         if relocate_preserved:
             main, preserved = _split_preserved_sections(analysis_content)
-            preserved_budget = min(
-                _MAX_PRESERVED_TOTAL_CHARS,
-                max(len(preserved), available // 3),
+            preserved = _cap_preserved_sections(
+                preserved,
+                min(_MAX_PRESERVED_TOTAL_CHARS, max(len(preserved), available // 3)),
             )
-            preserved = _cap_preserved_sections(preserved, preserved_budget)
-        else:
-            preserved_budget = 0
 
+        return _PromptFit(
+            prefix=prefix,
+            start_tag=start_tag,
+            end_tag=end_tag,
+            log_label=log_label,
+            relocate_preserved=relocate_preserved,
+            max_total=max_total,
+            available=available,
+            guidance=guidance,
+            pinned=pinned,
+            guidance_used=guidance,
+            main=main,
+            preserved=preserved,
+            analysis=analysis_content,
+        )
+
+    def _trim_guidance(self, fit: "_PromptFit") -> None:
+        """Cut the truncatable head of the template down to its share."""
         reserved_analysis = (
-            pinned_len
-            + len(preserved)
+            len(fit.pinned)
+            + len(fit.preserved)
             + _MIN_ANALYSIS_CHARS
             + len(_ANALYSIS_TRUNCATION_SUFFIX)
         )
-        max_guidance_len = max(0, available - reserved_analysis)
+        max_guidance_len = max(0, fit.available - reserved_analysis)
+        if len(fit.guidance) <= max_guidance_len:
+            return
 
-        guidance_used = guidance
-        if len(guidance) > max_guidance_len:
-            allow = max(0, max_guidance_len - len(_TEMPLATE_TRUNCATION_SUFFIX))
-            guidance_used = guidance[:allow] + _TEMPLATE_TRUNCATION_SUFFIX
-            self.logger.warning(
-                "prompt template truncated label=%s template_length=%d "
-                "max_guidance=%d pinned=%d budget=%d preserved_reserved=%d",
-                log_label,
-                len(guidance),
-                max_guidance_len,
-                pinned_len,
-                max_total,
-                len(preserved),
-            )
-
-        template_used = guidance_used + pinned
-        max_analysis = max(
-            len(preserved),
-            available - len(template_used) - len(_ANALYSIS_TRUNCATION_SUFFIX),
+        allow = max(0, max_guidance_len - len(_TEMPLATE_TRUNCATION_SUFFIX))
+        fit.guidance_used = fit.guidance[:allow] + _TEMPLATE_TRUNCATION_SUFFIX
+        self.logger.warning(
+            "prompt template truncated label=%s template_length=%d "
+            "max_guidance=%d pinned=%d budget=%d preserved_reserved=%d",
+            fit.log_label,
+            len(fit.guidance),
+            max_guidance_len,
+            len(fit.pinned),
+            fit.max_total,
+            len(fit.preserved),
         )
-        original_analysis_len = len(analysis_content)
-        if relocate_preserved:
-            if len(original_analysis_content) <= max_analysis:
-                analysis_content = original_analysis_content
-            elif len(main) + len(preserved) > max_analysis:
-                self.logger.warning(
-                    "prompt truncated label=%s analysis_length=%d max_analysis=%d "
-                    "budget=%d preserved=%d pinned=%d",
-                    log_label,
-                    original_analysis_len,
-                    max_analysis,
-                    max_total,
-                    len(preserved),
-                    pinned_len,
-                )
-                analysis_content = _truncate_analysis_preserving_graph(
-                    main, preserved, max_analysis
-                )
-            else:
-                analysis_content = main + preserved
-        elif len(analysis_content) > max_analysis:
-            self.logger.warning(
-                "prompt truncated label=%s analysis_length=%d max_analysis=%d "
-                "budget=%d preserved=%d pinned=%d",
-                log_label,
-                original_analysis_len,
-                max_analysis,
-                max_total,
-                len(preserved),
-                pinned_len,
-            )
-            suffix_len = len(_ANALYSIS_TRUNCATION_SUFFIX)
-            if max_analysis <= suffix_len:
-                analysis_content = _ANALYSIS_TRUNCATION_SUFFIX.strip()
-            else:
-                analysis_content = (
-                    analysis_content[: max_analysis - suffix_len]
-                    + _ANALYSIS_TRUNCATION_SUFFIX
-                )
 
-        def _build(template_body: str, body: str) -> str:
-            return (
-                f"""{template_body}
+    def _trim_analysis(self, fit: "_PromptFit", original: str) -> None:
+        """Cut the analysis body down to whatever the template left it."""
+        max_analysis = fit.max_analysis()
 
-{prefix}{start_tag}
-{body}
-{end_tag}
-"""
-            ).strip()
+        if fit.relocate_preserved:
+            if len(original) <= max_analysis:
+                fit.analysis = original
+                return
+            if len(fit.main) + len(fit.preserved) <= max_analysis:
+                fit.analysis = fit.main + fit.preserved
+                return
+        elif len(fit.analysis) <= max_analysis:
+            return
 
-        prompt = _build(template_used, analysis_content)
+        self._warn_analysis_truncated(fit, len(original), max_analysis)
+        fit.analysis = fit.fit_analysis(max_analysis)
+
+    def _warn_analysis_truncated(
+        self, fit: "_PromptFit", analysis_length: int, max_analysis: int
+    ) -> None:
+        self.logger.warning(
+            "prompt truncated label=%s analysis_length=%d max_analysis=%d "
+            "budget=%d preserved=%d pinned=%d",
+            fit.log_label,
+            analysis_length,
+            max_analysis,
+            fit.max_total,
+            len(fit.preserved),
+            len(fit.pinned),
+        )
+
+    def _shrink_to_fit(self, fit: "_PromptFit", prompt: str) -> str:
+        """Alternate between shrinking guidance and analysis until it fits.
+
+        ``previous_len`` guards the guidance step: once a pass fails to make
+        the prompt any shorter, stop retrying it and start eating the
+        analysis instead, so a body that cannot shrink cannot spin forever.
+        """
         previous_len: Optional[int] = None
-        while len(prompt) > max_total:
-            guidance_body = guidance_used
-            if guidance_used.endswith(_TEMPLATE_TRUNCATION_SUFFIX):
-                guidance_body = guidance_used[: -len(_TEMPLATE_TRUNCATION_SUFFIX)]
+        while len(prompt) > fit.max_total:
+            guidance_body = fit.guidance_used
+            if guidance_body.endswith(_TEMPLATE_TRUNCATION_SUFFIX):
+                guidance_body = guidance_body[: -len(_TEMPLATE_TRUNCATION_SUFFIX)]
 
             if len(guidance_body) > 0 and previous_len != len(prompt):
                 previous_len = len(prompt)
                 new_len = max(
                     0, len(guidance_body) - max(256, len(guidance_body) // 10)
                 )
-                if new_len < len(guidance):
-                    guidance_used = guidance[:new_len] + _TEMPLATE_TRUNCATION_SUFFIX
-                else:
-                    guidance_used = guidance_body[:new_len]
-                template_used = guidance_used + pinned
-                max_analysis = max(
-                    len(preserved),
-                    available
-                    - len(template_used)
-                    - len(_ANALYSIS_TRUNCATION_SUFFIX),
-                )
-                if relocate_preserved:
-                    analysis_content = _truncate_analysis_preserving_graph(
-                        main, preserved, max_analysis
+                if new_len < len(fit.guidance):
+                    fit.guidance_used = (
+                        fit.guidance[:new_len] + _TEMPLATE_TRUNCATION_SUFFIX
                     )
                 else:
-                    suffix_len = len(_ANALYSIS_TRUNCATION_SUFFIX)
-                    if len(analysis_content) > max_analysis:
-                        if max_analysis <= suffix_len:
-                            analysis_content = _ANALYSIS_TRUNCATION_SUFFIX.strip()
-                        else:
-                            analysis_content = (
-                                analysis_content[: max_analysis - suffix_len]
-                                + _ANALYSIS_TRUNCATION_SUFFIX
-                            )
-                prompt = _build(template_used, analysis_content)
+                    fit.guidance_used = guidance_body[:new_len]
+                fit.analysis = fit.fit_analysis(fit.max_analysis())
+                prompt = fit.build()
                 continue
 
-            if relocate_preserved:
-                _, preserved_live = _split_preserved_sections(analysis_content)
-                main_live = analysis_content[
-                    : len(analysis_content) - len(preserved_live)
-                ]
-                if len(main_live) > len(_ANALYSIS_TRUNCATION_SUFFIX) + 32:
-                    previous_len = len(prompt)
-                    main_live = main_live[: max(0, len(main_live) - 256)]
-                    if not main_live.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
-                        main_live += _ANALYSIS_TRUNCATION_SUFFIX
-                    analysis_content = main_live + preserved_live
-                    prompt = _build(template_used, analysis_content)
-                    continue
-            elif len(analysis_content) > len(_ANALYSIS_TRUNCATION_SUFFIX) + 32:
+            if fit.shave_analysis(256, floor=len(_ANALYSIS_TRUNCATION_SUFFIX) + 32):
                 previous_len = len(prompt)
-                analysis_content = analysis_content[: max(0, len(analysis_content) - 256)]
-                if not analysis_content.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
-                    analysis_content += _ANALYSIS_TRUNCATION_SUFFIX
-                prompt = _build(template_used, analysis_content)
+                prompt = fit.build()
                 continue
 
             self.logger.warning(
                 "prompt exceeds alignment cap after assembly label=%s "
                 "prompt_length=%d budget=%d -- cannot shrink further without "
                 "dropping graph evidence",
-                log_label,
+                fit.log_label,
                 len(prompt),
-                max_total,
+                fit.max_total,
             )
             break
+        return prompt
 
-        if len(prompt) > max_total:
-            self.logger.warning(
-                "prompt hard-truncating label=%s prompt_length=%d budget=%d",
-                log_label,
-                len(prompt),
-                max_total,
-            )
-            if relocate_preserved:
-                _, preserved_live = _split_preserved_sections(analysis_content)
-                while (
-                    len(prompt) > max_total
-                    and len(analysis_content)
-                    > len(preserved_live) + len(_ANALYSIS_TRUNCATION_SUFFIX)
-                ):
-                    main_live = analysis_content[
-                        : len(analysis_content) - len(preserved_live)
-                    ]
-                    main_live = main_live[: max(0, len(main_live) - 512)]
-                    if not main_live.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
-                        main_live += _ANALYSIS_TRUNCATION_SUFFIX
-                    analysis_content = main_live + preserved_live
-                    prompt = _build(template_used, analysis_content)
-            else:
-                while (
-                    len(prompt) > max_total
-                    and len(analysis_content) > len(_ANALYSIS_TRUNCATION_SUFFIX)
-                ):
-                    analysis_content = analysis_content[
-                        : max(0, len(analysis_content) - 512)
-                    ]
-                    if not analysis_content.endswith(_ANALYSIS_TRUNCATION_SUFFIX):
-                        analysis_content += _ANALYSIS_TRUNCATION_SUFFIX
-                    prompt = _build(template_used, analysis_content)
-            if len(prompt) > max_total:
-                prompt = _cap_prompt_preserving_end_tag(
-                    prompt, max_total=max_total, end_tag=end_tag
-                )
+    def _hard_cap(self, fit: "_PromptFit", prompt: str) -> str:
+        """Last resort: shave in bigger steps, then cut the string outright."""
+        if len(prompt) <= fit.max_total:
+            return prompt
 
-        self.logger.debug(
-            "prompt built label=%s prompt_length=%d analysis_content_length=%d "
-            "preserved_length=%d pinned_length=%d",
-            log_label,
+        self.logger.warning(
+            "prompt hard-truncating label=%s prompt_length=%d budget=%d",
+            fit.log_label,
             len(prompt),
-            len(analysis_content),
-            len(preserved),
-            pinned_len,
+            fit.max_total,
         )
+        while len(prompt) > fit.max_total and fit.shave_analysis(
+            512, floor=len(_ANALYSIS_TRUNCATION_SUFFIX)
+        ):
+            prompt = fit.build()
+
+        if len(prompt) > fit.max_total:
+            prompt = _cap_prompt_preserving_end_tag(
+                prompt, max_total=fit.max_total, end_tag=fit.end_tag
+            )
         return prompt
 
     def _format_call_chain(self, chain: List[Dict[str, Any]], indent: int = 0) -> str:
@@ -1024,7 +1168,7 @@ For functions with no issues, just include function_index, function_name, and mi
             raise
         except Exception as e:
             self.logger.error(
-                f"Failed to load prompt code_alignment_threat_analysis_prompt.md: {e}"
+                "Failed to load prompt code_alignment_threat_analysis_prompt.md: %s", e
             )
             raise IOError(
                 f"Could not load prompt code_alignment_threat_analysis_prompt.md: {e}"

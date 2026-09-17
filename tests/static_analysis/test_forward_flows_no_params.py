@@ -64,7 +64,9 @@ class _NoShortCircuit(ForwardDataflowAnalysis):
             taint = Taint(status=TaintStatus.TAINTED)
             taint.add_label(f"param:{param_name}")
             initial_fact.shape_env.set_taint(param_name, taint)
-            initial_fact.parameter_flows[param_name] = FlowPath(parameter_name=param_name)
+            initial_fact.parameter_flows[param_name] = FlowPath(
+                parameter_name=param_name
+            )
 
         self.analyze(initial_fact, forward=True)
         self._collect_flows()
@@ -106,7 +108,8 @@ class TestForwardFlowsNoParamsEquivalence:
             analyzer.analyze_forward_flows()
 
         matching = [
-            r for r in caplog.records
+            r
+            for r in caplog.records
             if "static_dataflow forward_flows skipped" in r.getMessage()
         ]
         assert matching, "expected a 'skipped' DEBUG record"

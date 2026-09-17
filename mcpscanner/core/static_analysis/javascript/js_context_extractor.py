@@ -233,7 +233,9 @@ class JSContextExtractor:
                 )
             try:
                 ctx = self._build_context_from_registration(call_node, method_name)
-            except Exception as e:  # noqa: BLE001 - extractor should never crash the scan
+            except (
+                Exception
+            ) as e:  # noqa: BLE001 - extractor should never crash the scan
                 logger.warning(
                     "js_extractor failed_registration file=%s line=%d method=%s error=%s",
                     self.file_path,
@@ -266,9 +268,7 @@ class JSContextExtractor:
     # Registration detection
     # ------------------------------------------------------------------
 
-    def _iter_mcp_registration_calls(
-        self, root: Node
-    ) -> List[Tuple[Node, str]]:
+    def _iter_mcp_registration_calls(self, root: Node) -> List[Tuple[Node, str]]:
         """Return ``[(call_node, method_name)]`` for every
         ``<expr>.<mcp-method>(...)`` invocation in the tree."""
         found: List[Tuple[Node, str]] = []
@@ -315,9 +315,7 @@ class JSContextExtractor:
             # Without a name there is nothing useful to align against.
             return None
 
-        decorator_params: Dict[str, Dict[str, Any]] = {
-            method_name: {"name": tool_name}
-        }
+        decorator_params: Dict[str, Dict[str, Any]] = {method_name: {"name": tool_name}}
         # Many SDK variants accept a description either as a positional
         # string or as an options-object field. Pick whichever shows up.
         description = self._extract_tool_description(args)
@@ -350,9 +348,7 @@ class JSContextExtractor:
             return []
         return [c for c in args_node.named_children if c.type != "comment"]
 
-    def _extract_tool_name(
-        self, args: List[Node], method_name: str
-    ) -> Optional[str]:
+    def _extract_tool_name(self, args: List[Node], method_name: str) -> Optional[str]:
         """The first positional argument is the tool name (string literal).
         Bail out for dynamic names — they're rare and don't carry a docstring
         we can align against."""
@@ -521,7 +517,10 @@ class JSContextExtractor:
             if inner is None:
                 return []
             return [
-                {**entry, **({"type": type_str} if type_str and "type" not in entry else {})}
+                {
+                    **entry,
+                    **({"type": type_str} if type_str and "type" not in entry else {}),
+                }
                 for entry in self._param_node_to_entries(inner)
             ]
 
@@ -594,7 +593,13 @@ class JSContextExtractor:
                 {"if_statement", "ternary_expression", "switch_statement"} & types
             ),
             "has_loops": bool(
-                {"for_statement", "for_in_statement", "for_of_statement", "while_statement", "do_statement"}
+                {
+                    "for_statement",
+                    "for_in_statement",
+                    "for_of_statement",
+                    "while_statement",
+                    "do_statement",
+                }
                 & types
             ),
             "has_exception_handling": "try_statement" in types,
@@ -654,7 +659,11 @@ class JSContextExtractor:
                     out.append(
                         {
                             "variable": self._text(name_node),
-                            "value": self._text(value_node)[:200] if value_node else "<no value>",
+                            "value": (
+                                self._text(value_node)[:200]
+                                if value_node
+                                else "<no value>"
+                            ),
                             "line": node.start_point[0] + 1,
                             "type": "declarator",
                         }
@@ -735,9 +744,7 @@ class JSContextExtractor:
             stack.extend(node.children)
         return out
 
-    def _collect_exception_handlers(
-        self, body: Optional[Node]
-    ) -> List[Dict[str, Any]]:
+    def _collect_exception_handlers(self, body: Optional[Node]) -> List[Dict[str, Any]]:
         """Collect ``catch`` clauses with their declared exception type
         (if any) and a 'silent' flag for empty handlers."""
         if body is None:
@@ -788,9 +795,7 @@ class JSContextExtractor:
             stack.extend(node.children)
         return out
 
-    def _collect_attribute_access(
-        self, body: Optional[Node]
-    ) -> List[Dict[str, Any]]:
+    def _collect_attribute_access(self, body: Optional[Node]) -> List[Dict[str, Any]]:
         """Collect deduplicated member accesses (``obj.attr``) with
         type=read/write inferred from whether they appear on the LHS of an
         assignment."""
@@ -1005,9 +1010,7 @@ class JSContextExtractor:
                     out.append(text[:300])
             elif child.type in ("lexical_declaration", "variable_declaration"):
                 # const/let/var X = require('foo')
-                if any(
-                    self._is_require_call(c) for c in self._walk_descendants(child)
-                ):
+                if any(self._is_require_call(c) for c in self._walk_descendants(child)):
                     text = self._text(child).rstrip(";").strip()
                     if text and text not in seen:
                         seen.add(text)

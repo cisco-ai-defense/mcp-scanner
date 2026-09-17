@@ -290,7 +290,8 @@ class ReportGenerator:
             # Tool name filter
             if (
                 tool_filter
-                and tool_filter.lower() not in result.get("tool_name", result.get("package_name", "")).lower()
+                and tool_filter.lower()
+                not in result.get("tool_name", result.get("package_name", "")).lower()
             ):
                 continue
 
@@ -450,7 +451,9 @@ class ReportGenerator:
 
             # Get item name and description based on type
             if item_type == "tool":
-                item_name = result.get("tool_name", result.get("package_name", "Unknown"))
+                item_name = result.get(
+                    "tool_name", result.get("package_name", "Unknown")
+                )
                 item_label = "Tool"
             elif item_type == "prompt":
                 item_name = result.get("prompt_name", "Unknown")
@@ -486,7 +489,6 @@ class ReportGenerator:
                     threat_names = data.get("threat_names", [])
                     threat_summary = data.get("threat_summary", "N/A")
                     total_findings = data.get("total_findings", 0)
-                    mcp_taxonomy = data.get("mcp_taxonomy")
 
                     output.append(f"  • {analyzer}:")
                     output.append(f"    - Severity: {severity}")
@@ -500,7 +502,7 @@ class ReportGenerator:
                     mcp_taxonomies = data.get("mcp_taxonomies", [])
                     if mcp_taxonomies and total_findings > 0:
                         if len(mcp_taxonomies) == 1:
-                            output.append(f"    - MCP Taxonomy:")
+                            output.append("    - MCP Taxonomy:")
                             taxonomy = mcp_taxonomies[0]
                             if taxonomy.get("aitech"):
                                 output.append(f"      • AITech: {taxonomy['aitech']}")
@@ -574,7 +576,6 @@ class ReportGenerator:
 
         for result in results:
             tool_name = result.get("tool_name", result.get("package_name", "Unknown"))
-            is_safe = result.get("is_safe", True)
             findings = result.get("findings", {})
 
             # Get summary info
@@ -630,7 +631,12 @@ class ReportGenerator:
                     analyzer_results[analyzer] = []
 
                 analyzer_results[analyzer].append(
-                    {"tool_name": result.get("tool_name", result.get("package_name", "Unknown")), "data": data}
+                    {
+                        "tool_name": result.get(
+                            "tool_name", result.get("package_name", "Unknown")
+                        ),
+                        "data": data,
+                    }
                 )
 
         for analyzer, tools in analyzer_results.items():
@@ -691,7 +697,9 @@ class ReportGenerator:
 
                 severity_groups[severity].append(
                     {
-                        "tool_name": result.get("tool_name", result.get("package_name", "Unknown")),
+                        "tool_name": result.get(
+                            "tool_name", result.get("package_name", "Unknown")
+                        ),
                         "analyzer": analyzer,
                         "data": data,
                     }
@@ -802,10 +810,14 @@ class ReportGenerator:
                     target_server = result["server_name"][:18]
                 else:
                     target_server = "unknown"
-                tool_name = result.get("tool_name", result.get("package_name", "Unknown"))[:16]
+                tool_name = result.get(
+                    "tool_name", result.get("package_name", "Unknown")
+                )[:16]
             else:
                 # Direct server scan: no target server column
-                tool_name = result.get("tool_name", result.get("package_name", "Unknown"))[:18]
+                tool_name = result.get(
+                    "tool_name", result.get("package_name", "Unknown")
+                )[:18]
             status = "SAFE" if result.get("is_safe", True) else "UNSAFE"
             findings = result.get("findings", {})
 
@@ -836,9 +848,7 @@ class ReportGenerator:
             }
 
             if findings:
-                severities = [
-                    f.get("severity", "UNKNOWN") for f in findings.values()
-                ]
+                severities = [f.get("severity", "UNKNOWN") for f in findings.values()]
                 severity_text = get_highest_severity(severities)
                 severity_emoji = severity_emojis.get(severity_text, "🟣")
                 overall_severity = f"{severity_emoji} {severity_text}"[:8]
@@ -847,7 +857,9 @@ class ReportGenerator:
                 overall_severity = f"{severity_emoji} {status}"[:8]
 
             if self.is_vuln_pkg_scan:
-                pkg_name = result.get("package_name", result.get("tool_name", "Unknown"))[:23]
+                pkg_name = result.get(
+                    "package_name", result.get("tool_name", "Unknown")
+                )[:23]
                 vp_severity = get_analyzer_status("vulnerable_package_analyzer")[:13]
                 row = f"{scan_target_source:<30} {pkg_name:<25} {status:<10} {vp_severity:<15} {overall_severity:<10}"
             elif is_behavioral:

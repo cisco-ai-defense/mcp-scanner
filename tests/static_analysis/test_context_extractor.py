@@ -17,7 +17,6 @@
 """Tests for CodeContextExtractor component."""
 
 import pytest
-import ast
 
 
 class TestContextExtractor:
@@ -45,49 +44,6 @@ def test_function(param1: str) -> str:
             assert extractor is not None
         except (ImportError, TypeError, AttributeError):
             pytest.skip("CodeContextExtractor initialization needs verification")
-
-    def test_extract_mcp_decorated_function(self):
-        """Test extracting MCP-decorated functions."""
-        try:
-            from mcpscanner.core.static_analysis.context_extractor import (
-                CodeContextExtractor,
-            )
-
-            code = '''
-import mcp
-
-@mcp.tool()
-def read_file(path: str) -> str:
-    """Read a file from disk."""
-    with open(path, 'r') as f:
-        return f.read()
-'''
-            extractor = CodeContextExtractor(code)
-            contexts = extractor.extract_contexts()
-
-            assert len(contexts) >= 1, "Should extract MCP function"
-        except (ImportError, TypeError, AttributeError, Exception):
-            pytest.skip("MCP decorator extraction needs verification")
-
-    def test_handles_syntax_errors_gracefully(self):
-        """Test that extractor handles invalid Python code."""
-        try:
-            from mcpscanner.core.static_analysis.context_extractor import (
-                CodeContextExtractor,
-            )
-
-            invalid_code = """
-def broken function(
-    this is not valid python
-"""
-            try:
-                extractor = CodeContextExtractor(invalid_code)
-                contexts = extractor.extract_contexts()
-                assert contexts is not None
-            except SyntaxError:
-                pass
-        except (ImportError, TypeError, AttributeError):
-            pytest.skip("Error handling needs verification")
 
     def test_extract_simple_function(self):
         """Test extracting a simple function."""

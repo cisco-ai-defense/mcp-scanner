@@ -274,6 +274,7 @@ class TestSdkSerializerMetaAudit:
 
 try:
     import bs4 as _bs4  # noqa: F401
+
     _BS4_AVAILABLE = True
 except ImportError:
     _BS4_AVAILABLE = False
@@ -340,9 +341,7 @@ class TestStaticPathHtmlStripping:
             "mimeType": "text/html",
             "text": "<html><body><h1>Hello</h1><p>world</p></body></html>",
         }
-        text_content, saw_blob = analyzer._resource_text_content(
-            resource_data, []
-        )
+        text_content, saw_blob = analyzer._resource_text_content(resource_data, [])
         # Sanity: pre-strip, the body is the raw HTML.
         assert "<html>" in text_content
         # The helper applies the strip when invoked with the right mime.
@@ -428,9 +427,7 @@ class TestInstructionsContextForMeta:
             analyzers=["yara"],
             findings=[],
         )
-        out = Scanner._build_instructions_description_for_meta(
-            result, budget=8000
-        )
+        out = Scanner._build_instructions_description_for_meta(result, budget=8000)
         assert out.startswith("Y" * 8000)
         assert "instructions truncated" in out
         assert "4000 bytes elided" in out

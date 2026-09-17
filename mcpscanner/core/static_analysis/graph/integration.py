@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 from ....threats.threats import ThreatMapping
-from ....utils.log_format import sanitize_log_value, truncate
+from ....utils.log_format import sanitize_log_value
 from ....utils.logging_config import get_logger
 from ...analyzers.base import SecurityFinding
 from ..interprocedural.call_graph_analyzer import CallGraphAnalyzer
@@ -296,9 +296,21 @@ def is_actionable_sink_hit(hit: SinkHit) -> bool:
             continue
         if hit.category in _SINK_CATEGORY_TO_THREAT:
             return True
-        if label in {"os.remove", "os.system", "os.rmdir", "shutil.rmtree", "subprocess.run"}:
+        if label in {
+            "os.remove",
+            "os.system",
+            "os.rmdir",
+            "shutil.rmtree",
+            "subprocess.run",
+        }:
             return True
-        if label in {"fs.unlinkSync", "fs.unlink", "fs.rmSync", "File.delete", "unlink"}:
+        if label in {
+            "fs.unlinkSync",
+            "fs.unlink",
+            "fs.rmSync",
+            "File.delete",
+            "unlink",
+        }:
             return True
     return False
 
@@ -428,7 +440,9 @@ def partition_functions_by_graph(
             ]
             if actionable:
                 sink_hint_count += len(actionable)
-                func_context.dataflow_summary = dict(func_context.dataflow_summary or {})
+                func_context.dataflow_summary = dict(
+                    func_context.dataflow_summary or {}
+                )
                 func_context.dataflow_summary["code_graph_sink_hints"] = [
                     {
                         "sink_name": hit.sink_name,

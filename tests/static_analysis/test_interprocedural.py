@@ -39,13 +39,8 @@ class TestInterprocedural:
         except (ImportError, AttributeError):
             pytest.skip("Call graph analyzer structure needs verification")
 
-    def test_cross_file_analyzer_importable(self):
-        """Test that cross file analyzer can be imported."""
-        try:
-            from mcpscanner.core.static_analysis.interprocedural.cross_file_analyzer import (
-                CrossFileAnalyzer,
-            )
-
-            assert CrossFileAnalyzer is not None
-        except (ImportError, AttributeError):
-            pytest.skip("Cross file analyzer structure needs verification")
+    def test_deprecated_cross_file_analyzer_is_gone(self):
+        """The pre-refactor CrossFileAnalyzer was a clone of CallGraphAnalyzer
+        and has been removed; nothing should resurrect the import path."""
+        with pytest.raises(ImportError):
+            import mcpscanner.core.static_analysis.interprocedural.cross_file_analyzer  # noqa: F401

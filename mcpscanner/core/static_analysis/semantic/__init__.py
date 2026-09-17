@@ -20,4 +20,11 @@ from .name_resolver import NameResolver
 from .type_analyzer import TypeAnalyzer
 from .treesitter_analyzer import TreeSitterSemanticAnalyzer, TSType, TSTypeKind, TSScope
 
-__all__ = ["NameResolver", "TypeAnalyzer", "TreeSitterSemanticAnalyzer", "TSType", "TSTypeKind", "TSScope"]
+__all__ = [
+    "NameResolver",
+    "TypeAnalyzer",
+    "TreeSitterSemanticAnalyzer",
+    "TSType",
+    "TSTypeKind",
+    "TSScope",
+]

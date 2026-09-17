@@ -79,7 +79,7 @@ async def scan_mcp_config_file(path: str) -> MCPConfig:
     Raises:
         Exception: If the file cannot be parsed
     """
-    logger.debug(f"Scanning MCP config file: {path}")
+    logger.debug("Scanning MCP config file: %s", path)
     path = os.path.expanduser(path)
 
     def parse_and_validate(config: dict) -> MCPConfig:
@@ -96,7 +96,8 @@ async def scan_mcp_config_file(path: str) -> MCPConfig:
                     if isinstance(server_config, dict):
                         # Check for any URL field variant (case-insensitive)
                         has_url = any(
-                            k.lower() in ("url", "serverurl") for k in server_config.keys()
+                            k.lower() in ("url", "serverurl")
+                            for k in server_config.keys()
                         )
                         if has_url:
                             # Try RemoteServer (model_validator normalizes URL field)
@@ -109,17 +110,22 @@ async def scan_mcp_config_file(path: str) -> MCPConfig:
                         else:
                             invalid_count += 1
                             logger.debug(
-                                f"Skipping invalid server '{name}': missing url or command"
+                                "Skipping invalid server '%s': missing url or command",
+                                name,
                             )
                     else:
                         invalid_count += 1
-                        logger.debug(f"Skipping invalid server '{name}': not a dict")
+                        logger.debug("Skipping invalid server '%s': not a dict", name)
                 except ValidationError:
                     invalid_count += 1
-                    logger.debug(f"Skipping invalid server '{name}': validation failed")
+                    logger.debug(
+                        "Skipping invalid server '%s': validation failed", name
+                    )
 
             logger.debug(
-                f"Found {len(valid_servers)} valid servers, skipped {invalid_count} invalid entries"
+                "Found %s valid servers, skipped %s invalid entries",
+                len(valid_servers),
+                invalid_count,
             )
 
             # Create a cleaned config with only valid servers
@@ -141,7 +147,7 @@ async def scan_mcp_config_file(path: str) -> MCPConfig:
                 continue
 
         error_msg = "Could not parse config file as any supported format"
-        logger.debug(f"Validation errors: {validation_errors}")
+        logger.debug("Validation errors: %s", validation_errors)
         raise Exception(error_msg)
 
     try:
@@ -162,8 +168,8 @@ async def scan_mcp_config_file(path: str) -> MCPConfig:
         logger.debug("Config file parsed and validated successfully")
         return result
 
-    except Exception as e:
-        logger.exception(f"Error processing config file {path}")
+    except Exception:
+        logger.exception("Error processing config file %s", path)
         raise
 
 
@@ -187,13 +193,15 @@ class MCPConfigScanner:
             expanded_path = os.path.expanduser(path)
             if os.path.exists(expanded_path):
                 try:
-                    logger.debug(f"Found MCP config file: {expanded_path}")
+                    logger.debug("Found MCP config file: %s", expanded_path)
                     config = await scan_mcp_config_file(expanded_path)
                     results[expanded_path] = config
                 except Exception as e:
-                    logger.warning(f"Failed to parse config file {expanded_path}: {e}")
+                    logger.warning(
+                        "Failed to parse config file %s: %s", expanded_path, e
+                    )
             else:
-                logger.warning(f"Config file not found: {expanded_path}")
+                logger.warning("Config file not found: %s", expanded_path)
 
         return results
 
@@ -209,7 +217,7 @@ class MCPConfigScanner:
         try:
             return await scan_mcp_config_file(path)
         except Exception as e:
-            logger.error(f"Failed to scan config file {path}: {e}")
+            logger.error("Failed to scan config file %s: %s", path, e)
             return None
 
     def extract_servers(

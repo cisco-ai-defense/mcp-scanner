@@ -163,9 +163,9 @@ class TestResolvedAnalyzers:
         assert AnalyzerEnum.META in req.resolved_analyzers()
         # Warning emitted at WARNING level (first occurrence).
         warnings = [
-            r for r in records
-            if "enable_meta=False" in r.getMessage()
-            and r.levelno == logging.WARNING
+            r
+            for r in records
+            if "enable_meta=False" in r.getMessage() and r.levelno == logging.WARNING
         ]
         assert warnings, (
             "Operators must be warned about the surprising "
@@ -430,7 +430,10 @@ class TestEndpointAnalyzerThreading:
         response = client.post(endpoint, json=body)
 
         assert response.status_code == 200, response.text
-        assert captured["factory_analyzers"] == [AnalyzerEnum.YARA, AnalyzerEnum.META], (
+        assert captured["factory_analyzers"] == [
+            AnalyzerEnum.YARA,
+            AnalyzerEnum.META,
+        ], (
             "ScannerFactory did not receive META — meta analyzer would never "
             "be initialised for endpoint %s" % endpoint
         )
@@ -500,9 +503,7 @@ class TestEndpointAnalyzerThreading:
         assert AnalyzerEnum.META not in (captured["factory_analyzers"] or [])
         assert AnalyzerEnum.META not in (captured["scan_call_analyzers"] or [])
 
-    def test_explicit_meta_in_analyzers_is_honoured(
-        self, captured_factory_and_scanner
-    ):
+    def test_explicit_meta_in_analyzers_is_honoured(self, captured_factory_and_scanner):
         """``analyzers=["yara", "meta"]`` runs meta even without ``enable_meta``."""
         captured, app = captured_factory_and_scanner
         client = TestClient(app)
@@ -666,9 +667,7 @@ class TestAPIAnalyzerAllowlist:
     @pytest.mark.parametrize("allowed", sorted(API_ALLOWED_ANALYZERS))
     def test_allowed_analyzer_passes_validation(self, allowed):
         """Each allowlisted analyzer is accepted on its own."""
-        req = APIScanRequest(
-            server_url="https://example.com/mcp", analyzers=[allowed]
-        )
+        req = APIScanRequest(server_url="https://example.com/mcp", analyzers=[allowed])
         assert req.analyzers == [allowed]
 
     @pytest.mark.parametrize(
@@ -736,7 +735,7 @@ class TestAPIAnalyzerAllowlist:
             },
         )
         assert response.status_code == 422, response.text
-        body = response.json()
+        response.json()
         # FastAPI returns the Pydantic detail under "detail"; the message
         # should at least name the offending analyzer.
         assert "behavioral" in response.text.lower()
@@ -1084,13 +1083,13 @@ class TestCLIMetaBedrockGate:
         )
 
     def test_cli_gate_source_includes_bedrock_branch(self):
-        """Source-level pin: cli.py's --enable-meta gate must include the
-        Bedrock fallback. Catches a future refactor that silently drops
-        the IAM-only Bedrock path again.
+        """Source-level pin: the static command's --enable-meta gate must
+        include the Bedrock fallback. Catches a future refactor that
+        silently drops the IAM-only Bedrock path again.
         """
         import inspect
 
-        from mcpscanner import cli as cli_module
+        from mcpscanner.cli.commands import static as cli_module
 
         source = inspect.getsource(cli_module)
         # The fix introduces an ``_meta_is_bedrock`` local that is OR-ed
@@ -1211,9 +1210,9 @@ class TestEndToEndFPFiltering:
 
         # The yara_analyzer group reports zero findings post-filter.
         yara_group = body["findings"].get("yara_analyzer", {})
-        assert yara_group.get("total_findings", 0) == 0, (
-            f"FP-marked finding leaked into visible response: {yara_group!r}"
-        )
+        assert (
+            yara_group.get("total_findings", 0) == 0
+        ), f"FP-marked finding leaked into visible response: {yara_group!r}"
         # Severity rolls down to SAFE because the only finding was filtered.
         assert yara_group.get("severity") == "SAFE"
 
@@ -1236,6 +1235,7 @@ class TestEndToEndFPFiltering:
         lets the exception propagate would silently start emitting 500s
         on every meta-enabled request whenever the LLM hiccups.
         """
+
         async def _meta(findings, analyzers_used, entity_context):
             raise RuntimeError("simulated LLM transport error")
 
@@ -1248,9 +1248,9 @@ class TestEndToEndFPFiltering:
         body = response.json()
 
         yara_group = body["findings"].get("yara_analyzer", {})
-        assert yara_group.get("total_findings", 0) == 1, (
-            f"Original finding lost when meta raised: {yara_group!r}"
-        )
+        assert (
+            yara_group.get("total_findings", 0) == 1
+        ), f"Original finding lost when meta raised: {yara_group!r}"
         assert yara_group.get("severity") == "HIGH"
 
         # No meta_analysis block when nothing was filtered.

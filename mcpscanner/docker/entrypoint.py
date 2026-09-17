@@ -42,9 +42,7 @@ def download_package(package: str, version: str | None) -> tuple[Path, str]:
     spec = f"{package}=={version}" if version else package
     logger.info("Downloading %s", spec)
 
-    url, resolved_version, expected_digest = resolve_pypi_archive_url(
-        package, version
-    )
+    url, resolved_version, expected_digest = resolve_pypi_archive_url(package, version)
     archive = download_archive(
         url,
         DOWNLOAD_DIR,
@@ -70,9 +68,7 @@ def extract_package(archive: Path) -> Path:
     from mcpscanner.core.package_sandbox import safe_extract_archive
 
     EXTRACT_DIR.mkdir(parents=True, exist_ok=True)
-    extract_path = safe_extract_archive(
-        archive, EXTRACT_DIR, only_dirs=True
-    )
+    extract_path = safe_extract_archive(archive, EXTRACT_DIR, only_dirs=True)
     logger.info("Extracted to %s", extract_path)
     return extract_path
 
@@ -93,13 +89,15 @@ async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict],
 
     findings = []
     for finding in _reportable_findings(results):
-        findings.append({
-            "analyzer": "behavioral",
-            "severity": finding.severity,
-            "threat_category": finding.threat_category,
-            "summary": finding.summary,
-            "details": finding.details if finding.details else {},
-        })
+        findings.append(
+            {
+                "analyzer": "behavioral",
+                "severity": finding.severity,
+                "threat_category": finding.threat_category,
+                "summary": finding.summary,
+                "details": finding.details if finding.details else {},
+            }
+        )
     logger.info("Behavioral analysis: %d findings", len(findings))
     return findings, analysis_scan_status(analyzer, results)
 

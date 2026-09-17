@@ -122,7 +122,6 @@ mcp-scanner-api = "mcpscanner.server:main"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "--maxfail=1"
 filterwarnings = [
     # Silence Pydantic deprecation/future warnings across all tests
     #"ignore::DeprecationWarning:pydantic.*",
@@ -172,11 +171,6 @@ force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
 
-[tool.flake8]
-max-line-length = 88
-extend-ignore = ["E203", "W503", "E501"]
-exclude = [".git", "__pycache__", "build", "dist", ".venv", "venv"]
-
 [tool.mypy]
 python_version = "3.13"
 warn_return_any = true
@@ -199,3 +193,25 @@ module = [
     "mcp.*",
 ]
 ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["mcpscanner"]
+branch = true
+omit = [
+    # Run inside the scan container, not under the host test suite.
+    "mcpscanner/docker/entrypoint*.py",
+]
+
+[tool.coverage.report]
+# Measured 74.5% with branch coverage on. The floor sits just under that
+# so an ordinary refactor does not trip the gate while a feature landing
+# with no tests does. Raise it as coverage improves; it is a ratchet,
+# not a target.
+fail_under = 74
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "if __name__ == .__main__.:",
+]

@@ -70,9 +70,7 @@ class GraphSlicer:
 
         trimmed = self._trim_nodes(node_ids, max_chars, entry_id=entry_id)
         trimmed_edges = [
-            edge
-            for edge in edges
-            if edge.source in trimmed and edge.target in trimmed
+            edge for edge in edges if edge.source in trimmed and edge.target in trimmed
         ]
         return GraphSlice(
             entry_id=entry_id,

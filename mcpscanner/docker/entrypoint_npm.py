@@ -123,7 +123,9 @@ async def main() -> None:
                 "report is_safe=True for an un-analysed package"
             )
 
-        registry = os.environ.get("NPM_REGISTRY_URL", CONSTANTS.NPM_REGISTRY_URL).rstrip("/")
+        registry = os.environ.get(
+            "NPM_REGISTRY_URL", CONSTANTS.NPM_REGISTRY_URL
+        ).rstrip("/")
         encoded = (
             args.package.replace("/", "%2F")
             if args.package.startswith("@")
@@ -148,9 +150,7 @@ async def main() -> None:
         dist = manifest.get("dist") or {}
         tarball = dist.get("tarball")
         if not tarball:
-            raise RuntimeError(
-                f"no tarball URL for {args.package}@{resolved_version}"
-            )
+            raise RuntimeError(f"no tarball URL for {args.package}@{resolved_version}")
         integrity = dist.get("integrity")
         shasum = dist.get("shasum")
         if integrity:

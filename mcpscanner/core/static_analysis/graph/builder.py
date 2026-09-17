@@ -14,7 +14,12 @@ from ..interprocedural.treesitter_call_graph import (
     TreeSitterCallGraphAnalyzer,
 )
 from ..native_analyzer import NativeAnalyzer
-from .cache import GRAPH_EXTRACTOR_VERSION, CodeGraphCache, GraphCache, graph_cache_for_scan
+from .cache import (
+    GRAPH_EXTRACTOR_VERSION,
+    CodeGraphCache,
+    GraphCache,
+    graph_cache_for_scan,
+)
 from .cfg_fusion import extract_function_parameters
 from .classic_dataflow import ensure_classic_dataflow_enriched
 from .fixpoint import refine_call_graph
@@ -82,7 +87,9 @@ class CodeGraphBuilder:
     def add_path(self, file_path: Path) -> None:
         resolved = file_path.resolve()
         try:
-            self._files[resolved] = resolved.read_text(encoding="utf-8", errors="replace")
+            self._files[resolved] = resolved.read_text(
+                encoding="utf-8", errors="replace"
+            )
         except OSError as exc:
             logger.warning(
                 "code_graph add_path failed path=%s error_type=%s error=%s",
@@ -98,7 +105,9 @@ class CodeGraphBuilder:
         if not self._files:
             return graph
 
-        graph.source_registry = {str(path): source for path, source in self._files.items()}
+        graph.source_registry = {
+            str(path): source for path, source in self._files.items()
+        }
 
         py_files: dict[Path, str] = {}
         ts_buckets: dict[str, dict[Path, str]] = {}
@@ -267,7 +276,9 @@ class CodeGraphBuilder:
         for caller, callee in raw.calls:
             callee_label = callee.split("::")[-1] if "::" in callee else callee
             if resolver is not None:
-                dispatch = resolver.resolve_callee_targets(caller, callee_label, known_functions)
+                dispatch = resolver.resolve_callee_targets(
+                    caller, callee_label, known_functions
+                )
                 if not dispatch.targets:
                     resolved, provenance, confidence, context = resolver.resolve_callee(
                         caller, callee_label, known_functions
@@ -370,10 +381,14 @@ class CodeGraphBuilder:
                     label=resolved.split("::", 1)[-1],
                     source_file=_caller_file(resolved),
                     language=language,
-                    module_id=module_id_for(_caller_file(resolved))
-                    if _caller_file(resolved)
-                    else "",
-                    kind="external" if resolved.startswith("external::") else "function",
+                    module_id=(
+                        module_id_for(_caller_file(resolved))
+                        if _caller_file(resolved)
+                        else ""
+                    ),
+                    kind=(
+                        "external" if resolved.startswith("external::") else "function"
+                    ),
                 )
             )
             return
@@ -450,7 +465,9 @@ class CodeGraphBuilder:
             graph.source_registry = dict(source_registry)
             files = {Path(path): src for path, src in source_registry.items()}
         resolver = (
-            CrossFileSymbolResolver(files, language=language, function_nodes=raw.functions)
+            CrossFileSymbolResolver(
+                files, language=language, function_nodes=raw.functions
+            )
             if files
             else None
         )

@@ -35,7 +35,9 @@ def _ctx(**overrides):
         parameter_flows=[
             {
                 "parameter": "path",
-                "operations": [{"type": "function_call", "function": "os.remove", "line": 3}],
+                "operations": [
+                    {"type": "function_call", "function": "os.remove", "line": 3}
+                ],
                 "reaches_external": True,
             }
         ],
@@ -106,7 +108,9 @@ class TestGraphGaps:
         server_key = str(server.resolve())
         util_key = str(util.resolve())
         import_edges = [
-            e for e in edges if e.source == f"{server_key}::__module__" and e.target == util_key
+            e
+            for e in edges
+            if e.source == f"{server_key}::__module__" and e.target == util_key
         ]
         assert import_edges
         assert import_edges[0].context == "import_binding"
@@ -129,11 +133,7 @@ class TestGraphGaps:
         edges = resolver.import_edges()
         server_key = str(server.resolve())
         handlers_key = str(handlers.resolve())
-        targets = {
-            e.target
-            for e in edges
-            if e.source == f"{server_key}::__module__"
-        }
+        targets = {e.target for e in edges if e.source == f"{server_key}::__module__"}
         assert handlers_key in targets
 
     def test_resolver_ambiguous_cross_file_suffix(self) -> None:
@@ -228,7 +228,9 @@ export function handler(path: string): void {
         assert call_edges[0].provenance == Provenance.EXTRACTED
 
     def test_parse_dynamic_call_ts_cast_bracket(self) -> None:
-        from mcpscanner.core.static_analysis.graph.dynamic_dispatch import parse_dynamic_call
+        from mcpscanner.core.static_analysis.graph.dynamic_dispatch import (
+            parse_dynamic_call,
+        )
 
         assert parse_dynamic_call("(worker as any)[method]") == (
             "worker",
@@ -300,7 +302,9 @@ export function handler(path: string): void {
             and e.target == run_id
         ]
         assert call_edges
-        assert call_edges[0].context.startswith("fixpoint_r0:const_prop_semantic_bracket_variable")
+        assert call_edges[0].context.startswith(
+            "fixpoint_r0:const_prop_semantic_bracket_variable"
+        )
 
     def test_slicer_trim_preserves_entry_id(self) -> None:
         entry = "/z.py::handler_with_long_name"
@@ -335,7 +339,9 @@ export function handler(path: string): void {
         slice_ = GraphSlicer(graph).slice(entry, max_chars=len(callee) + 5)
         assert entry in slice_.node_ids
 
-    def test_call_graph_keeps_qualified_getattr_inner_call(self, tmp_path: Path) -> None:
+    def test_call_graph_keeps_qualified_getattr_inner_call(
+        self, tmp_path: Path
+    ) -> None:
         from mcpscanner.core.static_analysis.interprocedural.call_graph_analyzer import (
             CallGraphAnalyzer,
         )
@@ -362,10 +368,16 @@ def handler(path):
         assert "helpers.getattr" in callee_labels
 
     def test_sink_matches_require_fs_chain(self) -> None:
-        from mcpscanner.core.static_analysis.graph.sink_analyzer import _match_sink, _sink_lookup
+        from mcpscanner.core.static_analysis.graph.sink_analyzer import (
+            _match_sink,
+            _sink_lookup,
+        )
 
         sinks = _sink_lookup("typescript")
-        assert _match_sink("require('fs').unlinkSync", sinks) == ("file", "fs.unlinksync")
+        assert _match_sink("require('fs').unlinkSync", sinks) == (
+            "file",
+            "fs.unlinksync",
+        )
 
     def test_treesitter_mcp_entry_points(self, tmp_path: Path) -> None:
         sample = tmp_path / "server.ts"
@@ -425,7 +437,9 @@ def handler(path: str) -> None:
             and e.target == run_id
         ]
         assert call_edges
-        assert "getattr" in (call_edges[0].context or "") or "semantic" in (call_edges[0].context or "")
+        assert "getattr" in (call_edges[0].context or "") or "semantic" in (
+            call_edges[0].context or ""
+        )
         assert call_edges[0].provenance == Provenance.EXTRACTED
 
     def test_const_prop_dynamic_bracket(self, tmp_path: Path) -> None:
@@ -607,7 +621,9 @@ export function handler(path: string): void {
             if n.label == "FileWorker.run" or n.label.endswith(".run")
         )
         call_edges = [
-            e for e in built.edges if e.source == handler_id and e.relation == Relation.CALLS
+            e
+            for e in built.edges
+            if e.source == handler_id and e.relation == Relation.CALLS
         ]
         assert any(e.target == run_id for e in call_edges)
 
@@ -832,7 +848,9 @@ end
         assert "handler" in labels
         assert "helper" in labels
 
-    def test_java_cfg_fusion_maps_argument_to_callee_param(self, tmp_path: Path) -> None:
+    def test_java_cfg_fusion_maps_argument_to_callee_param(
+        self, tmp_path: Path
+    ) -> None:
         sample = tmp_path / "Server.java"
         sample.write_text(
             """

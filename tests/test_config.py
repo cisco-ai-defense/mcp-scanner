@@ -15,7 +15,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # tests/test_config.py
-import pytest
 from mcpscanner import Config
 from mcpscanner.config.constants import MCPScannerConstants, CONSTANTS
 from importlib.resources.abc import Traversable
@@ -151,7 +150,6 @@ class TestConfig:
     def test_config_stdio_timeout_from_env(self):
         """Test Config picks up MCP_SCANNER_STDIO_TIMEOUT from environment."""
         with patch.dict("os.environ", {"MCP_SCANNER_STDIO_TIMEOUT": "300"}):
-            from mcpscanner.config.constants import MCPScannerConstants
 
             fresh_default = int("300")
             config = Config(stdio_timeout=fresh_default)

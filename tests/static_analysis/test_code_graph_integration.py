@@ -10,7 +10,10 @@ from pathlib import Path
 import pytest
 
 from mcpscanner.config.constants import MCPScannerConstants
-from mcpscanner.core.static_analysis.context_extractor import ContextExtractor, FunctionContext
+from mcpscanner.core.static_analysis.context_extractor import (
+    ContextExtractor,
+    FunctionContext,
+)
 from mcpscanner.core.static_analysis.graph.integration import (
     build_code_graph,
     is_actionable_sink_hit,
@@ -153,7 +156,9 @@ def delete_file(path: str) -> None:
 
         cga = CallGraphAnalyzer()
         cga.add_file(file_path, source)
-        graph = build_code_graph(cga, language="python", source_registry={file_path: source})
+        graph = build_code_graph(
+            cga, language="python", source_registry={file_path: source}
+        )
 
         extractor = ContextExtractor(source, file_path)
         delete_ctx = next(fc for fc in extractor.extract_mcp_function_contexts())
@@ -419,7 +424,11 @@ export function delete_file(path: string): void {
         )
         graph.entry_points.add(node_id)
 
-        alt = f"/private{resolved}" if str(resolved).startswith("/var/") else str(resolved)
+        alt = (
+            f"/private{resolved}"
+            if str(resolved).startswith("/var/")
+            else str(resolved)
+        )
         assert resolve_entry_id(graph, alt, "tool_alpha") == node_id
 
         cases = [

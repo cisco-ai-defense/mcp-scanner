@@ -18,7 +18,7 @@ from mcpscanner.core.static_analysis.graph import (
 )
 
 
-PYTHON_SAMPLE = '''
+PYTHON_SAMPLE = """
 import os
 import shutil
 
@@ -27,7 +27,7 @@ def helper(path: str) -> None:
 
 def copy_sensitive(src: str, dst: str) -> None:
     shutil.copy(src, dst)
-'''
+"""
 
 
 class TestCodeGraphBuilder:
@@ -82,9 +82,7 @@ class TestCodeGraphBuilder:
         builder.add_path(sample)
         built = builder.build()
 
-        entry = next(
-            nid for nid, node in built.nodes.items() if node.label == "helper"
-        )
+        entry = next(nid for nid, node in built.nodes.items() if node.label == "helper")
         slice_ = GraphSlicer(built).slice(entry)
         sinks = SinkAnalyzer(built).analyze_entry(entry)
         text = EvidenceFormatter(built).format_combined(slice_, sinks)
@@ -99,9 +97,11 @@ class TestCodeGraphBuilder:
             (".rs", "rust"),
         ],
     )
-    def test_language_routing(self, ext: str, expected_lang: str, tmp_path: Path) -> None:
+    def test_language_routing(
+        self, ext: str, expected_lang: str, tmp_path: Path
+    ) -> None:
         if ext == ".go":
-            body = 'package main\nfunc helper() {}\n'
+            body = "package main\nfunc helper() {}\n"
         elif ext == ".rs":
             body = "fn helper() {}\n"
         else:

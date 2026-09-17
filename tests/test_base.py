@@ -18,7 +18,7 @@
 
 import pytest
 from typing import Dict, Any, List
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from mcpscanner.core.analyzers.base import BaseAnalyzer, SecurityFinding
 
@@ -260,7 +260,10 @@ class TestBaseAnalyzer:
             assert findings == []
             assert analyzer.analyze_called
             mock_debug.assert_called_once()
-            assert "found 0 potential threats" in mock_debug.call_args[0][0]
+            args = mock_debug.call_args[0]
+            assert (
+                args[0] % args[1:]
+            ) == "Analysis complete: found 0 potential threats"
 
     def test_base_analyzer_abstract_method(self):
         """Test that BaseAnalyzer cannot be instantiated directly."""

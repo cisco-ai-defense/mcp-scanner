@@ -163,7 +163,9 @@ def resolve_virtual_dispatch(
         program_facts=program_facts,
         caller_node_id=caller_node_id,
     )
-    return engine.resolve_virtual_method(caller_label=caller_label, callee_label=callee_label)
+    return engine.resolve_virtual_method(
+        caller_label=caller_label, callee_label=callee_label
+    )
 
 
 def resolve_python_dynamic_call(

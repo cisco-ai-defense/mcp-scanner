@@ -20,7 +20,6 @@ This module provides OAuth and Bearer token authentication support for MCP clien
 including token storage and OAuth client provider setup.
 """
 
-import asyncio
 from enum import Enum
 from typing import Optional, List, Callable, Tuple, Dict
 from urllib.parse import parse_qs, urlparse
@@ -286,7 +285,7 @@ class OAuthHandler:
         Args:
             auth_url (str): The authorization URL to display to the user.
         """
-        logger.info(f"OAuth authorization required. Visit: {auth_url}")
+        logger.info("OAuth authorization required. Visit: %s", auth_url)
         print(f"Visit the following URL to authorize the application: {auth_url}")
 
     async def handle_callback(self) -> Tuple[str, Optional[str]]:
@@ -304,7 +303,7 @@ class OAuthHandler:
         code = params["code"][0]
         state = params.get("state", [None])[0]
 
-        logger.debug(f"OAuth callback processed: code received, state={state}")
+        logger.debug("OAuth callback processed: code received, state=%s", state)
         return code, state
 
     def create_oauth_provider(
@@ -351,7 +350,11 @@ class OAuthHandler:
             scope=scope,
         )
 
-        logger.debug(f"Creating OAuth provider for server: {server_url}")
+        logger.debug("Creating OAuth provider for server: %s", server_url)
+        # Only the scope count, never the scopes themselves. They are not
+        # secret, but they are read off the same Auth object that carries
+        # client_secret, and a log line whose value is a count is not worth
+        # the standing question of whether it leaks the neighbouring field.
         logger.debug("OAuth metadata: scope_count=%d", len(scopes))
 
         return OAuthClientProvider(
@@ -444,7 +447,9 @@ def create_oauth_provider_from_auth(
         scope=scope,
     )
 
-    logger.info(f"Creating OAuth provider from Auth parameter for server: {server_url}")
+    logger.info(
+        "Creating OAuth provider from Auth parameter for server: %s", server_url
+    )
     logger.debug("OAuth metadata: scope_count=%d", len(scopes))
 
     return OAuthClientProvider(

@@ -92,9 +92,7 @@ class MCPScannerConstants:
     ENV_AWS_SESSION_TOKEN: str = os.getenv(
         "MCP_SCANNER_ENV_AWS_SESSION_TOKEN_NAME", "AWS_SESSION_TOKEN"
     )
-    ENV_AWS_PROFILE: str = os.getenv(
-        "MCP_SCANNER_ENV_AWS_PROFILE_NAME", "AWS_PROFILE"
-    )
+    ENV_AWS_PROFILE: str = os.getenv("MCP_SCANNER_ENV_AWS_PROFILE_NAME", "AWS_PROFILE")
     ENV_AWS_BEARER_TOKEN_BEDROCK: str = os.getenv(
         "MCP_SCANNER_ENV_AWS_BEARER_TOKEN_BEDROCK_NAME", "AWS_BEARER_TOKEN_BEDROCK"
     )
@@ -238,9 +236,11 @@ class MCPScannerConstants:
 
     # Deterministic code graph layer (graph evidence always passed to LLM).
     # Enabled by default; set MCP_SCANNER_CODE_GRAPH=0 to disable.
-    CODE_GRAPH_ENABLED: bool = os.getenv(
-        "MCP_SCANNER_CODE_GRAPH", "1"
-    ).lower() not in ("0", "false", "no")
+    CODE_GRAPH_ENABLED: bool = os.getenv("MCP_SCANNER_CODE_GRAPH", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
 
     # Optional on-disk cache directory for per-file CodeGraph partials.
     CODE_GRAPH_CACHE_DIR: str = os.getenv("MCP_SCANNER_CODE_GRAPH_CACHE", "")
@@ -271,9 +271,11 @@ class MCPScannerConstants:
     # None if not set (auto-enable when API key is present)
     _VIRUSTOTAL_ENABLED_RAW: str = os.getenv("MCP_SCANNER_VIRUSTOTAL_ENABLED", "")
     VIRUSTOTAL_ENABLED: bool = (
-        True if _VIRUSTOTAL_ENABLED_RAW.lower() in ("true", "1", "yes")
-        else False if _VIRUSTOTAL_ENABLED_RAW.lower() in ("false", "0", "no")
-        else None  # Not explicitly set — let Config decide based on API key
+        True
+        if _VIRUSTOTAL_ENABLED_RAW.lower() in ("true", "1", "yes")
+        else (
+            False if _VIRUSTOTAL_ENABLED_RAW.lower() in ("false", "0", "no") else None
+        )  # Not explicitly set — let Config decide based on API key
     )
     VIRUSTOTAL_UPLOAD_FILES: bool = os.getenv(
         "MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false"
@@ -281,9 +283,7 @@ class MCPScannerConstants:
 
     # Maximum number of files to scan per directory (0 = unlimited).
     # Override via MCP_SCANNER_VT_MAX_FILES env var.
-    VIRUSTOTAL_MAX_FILES: int = int(
-        os.getenv("MCP_SCANNER_VT_MAX_FILES", "10")
-    )
+    VIRUSTOTAL_MAX_FILES: int = int(os.getenv("MCP_SCANNER_VT_MAX_FILES", "10"))
 
     # Extra inclusion extensions: additional binary extensions to always scan.
     # The analyzer has built-in 3-tier classification (text → dangerous → magic check).
@@ -308,24 +308,16 @@ class MCPScannerConstants:
     DOCKER_IMAGE_NAME: str = os.getenv(
         "MCP_SCANNER_DOCKER_IMAGE_NAME", "mcp-scanner-pypi"
     )
-    DOCKER_IMAGE_TAG: str = os.getenv(
-        "MCP_SCANNER_DOCKER_IMAGE_TAG", "latest"
-    )
-    PYPI_SCAN_TIMEOUT: int = int(
-        os.getenv("MCP_SCANNER_PYPI_SCAN_TIMEOUT", "300")
-    )
+    DOCKER_IMAGE_TAG: str = os.getenv("MCP_SCANNER_DOCKER_IMAGE_TAG", "latest")
+    PYPI_SCAN_TIMEOUT: int = int(os.getenv("MCP_SCANNER_PYPI_SCAN_TIMEOUT", "300"))
 
     # npm Docker Scanner Configuration. Image is built from
     # mcpscanner/docker/Dockerfile.npm and entrypoint_npm.py.
     NPM_DOCKER_IMAGE_NAME: str = os.getenv(
         "MCP_SCANNER_NPM_DOCKER_IMAGE_NAME", "mcp-scanner-npm"
     )
-    NPM_DOCKER_IMAGE_TAG: str = os.getenv(
-        "MCP_SCANNER_NPM_DOCKER_IMAGE_TAG", "latest"
-    )
-    NPM_SCAN_TIMEOUT: int = int(
-        os.getenv("MCP_SCANNER_NPM_SCAN_TIMEOUT", "300")
-    )
+    NPM_DOCKER_IMAGE_TAG: str = os.getenv("MCP_SCANNER_NPM_DOCKER_IMAGE_TAG", "latest")
+    NPM_SCAN_TIMEOUT: int = int(os.getenv("MCP_SCANNER_NPM_SCAN_TIMEOUT", "300"))
     NPM_REGISTRY_URL: str = os.getenv(
         "MCP_SCANNER_NPM_REGISTRY_URL", "https://registry.npmjs.org"
     )

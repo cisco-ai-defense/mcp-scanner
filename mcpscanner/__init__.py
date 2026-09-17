@@ -38,6 +38,7 @@ from .core.exceptions import (
     MCPServerNotFoundError,
 )
 import sys as _sys
+
 if not getattr(_sys, "frozen", False):
     from .api.api import app as api_app
     from .api.router import get_scanner, router

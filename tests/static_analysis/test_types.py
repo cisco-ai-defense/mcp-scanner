@@ -16,8 +16,6 @@
 
 """Tests for type inference components."""
 
-import pytest
-
 
 class TestTypes:
     """Test type inference functionality."""

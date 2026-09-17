@@ -46,9 +46,9 @@ async def test_parallel_batches_run_concurrently(monkeypatch):
         build_prompt=lambda _c: "p",
     )
     orch.llm_client = SimpleNamespace(verify_alignment=_verify)
-    orch.response_validator.validate_batch = (
-        lambda _response, count: [{"mismatch_detected": False} for _ in range(count)]
-    )
+    orch.response_validator.validate_batch = lambda _response, count: [
+        {"mismatch_detected": False} for _ in range(count)
+    ]
 
     ctxs = [_ctx(f"fn{i}") for i in range(6)]
     results = await orch.check_alignment_batch(ctxs, batch_size=1, max_concurrency=3)

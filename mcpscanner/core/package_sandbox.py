@@ -65,13 +65,9 @@ import httpx
 from ..config.constants import MCPScannerConstants
 
 # PEP 508 normalized project name (case-insensitive).
-_PYPI_PACKAGE_NAME_RE = re.compile(
-    r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
-)
+_PYPI_PACKAGE_NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
 # npm: unscoped or scoped (@scope/name). See npm naming rules.
-_NPM_PACKAGE_NAME_RE = re.compile(
-    r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
-)
+_NPM_PACKAGE_NAME_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 
 
 # Names of environment variables we MUST never write to logs in plaintext.
@@ -246,7 +242,11 @@ def download_archive(
     # second ``urlparse`` of the same string.
     final_parsed = _validate_https_url(url, allowed_hosts)
 
-    cap = max_bytes if max_bytes is not None else MCPScannerConstants.PACKAGE_ARCHIVE_MAX_BYTES
+    cap = (
+        max_bytes
+        if max_bytes is not None
+        else MCPScannerConstants.PACKAGE_ARCHIVE_MAX_BYTES
+    )
     http_timeout = (
         timeout if timeout is not None else MCPScannerConstants.PACKAGE_DOWNLOAD_TIMEOUT
     )
@@ -302,9 +302,7 @@ def download_archive(
                     # the response is actually coming from. Streaming to a
                     # ``.partial`` sibling means a tampered file never
                     # appears at its final name, even briefly.
-                    target_name = filename or _safe_filename_from_url(
-                        final_parsed.path
-                    )
+                    target_name = filename or _safe_filename_from_url(final_parsed.path)
                     if (
                         not target_name
                         or "/" in target_name
@@ -486,7 +484,9 @@ def _reject_private_resolved_host(hostname: str) -> None:
             )
 
 
-def _validate_https_url(url: str, allowed_hosts: Optional[Sequence[str]]) -> ParseResult:
+def _validate_https_url(
+    url: str, allowed_hosts: Optional[Sequence[str]]
+) -> ParseResult:
     """Parse ``url`` and reject anything that isn't HTTPS or that points
     at a host outside ``allowed_hosts`` (when supplied)."""
     parsed = urlparse(url)

@@ -16,11 +16,9 @@
 
 """Tests for the MCPS Protocol Security Analyzer."""
 
-import asyncio
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-from typing import Any, Dict
 import pytest
 
 from mcpscanner.core.analyzers.protocol_analyzer import ProtocolAnalyzer
@@ -101,7 +99,9 @@ class SecureHandler(BaseHTTPRequestHandler):
             self.send_header("X-MCPS-Signature", "auth-required")
             self.end_headers()
             self.wfile.write(
-                json.dumps({"error": {"code": -32001, "message": "Unauthorized"}}).encode()
+                json.dumps(
+                    {"error": {"code": -32001, "message": "Unauthorized"}}
+                ).encode()
             )
             return
 
@@ -205,7 +205,9 @@ async def test_secure_server_fewer_findings(secure_server):
     # Secure server requires auth -- should NOT flag MCPS-002
     assert "MCPS-002" not in check_ids, "Should not flag auth on secure server"
     # Should produce fewer findings than a fully vulnerable server
-    assert len(findings) <= 5, f"Secure server should have few findings, got {len(findings)}"
+    assert (
+        len(findings) <= 5
+    ), f"Secure server should have few findings, got {len(findings)}"
 
 
 @pytest.mark.asyncio
@@ -215,8 +217,12 @@ async def test_poisoned_server_no_protocol_poisoning_check(poisoned_server):
     analyzer = ProtocolAnalyzer(timeout=5.0)
     findings = await analyzer.analyze(poisoned_server)
 
-    poisoning_findings = [f for f in findings if f.details.get("check_id") == "MCPS-006"]
-    assert len(poisoning_findings) == 0, "MCPS-006 should not be checked by protocol analyzer"
+    poisoning_findings = [
+        f for f in findings if f.details.get("check_id") == "MCPS-006"
+    ]
+    assert (
+        len(poisoning_findings) == 0
+    ), "MCPS-006 should not be checked by protocol analyzer"
 
 
 @pytest.mark.asyncio

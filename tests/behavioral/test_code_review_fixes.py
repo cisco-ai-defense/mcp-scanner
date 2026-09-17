@@ -119,20 +119,20 @@ class TestValidateBatchMarkdownFallbackValidatesItems:
         assert out is not None and len(out) == 5
         assert all(isinstance(item, dict) for item in out)
         for idx in range(5):
-            assert out[idx]["mismatch_detected"] is False, (
-                f"slot {idx} should be coerced to False, got {out[idx]!r}"
-            )
-            assert out[idx].get(_UNANALYSED_KEY) is True, (
-                f"slot {idx} should be tagged unanalysed, got {out[idx]!r}"
-            )
+            assert (
+                out[idx]["mismatch_detected"] is False
+            ), f"slot {idx} should be coerced to False, got {out[idx]!r}"
+            assert (
+                out[idx].get(_UNANALYSED_KEY) is True
+            ), f"slot {idx} should be tagged unanalysed, got {out[idx]!r}"
 
     def test_well_formed_mismatch_passes_through(self):
         v = AlignmentResponseValidator()
         resp = (
-            '```json\n['
+            "```json\n["
             '{"mismatch_detected": true, "threat_name": "T", "summary": "s"},'
             '{"mismatch_detected": false}'
-            ']\n```'
+            "]\n```"
         )
         out = v.validate_batch(resp, expected_count=2)
         assert out is not None and len(out) == 2
@@ -182,7 +182,9 @@ class TestAnalyzeUnboundScanModeRegression:
     """``analyze`` must remain total when reset_stats raises."""
 
     @pytest.mark.asyncio
-    async def test_reset_stats_raises_returns_infrastructure_finding(self, caplog, monkeypatch):
+    async def test_reset_stats_raises_returns_infrastructure_finding(
+        self, caplog, monkeypatch
+    ):
         from mcpscanner.utils.logging_config import get_logger
 
         analyzer = BehavioralCodeAnalyzer(_cfg())
@@ -207,7 +209,8 @@ class TestAnalyzeUnboundScanModeRegression:
         # sentinel values (``mode=unknown target=-``), confirming neither
         # variable was unbound.
         failed = [
-            r.getMessage() for r in caplog.records
+            r.getMessage()
+            for r in caplog.records
             if r.getMessage().startswith("behavioral scan failed")
         ]
         assert failed, f"expected a 'behavioral scan failed' line in {caplog.text!r}"
@@ -233,7 +236,6 @@ class TestSanitizeLogValueFalsy:
 
     def test_false_is_rendered_verbatim(self):
         assert sanitize_log_value(False) == "False"
-
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +283,8 @@ class TestErroredFunctionSurfacedAsError:
         )
 
         my = [
-            f for f in findings
+            f
+            for f in findings
             if (f.details or {}).get("function_name") == "captured_tool"
         ]
         assert len(my) == 1, f"expected one finding, got {findings!r}"
@@ -400,8 +403,7 @@ class TestErroredCrossFileHandlerNotSynthesisedSafe:
         )
 
         mine = [
-            f for f in findings
-            if (f.details or {}).get("function_name") == "handler"
+            f for f in findings if (f.details or {}).get("function_name") == "handler"
         ]
         assert len(mine) == 1, f"expected one finding, got {findings!r}"
         assert mine[0].severity == "UNKNOWN"
@@ -498,9 +500,7 @@ class TestBatchPaddingRoutesToErrored:
 
     def test_validator_routes_mismatch_missing_fields_to_unanalysed(self):
         v = AlignmentResponseValidator()
-        out = v.validate_batch(
-            '[{"mismatch_detected": true}]', expected_count=1
-        )
+        out = v.validate_batch('[{"mismatch_detected": true}]', expected_count=1)
         assert out is not None and len(out) == 1
         assert out[0][_UNANALYSED_KEY] is True
         assert out[0]["mismatch_detected"] is False
@@ -545,9 +545,9 @@ class TestValidatorStripsAdversarialSentinel:
         out = v.validate_batch(resp, expected_count=1)
         assert out is not None and len(out) == 1
         assert out[0]["mismatch_detected"] is False
-        assert _UNANALYSED_KEY not in out[0], (
-            "validator must strip adversarial sentinel from LLM-supplied dicts"
-        )
+        assert (
+            _UNANALYSED_KEY not in out[0]
+        ), "validator must strip adversarial sentinel from LLM-supplied dicts"
 
     def test_mismatch_with_llm_supplied_sentinel_is_stripped(self):
         v = AlignmentResponseValidator()
@@ -570,9 +570,7 @@ class TestValidatorStripsAdversarialSentinel:
         )
 
         async def _verify(_p):
-            return (
-                '[{"mismatch_detected": false, "%s": true}]' % _UNANALYSED_KEY
-            )
+            return '[{"mismatch_detected": false, "%s": true}]' % _UNANALYSED_KEY
 
         orch.llm_client = SimpleNamespace(verify_alignment=_verify)
 
@@ -616,9 +614,7 @@ class TestStatsPartitioningInvariant:
         async def _classify_none(**_kw):
             return None
 
-        orch.threat_vuln_classifier = SimpleNamespace(
-            classify_finding=_classify_none
-        )
+        orch.threat_vuln_classifier = SimpleNamespace(classify_finding=_classify_none)
 
         ctxs = [
             SimpleNamespace(name="bad"),
@@ -641,9 +637,7 @@ class TestStatsPartitioningInvariant:
         assert s["total_analyzed"] == 3
 
     @pytest.mark.asyncio
-    async def test_invariant_holds_when_validate_batch_returns_none(
-        self, monkeypatch
-    ):
+    async def test_invariant_holds_when_validate_batch_returns_none(self, monkeypatch):
         """``validate_batch`` returning ``None`` (hard failure) must hit
         the per-function fallback and still leave the invariant intact."""
         orch = AlignmentOrchestrator(_cfg())
@@ -767,8 +761,7 @@ class TestSingleShotValidateStripsSentinel:
     def test_single_shot_clean_strips_llm_supplied_sentinel(self, caplog):
         v = AlignmentResponseValidator()
         resp = (
-            '{"mismatch_detected": false, "%s": true, "extra": "x"}'
-            % _UNANALYSED_KEY
+            '{"mismatch_detected": false, "%s": true, "extra": "x"}' % _UNANALYSED_KEY
         )
         with caplog.at_level(
             logging.WARNING,
@@ -788,9 +781,9 @@ class TestSingleShotValidateStripsSentinel:
         assert out["mismatch_detected"] is False
         assert out["extra"] == "x"
         joined = " ".join(r.message for r in caplog.records)
-        assert "llm_supplied_sentinel" in joined, (
-            "operator-visible WARNING expected when stripping"
-        )
+        assert (
+            "llm_supplied_sentinel" in joined
+        ), "operator-visible WARNING expected when stripping"
 
     def test_single_shot_mismatch_strips_llm_supplied_sentinel(self):
         v = AlignmentResponseValidator()
@@ -879,7 +872,8 @@ class TestSpoofingLogAggregation:
         assert all(_UNANALYSED_KEY not in item for item in out)
 
         warnings = [
-            r for r in caplog.records
+            r
+            for r in caplog.records
             if r.levelno == logging.WARNING and "llm_supplied_sentinel" in r.message
         ]
         assert len(warnings) == 1, (
@@ -890,7 +884,8 @@ class TestSpoofingLogAggregation:
 
         # Per-item DEBUG breadcrumbs still emitted for traceability.
         debugs = [
-            r for r in caplog.records
+            r
+            for r in caplog.records
             if r.levelno == logging.DEBUG and "llm_supplied_sentinel" in r.message
         ]
         assert len(debugs) == n

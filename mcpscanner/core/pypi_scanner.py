@@ -33,7 +33,6 @@ Two execution modes:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import subprocess
@@ -47,11 +46,12 @@ from ..config.config import Config
 from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
 from .analyzers.base import is_infrastructure_error, reportable_findings
-from .docker_build import (
-    DockerBuildError,
-    default_scanner_image_tag,
-    docker_run_hardening_flags,
-    prepare_docker_build,
+from .docker_build import docker_run_hardening_flags
+from .package_scanner_base import (  # noqa: F401  (DockerNotAvailableError re-exported for SDK importers)
+    DockerNotAvailableError,
+    EcosystemProfile,
+    PackageScannerBase,
+    assert_loop_not_running,
 )
 from .package_sandbox import (
     PackageDownloadError,
@@ -69,10 +69,6 @@ from .package_sandbox import (
 )
 
 logger = get_logger(__name__)
-
-
-class DockerNotAvailableError(Exception):
-    """Raised when Docker is not installed or not running."""
 
 
 class PyPIScanError(Exception):
@@ -114,28 +110,30 @@ def raise_if_unreliable_package_scan(
     return result
 
 
-def _assert_loop_not_running(context: str) -> None:
-    """Refuse to call ``asyncio.run`` from inside an already-running loop.
+#: Retained for importers predating the move to ``package_scanner_base``.
+_assert_loop_not_running = assert_loop_not_running
 
-    The previous implementation called ``asyncio.run`` unconditionally,
-    which crashed every SDK caller that lived inside an event loop
-    (FastAPI handlers, jupyter cells, etc.). The async entrypoint is the
-    supported alternative; raise a clear error rather than silently
-    deadlocking.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    raise RuntimeError(
-        f"{context} was called from inside a running asyncio event loop. "
-        f"Use the async entrypoint (e.g. await scan_package_async(...)) "
-        f"or run this call from a non-async context."
-    )
+PYPI_PROFILE = EcosystemProfile(
+    name="pypi",
+    dockerfile="Dockerfile",
+    default_image_name=CONSTANTS.DOCKER_IMAGE_NAME,
+    default_timeout=CONSTANTS.PYPI_SCAN_TIMEOUT,
+    scan_error=PyPIScanError,
+    docker_missing_hint=(
+        "PyPI package scanning requires Docker for sandboxed execution. "
+        "Install Docker from https://docs.docker.com/get-docker/"
+    ),
+    docker_unresponsive_hint=" Please check that Docker is running properly.",
+    build_failure_subject="Docker image",
+)
 
 
-class PyPIPackageScanner:
+class PyPIPackageScanner(PackageScannerBase):
     """Scan PyPI packages either in Docker (default) or in-process.
+
+    Docker lifecycle and entrypoint dispatch come from
+    :class:`~mcpscanner.core.package_scanner_base.PackageScannerBase`; what
+    is PyPI-specific is archive resolution and the Python analyzer.
 
     Example:
         >>> scanner = PyPIPackageScanner()
@@ -144,183 +142,14 @@ class PyPIPackageScanner:
         >>> results = sdk.scan_package("flask", version="3.0.0")  # local
     """
 
-    def __init__(
-        self,
-        image_name: Optional[str] = None,
-        image_tag: Optional[str] = None,
-        timeout: Optional[int] = None,
-        use_docker: bool = True,
-        config: Optional[Config] = None,
-    ):
-        """
-        Args:
-            image_name: Override the Docker image name.
-            image_tag: Override the Docker image tag.
-            timeout: Per-scan timeout in seconds (Docker mode only; local
-                mode is bounded by network + analyzer timeouts).
-            use_docker: When ``False`` skip the container entirely and run
-                in-process. Intended for SDK users on shared CI runners or
-                in environments where Docker isn't available. Local mode
-                rejects HTTP URLs and bounds archive size — see
-                :mod:`mcpscanner.core.package_sandbox`.
-            config: Optional pre-built ``Config``. Only used in local mode.
-                When omitted the scanner builds one from the standard
-                ``MCP_SCANNER_LLM_*`` environment variables.
-        """
-        self._image_name = image_name or CONSTANTS.DOCKER_IMAGE_NAME
-        self._image_tag = image_tag or default_scanner_image_tag(ecosystem="pypi")
-        self._timeout = timeout or CONSTANTS.PYPI_SCAN_TIMEOUT
-        self._full_image = f"{self._image_name}:{self._image_tag}"
-        self._use_docker = use_docker
-        self._config = config
+    PROFILE = PYPI_PROFILE
 
-    # ------------------------------------------------------------------
-    # Docker plumbing
-    # ------------------------------------------------------------------
-
-    def check_docker(self) -> None:
-        """Verify Docker is installed and running.
-
-        Raises:
-            DockerNotAvailableError: If Docker is not available.
-        """
-        try:
-            result = subprocess.run(
-                ["docker", "info"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode != 0:
-                raise DockerNotAvailableError(
-                    "Docker is installed but not running. "
-                    "Please start Docker Desktop or the Docker daemon.\n"
-                    f"Error: {result.stderr.strip()}"
-                )
-        except FileNotFoundError:
-            raise DockerNotAvailableError(
-                "Docker is not installed. "
-                "PyPI package scanning requires Docker for sandboxed execution. "
-                "Install Docker from https://docs.docker.com/get-docker/"
-            )
-        except subprocess.TimeoutExpired:
-            raise DockerNotAvailableError(
-                "Docker did not respond within 10 seconds. "
-                "Please check that Docker is running properly."
-            )
-
-    def _image_exists(self) -> bool:
-        """Check if the scanner Docker image already exists."""
-        result = subprocess.run(
-            ["docker", "image", "inspect", self._full_image],
-            capture_output=True,
-            text=True,
-        )
-        return result.returncode == 0
-
-    def build_image(self, force: bool = False) -> None:
-        """Build the scanner Docker image if it doesn't exist.
-
-        Args:
-            force: Rebuild even if the image already exists.
-        """
-        if not force and self._image_exists():
-            logger.info("Docker image %s already exists, skipping build", self._full_image)
-            return
-
-        logger.info("Building Docker image %s ...", self._full_image)
-
-        try:
-            context, dockerfile, build_args = prepare_docker_build(
-                dockerfile="Dockerfile"
-            )
-        except DockerBuildError as exc:
-            raise PyPIScanError(str(exc)) from exc
-
-        cmd = [
-            "docker", "build",
-            "-t", self._full_image,
-            "-f", str(dockerfile),
-        ]
-        for key, value in build_args.items():
-            cmd.extend(["--build-arg", f"{key}={value}"])
-        cmd.append(str(context))
-
-        logger.debug("Running: %s", redact_argv_for_logging(cmd))
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-
-        if result.returncode != 0:
-            raise PyPIScanError(
-                f"Failed to build Docker image:\n{result.stderr.strip()}"
-            )
-
-        logger.info("Docker image %s built successfully", self._full_image)
-
-    # ------------------------------------------------------------------
-    # Public entrypoint
-    # ------------------------------------------------------------------
-
-    def scan_package(
-        self,
-        package: str,
-        version: Optional[str] = None,
-        verbose: bool = False,
-    ) -> dict:
-        """Scan a PyPI package (synchronous).
-
-        Args:
-            package: PyPI package name (e.g., "flask").
-            version: Specific version to scan (default: latest).
-            verbose: Print container stderr to host stderr (Docker mode).
-
-        Returns:
-            Dictionary with scan results.
-
-        Raises:
-            DockerNotAvailableError: If Docker is required but unavailable.
-            PyPIScanError: If the scan fails.
-            LLMNotConfiguredError: In local mode when no LLM key is set.
-            RuntimeError: If called from inside an already-running event
-                loop; use :meth:`scan_package_async` instead.
-        """
-        if self._use_docker:
-            _validate_pypi_package_or_raise(package)
-            return self._scan_in_docker(package, version, verbose)
-        _assert_loop_not_running("PyPIPackageScanner.scan_package")
+    @staticmethod
+    def _validate_package(package: str) -> None:
         _validate_pypi_package_or_raise(package)
-        return asyncio.run(self._scan_locally(package, version))
-
-    async def scan_package_async(
-        self,
-        package: str,
-        version: Optional[str] = None,
-        verbose: bool = False,
-    ) -> dict:
-        """Async-friendly counterpart of :meth:`scan_package`.
-
-        SDK consumers running inside an event loop (FastAPI handlers,
-        notebooks, etc.) must use this entrypoint so the analyzer's own
-        ``async def`` calls compose with their loop. Docker mode shells
-        out via ``subprocess.run``; we run that on the default executor
-        so the calling loop isn't blocked for the duration of the
-        container scan.
-        """
-        if self._use_docker:
-            _validate_pypi_package_or_raise(package)
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(
-                None, self._scan_in_docker, package, version, verbose
-            )
-        _validate_pypi_package_or_raise(package)
-        return await self._scan_locally(package, version)
 
     # ------------------------------------------------------------------
-    # Docker mode (unchanged)
+    # Docker mode
     # ------------------------------------------------------------------
 
     def _scan_in_docker(
@@ -330,7 +159,8 @@ class PyPIPackageScanner:
         self.build_image()
 
         cmd = [
-            "docker", "run",
+            "docker",
+            "run",
             "--rm",
             "--network=bridge",
             *docker_run_hardening_flags(),
@@ -415,9 +245,7 @@ class PyPIPackageScanner:
     # Local (no-Docker) SDK mode
     # ------------------------------------------------------------------
 
-    async def _scan_locally(
-        self, package: str, version: Optional[str]
-    ) -> dict:
+    async def _scan_locally(self, package: str, version: Optional[str]) -> dict:
         """In-process PyPI scan: download → safe-extract → analyse.
 
         Code from the downloaded package is never executed. Only the
@@ -446,8 +274,8 @@ class PyPIPackageScanner:
         )
 
         try:
-            url, resolved_version, expected_digest = (
-                self._resolve_pypi_archive_url(package, version)
+            url, resolved_version, expected_digest = self._resolve_pypi_archive_url(
+                package, version
             )
         except PackageDownloadError as e:
             raise PyPIScanError(str(e)) from e
@@ -466,13 +294,9 @@ class PyPIPackageScanner:
                     expected_digest_algo="sha256" if expected_digest else None,
                     allowed_hosts=pypi_tarball_allowed_hosts(CONSTANTS.PYPI_INDEX_URL),
                 )
-                source_root = safe_extract_archive(
-                    archive, extract_dir, only_dirs=True
-                )
+                source_root = safe_extract_archive(archive, extract_dir, only_dirs=True)
             except (PackageDownloadError, PackageExtractionError) as e:
-                raise PyPIScanError(
-                    f"failed to fetch/extract {spec}: {e}"
-                ) from e
+                raise PyPIScanError(f"failed to fetch/extract {spec}: {e}") from e
 
             analyzer = BehavioralCodeAnalyzer(config)
             findings = await analyzer.analyze(str(source_root), {})
@@ -531,9 +355,7 @@ def resolve_pypi_archive_url(
     """
     index = (index_url or CONSTANTS.PYPI_INDEX_URL).rstrip("/")
     meta_url = (
-        f"{index}/{package}/{version}/json"
-        if version
-        else f"{index}/{package}/json"
+        f"{index}/{package}/{version}/json" if version else f"{index}/{package}/json"
     )
     if not meta_url.lower().startswith("https://"):
         raise PackageDownloadError(
@@ -559,16 +381,12 @@ def resolve_pypi_archive_url(
         ) from e
 
     info = meta.get("info") or {}
-    resolved_version = (info.get("version") or version or "unknown")
+    resolved_version = info.get("version") or version or "unknown"
     urls = meta.get("urls") or []
 
     def _pick(packagetype: str) -> Optional[dict]:
         return next(
-            (
-                u
-                for u in urls
-                if u.get("packagetype") == packagetype and u.get("url")
-            ),
+            (u for u in urls if u.get("packagetype") == packagetype and u.get("url")),
             None,
         )
 
@@ -594,9 +412,7 @@ def _build_config_from_env() -> Config:
     api_key = os.environ.get(CONSTANTS.ENV_LLM_API_KEY, "")
     return Config(
         llm_provider_api_key=api_key,
-        llm_model=os.environ.get(
-            CONSTANTS.ENV_LLM_MODEL, CONSTANTS.DEFAULT_LLM_MODEL
-        ),
+        llm_model=os.environ.get(CONSTANTS.ENV_LLM_MODEL, CONSTANTS.DEFAULT_LLM_MODEL),
         llm_base_url=os.environ.get(CONSTANTS.ENV_LLM_BASE_URL, "") or "",
         llm_api_version=os.environ.get(CONSTANTS.ENV_LLM_API_VERSION, "") or "",
     )
@@ -637,9 +453,7 @@ def _https_get_json(
         for _hop in range(10):
             resp = client.get(current)
             if resp.is_redirect:
-                current, _ = _next_redirect_target(
-                    current, resp, allowed_hosts
-                )
+                current, _ = _next_redirect_target(current, resp, allowed_hosts)
                 continue
             resp.raise_for_status()
             return resp.json()
@@ -740,7 +554,9 @@ def _build_scan_result(
     for f in reportable:
         serialised.append(
             {
-                "analyzer": f.analyzer.lower() if getattr(f, "analyzer", None) else "behavioral",
+                "analyzer": (
+                    f.analyzer.lower() if getattr(f, "analyzer", None) else "behavioral"
+                ),
                 "severity": getattr(f, "severity", "UNKNOWN"),
                 "threat_category": getattr(f, "threat_category", None),
                 "summary": getattr(f, "summary", ""),
@@ -750,9 +566,7 @@ def _build_scan_result(
     ecosystem_field = (
         "python_files_scanned"
         if ecosystem == "pypi"
-        else "js_files_scanned"
-        if ecosystem == "npm"
-        else f"{ecosystem}_files_scanned"
+        else "js_files_scanned" if ecosystem == "npm" else f"{ecosystem}_files_scanned"
     )
     result: Dict[str, Any] = {
         "ecosystem": ecosystem,

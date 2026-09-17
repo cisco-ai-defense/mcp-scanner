@@ -239,9 +239,7 @@ class TestWeaklyAttributedRegistrations:
         assert len(ctxs) == 1
         decorator = ctxs[0].decorator_params["tool"]
         assert decorator.get("weakly_attributed") is True
-        assert any(
-            "weakly_attributed_match" in r.getMessage() for r in caplog.records
-        )
+        assert any("weakly_attributed_match" in r.getMessage() for r in caplog.records)
 
     def test_mcp_import_drops_weak_attribution(self, caplog):
         src = """

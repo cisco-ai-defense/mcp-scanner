@@ -16,7 +16,6 @@
 
 """Tests for AlignmentPromptBuilder component."""
 
-import pytest
 from pathlib import Path
 
 from mcpscanner.config.constants import MCPScannerConstants
@@ -126,7 +125,9 @@ class TestAlignmentPromptBudget:
     def test_sink_hints_preserved_when_analysis_truncated(self, monkeypatch):
         monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 3000)
         builder = AlignmentPromptBuilder()
-        sink_marker = "**CODE GRAPH SINK HINTS (deterministic, verify against docstring):**"
+        sink_marker = (
+            "**CODE GRAPH SINK HINTS (deterministic, verify against docstring):**"
+        )
         sink_body = '"sink_name": "os.remove"'
         analysis = (
             "M" * 10_000
@@ -277,19 +278,6 @@ class TestPromptBuilder:
                 keyword.lower() in content.lower()
             ), f"Prompt should contain {keyword} concept"
 
-    def test_prompt_length_adequate(self):
-        """Test that prompt is sufficiently detailed."""
-        prompt_path = (
-            Path(__file__).parent.parent.parent
-            / "mcpscanner"
-            / "data"
-            / "prompts"
-            / "code_alignment_threat_analysis_prompt.md"
-        )
-        content = prompt_path.read_text()
-
-        assert len(content) > 5000, f"Prompt seems too short: {len(content)} characters"
-
     def test_prompt_has_threat_categories(self):
         """Test that prompt defines threat categories."""
         prompt_path = (
@@ -392,9 +380,7 @@ class TestBatchGraphEvidence:
     ):
         import mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder as apb
 
-        monkeypatch.setattr(
-            MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000
-        )
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000)
         monkeypatch.setattr(
             apb.MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000
         )

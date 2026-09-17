@@ -112,7 +112,9 @@ class TestPrepareMcpDial:
 class TestNormalizedProxyRelayURL:
     def test_missing_env_raises(self, monkeypatch):
         monkeypatch.delenv(ENV_PROXY_RELAY_URL, raising=False)
-        with pytest.raises(RuntimeError, match=f"{ENV_PROXY_RELAY_URL} is not configured"):
+        with pytest.raises(
+            RuntimeError, match=f"{ENV_PROXY_RELAY_URL} is not configured"
+        ):
             _normalized_proxy_relay_url()
 
     def test_scheme_less_defaults_to_http(self, monkeypatch):

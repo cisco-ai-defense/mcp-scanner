@@ -268,7 +268,10 @@ def _group_findings_for_api(
     for display_name, internal_name in all_analyzers_map.items():
         vulns = analyzer_groups.get(internal_name, [])
         logger.debug(
-            f"Processing analyzer {display_name} ({internal_name}): {len(vulns)} security findings"
+            "Processing analyzer %s (%s): %s security findings",
+            display_name,
+            internal_name,
+            len(vulns),
         )
 
         if vulns:
@@ -279,7 +282,9 @@ def _group_findings_for_api(
             for vuln in vulns:
                 severities.append(vuln.severity)
                 logger.debug(
-                    f"Processing security finding: {vuln.summary}, severity: {vuln.severity}"
+                    "Processing security finding: %s, severity: %s",
+                    vuln.summary,
+                    vuln.severity,
                 )
 
                 # Extract threat name from details
@@ -295,26 +300,13 @@ def _group_findings_for_api(
             # Get the highest severity for this analyzer
             analyzer_severity = get_highest_severity(severities)
             logger.debug(
-                f"Analyzer {display_name} severity: {analyzer_severity}, threat names: {threat_names}"
+                "Analyzer %s severity: %s, threat names: %s",
+                display_name,
+                analyzer_severity,
+                threat_names,
             )
 
             highest_severity = analyzer_severity
-
-            # Generate threat summary - handle UNKNOWN threats specially
-            if analyzer_severity == "UNKNOWN":
-                threat_summary = "Analysis failed - status unknown"
-                if len(threat_names) == 0 or (
-                    len(threat_names) == 1 and threat_names[0].lower() == "unknown"
-                ):
-                    threat_names = ["UNKNOWN"]
-            elif len(threat_names) == 0:
-                threat_summary = "No specific threats identified"
-            elif len(threat_names) == 1:
-                threat_summary = (
-                    f"Detected 1 threat: {threat_names[0].lower().replace('_', ' ')}"
-                )
-            else:
-                threat_summary = f"Detected {len(threat_names)} threats: {', '.join([t.lower().replace('_', ' ') for t in threat_names])}"
         else:
             # If the analyzer was run but found nothing, it's SAFE.
             # We check if the internal name is in the list of analyzers that were part of the scan.
@@ -333,10 +325,10 @@ def _group_findings_for_api(
                 result_id = "unknown"
 
             logger.debug(
-                f"Scanner Result {result_id} findings: {scanner_result.findings}"
+                "Scanner Result %s findings: %s", result_id, scanner_result.findings
             )
             logger.debug(
-                f"Ran Analyzers: {ran_analyzers} Internal Name: {internal_name}"
+                "Ran Analyzers: %s Internal Name: %s", ran_analyzers, internal_name
             )
 
             # Handle both enum analyzers and custom analyzers
@@ -356,13 +348,7 @@ def _group_findings_for_api(
             else:  # Custom analyzer
                 analyzer_was_run = internal_name in ran_analyzer_values
 
-            if analyzer_was_run:
-                highest_severity = "SAFE"
-                threat_summary = "No threats detected"
-            else:
-                highest_severity = "UNKNOWN"
-                threat_summary = "Analyzer not run"
-            threat_names = []
+            highest_severity = "SAFE" if analyzer_was_run else "UNKNOWN"
 
         # Build the base structure (simplified - removed threat_names and threat_summary)
         analyzer_result = {
@@ -452,7 +438,9 @@ async def scan_tool_endpoint(
 ):
     """Scan a specific tool on an MCP server."""
     logger.debug(
-        f"Starting tool scan - server: {request.server_url}, tool: {request.tool_name}"
+        "Starting tool scan - server: %s, tool: %s",
+        request.server_url,
+        request.tool_name,
     )
 
     try:
@@ -487,7 +475,8 @@ async def scan_tool_endpoint(
         # Only warn if analyzers actually failed to run
         if len(result.findings) == 0 and len(result.analyzers) == 0:
             logger.warning(
-                f"No analyzers ran for tool '{request.tool_name}' - check analyzer configuration"
+                "No analyzers ran for tool '%s' - check analyzer configuration",
+                request.tool_name,
             )
 
         api_result = _convert_scanner_result_to_tool_api_result(result, scanner)
@@ -515,23 +504,23 @@ async def scan_tool_endpoint(
                 [api_result] if request.output_format != OutputFormat.RAW else None
             ),
         )
-        logger.debug(f"Tool scan completed successfully for {request.tool_name}")
+        logger.debug("Tool scan completed successfully for %s", request.tool_name)
         return response
 
     except ValueError as e:
-        logger.error(f"ValueError in tool scan: {str(e)}")
+        logger.error("ValueError in tool scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPAuthenticationError as e:
-        logger.error(f"Authentication error in tool scan: {str(e)}")
+        logger.error("Authentication error in tool scan: %s", str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except MCPServerNotFoundError as e:
-        logger.error(f"Server not found in tool scan: {str(e)}")
+        logger.error("Server not found in tool scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPConnectionError as e:
-        logger.error(f"Connection error in tool scan: {str(e)}")
+        logger.error("Connection error in tool scan: %s", str(e))
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error in tool scan: {str(e)}", exc_info=True)
+        logger.error("Unexpected error in tool scan: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning tool: {str(e)}")
 
 
@@ -546,7 +535,7 @@ async def scan_all_tools_endpoint(
     scanner_factory: ScannerFactory = Depends(get_scanner),
 ):
     """Scan all tools on an MCP server."""
-    logger.debug(f"Starting full server scan - server: {request.server_url}")
+    logger.debug("Starting full server scan - server: %s", request.server_url)
 
     try:
         analyzers = request.resolved_analyzers()
@@ -575,7 +564,7 @@ async def scan_all_tools_endpoint(
             http_headers=http_headers,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned {len(results)} tools")
+        logger.debug("Scanner completed - scanned %s tools", len(results))
 
         api_results = [
             _convert_scanner_result_to_tool_api_result(res, scanner) for res in results
@@ -608,25 +597,25 @@ async def scan_all_tools_endpoint(
         )
 
         logger.debug(
-            f"Full server scan completed successfully - {len(results)} tools processed"
+            "Full server scan completed successfully - %s tools processed", len(results)
         )
 
         return response
 
     except ValueError as e:
-        logger.error(f"ValueError in full server scan: {str(e)}")
+        logger.error("ValueError in full server scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPAuthenticationError as e:
-        logger.error(f"Authentication error in full server scan: {str(e)}")
+        logger.error("Authentication error in full server scan: %s", str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except MCPServerNotFoundError as e:
-        logger.error(f"Server not found in full server scan: {str(e)}")
+        logger.error("Server not found in full server scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPConnectionError as e:
-        logger.error(f"Connection error in full server scan: {str(e)}")
+        logger.error("Connection error in full server scan: %s", str(e))
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error in full server scan: {str(e)}", exc_info=True)
+        logger.error("Unexpected error in full server scan: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning tools: {str(e)}")
 
 
@@ -642,7 +631,9 @@ async def scan_prompt_endpoint(
 ):
     """Scan a specific prompt on an MCP server."""
     logger.debug(
-        f"Starting specific prompt scan - server: {request.server_url}, prompt: {request.prompt_name}"
+        "Starting specific prompt scan - server: %s, prompt: %s",
+        request.server_url,
+        request.prompt_name,
     )
 
     try:
@@ -673,7 +664,7 @@ async def scan_prompt_endpoint(
             http_headers=http_headers,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
+        logger.debug("Scanner completed - scanned prompt: %s", request.prompt_name)
 
         # Convert result to API format using helper function
         grouped_findings = _group_findings_for_api(result, scanner)
@@ -690,23 +681,23 @@ async def scan_prompt_endpoint(
         if meta_audit is not None:
             response["meta_analysis"] = meta_audit
 
-        logger.debug(f"Prompt scan completed successfully for {request.prompt_name}")
+        logger.debug("Prompt scan completed successfully for %s", request.prompt_name)
         return response
 
     except ValueError as e:
-        logger.error(f"ValueError in prompt scan: {str(e)}")
+        logger.error("ValueError in prompt scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPAuthenticationError as e:
-        logger.error(f"Authentication error in prompt scan: {str(e)}")
+        logger.error("Authentication error in prompt scan: %s", str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except MCPServerNotFoundError as e:
-        logger.error(f"Server not found in prompt scan: {str(e)}")
+        logger.error("Server not found in prompt scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPConnectionError as e:
-        logger.error(f"Connection error in prompt scan: {str(e)}")
+        logger.error("Connection error in prompt scan: %s", str(e))
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error in prompt scan: {str(e)}", exc_info=True)
+        logger.error("Unexpected error in prompt scan: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning prompt: {str(e)}")
 
 
@@ -721,7 +712,7 @@ async def scan_all_prompts_endpoint(
     scanner_factory: ScannerFactory = Depends(get_scanner),
 ):
     """Scan all prompts on an MCP server."""
-    logger.debug(f"Starting all prompts scan - server: {request.server_url}")
+    logger.debug("Starting all prompts scan - server: %s", request.server_url)
 
     try:
         analyzers = request.resolved_analyzers()
@@ -750,7 +741,7 @@ async def scan_all_prompts_endpoint(
             http_headers=http_headers,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned {len(results)} prompts")
+        logger.debug("Scanner completed - scanned %s prompts", len(results))
 
         # Convert results to API format
         prompt_results = []
@@ -779,24 +770,24 @@ async def scan_all_prompts_endpoint(
         }
 
         logger.debug(
-            f"Prompt scan completed successfully - {len(results)} prompts processed"
+            "Prompt scan completed successfully - %s prompts processed", len(results)
         )
         return response
 
     except ValueError as e:
-        logger.error(f"ValueError in prompt scan: {str(e)}")
+        logger.error("ValueError in prompt scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPAuthenticationError as e:
-        logger.error(f"Authentication error in prompt scan: {str(e)}")
+        logger.error("Authentication error in prompt scan: %s", str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except MCPServerNotFoundError as e:
-        logger.error(f"Server not found in prompt scan: {str(e)}")
+        logger.error("Server not found in prompt scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPConnectionError as e:
-        logger.error(f"Connection error in prompt scan: {str(e)}")
+        logger.error("Connection error in prompt scan: %s", str(e))
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error in prompt scan: {str(e)}", exc_info=True)
+        logger.error("Unexpected error in prompt scan: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error scanning prompts: {str(e)}")
 
 
@@ -812,7 +803,9 @@ async def scan_resource_endpoint(
 ):
     """Scan a specific resource on an MCP server."""
     logger.debug(
-        f"Starting specific resource scan - server: {request.server_url}, resource: {request.resource_uri}"
+        "Starting specific resource scan - server: %s, resource: %s",
+        request.server_url,
+        request.resource_uri,
     )
 
     try:
@@ -847,7 +840,7 @@ async def scan_resource_endpoint(
             allowed_mime_types=allowed_mime_types,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
+        logger.debug("Scanner completed - scanned resource: %s", request.resource_uri)
 
         # Convert result to API format using helper function
         if result.status == "completed":
@@ -868,23 +861,25 @@ async def scan_resource_endpoint(
         if meta_audit is not None:
             response["meta_analysis"] = meta_audit
 
-        logger.debug(f"Resource scan completed successfully for {request.resource_uri}")
+        logger.debug(
+            "Resource scan completed successfully for %s", request.resource_uri
+        )
         return response
 
     except ValueError as e:
-        logger.error(f"ValueError in resource scan: {str(e)}")
+        logger.error("ValueError in resource scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPAuthenticationError as e:
-        logger.error(f"Authentication error in resource scan: {str(e)}")
+        logger.error("Authentication error in resource scan: %s", str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except MCPServerNotFoundError as e:
-        logger.error(f"Server not found in resource scan: {str(e)}")
+        logger.error("Server not found in resource scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPConnectionError as e:
-        logger.error(f"Connection error in resource scan: {str(e)}")
+        logger.error("Connection error in resource scan: %s", str(e))
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error in resource scan: {str(e)}", exc_info=True)
+        logger.error("Unexpected error in resource scan: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Error scanning resource: {str(e)}"
         )
@@ -901,7 +896,7 @@ async def scan_all_resources_endpoint(
     scanner_factory: ScannerFactory = Depends(get_scanner),
 ):
     """Scan all resources on an MCP server."""
-    logger.debug(f"Starting all resources scan - server: {request.server_url}")
+    logger.debug("Starting all resources scan - server: %s", request.server_url)
 
     try:
         analyzers = request.resolved_analyzers()
@@ -934,7 +929,7 @@ async def scan_all_resources_endpoint(
             allowed_mime_types=allowed_mime_types,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned {len(results)} resources")
+        logger.debug("Scanner completed - scanned %s resources", len(results))
 
         # Convert results to API format
         resource_results = []
@@ -982,24 +977,25 @@ async def scan_all_resources_endpoint(
         }
 
         logger.debug(
-            f"Resource scan completed successfully - {len(results)} resources processed"
+            "Resource scan completed successfully - %s resources processed",
+            len(results),
         )
         return response
 
     except ValueError as e:
-        logger.error(f"ValueError in resource scan: {str(e)}")
+        logger.error("ValueError in resource scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPAuthenticationError as e:
-        logger.error(f"Authentication error in resource scan: {str(e)}")
+        logger.error("Authentication error in resource scan: %s", str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except MCPServerNotFoundError as e:
-        logger.error(f"Server not found in resource scan: {str(e)}")
+        logger.error("Server not found in resource scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPConnectionError as e:
-        logger.error(f"Connection error in resource scan: {str(e)}")
+        logger.error("Connection error in resource scan: %s", str(e))
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error in resource scan: {str(e)}", exc_info=True)
+        logger.error("Unexpected error in resource scan: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Error scanning resources: {str(e)}"
         )
@@ -1016,7 +1012,7 @@ async def scan_instructions_endpoint(
     scanner_factory: ScannerFactory = Depends(get_scanner),
 ):
     """Scan server instructions from the InitializeResult."""
-    logger.debug(f"Starting instructions scan - server: {request.server_url}")
+    logger.debug("Starting instructions scan - server: %s", request.server_url)
 
     try:
         analyzers = request.resolved_analyzers()
@@ -1039,7 +1035,7 @@ async def scan_instructions_endpoint(
             http_headers=http_headers,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned instructions from server")
+        logger.debug("Scanner completed - scanned instructions from server")
 
         # Convert result to API format using helper function
         if result.status == "completed":
@@ -1060,23 +1056,23 @@ async def scan_instructions_endpoint(
         if meta_audit is not None:
             response["meta_analysis"] = meta_audit
 
-        logger.debug(f"Instructions scan completed successfully")
+        logger.debug("Instructions scan completed successfully")
         return response
 
     except ValueError as e:
-        logger.error(f"ValueError in instructions scan: {str(e)}")
+        logger.error("ValueError in instructions scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPAuthenticationError as e:
-        logger.error(f"Authentication error in instructions scan: {str(e)}")
+        logger.error("Authentication error in instructions scan: %s", str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except MCPServerNotFoundError as e:
-        logger.error(f"Server not found in instructions scan: {str(e)}")
+        logger.error("Server not found in instructions scan: %s", str(e))
         raise HTTPException(status_code=404, detail=str(e))
     except MCPConnectionError as e:
-        logger.error(f"Connection error in instructions scan: {str(e)}")
+        logger.error("Connection error in instructions scan: %s", str(e))
         raise HTTPException(status_code=502, detail=str(e))
     except Exception as e:
-        logger.error(f"Unexpected error in instructions scan: {str(e)}", exc_info=True)
+        logger.error("Unexpected error in instructions scan: %s", str(e), exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Error scanning instructions: {str(e)}"
         )

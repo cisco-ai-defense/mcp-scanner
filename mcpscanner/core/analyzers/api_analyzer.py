@@ -158,8 +158,14 @@ class ApiAnalyzer(BaseAnalyzer):
                                 json=payload,
                                 timeout=self._DEFAULT_TIMEOUT,
                             )
-                    except Exception:
-                        pass  # If we can't parse the error, let the original error propagate
+                    except Exception as e:
+                        # Deliberate: the retry was best-effort, so let the
+                        # original API error surface below rather than this one.
+                        self.logger.debug(
+                            "could not parse API error for rules retry error_type=%s error=%s",
+                            type(e).__name__,
+                            e,
+                        )
 
             response.raise_for_status()
             response_json = response.json()
@@ -168,7 +174,9 @@ class ApiAnalyzer(BaseAnalyzer):
 
             if not is_safe:
                 self.logger.debug(
-                    f'Cisco AI Defense API detected malicious content: tool="{tool_name}" classifications="{classifications}"'
+                    'Cisco AI Defense API detected malicious content: tool="%s" classifications="%s"',
+                    tool_name,
+                    classifications,
                 )
 
                 # Generate threat summary for all findings
@@ -207,7 +215,7 @@ class ApiAnalyzer(BaseAnalyzer):
                     )
 
         except httpx.HTTPError as e:
-            self.logger.error(f"API analysis failed for tool '{tool_name}': {e}")
+            self.logger.error("API analysis failed for tool '%s': %s", tool_name, e)
             raise
 
         return findings

@@ -174,8 +174,10 @@ class VulnerablePackageAnalyzer:
             return []
 
         cmd = list(self._pip_audit_cmd) + [
-            "--format", "json",
-            "--vulnerability-service", self.vulnerability_service,
+            "--format",
+            "json",
+            "--vulnerability-service",
+            self.vulnerability_service,
         ]
         if self.desc:
             cmd.append("--desc")
@@ -244,12 +246,12 @@ class VulnerablePackageAnalyzer:
         For Python tracebacks the last non-blank line is usually the
         exception; for other output just return the last few lines.
         """
-        lines = [l for l in stderr.splitlines() if l.strip()]
+        lines = [line for line in stderr.splitlines() if line.strip()]
         if not lines:
             return stderr[:300]
         for line in reversed(lines):
             stripped = line.strip()
-            if stripped and not stripped.startswith(("File ", "File \"", "Traceback")):
+            if stripped and not stripped.startswith(("File ", 'File "', "Traceback")):
                 return stripped[:300]
         return lines[-1].strip()[:300]
 

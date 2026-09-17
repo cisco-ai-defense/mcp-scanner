@@ -21,7 +21,7 @@ and related data structures.
 """
 
 from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ServerSignature(BaseModel):
@@ -58,7 +58,7 @@ class RemoteServer(BaseModel):
     @classmethod
     def normalize_url_field(cls, data: Any) -> Any:
         """Normalize different URL field names to 'url' (case-insensitive).
-        
+
         MCP configs may use 'url', 'Url', 'URL', 'serverUrl', 'serverURL', etc.
         """
         if isinstance(data, dict):

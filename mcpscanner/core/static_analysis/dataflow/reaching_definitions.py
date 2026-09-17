@@ -18,11 +18,10 @@
 
 import ast
 from dataclasses import dataclass, field
-from typing import Any
 
-from ..cfg.builder import CFGNode, DataFlowAnalyzer
+from ..cfg.builder import CFGNode
 from ..parser.base import BaseParser
-from ..parser.python_parser import PythonParser
+from .python_base import PythonDataFlowAnalyzer
 
 
 @dataclass(frozen=True)
@@ -55,7 +54,7 @@ class ReachingDefsFact:
         return self.defs == other.defs
 
 
-class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
+class ReachingDefinitionsAnalysis(PythonDataFlowAnalyzer[ReachingDefsFact]):
     """Analyzes which definitions reach which program points.
 
     REVERSED APPROACH: Tracks how MCP entry point parameters flow through definitions.
@@ -78,10 +77,7 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
         Returns:
             Use-def chains: (node_id, var) -> list of reaching definitions
         """
-        # Preserve a function-scoped CFG from ``build_cfg_for_function``;
-        # rebuilding here would silently widen the analysis to the module.
-        if not self.cfg:
-            self.build_cfg()
+        self._ensure_cfg()
 
         # Initialize with parameter definitions (REVERSED APPROACH)
         initial_fact = ReachingDefsFact()
@@ -95,34 +91,15 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
 
         return self.use_def_chains
 
-    def transfer(self, node: CFGNode, in_fact: ReachingDefsFact) -> ReachingDefsFact:
-        """Transfer function for reaching definitions.
+    def _transfer_python(self, cfg_node: CFGNode, fact: ReachingDefsFact) -> None:
+        """Apply one node's definitions to the reaching set.
 
         Args:
-            node: CFG node
-            in_fact: Input reaching definitions
-
-        Returns:
-            Output reaching definitions
-        """
-        out_fact = in_fact.copy()
-        ast_node = node.ast_node
-
-        if isinstance(self.analyzer, PythonParser):
-            self._transfer_python(ast_node, node, out_fact)
-
-        return out_fact
-
-    def _transfer_python(
-        self, ast_node: ast.AST, cfg_node: CFGNode, fact: ReachingDefsFact
-    ) -> None:
-        """Transfer function for Python nodes.
-
-        Args:
-            ast_node: Python AST node
-            cfg_node: CFG node
+            cfg_node: CFG node, whose id labels the definitions it generates
             fact: Reaching definitions fact to update
         """
+        ast_node = cfg_node.ast_node
+
         if isinstance(ast_node, ast.Assign):
             for target in ast_node.targets:
                 if isinstance(target, ast.Name):
@@ -218,29 +195,11 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
             ast_node = node.ast_node
 
             reaching = self.in_facts.get(node.id, ReachingDefsFact())
-            uses = self._find_uses(ast_node)
+            uses = self._used_names(ast_node)
 
             for var in uses:
                 reaching_defs = [d for d in reaching.defs if d.var == var]
                 self.use_def_chains[(node.id, var)] = reaching_defs
-
-    def _find_uses(self, node: ast.AST) -> set[str]:
-        """Find all variable uses in an AST node.
-
-        Args:
-            node: AST node
-
-        Returns:
-            Set of variable names used
-        """
-        uses = set()
-
-        if isinstance(self.analyzer, PythonParser):
-            for child in ast.walk(node):
-                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
-                    uses.add(child.id)
-
-        return uses
 
     def get_reaching_defs(self, node_id: int, var: str) -> list[Definition]:
         """Get reaching definitions for a variable at a node.

@@ -191,9 +191,13 @@ class CFGFusionEngine:
         if not callee_params:
             return []
 
-        language = self._normalize_language(self._graph.language or callee_node.language)
+        language = self._normalize_language(
+            self._graph.language or callee_node.language
+        )
         if language == "python":
-            return self._python_bindings(caller_id, callee_id, edge, active_taints, callee_params)
+            return self._python_bindings(
+                caller_id, callee_id, edge, active_taints, callee_params
+            )
         if language in _TS_LANGS:
             return self._treesitter_bindings(
                 caller_id, callee_id, edge, active_taints, callee_params, language
@@ -327,7 +331,9 @@ class CFGFusionEngine:
         )
 
         call_label = edge.call_expression or callee_label.split(".")[-1]
-        call_sites = _find_treesitter_calls(caller_func, call_label, callee_label, source_bytes)
+        call_sites = _find_treesitter_calls(
+            caller_func, call_label, callee_label, source_bytes
+        )
         bindings: list[ParamBinding] = []
         param_by_index = {p["index"]: p["name"] for p in callee_params}
         for call in call_sites:
@@ -342,7 +348,9 @@ class CFGFusionEngine:
                     if arg.type == "identifier":
                         arg_name = _node_text(arg, source_bytes)
                         call_line = call.start_point[0] + 1
-                        if not self._classic.is_live_at_line(caller_id, arg_name, call_line):
+                        if not self._classic.is_live_at_line(
+                            caller_id, arg_name, call_line
+                        ):
                             continue
                     bindings.append(
                         ParamBinding(
@@ -377,7 +385,10 @@ def _find_python_function(tree: ast.Module, label: str) -> ast.FunctionDef | Non
         return None
 
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == label:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == label
+        ):
             return node
     return None
 
@@ -420,10 +431,14 @@ def _node_text(node: Node, source_bytes: bytes) -> str:
     return source_bytes[node.start_byte : node.end_byte].decode("utf-8")
 
 
-def _find_treesitter_function(root: Node, label: str, source_bytes: bytes) -> Node | None:
+def _find_treesitter_function(
+    root: Node, label: str, source_bytes: bytes
+) -> Node | None:
     if "." in label:
         class_name, method_name = label.rsplit(".", 1)
-        class_node = _find_named_child(root, {"class_declaration", "class"}, class_name, source_bytes)
+        class_node = _find_named_child(
+            root, {"class_declaration", "class"}, class_name, source_bytes
+        )
         if class_node is None:
             return None
         return _find_named_child(class_node, _TS_FUNC_TYPES, method_name, source_bytes)

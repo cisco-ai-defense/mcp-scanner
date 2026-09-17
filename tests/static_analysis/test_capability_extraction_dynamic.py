@@ -132,9 +132,7 @@ def test_python_bound_method_decorator_factory_classifies_methods() -> None:
     (e.g. amazon-bedrock-agentcore-mcp-server) that previously fell
     through the cracks.
     """
-    analyzer = NativeAnalyzer(
-        PYTHON_BOUND_METHOD_REGISTRATION, "controlplane.py"
-    )
+    analyzer = NativeAnalyzer(PYTHON_BOUND_METHOD_REGISTRATION, "controlplane.py")
     caps = analyzer.extract_mcp_capability_contexts()
     names = {c.name for c in caps}
     assert "memory_create" in names, names
@@ -155,7 +153,7 @@ def test_python_bound_method_decorator_factory_classifies_methods() -> None:
 # Python: decorator-factory applied to a cross-file module attribute.
 # ---------------------------------------------------------------------------
 
-PYTHON_CROSSFILE_DOCS_REGISTRATION = '''
+PYTHON_CROSSFILE_DOCS_REGISTRATION = """
 from mcp.server.fastmcp import FastMCP
 from .tools import docs
 
@@ -163,7 +161,7 @@ mcp = FastMCP("demo")
 
 mcp.tool()(docs.search_agentcore_docs)
 mcp.tool()(docs.fetch_agentcore_doc)
-'''
+"""
 
 
 PYTHON_MIXED_DECORATOR_AND_PROGRAMMATIC = '''
@@ -186,9 +184,7 @@ mcp.add_tool(sub)
 
 def test_python_programmatic_not_shadowed_by_decorator_tools() -> None:
     """Gap 8 must run even when ``@mcp.tool()`` tools exist in the file."""
-    analyzer = NativeAnalyzer(
-        PYTHON_MIXED_DECORATOR_AND_PROGRAMMATIC, "mixed.py"
-    )
+    analyzer = NativeAnalyzer(PYTHON_MIXED_DECORATOR_AND_PROGRAMMATIC, "mixed.py")
     names = {c.name for c in analyzer.extract_mcp_capability_contexts()}
     assert names == {"add", "sub"}, names
 
@@ -214,8 +210,9 @@ def test_python_self_mcp_nested_decorator() -> None:
 
     names = {
         c.name
-        for c in ContextExtractor(PYTHON_SELF_MCP_NESTED, "nested.py")
-        .extract_mcp_function_contexts()
+        for c in ContextExtractor(
+            PYTHON_SELF_MCP_NESTED, "nested.py"
+        ).extract_mcp_function_contexts()
     }
     assert "add" in names, names
 
@@ -250,26 +247,21 @@ def test_ts_dynamic_tool_name_emits_unresolved_stub() -> None:
     caps = analyzer.extract_mcp_capability_contexts()
     names = {c.name for c in caps}
     assert caps, names
-    assert any(
-        "toolName" in n or "handler" in n for n in names
-    ), names
+    assert any("toolName" in n or "handler" in n for n in names), names
 
 
 def test_python_crossfile_module_attr_emits_unresolved_stub() -> None:
     """``mcp.tool()(docs.search_agentcore_docs)`` references a handler
     defined in another module. Emit unresolved stubs so the
     registration is at least visible downstream (Gap 8 extension)."""
-    analyzer = NativeAnalyzer(
-        PYTHON_CROSSFILE_DOCS_REGISTRATION, "server.py"
-    )
+    analyzer = NativeAnalyzer(PYTHON_CROSSFILE_DOCS_REGISTRATION, "server.py")
     caps = analyzer.extract_mcp_capability_contexts()
     labels = {c.name for c in caps}
     assert "docs.search_agentcore_docs" in labels, labels
     assert "docs.fetch_agentcore_doc" in labels, labels
     for cap in caps:
         assert any(
-            t == "<registration.unresolved>.tool"
-            for t in cap.decorator_types
+            t == "<registration.unresolved>.tool" for t in cap.decorator_types
         ), cap.decorator_types
 
 
@@ -314,9 +306,7 @@ def test_graph_endpoint_loop_expands_literal_aliases() -> None:
     assert "get-user" in names, names
     assert "list-onenote-notebooks" in names, names
     table_caps = [
-        c
-        for c in caps
-        if any("registration.table" in t for t in c.decorator_types)
+        c for c in caps if any("registration.table" in t for t in c.decorator_types)
     ]
     assert len(table_caps) >= 3, [c.decorator_types for c in caps]
 
