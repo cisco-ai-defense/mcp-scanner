@@ -89,7 +89,7 @@ rule credential_harvesting{
         $credential_file_extensions = /\.(keystore|passwd|shadow|config|env|credential|secret|token|private|pub|rsa|dsa|ecdsa|ed25519|pem|crt|cer|key|p12|pfx|jks)\b/
 
         // Pattern for exfiltration action words
-        $leak_param  = /\b(leak|exfiltrate|export|dump) [^\n]*(parameter|context|files?|credentials?|keys?|tokens?|secrets?)\b/i
+        $leak_param  = /\b(leak|exfiltrate|export|dump) [^\n]{0,40}(parameter|context|files?|credentials?|keys?|tokens?|secrets?)\b/i
 
         // Base64 credential encoding patterns
         $base64_credential_encoding = /\b(base64\s+encode [^\n]*credentials?|concatenate [^\n]*conversation\s+history)\b/i
@@ -103,6 +103,19 @@ rule credential_harvesting{
         // Generic configuration operation patterns
         $generic_config_ops = /(get_env|set_env|read_config|write_config|config_file|settings_file|env_file)/
         $template_indicators = /(\bYOUR_API_KEY|\bREPLACE_WITH|\bINSERT_KEY|\.example|\.sample|\.template)/
+        // Negated disclosure — suppresses a $leak_param occurrence ONLY when
+        // the negation phrase ("no secrets", "without credentials",
+        // "secret-free") begins within that occurrence's verb-to-object span
+        // (verb + space + gap = at most 10 + 1 + 40 = 51 bytes from the leak
+        // match start). A negation further out belongs to a later clause or
+        // sentence and must not suppress the leak. This fixes two defects of
+        // the previous guards: the rule-wide $negated_disclosure hid real
+        // leaks whenever any benign negation existed anywhere in the input
+        // ("Export credentials ... This tool is secret-free"), and its
+        // verb-anchored $scoped_negation replacement still let an unrelated
+        // negated clause ("... Later, dump no secrets ...") suppress a real
+        // leak in the same description.
+        $negated_disclosure = /\b(no\s+(secrets?|credentials?|tokens?|keys?|passwords?)|without\s+(secrets?|credentials?|tokens?|keys?|passwords?)|(secrets?|credentials?|tokens?|keys?|passwords?)-free)\b/i
 
     condition:
 
@@ -118,8 +131,14 @@ rule credential_harvesting{
         // Sensitive data targeting patterns
         (($sensitive_file_patterns or $env_exfil or $source_exfil) and ($transfer_actions or $file_system_operations or $access_actions_words) and not $generic_config_ops) or
 
-        // Exfiltration attempts
-        ($leak_param and not $generic_config_ops) or
+        // Exfiltration attempts — at least one $leak_param occurrence must
+        // have no $negated_disclosure inside its own span (offset within
+        // [match start, match start + 51]); occurrences whose object phrase
+        // itself is a negation ("dump no secrets") stay suppressed.
+        ($leak_param and not $generic_config_ops and
+          (for any i in (1..#leak_param) :
+            (not (for any j in (1..#negated_disclosure) :
+              ((@negated_disclosure[j] >= @leak_param[i]) and (@negated_disclosure[j] <= @leak_param[i] + 51)))))) or
 
         // Base64 credential encoding
         $base64_credential_encoding or
