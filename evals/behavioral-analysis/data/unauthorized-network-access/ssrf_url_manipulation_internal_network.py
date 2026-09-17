@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Complex SSRF with URL Manipulation and Internal Network Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 from urllib.parse import urlparse, urljoin
 
-app = FastMCP("unauthorized-network-access-service-1")
+app = MCPServer("unauthorized-network-access-service-1")
 
 
 class ResourceFetcher:

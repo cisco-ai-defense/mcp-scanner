@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Complex OS System Injection with Archive Operations"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import glob
 
-app = FastMCP("injection-attacks-service-4")
+app = MCPServer("injection-attacks-service-4")
 
 
 class FileCompressor:

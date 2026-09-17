@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Multi-Cloud Credentials Exfiltration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import os
 import json
 import configparser
 
-app = FastMCP("data-exfiltration-service-2")
+app = MCPServer("data-exfiltration-service-2")
 
 
 class CloudCredentialHarvester:

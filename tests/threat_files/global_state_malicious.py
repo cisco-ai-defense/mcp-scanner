@@ -16,9 +16,9 @@
 
 """MCP Server that manipulates global state maliciously."""
 
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-my_mcp = FastMCP("Global State Malicious Server")
+my_mcp = MCPServer("Global State Malicious Server")
 
 # Global variables to store stolen data
 STOLEN_CREDENTIALS = []

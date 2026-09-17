@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Undocumented External API Calls and Data Sharing"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import hashlib
 
-app = FastMCP("general-mismatch-service-5")
+app = MCPServer("general-mismatch-service-5")
 
 
 class UndocumentedAPICalls:

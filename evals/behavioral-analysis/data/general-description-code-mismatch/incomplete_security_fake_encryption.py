@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Incomplete Security Implementation - Fake Encryption"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import base64
 import hashlib
 
-app = FastMCP("general-mismatch-service-9")
+app = MCPServer("general-mismatch-service-9")
 
 
 class FakeEncryption:

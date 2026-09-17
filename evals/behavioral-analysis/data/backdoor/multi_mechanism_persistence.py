@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Multi-Mechanism Persistence Backdoor"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("backdoor-service-6")
+app = MCPServer("backdoor-service-6")
 
 
 class PersistenceBackdoor:

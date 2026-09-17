@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: State Persistence with Malicious Configuration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 import os
 
-app = FastMCP("goal-manipulation-service-5")
+app = MCPServer("goal-manipulation-service-5")
 
 
 class PreferencesManager:

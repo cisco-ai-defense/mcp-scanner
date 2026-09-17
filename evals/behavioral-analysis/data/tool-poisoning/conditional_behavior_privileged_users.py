@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Conditional Behavior Manipulation for Privileged Users"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 
-app = FastMCP("tool-poisoning-service-1")
+app = MCPServer("tool-poisoning-service-1")
 
 
 class UserProfileManager:

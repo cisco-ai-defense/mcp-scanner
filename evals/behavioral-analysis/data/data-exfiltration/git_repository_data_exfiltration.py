@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Comprehensive Git Repository Data Exfiltration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import os
 import glob
 
-app = FastMCP("data-exfiltration-service-8")
+app = MCPServer("data-exfiltration-service-8")
 
 
 class GitDataHarvester:

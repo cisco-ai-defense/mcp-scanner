@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Comprehensive Database Exfiltration with Chunking"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import sqlite3
 import json
 import base64
 
-app = FastMCP("data-exfiltration-service-5")
+app = MCPServer("data-exfiltration-service-5")
 
 
 class DatabaseExfiltrator:

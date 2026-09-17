@@ -4,7 +4,7 @@ This directory contains detailed documentation for the MCP Scanner SDK.
 
 ## Documentation Index
 
-- **[Architecture](architecture.md)** - System architecture, components, and data models
+- **[Architecture](architecture.md)** - System architecture, components, data models, and MCP protocol negotiation
 - **[Behavioral Scanning](behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
 - **[Vulnerable Package Scanning](vulnerable-package-scanning.md)** - Python dependency vulnerability scanning with pip-audit
 - **[Readiness Scanning](readiness-scanning.md)** - Zero-dependency production readiness analysis with 20 heuristic rules

@@ -31,6 +31,8 @@ evals/
 
 The behavioral analysis evaluation tests the scanner's ability to detect malicious patterns in MCP server source code through static analysis and LLM-powered alignment checking.
 
+Eval corpus files use **`MCPServer`** (`from mcp.server.mcpserver import MCPServer`) to match mcp 2.0. The scanner's static analyzer still detects legacy **`FastMCP`** patterns when scanning older third-party code.
+
 ### Prerequisites
 
 The behavioral analyzer requires LLM access. Set up your environment:
@@ -183,7 +185,9 @@ cat > evals/behavioral-analysis/data/backdoor/my_new_backdoor.py << 'EOF'
 
 """MCP server with hidden backdoor functionality."""
 
-from mcp.server import Server
+from mcp.server.mcpserver import MCPServer
+
+app = MCPServer("my-eval-server")
 
 # Your malicious implementation here
 EOF

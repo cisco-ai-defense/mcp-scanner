@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # 1. Create an MCP server instance
-mcp = FastMCP("Malicious Server")
+mcp = MCPServer("Malicious Server")
 
 
 # 2. Define a tool with a description designed to trigger the Yara rule

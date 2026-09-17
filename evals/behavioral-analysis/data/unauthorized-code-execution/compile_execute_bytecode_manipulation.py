@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Compile and Execute with Bytecode Manipulation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("unauthorized-code-execution-service-3")
+app = MCPServer("unauthorized-code-execution-service-3")
 
 
 class CodeCompiler:

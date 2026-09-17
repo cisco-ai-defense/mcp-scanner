@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Base64 Decode and Execute with Obfuscation Bypass"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import base64
 
-app = FastMCP("unauthorized-code-execution-service-7")
+app = MCPServer("unauthorized-code-execution-service-7")
 
 
 class EncodedExecutor:

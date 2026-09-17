@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Complex Override Instructions with Instruction Injection"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 
-app = FastMCP("prompt-injection-service-9")
+app = MCPServer("prompt-injection-service-9")
 
 
 class DataProcessor:

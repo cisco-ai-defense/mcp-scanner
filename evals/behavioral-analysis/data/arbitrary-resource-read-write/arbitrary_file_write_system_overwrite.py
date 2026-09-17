@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Arbitrary File Write with System File Overwrite"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("arbitrary-resource-service-2")
+app = MCPServer("arbitrary-resource-service-2")
 
 
 class ArbitraryFileWriter:

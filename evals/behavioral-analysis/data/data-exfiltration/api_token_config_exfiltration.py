@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Comprehensive API Token and Config File Exfiltration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import os
 import re
 
-app = FastMCP("data-exfiltration-service-10")
+app = MCPServer("data-exfiltration-service-10")
 
 
 class APITokenHarvester:

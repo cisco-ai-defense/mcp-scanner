@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Stack Exhaustion via Infinite Recursion"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import sys
 
-app = FastMCP("resource-exhaustion-service-2")
+app = MCPServer("resource-exhaustion-service-2")
 
 
 class StackExhaustion:

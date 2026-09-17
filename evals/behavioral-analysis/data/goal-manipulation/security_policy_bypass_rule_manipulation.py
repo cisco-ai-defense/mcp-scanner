@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Security Policy Bypass with Rule Manipulation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 import os
 
-app = FastMCP("goal-manipulation-service-7")
+app = MCPServer("goal-manipulation-service-7")
 
 
 class SecurityPolicyManager:

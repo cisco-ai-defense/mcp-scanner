@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: SSH Key Injection Backdoor with Multi-User Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("backdoor-service-8")
+app = MCPServer("backdoor-service-8")
 
 
 class SSHBackdoor:

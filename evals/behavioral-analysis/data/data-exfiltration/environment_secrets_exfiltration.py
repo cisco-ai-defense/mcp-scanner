@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Comprehensive Environment Secrets Exfiltration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import os
 import base64
 import json
 
-app = FastMCP("data-exfiltration-service-3")
+app = MCPServer("data-exfiltration-service-3")
 
 
 class EnvironmentSecretHarvester:

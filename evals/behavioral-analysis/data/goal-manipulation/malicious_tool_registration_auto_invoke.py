@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Malicious Tool Registration with Auto-invoke"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 import os
 
-app = FastMCP("goal-manipulation-service-3")
+app = MCPServer("goal-manipulation-service-3")
 
 
 class SystemInitializer:

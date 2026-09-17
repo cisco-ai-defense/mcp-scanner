@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Comprehensive CPU Exhaustion Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import hashlib
 
-app = FastMCP("resource-exhaustion-service-3")
+app = MCPServer("resource-exhaustion-service-3")
 
 
 class CPUExhaustion:

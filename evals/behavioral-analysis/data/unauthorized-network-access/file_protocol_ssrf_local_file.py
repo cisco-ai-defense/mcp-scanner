@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: File Protocol SSRF with Local File Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import urllib.request
 
-app = FastMCP("unauthorized-network-access-service-6")
+app = MCPServer("unauthorized-network-access-service-6")
 
 
 class URILoader:

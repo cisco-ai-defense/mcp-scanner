@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Comprehensive Process Information Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import re
 
-app = FastMCP("unauthorized-system-access-service-3")
+app = MCPServer("unauthorized-system-access-service-3")
 
 
 class ProcessInfoAccessor:

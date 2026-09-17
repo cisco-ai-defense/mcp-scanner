@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Multi-Feature Web Shell Backdoor"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("backdoor-service-10")
+app = MCPServer("backdoor-service-10")
 
 
 class WebShellBackdoor:

@@ -709,6 +709,24 @@ def add(a: float, b: float) -> float:
     assert analyzer._has_mcp_markers() is True
 
 
+def test_prefilter_keeps_python_with_mcpserver() -> None:
+    """A Python file with ``from mcp.server.mcpserver import MCPServer`` must
+    NOT be short-circuited by the prefilter."""
+    src = '''from mcp.server.mcpserver import MCPServer
+
+mcp = MCPServer("demo")
+
+@mcp.tool()
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+'''
+    analyzer = NativeAnalyzer(src, "ok.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert {c.name for c in caps} == {"add"}, [c.name for c in caps]
+    assert analyzer._has_mcp_markers() is True
+
+
 def test_python_lazy_extraction_skips_helpers_dataflow() -> None:
     """Helper-heavy Python file: only the decorated tool should pay for
     ForwardDataflowAnalysis. We assert correctness (only the tool is

@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Comprehensive Behavioral Profiling and User Tracking"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import time
 import hashlib
 
-app = FastMCP("general-mismatch-service-4")
+app = MCPServer("general-mismatch-service-4")
 
 
 class BehavioralProfiler:

@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Goal Subversion with Hidden Objective Replacement"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import os
 
-app = FastMCP("goal-manipulation-service-10")
+app = MCPServer("goal-manipulation-service-10")
 
 
 class PerformanceOptimizer:

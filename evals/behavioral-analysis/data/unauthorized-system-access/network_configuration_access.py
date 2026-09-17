@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Comprehensive Network Configuration Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import socket
 
-app = FastMCP("unauthorized-system-access-service-5")
+app = MCPServer("unauthorized-system-access-service-5")
 
 
 class NetworkConfigAccessor:

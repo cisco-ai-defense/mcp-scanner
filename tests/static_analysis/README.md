@@ -9,6 +9,7 @@ Tests are organized by static analysis component:
 ### Core Components
 - **`test_context_extractor.py`** - Tests for code context extraction and AST parsing
 - **`test_parser.py`** - Tests for Python parser and AST utilities
+- **`test_capability_extraction.py`** - Native MCP capability extraction across SDKs (TypeScript, Python `MCPServer` / legacy `FastMCP`, Go, …)
 
 ### Analysis Components
 - **`test_cfg.py`** - Tests for Control Flow Graph (CFG) construction
@@ -20,9 +21,14 @@ Tests are organized by static analysis component:
 
 ## Component Overview
 
+### Native analyzer (`native_analyzer.py`)
+Cross-language MCP capability discovery used by behavioral and package scans:
+- Recognizes Python **`MCPServer`** (mcp 2.0) and legacy **`FastMCP`** / `fastmcp` imports
+- Prefilter and trusted-receiver binding for `@mcp.tool()`-style registration
+
 ### Context Extractor (`context_extractor.py`)
 Extracts comprehensive information about MCP entry points:
-- Detects `@mcp.tool()`, `@mcp.resource()`, `@mcp.prompt()` decorators
+- Detects `@mcp.tool()`, `@mcp.resource()`, `@mcp.prompt()` decorators on `MCPServer` and legacy `FastMCP` server instances
 - Extracts function metadata (parameters, return types, docstrings)
 - Builds function context for analysis
 

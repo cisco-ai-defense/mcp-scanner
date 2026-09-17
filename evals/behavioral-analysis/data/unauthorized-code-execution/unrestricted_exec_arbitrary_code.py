@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Unrestricted Exec with Arbitrary Code Execution"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("unauthorized-code-execution-service-2")
+app = MCPServer("unauthorized-code-execution-service-2")
 
 
 class ScriptExecutor:

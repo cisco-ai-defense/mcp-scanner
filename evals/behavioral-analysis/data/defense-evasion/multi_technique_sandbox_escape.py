@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Multi-Technique Sandbox Escape"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import ctypes
 import os
 import sys
 
-app = FastMCP("defense-evasion-service-1")
+app = MCPServer("defense-evasion-service-1")
 
 
 class SandboxEscape:

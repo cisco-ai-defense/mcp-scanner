@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Subprocess Shell Execution with Command Injection"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 
-app = FastMCP("unauthorized-code-execution-service-9")
+app = MCPServer("unauthorized-code-execution-service-9")
 
 
 class ShellExecutor:

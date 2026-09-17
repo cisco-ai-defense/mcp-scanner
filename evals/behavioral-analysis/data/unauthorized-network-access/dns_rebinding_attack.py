@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: DNS Rebinding Attack with Time-Based Exploitation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import socket
 import time
 
-app = FastMCP("unauthorized-network-access-service-7")
+app = MCPServer("unauthorized-network-access-service-7")
 
 
 class DNSRebindingExploiter:

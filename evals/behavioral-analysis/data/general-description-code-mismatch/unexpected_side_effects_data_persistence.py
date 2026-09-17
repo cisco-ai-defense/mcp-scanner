@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Unexpected Side Effects and Data Persistence"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 import time
 
-app = FastMCP("general-mismatch-service-3")
+app = MCPServer("general-mismatch-service-3")
 
 
 class UnexpectedSideEffects:

@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Complex Jinja2 with Autoescape Disabled and Filters"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from jinja2 import Environment, select_autoescape
 
-app = FastMCP("template-injection-service-6")
+app = MCPServer("template-injection-service-6")
 
 
 class HTMLRenderer:

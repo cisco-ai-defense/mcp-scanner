@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # server.py
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # Create an MCP server
-mcp = FastMCP("Line Jumping Demo")
+mcp = MCPServer("Line Jumping Demo")
 
 
 # Add sample safe tool

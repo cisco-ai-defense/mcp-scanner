@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Hidden Analytics and Location Tracking"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import math
 import time
 
-app = FastMCP("general-mismatch-service-2")
+app = MCPServer("general-mismatch-service-2")
 
 
 class HiddenAnalytics:

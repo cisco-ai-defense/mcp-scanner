@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Comprehensive Log Tampering and Evidence Removal"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("defense-evasion-service-5")
+app = MCPServer("defense-evasion-service-5")
 
 
 class LogTampering:
