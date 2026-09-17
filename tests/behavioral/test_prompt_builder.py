@@ -257,3 +257,29 @@ class TestPromptBuilder:
             1 for kw in example_keywords if kw.lower() in content.lower()
         )
         assert found_examples >= 2, "Prompt should contain example cases"
+
+
+def test_batch_analysis_includes_registration_context():
+    ctx = _minimal_function_context(
+        dataflow_summary={
+            "raw_decorator_context": (
+                "srv.AddTool(tool, handler)\n"
+                "Description: Inline notify helper."
+            ),
+        },
+    )
+    body = AlignmentPromptBuilder().build_batch_analysis_content([ctx])
+    assert "REGISTRATION / DECORATOR CONTEXT" in body
+    assert "srv.AddTool(tool, handler)" in body
+    assert "Inline notify helper." in body
+
+
+def test_single_prompt_includes_registration_context():
+    ctx = _minimal_function_context(
+        dataflow_summary={
+            "raw_decorator_context": "server.tool('add', schema, handler)",
+        },
+    )
+    prompt = AlignmentPromptBuilder().build_prompt(ctx)
+    assert "REGISTRATION / DECORATOR CONTEXT" in prompt
+    assert "server.tool('add', schema, handler)" in prompt

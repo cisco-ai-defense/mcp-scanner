@@ -63,6 +63,23 @@ def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
     return ("full", ctx.name, ctx.line_number, decs)
 
 
+def _is_duplicate_native_registration_stub(
+    primary: FunctionContext,
+    supplemental: FunctionContext,
+) -> bool:
+    """Skip NativeAnalyzer handler stubs already captured by JSContextExtractor."""
+    if primary.name != supplemental.name:
+        return False
+    primary_doc = (primary.docstring or "").strip()
+    supplemental_doc = (supplemental.docstring or "").strip()
+    if primary_doc and not supplemental_doc:
+        return True
+    supplemental_decs = tuple(supplemental.decorator_types or ())
+    if primary_doc and "<registration>.tool" in supplemental_decs:
+        return True
+    return False
+
+
 def _merge_mcp_function_contexts(
     primary: List[FunctionContext],
     supplemental: List[FunctionContext],
@@ -78,6 +95,8 @@ def _merge_mcp_function_contexts(
     for ctx in supplemental:
         key = _context_dedupe_key(ctx)
         if key in seen:
+            continue
+        if any(_is_duplicate_native_registration_stub(p, ctx) for p in primary):
             continue
         seen.add(key)
         merged.append(ctx)
@@ -297,10 +316,14 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
 
                 capability_files = self._prefilter_capability_files(source_files)
+                call_graph_files = self._expand_call_graph_import_closure(
+                    capability_files, source_files
+                )
                 self.logger.info(
-                    "behavioral prefilter scanned=%d kept=%d",
+                    "behavioral prefilter scanned=%d kept=%d call_graph=%d",
                     len(source_files),
                     len(capability_files),
+                    len(call_graph_files),
                 )
 
                 if source_files and not capability_files:
@@ -345,7 +368,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     ts_call_graph_analyzers[lang] = TreeSitterCallGraphAnalyzer(lang)
 
                 total_size = 0
-                for accepted in capability_files:
+                for accepted in call_graph_files:
                     try:
                         if accepted.source_bytes:
                             file_size = len(accepted.source_bytes)
@@ -385,7 +408,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         )
 
                 self.logger.debug(
-                    f"Total directory size: {total_size:,} bytes across {len(capability_files)} files"
+                    f"Total directory size: {total_size:,} bytes across {len(call_graph_files)} files"
                 )
                 if total_size > 10_000_000:  # 10MB
                     self.logger.warning(
@@ -621,6 +644,119 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
         return accepted
 
+    def _expand_call_graph_import_closure(
+        self,
+        capability_files: List[_AcceptedFile],
+        source_files: List[str],
+    ) -> List[_AcceptedFile]:
+        """Include import-reachable helper modules in call-graph construction.
+
+        Capability prefilter drops marker-free files, but handlers often
+        live in imported helpers. Build a transitive import closure from
+        capability files so cross-file resolution can reach those modules.
+        """
+        import ast
+
+        from tree_sitter import Language, Parser
+
+        from ...static_analysis.capability_detector import (
+            CapabilityDetector,
+            _path_endswith_suffix,
+        )
+        from ...static_analysis.native_analyzer import (
+            NativeAnalyzer,
+            _get_language_module,
+        )
+
+        by_path = {accepted.path: accepted for accepted in capability_files}
+        included = set(by_path.keys())
+        supplemental: List[_AcceptedFile] = []
+        pending = list(included)
+
+        def _language_object(lang_id: str, file_path: str):
+            lang_mod = _get_language_module(lang_id)
+            if lang_mod is None:
+                return None
+            if lang_id == "typescript" and Path(file_path).suffix.lower() == ".tsx":
+                return Language(lang_mod.language_tsx())
+            if lang_id == "typescript":
+                return Language(lang_mod.language_typescript())
+            if lang_id == "php":
+                return Language(lang_mod.language_php())
+            return Language(lang_mod.language())
+
+        def _import_path_suffixes(accepted: _AcceptedFile) -> List[str]:
+            source_code = accepted.source_text or ""
+            path = accepted.path
+            analyzer = NativeAnalyzer(source_code, path)
+            detector = CapabilityDetector(analyzer)
+            ext = Path(path).suffix.lower()
+            imports: List[str] = []
+
+            if ext in self._PYTHON_EXTENSIONS:
+                try:
+                    tree = ast.parse(source_code, filename=path)
+                    imports = analyzer._py_extract_imports(tree)
+                except SyntaxError:
+                    return []
+            elif ext in self._EXT_TO_TS_LANGUAGE:
+                lang_id = self._EXT_TO_TS_LANGUAGE[ext]
+                lang = _language_object(lang_id, path)
+                if lang is None:
+                    return []
+                parser = Parser(lang)
+                source_bytes = accepted.source_bytes or source_code.encode("utf-8")
+                tree = parser.parse(source_bytes)
+                imports = analyzer._ts_extract_imports(tree.root_node)
+            else:
+                return []
+
+            target_map = detector._build_import_target_map(imports, path)
+            suffixes: set[str] = set()
+            for targets in target_map.values():
+                suffixes.update(targets)
+            return list(suffixes)
+
+        while pending:
+            current = pending.pop()
+            accepted = by_path.get(current)
+            if accepted is None:
+                continue
+
+            for suffix in _import_path_suffixes(accepted):
+                for candidate in source_files:
+                    if candidate in included:
+                        continue
+                    if not _path_endswith_suffix(candidate, suffix):
+                        continue
+                    try:
+                        with open(candidate, "rb") as f:
+                            source_bytes = f.read()
+                        source_text = source_bytes.decode("utf-8", errors="replace")
+                    except OSError as exc:
+                        self.logger.debug(
+                            "Call-graph import closure could not read %s: %s",
+                            candidate,
+                            exc,
+                        )
+                        continue
+                    loaded = _AcceptedFile(
+                        path=candidate,
+                        source_bytes=source_bytes,
+                        source_text=source_text,
+                    )
+                    supplemental.append(loaded)
+                    by_path[candidate] = loaded
+                    included.add(candidate)
+                    pending.append(candidate)
+
+        if supplemental:
+            self.logger.debug(
+                "Call-graph import closure added %d helper file(s)",
+                len(supplemental),
+            )
+        return list(capability_files) + supplemental
+
     def _find_python_files(self, directory: str) -> List[str]:
         """Find all Python files in a directory (legacy method).
 
@@ -769,6 +905,13 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         is_python = file_ext in {".py", ".pyw"}
         is_js_ts = file_ext in {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
 
+        def _detect_capabilities(analyzer: NativeAnalyzer) -> List[FunctionContext]:
+            from mcpscanner.core.static_analysis import CapabilityDetector
+
+            return CapabilityDetector(analyzer).extract_mcp_capability_contexts(
+                cross_file_analyzer=context.get("cross_file_analyzer")
+            )
+
         try:
             if is_python:
                 # Primary ContextExtractor for standard @mcp.tool decorators;
@@ -793,18 +936,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 native_failed = False
                 try:
                     native_analyzer = NativeAnalyzer(source_code, file_path)
-                    native_contexts = native_analyzer.extract_mcp_capability_contexts(
-                        cross_file_analyzer=context.get("cross_file_analyzer")
-                    )
+                    native_contexts = _detect_capabilities(native_analyzer)
                     if native_contexts:
                         self.logger.debug(
-                            f"NativeAnalyzer extracted {len(native_contexts)} MCP "
+                            f"CapabilityDetector extracted {len(native_contexts)} MCP "
                             f"capabilities from {file_path}"
                         )
                 except Exception as e:
                     native_failed = True
                     self.logger.debug(
-                        f"NativeAnalyzer failed for {file_path}: {e}"
+                        f"CapabilityDetector failed for {file_path}: {e}"
                     )
                 if extractor_failed and native_failed:
                     self.analysis_errors += 1
@@ -813,25 +954,55 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
 
             elif is_js_ts:
-                self.logger.debug(f"Using NativeAnalyzer for JS/TS file: {file_path}")
-                native_analyzer = NativeAnalyzer(source_code, file_path)
-                func_contexts = native_analyzer.extract_mcp_capability_contexts(
-                    cross_file_analyzer=context.get("cross_file_analyzer")
+                self.logger.debug(
+                    f"Using JSContextExtractor + CapabilityDetector for: {file_path}"
                 )
+                js_contexts: List[FunctionContext] = []
+                js_failed = False
+                try:
+                    from mcpscanner.core.static_analysis.javascript.js_context_extractor import (
+                        JSContextExtractor,
+                    )
+
+                    js_contexts = JSContextExtractor(
+                        source_code, file_path
+                    ).extract_mcp_function_contexts()
+                except Exception as e:
+                    js_failed = True
+                    self.logger.debug(
+                        f"JSContextExtractor failed for {file_path}: {e}"
+                    )
+
+                native_contexts: List[FunctionContext] = []
+                native_failed = False
+                try:
+                    native_analyzer = NativeAnalyzer(source_code, file_path)
+                    native_contexts = _detect_capabilities(native_analyzer)
+                except Exception as e:
+                    native_failed = True
+                    self.logger.debug(
+                        f"CapabilityDetector failed for {file_path}: {e}"
+                    )
+
+                if js_failed and native_failed:
+                    self.logger.debug(
+                        f"Both JSContextExtractor and CapabilityDetector failed for {file_path}"
+                    )
+                func_contexts = _merge_mcp_function_contexts(js_contexts, native_contexts)
                 if func_contexts:
                     self.logger.debug(
-                        f"NativeAnalyzer extracted {len(func_contexts)} MCP capabilities from {file_path}"
+                        f"Extracted {len(func_contexts)} MCP capabilities from {file_path}"
                     )
 
             else:
-                self.logger.debug(f"Unknown file type {file_path}, trying NativeAnalyzer")
-                native_analyzer = NativeAnalyzer(source_code, file_path)
-                func_contexts = native_analyzer.extract_mcp_capability_contexts(
-                    cross_file_analyzer=context.get("cross_file_analyzer")
+                self.logger.debug(
+                    f"Unknown file type {file_path}, trying CapabilityDetector"
                 )
+                native_analyzer = NativeAnalyzer(source_code, file_path)
+                func_contexts = _detect_capabilities(native_analyzer)
                 if func_contexts:
                     self.logger.debug(
-                        f"NativeAnalyzer detected {native_analyzer.language}, "
+                        f"CapabilityDetector detected {native_analyzer.language}, "
                         f"extracted {len(func_contexts)} MCP capabilities"
                     )
 
