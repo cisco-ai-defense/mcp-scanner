@@ -1267,6 +1267,121 @@ def test_analysis_scan_status_no_findings_no_errors_is_completed():
     assert analysis_scan_status(_analyzer_with_error_stats(0), []) == "completed"
 
 
+def _safe_placeholder(function_name: str = "tool"):
+    from mcpscanner.core.analyzers.base import SecurityFinding
+
+    return SecurityFinding(
+        severity="SAFE",
+        summary="No behavioral mismatches detected",
+        analyzer="Behavioral",
+        threat_category="",
+        details={"function_name": function_name, "no_findings": True},
+    )
+
+
+def test_analysis_scan_status_safe_placeholders_do_not_mask_errors():
+    """SAFE rows are audit records, not results.
+
+    The unified pipeline emits one per discovered tool, so counting them
+    would report a degraded scan as ``completed`` and hand back
+    ``is_safe=True`` once the placeholders are stripped downstream.
+    """
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    findings = [_safe_placeholder("a"), _safe_placeholder("b")]
+    assert analysis_scan_status(_analyzer_with_error_stats(3), findings) == "error"
+
+
+def test_analysis_scan_status_safe_placeholders_alone_stay_completed():
+    """Placeholders with no error tally still mean a clean, complete scan."""
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    findings = [_safe_placeholder("a")]
+    assert analysis_scan_status(_analyzer_with_error_stats(0), findings) == "completed"
+
+
+def test_analysis_scan_status_real_finding_beside_placeholder_is_completed():
+    """A genuine finding still short-circuits to ``completed``."""
+    from mcpscanner.core.analyzers.base import SecurityFinding
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    real = SecurityFinding(
+        severity="HIGH",
+        summary="exfiltrates data",
+        analyzer="Behavioral",
+        threat_category="MALICIOUS_CODE",
+    )
+    findings = [_safe_placeholder("a"), real]
+    assert analysis_scan_status(_analyzer_with_error_stats(4), findings) == "completed"
+
+
+def _infrastructure_finding():
+    from mcpscanner.utils.analyzer_errors import build_infrastructure_error_finding
+
+    return build_infrastructure_error_finding(
+        analyzer_name="Behavioral",
+        subject="pkg",
+        error=RuntimeError("tree-sitter unavailable"),
+        context="local",
+    )
+
+
+def test_analysis_scan_status_infrastructure_finding_is_error():
+    """The analyzer's own "I crashed" notice must not be mistaken for a
+    result: it is INFO-severity and therefore reportable, so without an
+    explicit check it would short-circuit the whole guard to ``completed``
+    and publish a definitive ``is_safe=False`` verdict for a scan that
+    never ran."""
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    findings = [_infrastructure_finding()]
+    assert analysis_scan_status(_analyzer_with_error_stats(0), findings) == "error"
+
+
+def test_analysis_scan_status_infrastructure_finding_outranks_real_findings():
+    """Partial results collected before the crash don't make the scan
+    trustworthy — the crash notice still wins."""
+    from mcpscanner.core.analyzers.base import SecurityFinding
+    from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+    real = SecurityFinding(
+        severity="HIGH",
+        summary="exfiltrates data",
+        analyzer="Behavioral",
+        threat_category="MALICIOUS_CODE",
+    )
+    findings = [real, _infrastructure_finding()]
+    assert analysis_scan_status(_analyzer_with_error_stats(0), findings) == "error"
+
+
+def test_infrastructure_finding_scan_result_refuses_a_verdict():
+    """End of the chain: ``error`` status means ``is_safe=None`` and the
+    package guard raises rather than letting a caller read the crash
+    notice as a scanned-and-unsafe package."""
+    from mcpscanner.core.pypi_scanner import (
+        PyPIScanError,
+        _build_scan_result,
+        analysis_scan_status,
+        raise_if_unreliable_package_scan,
+    )
+
+    findings = [_infrastructure_finding()]
+    status = analysis_scan_status(_analyzer_with_error_stats(0), findings)
+    result = _build_scan_result(
+        ecosystem="npm",
+        package="pkg",
+        resolved_version="1.0.0",
+        source_root=Path("/tmp/pkg"),
+        files_scanned=3,
+        findings=findings,
+        scan_status=status,
+    )
+
+    assert result["is_safe"] is None
+    with pytest.raises(PyPIScanError):
+        raise_if_unreliable_package_scan(result)
+
+
 def test_analysis_scan_status_fails_closed_when_stats_unreadable():
     """If the analyzer doesn't expose orchestrator stats and produced no
     findings, downgrade to ``error`` rather than reporting safe."""
@@ -1473,21 +1588,37 @@ def test_js_analyzer_extract_failure_marks_scan_error(tmp_path, monkeypatch):
     This closes the residual false-safe gap where a broken/unavailable
     tree-sitter parser produced zero findings indistinguishable from a
     genuinely clean package."""
+    from mcpscanner.core.analyzers.behavioral import code_analyzer as camod
     from mcpscanner.core.analyzers.behavioral import js_code_analyzer as jmod
     from mcpscanner.core.pypi_scanner import analysis_scan_status
     from mcpscanner.core.static_analysis import native_analyzer as namod
 
     # Keep analyzer construction cheap and offline.
-    monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
+    monkeypatch.setattr(camod, "AlignmentOrchestrator", MagicMock())
 
     js_file = tmp_path / "server.ts"
-    js_file.write_text("export const handler = async () => 42;\n")
+    js_file.write_text(
+        """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.tool("handler", {}, async () => 42);
+"""
+    )
 
     def boom(self, *args, **kwargs):
         raise RuntimeError("tree-sitter unavailable")
 
     monkeypatch.setattr(
         namod.NativeAnalyzer, "extract_mcp_capability_contexts", boom
+    )
+    from mcpscanner.core.static_analysis.javascript import (
+        js_context_extractor as jsmod,
+    )
+
+    monkeypatch.setattr(
+        jsmod.JSContextExtractor, "extract_mcp_function_contexts", boom
     )
 
     analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())

@@ -78,7 +78,10 @@ class ReachingDefinitionsAnalysis(DataFlowAnalyzer[ReachingDefsFact]):
         Returns:
             Use-def chains: (node_id, var) -> list of reaching definitions
         """
-        self.build_cfg()
+        # Preserve a function-scoped CFG from ``build_cfg_for_function``;
+        # rebuilding here would silently widen the analysis to the module.
+        if not self.cfg:
+            self.build_cfg()
 
         # Initialize with parameter definitions (REVERSED APPROACH)
         initial_fact = ReachingDefsFact()

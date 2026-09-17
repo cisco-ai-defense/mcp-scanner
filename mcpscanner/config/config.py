@@ -67,6 +67,7 @@ class Config:
         virustotal_max_files: int = None,
         virustotal_inclusion_extensions: set = None,
         virustotal_exclusion_extensions: set = None,
+        behavioral_source_path: str = None,
     ):
         """Initialize a new Config instance.
 
@@ -156,6 +157,19 @@ class Config:
         self._virustotal_exclusion_extensions = (
             virustotal_exclusion_extensions or CONSTANTS.VIRUSTOTAL_EXCLUSION_EXTENSIONS
         )
+        _raw_behavioral_source = (
+            behavioral_source_path
+            or os.getenv("MCP_SCANNER_BEHAVIORAL_SOURCE_PATH")
+            or CONSTANTS.BEHAVIORAL_SOURCE_PATH
+        )
+        self._behavioral_source_path = (
+            _raw_behavioral_source.strip() if _raw_behavioral_source else ""
+        ) or None
+
+    @property
+    def behavioral_source_path(self) -> Optional[str]:
+        """Optional on-disk MCP server source used with BEHAVIORAL server scans."""
+        return self._behavioral_source_path
 
     @property
     def api_key(self) -> str:

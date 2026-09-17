@@ -22,12 +22,14 @@ Sibling of :class:`PyPIPackageScanner` for npm packages. Same two modes:
 * ``use_docker=False`` (opt-in SDK mode): downloads tarball directly from
   ``registry.npmjs.org`` via HTTPS, extracts it through
   :func:`mcpscanner.core.package_sandbox.safe_extract_tar_gz`, then runs the
-  in-process :class:`JSBehavioralCodeAnalyzer`. Package code is never
+  in-process :class:`BehavioralCodeAnalyzer` (via :class:`JSBehavioralCodeAnalyzer`
+  alias). Package code is never
   executed — only parsed.
 
 Detection runs the same docstring-vs-behaviour alignment LLM check that
-PyPI scans use, against JS / TS sources via the tree-sitter-backed
-:class:`JSContextExtractor`.
+PyPI scans use. JS/TS sources are analyzed via the tree-sitter-backed
+:class:`JSContextExtractor` in the unified :class:`BehavioralCodeAnalyzer`
+pipeline.
 """
 
 from __future__ import annotations
