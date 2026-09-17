@@ -18,6 +18,7 @@
 
 import pytest
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -611,6 +612,31 @@ class TestStaticSubcommandCLI:
             assert "MCP Scanner Results" in captured.out
             assert "Total tools scanned: 1" in captured.out
             assert "Safe items: 1" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_api_key_flag_is_applied_before_static_dispatch(
+        self, tools_json_file, monkeypatch, capsys
+    ):
+        """Global CLI environment overrides are applied before subcommand dispatch."""
+        from mcpscanner.cli import main
+
+        monkeypatch.delenv("MCP_SCANNER_API_KEY", raising=False)
+        test_args = [
+            "mcp-scanner",
+            "--api-key",
+            "test-api-key",
+            "--analyzers",
+            "yara",
+            "static",
+            "--tools",
+            tools_json_file,
+        ]
+
+        with patch("sys.argv", test_args):
+            await main()
+
+        assert "MCP Scanner Results" in capsys.readouterr().out
+        assert os.environ["MCP_SCANNER_API_KEY"] == "test-api-key"
 
     @pytest.mark.asyncio
     async def test_static_resources_result_conversion(self, resources_json_file):
