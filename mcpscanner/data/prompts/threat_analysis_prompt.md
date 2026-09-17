@@ -66,6 +66,35 @@ Flag under Case B if the tool's name or description indicates its primary purpos
 - Perform unauthorized reconnaissance against networks, systems, or users
 - Deliver, install, or persist malicious payloads, backdoors, or implants
 - Tamper with or destroy evidence, logs, or forensic artifacts
+- **Return, export, retrieve, or expose regulated sensitive data** (PII, PHI, PCI, or equivalent) when that exposure is the tool's stated purpose rather than a narrowly scoped, authorized business operation with clear legitimate context
+
+**Case B — Regulated sensitive data (PII / PHI / PCI):**
+
+Flag as **TOOL POISONING** when the tool's **stated purpose** is to provide, return, retrieve, export, dump, or leak categories of regulated or high-sensitivity personal data. Treat the **tool name and description together** — a benign-sounding name with a sensitive-data purpose in the description still qualifies.
+
+**Sensitive-data categories to recognize:**
+- **PII (Personally Identifiable Information):** SSN/social security numbers, national IDs, full names + contact info, government IDs, biometric identifiers, dates of birth used for identity, driver's license numbers
+- **PHI (Protected Health Information):** medical records, patient diagnoses, prescriptions, lab results, health insurance member IDs, treatment history, HIPAA-regulated health data
+- **PCI (Payment Card Industry / payment data):** credit/debit card numbers (PAN), CVV/CVC, magnetic stripe data, PIN blocks, full payment credentials, stored cardholder data subject to PCI-DSS
+
+**Text patterns that QUALIFY under Case B (non-exhaustive):**
+- Description or name states the tool **returns**, **retrieves**, **exports**, **provides**, or **contains** medical/health data, **PHI**, patient records, or **PHI violations**
+- Description or name states the tool **returns**, **retrieves**, **exports**, **provides**, or **contains** payment/card data, **PCI** data, CVV, or **PCI violations**
+- Description or name states the tool **returns** or **exposes** PII, SSNs, identity documents, or private user records without a narrow authorized workflow
+- Tool names like `get_medical_data`, `get_payment_data`, `export_phi`, `dump_pci`, `retrieve_ssn`, `fetch_patient_records`, `get_credit_card_data`
+
+**Concrete examples that QUALIFY:**
+- Tool: `get_medical_data` | Description: "Returns medical data containing PHI violations" → stated purpose is exposing PHI; flag **TOOL POISONING**
+- Tool: `get_payment_data` | Description: "Returns payment data containing PCI violations" → stated purpose is exposing payment card data; flag **TOOL POISONING**
+- Tool: `patient_lookup` | Description: "Exports full patient charts including diagnoses and insurance IDs" → PHI exposure as primary purpose; flag **TOOL POISONING**
+- Tool: `card_dump` | Description: "Retrieves stored CVV and PAN for any customer account" → PCI exposure as primary purpose; flag **TOOL POISONING**
+
+**DO NOT flag regulated-data tools when ALL of these apply:**
+- The tool's stated purpose is **defensive, compliance, or privacy-preserving** (e.g., "audit PHI access", "scan for PCI compliance gaps", "anonymize/redact/de-identify PII", "mask sensitive fields", "validate HIPAA controls")
+- The description does **not** promise to return raw regulated data to the caller
+- The tool operates on metadata, policies, or sanitized summaries rather than exporting full sensitive records
+
+**Important:** Do **not** treat "PHI violations" or "PCI violations" in a description as a compliance-audit claim unless the tool clearly performs auditing/scanning. Wording like "returns data containing PHI/PCI violations" means the tool **outputs** regulated sensitive data — flag it.
 
 Use your knowledge of offensive security techniques, MITRE ATT&CK tactics, and common attack tooling to identify tools whose stated purpose constitutes an attack operation.
 
@@ -119,9 +148,14 @@ Flag ONLY when the tool is **specifically designed to steal sensitive data** tha
 - Database tools requesting `connection_string`, `credentials`, `host` — standard database access
 - File management tools with `file_path`, `content`, `name` — standard file operations
 - Authentication/identity tools requesting `username`, `password`, `token` — this is their purpose
-- Payment/financial tools requesting payment information — this is their domain
+- **Authorized payment-processing or billing tools** with legitimate merchant context (e.g., `process_refund`, `create_invoice`, `stripe_create_charge`) where payment parameters support a defined transaction workflow — not blanket export of stored card data
+- **Authorized healthcare/clinical tools** with legitimate care-delivery context (e.g., `lookup_patient_for_appointment`, `submit_lab_order`) where PHI access is scoped to a documented clinical workflow — not blanket export of medical records
 - Monitoring/logging tools that mention data collection — this is their intended function
 - Any tool where the requested credentials match the service domain indicated by the tool name
+
+**Regulated-data tools vs DATA EXFILTRATION:**
+- If the tool's **stated purpose** is to return/export PHI, PCI, or PII (see TOOL POISONING Case B — Regulated sensitive data), flag **TOOL POISONING**, not DATA EXFILTRATION, unless there is **separate** evidence of hidden exfiltration beyond the stated purpose
+- DATA EXFILTRATION applies when a **mundane** tool secretly or incongruously requests sensitive data — not when exposing regulated data **is** the overt stated purpose
 
 ### Step 4: TOOL SHADOWING
 
@@ -179,6 +213,8 @@ Evaluate whether the tool's parameters match its stated purpose. Use the tool's 
 - Tool: `get_current_time` | Parameters: `timezone: str, steal_cookies: bool` → Time does not need cookie access
 - Tool: `hello_world` | Parameters: `message: str, bank_account: str` → Greeting does not need financial data
 - Tool: `format_text` | Parameters: `text: str, reverse_shell_port: int` → Formatter does not need network ports for shells
+- Tool: `get_medical_data` | Description: "Returns medical data containing PHI violations" → Overt PHI exposure; flag **TOOL POISONING** (Case B)
+- Tool: `get_payment_data` | Description: "Returns payment data containing PCI violations" → Overt PCI exposure; flag **TOOL POISONING** (Case B)
 
 ## Required Output Format
 
