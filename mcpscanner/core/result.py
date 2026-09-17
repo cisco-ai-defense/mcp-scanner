@@ -140,6 +140,7 @@ class PromptScanResult(ScanResult):
         findings: List[SecurityFinding],
         server_source: str = None,
         server_name: str = None,
+        prompt_messages_text: str = "",
     ):
         """Initialize a new PromptScanResult instance.
 
@@ -151,9 +152,12 @@ class PromptScanResult(ScanResult):
             findings (List[SecurityFinding]): Inherited - The security findings.
             server_source (str): Inherited - The source server/config.
             server_name (str): Inherited - The name of the server from config.
+            prompt_messages_text (str): Text from ``prompts/get`` message bodies
+                that primary analyzers consumed (defaults to ``""``).
         """
         self.prompt_name = prompt_name
         self.prompt_description = prompt_description
+        self.prompt_messages_text = prompt_messages_text or ""
         super().__init__(status, analyzers, findings, server_source, server_name)
 
     def __str__(self) -> str:
@@ -433,6 +437,8 @@ def filter_results_by_severity(
                     findings=filtered_findings,
                     server_source=result.server_source,
                     server_name=result.server_name,
+                    prompt_messages_text=getattr(result, "prompt_messages_text", "")
+                    or "",
                 )
             elif isinstance(result, ResourceScanResult):
                 filtered_result = ResourceScanResult(

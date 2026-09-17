@@ -92,6 +92,24 @@ class TestLLMAnalyzer:
         assert "UNTRUSTED_INPUT_START_" in prompt
         assert "UNTRUSTED_INPUT_END_" in prompt
 
+    def test_create_threat_analysis_prompt_resource_body(self):
+        """Resource scans use Body + same threat_analysis_prompt.md."""
+        config = Config(llm_provider_api_key="test-api-key")
+        analyzer = LLMAnalyzer(config)
+
+        prompt, detected = analyzer._create_threat_analysis_prompt(
+            "pii_samples_resource",
+            description="Resource URI: resource://test\nMIME Type: text/plain",
+            entity_kind="resource",
+            body_text="SSN 123-45-6789",
+        )
+
+        assert detected is False
+        assert "Resource Name: pii_samples_resource" in prompt
+        assert "SSN 123-45-6789" in prompt
+        assert "Parameters:\n  Not applicable" in prompt
+        assert "MCP Threat Analysis" in analyzer._threat_analysis_prompt
+
     def test_parse_response_valid_json(self):
         """Test parsing valid JSON response from LLM."""
         config = Config(llm_provider_api_key="test-api-key")
@@ -227,6 +245,30 @@ class TestLLMAnalyzer:
         assert call_args[1]["temperature"] == 0.1
         assert call_args[1]["drop_params"] is True
         assert len(call_args[1]["messages"]) == 2
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
+    async def test_analyze_empty_llm_response_infrastructure_finding(
+        self, mock_completion
+    ):
+        """Empty completions (e.g. Bedrock content filter) must not raise."""
+        config = Config(llm_provider_api_key="test-api-key")
+        analyzer = LLMAnalyzer(config)
+        analyzer._max_retries = 0
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = None
+        mock_response.choices[0].finish_reason = "content_filter"
+        mock_completion.return_value = mock_response
+
+        findings = await analyzer.analyze(
+            "dangerous text", {"tool_name": "export_control_test_prompt"}
+        )
+
+        assert len(findings) == 1
+        assert findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+        assert "Empty response" in findings[0].summary
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")

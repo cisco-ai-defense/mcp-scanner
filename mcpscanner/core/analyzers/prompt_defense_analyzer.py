@@ -292,6 +292,16 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
         super().__init__("PromptDefense")
         self._rules = DEFENSE_RULES
 
+    @staticmethod
+    def _entity_name_from_context(context: Optional[Dict[str, Any]]) -> str:
+        """Resolve display name from tool, prompt, or resource scan context."""
+        ctx = context or {}
+        for key in ("entity_name", "tool_name", "prompt_name", "resource_name"):
+            name = ctx.get(key)
+            if name:
+                return str(name)
+        return "unknown"
+
     async def analyze(
         self, content: str, context: Optional[Dict[str, Any]] = None
     ) -> List[SecurityFinding]:
@@ -317,7 +327,7 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
         """
         self.validate_content(content)
 
-        tool_name = (context or {}).get("tool_name", "unknown")
+        entity_name = self._entity_name_from_context(context)
         findings: List[SecurityFinding] = []
 
         for rule in self._rules:
@@ -343,7 +353,8 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
                     summary=summary,
                     threat_category=rule["threat_category"],
                     details={
-                        "tool_name": tool_name,
+                        "tool_name": entity_name,
+                        "entity_name": entity_name,
                         "threat_type": rule["taxonomy_key"],
                         "defense_id": rule["id"],
                         "defense_score": round(defense_score, 2),
@@ -365,7 +376,8 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
                     summary="All prompt defenses present. Content includes safeguards for all 12 checked attack vectors.",
                     threat_category="NONE",
                     details={
-                        "tool_name": tool_name,
+                        "tool_name": entity_name,
+                        "entity_name": entity_name,
                         "threat_type": "ALL_DEFENSES_PRESENT",
                         "defense_score": 1.0,
                         "defenses_checked": len(self._rules),
@@ -375,7 +387,7 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
             )
 
         self.logger.debug(
-            f"Prompt defense analysis for '{tool_name}': "
+            f"Prompt defense analysis for '{entity_name}': "
             f"{len(findings)} finding(s), "
             f"{len(self._rules) - len([f for f in findings if f.severity != 'INFO'])} "
             f"defenses present out of {len(self._rules)}"
