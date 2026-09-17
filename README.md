@@ -111,9 +111,14 @@ export MCP_SCANNER_ENDPOINT="https://us.api.inspect.aidefense.security.cisco.com
 
 **Tested LLMs:** OpenAI GPT-4o and GPT-4.1 | AWS Bedrock Claude 4.5 Sonnet
 
+> AWS Bedrock requires `boto3`: `pip install "cisco-ai-mcp-scanner[bedrock]"`.
+> With a `bedrock/*` model and valid AWS credentials (IAM role / SSO / profile),
+> the LLM analyzer activates automatically — **no `MCP_SCANNER_LLM_API_KEY` is
+> required** (and you should not set a placeholder one).
+
 ```bash
-# AWS Bedrock Claude with AWS credentials (profile)
-export AWS_PROFILE="your-profile"
+# AWS Bedrock Claude with AWS credentials (IAM role / SSO / profile)
+export AWS_PROFILE="your-profile"   # or rely on an IAM role / SSO session
 export AWS_REGION="us-east-1"
 export MCP_SCANNER_LLM_MODEL="bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0" # Any AWS Bedrock supported model
 
