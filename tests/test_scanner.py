@@ -16,6 +16,7 @@
 
 # tests/test_scanner.py
 
+import json
 import pytest
 import respx
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -1305,3 +1306,65 @@ async def test_scan_prompts_returns_empty_on_synthetic_session_terminated(config
 
     assert results == []
     session.list_prompts.assert_called_once()
+
+
+# --- Regression: analyzers must not corrupt each other's input (issue #227) ---
+
+
+@pytest.mark.asyncio
+async def test_yara_does_not_strip_description_from_readiness_input():
+    """YARA's parameter scan must not mutate the tool definition READINESS sees.
+
+    The YARA branch drops `description` before scanning parameters. When that
+    deletion happened on the dict shared with later branches, READINESS
+    received a description-less tool definition and HEUR-009 ("no description")
+    fired for every tool of every server scanned with the default analyzer
+    set — a finding that depended on which *other* analyzer ran, and that no
+    server operator could remediate.
+    """
+    from mcp.types import Tool as MCPTool
+
+    tool = MCPTool(
+        name="documented_tool",
+        description="A thoroughly documented tool that lists open pull requests.",
+        inputSchema={
+            "type": "object",
+            "properties": {"repo": {"type": "string"}},
+            "required": ["repo"],
+        },
+    )
+
+    seen = {}
+
+    async def capture_readiness(content, context=None):
+        seen["content"] = content
+        seen["context"] = context
+        return []
+
+    async def noop_yara(content, context=None):
+        seen.setdefault("yara_payloads", []).append(content)
+        return []
+
+    scanner = Scanner(Config(api_key="test_api_key"))
+    scanner._yara_analyzer = MagicMock()
+    scanner._yara_analyzer.analyze = AsyncMock(side_effect=noop_yara)
+    scanner._readiness_analyzer = MagicMock()
+    scanner._readiness_analyzer.analyze = AsyncMock(side_effect=capture_readiness)
+
+    await scanner._analyze_tool(
+        tool, [AnalyzerEnum.YARA, AnalyzerEnum.READINESS]
+    )
+
+    # READINESS resolves the tool definition from context first, so that is
+    # the value that must still carry the description.
+    tool_definition = seen["context"]["tool_definition"]
+    assert tool_definition["description"] == tool.description
+    assert json.loads(seen["content"])["description"] == tool.description
+
+    # YARA still gets its description-free parameter payload, and drops
+    # nothing else. Compared as key sets so this does not depend on whether
+    # the MCP model serialises field names or aliases.
+    params_payload = json.loads(seen["yara_payloads"][-1])
+    full_payload = json.loads(tool.model_dump_json())
+    assert "description" not in params_payload
+    assert set(params_payload) == set(full_payload) - {"description"}
