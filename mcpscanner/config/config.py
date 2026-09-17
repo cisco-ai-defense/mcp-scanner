@@ -69,33 +69,35 @@ class Config:
         virustotal_exclusion_extensions: set = None,
         behavioral_source_path: str = None,
     ):
-        """Initialize a new Config instance.
-
+        """Initialize configuration for API, LLM, AWS, OAuth, VirusTotal, and behavioral scanning.
+        
         Args:
-            api_key (str, optional): The API key for authenticating with the Cisco AI Defense API.
-            endpoint_url (Optional[str], optional): The API endpoint URL to use. Overrides the default.
-
-            llm_provider_api_key (str, optional): API key for LLM provider (OpenAI, Anthropic, etc.).
-            llm_model (str, optional): The LLM model to use for LiteLLM analyzer. Defaults from constants.
-            llm_base_url (str, optional): Custom base URL for LLM API (for custom endpoints).
-            llm_max_tokens (int, optional): Maximum tokens for LLM responses. Defaults from constants.
-            llm_temperature (float, optional): Temperature for LLM responses (0.0-1.0). Defaults from constants.
-            llm_api_version (str, optional): API version for LLM provider (if required).
-            llm_rate_limit_delay (float, optional): Delay in seconds between LLM API calls. Defaults to 1.0.
-            llm_max_retries (int, optional): Maximum number of retries for failed LLM API calls. Defaults to 3.
-            aws_region_name (str, optional): AWS region name for Bedrock (e.g., 'us-east-1'). Falls back to AWS_REGION or AWS_DEFAULT_REGION env vars.
-            aws_session_token (str, optional): AWS session token for temporary credentials. Falls back to AWS_SESSION_TOKEN env var.
-            aws_profile_name (str, optional): AWS profile name from ~/.aws/credentials. Falls back to AWS_PROFILE env var.
-            aws_bearer_token_bedrock (str, optional): AWS Bedrock bearer token for API gateway authentication. Falls back to AWS_BEARER_TOKEN_BEDROCK env var.
-            oauth_client_id (str, optional): OAuth client ID for authentication.
-            oauth_client_secret (str, optional): OAuth client secret for authentication.
-            oauth_token_url (str, optional): OAuth token URL for authentication.
-            oauth_scopes (List[str], optional): OAuth scopes for authentication.
-            virustotal_api_key (str, optional): VirusTotal API key for binary file scanning. Falls back to VIRUSTOTAL_API_KEY env var.
-            virustotal_upload_files (bool, optional): If True, upload unknown files to VT for scanning. Defaults to False.
-            virustotal_max_files (int, optional): Max files to scan per directory (0=unlimited). Defaults to 10.
-            virustotal_inclusion_extensions (set, optional): Binary extensions to always include. Defaults from constants.
-            virustotal_exclusion_extensions (set, optional): Text/code extensions to always exclude. Defaults from constants.
+            api_key (str, optional): API key for Cisco AI Defense authentication.
+            endpoint_url (str, optional): Custom API endpoint URL.
+            llm_provider_api_key (str, optional): API key for the LLM provider.
+            llm_model (str, optional): LLM model name.
+            llm_max_tokens (int, optional): Maximum tokens in LLM responses.
+            llm_temperature (float, optional): LLM response temperature.
+            llm_base_url (str, optional): Custom LLM API base URL.
+            llm_api_version (str, optional): LLM provider API version.
+            llm_rate_limit_delay (float, optional): Delay between LLM API calls, in seconds.
+            llm_max_retries (int, optional): Maximum retries for failed LLM API calls.
+            aws_region_name (str, optional): AWS region for Bedrock.
+            aws_session_token (str, optional): AWS session token.
+            aws_profile_name (str, optional): AWS credentials profile name.
+            aws_bearer_token_bedrock (str, optional): AWS Bedrock bearer token.
+            llm_timeout (float, optional): LLM request timeout, in seconds.
+            stdio_timeout (int, optional): Standard input/output operation timeout.
+            oauth_client_id (str, optional): OAuth client identifier.
+            oauth_client_secret (str, optional): OAuth client secret.
+            oauth_token_url (str, optional): OAuth token endpoint URL.
+            oauth_scopes (list[str], optional): OAuth scopes.
+            virustotal_api_key (str, optional): VirusTotal API key.
+            virustotal_upload_files (bool, optional): Whether to upload unknown files to VirusTotal.
+            virustotal_max_files (int, optional): Maximum files to scan per directory.
+            virustotal_inclusion_extensions (set, optional): File extensions to include in VirusTotal scans.
+            virustotal_exclusion_extensions (set, optional): File extensions to exclude from VirusTotal scans.
+            behavioral_source_path (str, optional): Path used as the source for behavioral scanning. Whitespace is trimmed, and empty values are treated as unset.
         """
         self._api_key = api_key
         self._endpoint_url = endpoint_url
@@ -168,7 +170,12 @@ class Config:
 
     @property
     def behavioral_source_path(self) -> Optional[str]:
-        """Optional on-disk MCP server source used with BEHAVIORAL server scans."""
+        """
+        Provides the on-disk MCP server source path for behavioral scans.
+        
+        Returns:
+        	str: The configured source path, or None when no path is configured.
+        """
         return self._behavioral_source_path
 
     @property

@@ -154,7 +154,9 @@ class TreeSitterSemanticAnalyzer:
         self._visit(self.root)
     
     def _visit(self, node: Node) -> None:
-        """Visit a node and its children."""
+        """
+        Visit an AST node and recursively analyze its declarations, functions, classes, or child nodes.
+        """
         # Handle scope-creating nodes
         if node.type in ("function_declaration", "function_expression", "arrow_function",
                         "method_definition", "method_declaration", "function_item"):
@@ -240,7 +242,9 @@ class TreeSitterSemanticAnalyzer:
         self.current_scope = old_scope
     
     def _visit_assignment(self, node: Node) -> None:
-        """Visit assignment and track taint."""
+        """
+        Process a declaration or assignment, recording its inferred type, parameter influence, and class instantiation mapping.
+        """
         if node.type == "lexical_declaration":
             for child in node.children:
                 if child.type == "variable_declarator":

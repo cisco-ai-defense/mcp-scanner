@@ -23,6 +23,14 @@ from mcpscanner.core.static_analysis.context_extractor import FunctionContext
 
 
 def _minimal_function_context(**overrides):
+    """Create a minimal function context for tests with optional field overrides.
+    
+    Parameters:
+        overrides: Function context fields to replace in the default test context.
+    
+    Returns:
+        FunctionContext: A context populated with minimal test-tool metadata.
+    """
     base = dict(
         name="test_tool",
         decorator_types=["@mcp.tool"],
@@ -69,6 +77,7 @@ class TestAlignmentResultCache:
 
 class TestAlignmentOrchestratorCache:
     def _new_orchestrator(self) -> AlignmentOrchestrator:
+        """Create an alignment orchestrator with a mocked asynchronous alignment verifier."""
         config = MagicMock()
         orch = AlignmentOrchestrator(config)
         orch.llm_client.verify_alignment = AsyncMock()
