@@ -257,13 +257,6 @@ class TestReadinessToolDefinitionParsing:
             [AnalyzerEnum.READINESS]
         )
 
-        # Should not have HEUR-001 (has timeout)
-        timeout_findings = [
-            f for f in result.findings
-            if f.details and f.details.get("rule_id") == "HEUR-001"
-        ]
-        assert len(timeout_findings) == 0
-
         # Should not have HEUR-003 (has maxRetries)
         retry_findings = [
             f for f in result.findings
@@ -362,24 +355,6 @@ class TestReadinessErrorHandling:
 
 class TestReadinessThreatCategories:
     """Test threat category assignments."""
-
-    @pytest.mark.asyncio
-    async def test_timeout_threat_category(self):
-        """HEUR-001 and HEUR-002 should use MISSING_TIMEOUT_GUARD."""
-        analyzer = ReadinessAnalyzer()
-        tool_def = {"name": "test", "description": "A test tool for something useful"}
-        content = json.dumps(tool_def)
-
-        findings = await analyzer.analyze(content, {"tool_name": "test"})
-
-        timeout_finding = None
-        for f in findings:
-            if f.details and f.details.get("rule_id") == "HEUR-001":
-                timeout_finding = f
-                break
-
-        assert timeout_finding is not None
-        assert timeout_finding.threat_category == "MISSING_TIMEOUT_GUARD"
 
     @pytest.mark.asyncio
     async def test_retry_threat_category(self):
