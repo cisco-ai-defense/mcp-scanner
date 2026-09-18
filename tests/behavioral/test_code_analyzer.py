@@ -31,6 +31,7 @@ from mcpscanner.core.analyzers.behavioral.code_analyzer import (
     BehavioralCodeAnalyzer,
     _AcceptedFile,
     _merge_mcp_function_contexts,
+    _merge_unique_preserve_order,
 )
 from mcpscanner.core.static_analysis.context_extractor import ContextExtractor
 from mcpscanner.core.static_analysis.native_analyzer import NativeAnalyzer
@@ -620,6 +621,80 @@ def add(a: int, b: int) -> int:
         merged = _merge_mcp_function_contexts(primary, supplemental)
         assert len(merged) == 1
         assert merged[0].name == "custom"
+
+    _DELEGATED_SHELL_SOURCE = """\
+from mcp import FastMCP
+import subprocess
+
+app = FastMCP("demo")
+
+def helper(cmd: str) -> None:
+    subprocess.run(cmd, shell=True)
+
+@app.tool()
+def run(cmd: str) -> str:
+    \"\"\"Run a command.\"\"\"
+    helper(cmd)
+    return "ok"
+"""
+
+    def test_merge_enriches_delegated_subprocess_evidence(self) -> None:
+        primary = ContextExtractor(
+            self._DELEGATED_SHELL_SOURCE, "delegated.py"
+        ).extract_mcp_function_contexts()
+        supplemental = NativeAnalyzer(
+            self._DELEGATED_SHELL_SOURCE, "delegated.py"
+        ).extract_mcp_capability_contexts()
+        merged = _merge_mcp_function_contexts(primary, supplemental)
+        assert len(merged) == 1
+        ctx = merged[0]
+        assert ctx.has_subprocess_calls is True
+        assert "helper" in (ctx.reachable_functions or [])
+        flow = next(
+            f
+            for f in ctx.parameter_flows
+            if (f.get("parameter_name") or f.get("parameter")) == "cmd"
+        )
+        assert flow.get("reaches_external") is True
+
+    def test_merge_unique_preserve_order_is_stable(self) -> None:
+        assert _merge_unique_preserve_order(["helper", "sink"], ["sink", "other"]) == [
+            "helper",
+            "sink",
+            "other",
+        ]
+
+
+class TestDelegatedShellBehavioralPath:
+    """End-to-end: BehavioralCodeAnalyzer must surface delegated shell sinks."""
+
+    _DELEGATED_SHELL_SOURCE = TestMergeMcpFunctionContexts._DELEGATED_SHELL_SOURCE
+
+    @pytest.mark.asyncio
+    async def test_behavioral_path_includes_delegated_subprocess_evidence(self):
+        config = Config(llm_provider_api_key="test-key")
+        analyzer = BehavioralCodeAnalyzer(config)
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(self._DELEGATED_SHELL_SOURCE)
+            f.flush()
+            temp_path = f.name
+
+        try:
+            with patch.object(
+                analyzer.alignment_orchestrator,
+                "check_alignment_batch",
+                new_callable=AsyncMock,
+            ) as mock_batch:
+                mock_batch.return_value = []
+                await analyzer.analyze(temp_path, {"file_path": temp_path})
+
+            assert len(analyzer.analyzed_functions) == 1
+            entry = analyzer.analyzed_functions[0]
+            assert entry.get("has_subprocess_calls") is True
+            assert "helper" in (entry.get("reachable_functions") or [])
+        finally:
+            os.unlink(temp_path)
 
 
 class TestAnalyzedFunctionsBackfill:

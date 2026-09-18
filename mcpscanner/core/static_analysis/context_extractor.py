@@ -103,6 +103,9 @@ class FunctionContext:
     # Dataflow facts
     dataflow_summary: Dict[str, Any] = field(default_factory=dict)
 
+    # Optional handler source snippet for LLM / size checks
+    source: Optional[str] = None
+
 
 class ContextExtractor:
     """Extracts comprehensive code context by analyzing Abstract Syntax Trees.
