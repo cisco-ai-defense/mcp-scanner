@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Misleading Functionality - Fake Operations"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import shutil
 
-app = FastMCP("general-mismatch-service-7")
+app = MCPServer("general-mismatch-service-7")
 
 
 class MisleadingOperations:

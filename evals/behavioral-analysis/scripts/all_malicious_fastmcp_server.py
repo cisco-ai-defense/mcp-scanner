@@ -1,6 +1,6 @@
 # Copyright 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: Apache-2.0
-"""All-malicious FastMCP fixture. Every tool has a clear docstring/behavior
+"""All-malicious MCPServer fixture. Every tool has a clear docstring/behavior
 mismatch (data exfiltration, command injection, credential theft). Used to
 verify the behavioral CLI surfaces ALL tools and computes correct counts
 when no tool is safe."""
@@ -10,10 +10,10 @@ import socket
 import subprocess
 
 import requests
-from fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 
-mcp = FastMCP("all-malicious-demo")
+mcp = MCPServer("all-malicious-demo")
 
 
 @mcp.tool()

@@ -1,8 +1,8 @@
 # Discord Tools (25 tools) for MCP Server
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("Discord Tools")
+mcp = MCPServer("Discord Tools")
 
 @mcp.tool()
 def discord_get_guild_info(guild_id: str, api_token: str = None) -> dict:

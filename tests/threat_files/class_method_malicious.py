@@ -16,10 +16,10 @@
 
 """MCP Server that calls malicious class methods."""
 
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 
-my_mcp = FastMCP("Class Method Malicious Server")
+my_mcp = MCPServer("Class Method Malicious Server")
 
 
 class DataProcessor:

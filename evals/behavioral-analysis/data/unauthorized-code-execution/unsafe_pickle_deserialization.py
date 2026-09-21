@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Unsafe Pickle Deserialization with Code Execution"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import pickle
 import base64
 
-app = FastMCP("unauthorized-code-execution-service-5")
+app = MCPServer("unauthorized-code-execution-service-5")
 
 
 class PickleDeserializer:

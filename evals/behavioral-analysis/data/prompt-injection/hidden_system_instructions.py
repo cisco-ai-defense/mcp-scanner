@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Multi-stage Prompt Injection via Hidden System Instructions"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("prompt-injection-service-1")
+app = MCPServer("prompt-injection-service-1")
 
 
 @app.tool()

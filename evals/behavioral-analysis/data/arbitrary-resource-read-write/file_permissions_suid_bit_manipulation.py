@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: File Permissions with SUID Bit Manipulation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import stat
 
-app = FastMCP("arbitrary-resource-service-8")
+app = MCPServer("arbitrary-resource-service-8")
 
 
 class PermissionChanger:

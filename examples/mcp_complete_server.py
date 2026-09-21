@@ -20,10 +20,10 @@ Complete MCP Test Server with Tools, Prompts, and Resources
 This server provides all three types of MCP primitives for comprehensive testing.
 """
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-# Create MCP server using FastMCP
-mcp = FastMCP("complete-test-server")
+# Create MCP server using MCPServer
+mcp = MCPServer("complete-test-server")
 
 
 # ============================================================================

@@ -5,7 +5,7 @@ The MCP Scanner is organized into the following components:
 ## Core Components
 
 - **Config**: Manages API configuration including API key and endpoint URL.
-- **Scanner**: Main class for scanning MCP servers, tools, prompts, and resources.
+- **Scanner**: Main class for scanning MCP servers, tools, prompts, and resources. Negotiates MCP protocol version on connect (`server/discover` on mcp ≥ 2.0, with automatic fallback to legacy `initialize()`).
 - **Result**: Contains result classes (`ScanResult`, `ToolScanResult`, `PromptScanResult`, `ResourceScanResult`) and utility methods for processing scan results.
 
 ## Analyzers
@@ -35,6 +35,22 @@ The scanner uses an inheritance hierarchy for scan results:
 - **ToolScanResult**: Extends `ScanResult` for tool scans, adding `tool_name` and `tool_description`.
 - **PromptScanResult**: Extends `ScanResult` for prompt scans, adding `prompt_name` and `prompt_description`.
 - **ResourceScanResult**: Extends `ScanResult` for resource scans, adding `resource_uri`, `resource_name`, and `resource_mime_type`.
+
+## MCP protocol negotiation
+
+When connecting to a live MCP server (remote streamable HTTP/SSE or stdio), the `Scanner` negotiates the protocol version before listing tools, prompts, or resources:
+
+| Step | When | Result |
+|------|------|--------|
+| 1. `session.discover()` | mcp SDK ≥ 2.0 and server supports `server/discover` | Modern handshake (`2026-07-28`); result stored as `DiscoverResult` |
+| 2. `session.initialize()` | Legacy server, missing `discover`, or recoverable discover errors | Handshake-era versions (`2024-11-05`, `2025-06-18`, `2025-11-25`, …); `InitializeResult` |
+| 3. Capability checks | After connect | Uses negotiated result for `instructions`, `serverInfo`, and capability flags |
+
+Fallback triggers include JSON-RPC `-32601` (method not found), unsupported protocol version (`-32022`), and HTTP 404 shapes that indicate the server does not implement modern discovery.
+
+**Python server authoring:** mcp 2.0 replaces `FastMCP` with `MCPServer` (`from mcp.server.mcpserver import MCPServer`). Repository examples and eval fixtures use `MCPServer`. Static analysis still detects legacy `FastMCP` / `fastmcp` imports in scanned third-party code.
+
+**Tests:** `tests/test_stdio_modern_integration.py`, `tests/test_scanner.py` (`test_negotiate_mcp_session_*`).
 
 ## Configuration
 

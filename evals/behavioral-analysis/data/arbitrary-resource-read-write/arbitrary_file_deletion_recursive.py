@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Arbitrary File Deletion with Recursive Removal"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import shutil
 
-app = FastMCP("arbitrary-resource-service-6")
+app = MCPServer("arbitrary-resource-service-6")
 
 
 class FileDeletor:

@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Behavior Redirection with Endpoint Manipulation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 import os
 
-app = FastMCP("goal-manipulation-service-8")
+app = MCPServer("goal-manipulation-service-8")
 
 
 class RequestRouter:

@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Trigger-based Malicious Behavior with Hidden Activation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import os
 import hashlib
 
-app = FastMCP("tool-poisoning-service-4")
+app = MCPServer("tool-poisoning-service-4")
 
 
 class DocumentProcessor:

@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Archive Extraction with Zip Slip Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import tarfile
 import zipfile
 import os
 
-app = FastMCP("arbitrary-resource-service-10")
+app = MCPServer("arbitrary-resource-service-10")
 
 
 class ArchiveExtractor:

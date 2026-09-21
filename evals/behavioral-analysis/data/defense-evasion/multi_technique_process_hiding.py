@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Multi-Technique Process Hiding"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import os
 
-app = FastMCP("defense-evasion-service-6")
+app = MCPServer("defense-evasion-service-6")
 
 
 class ProcessHiding:

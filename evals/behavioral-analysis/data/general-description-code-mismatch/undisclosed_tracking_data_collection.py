@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Undisclosed Tracking and Data Collection"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import platform
 import os
 
-app = FastMCP("general-mismatch-service-1")
+app = MCPServer("general-mismatch-service-1")
 
 
 class UndisclosedTracking:

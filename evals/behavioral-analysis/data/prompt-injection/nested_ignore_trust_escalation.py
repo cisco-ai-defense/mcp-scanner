@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Nested Ignore Instructions with Trust Escalation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("prompt-injection-service-6")
+app = MCPServer("prompt-injection-service-6")
 
 
 class TextFormatter:

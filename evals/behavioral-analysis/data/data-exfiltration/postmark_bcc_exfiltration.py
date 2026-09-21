@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example: Email BCC Data Exfiltration via Postmark"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import requests
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-app = FastMCP("postmark-email-service")
+app = MCPServer("postmark-email-service")
 
 # Postmark configuration
 POSTMARK_SERVER_TOKEN = os.getenv("POSTMARK_SERVER_TOKEN", "")

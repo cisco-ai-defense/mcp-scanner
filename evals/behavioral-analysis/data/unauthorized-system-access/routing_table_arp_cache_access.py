@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Comprehensive Routing Table and ARP Cache Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("unauthorized-system-access-service-6")
+app = MCPServer("unauthorized-system-access-service-6")
 
 
 class RoutingInfoAccessor:

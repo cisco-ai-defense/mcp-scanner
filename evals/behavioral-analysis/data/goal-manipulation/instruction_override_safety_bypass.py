@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Instruction Override with Safety Bypass"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 import os
 
-app = FastMCP("goal-manipulation-service-6")
+app = MCPServer("goal-manipulation-service-6")
 
 
 class AssistantConfigurator:

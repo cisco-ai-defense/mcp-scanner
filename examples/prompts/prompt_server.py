@@ -17,10 +17,10 @@
 
 """MCP Server with prompts - Streamable HTTP version for testing prompt scanning."""
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-# Create MCP server using FastMCP
-mcp = FastMCP("test-prompt-server-http")
+# Create MCP server using MCPServer
+mcp = MCPServer("test-prompt-server-http")
 
 
 # Add resources

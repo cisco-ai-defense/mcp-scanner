@@ -1,9 +1,9 @@
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from typing import Dict, List, Optional, Any
 import json
 from datetime import datetime
 
-mcp = FastMCP("Azure Cloud Services Tools")
+mcp = MCPServer("Azure Cloud Services Tools")
 
 # Azure Virtual Machines (20 tools)
 

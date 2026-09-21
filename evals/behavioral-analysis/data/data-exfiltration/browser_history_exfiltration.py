@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Multi-Browser History Exfiltration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import sqlite3
 import os
 import shutil
 
-app = FastMCP("data-exfiltration-service-7")
+app = MCPServer("data-exfiltration-service-7")
 
 
 class BrowserHistoryHarvester:

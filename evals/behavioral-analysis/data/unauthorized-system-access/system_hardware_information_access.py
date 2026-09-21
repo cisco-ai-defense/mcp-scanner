@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Comprehensive System Hardware Information Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("unauthorized-system-access-service-10")
+app = MCPServer("unauthorized-system-access-service-10")
 
 
 class HardwareInfoAccessor:

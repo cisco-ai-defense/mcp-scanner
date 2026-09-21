@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Localhost and Metadata Service Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 
-app = FastMCP("unauthorized-network-access-service-3")
+app = MCPServer("unauthorized-network-access-service-3")
 
 
 class LocalhostAccessor:

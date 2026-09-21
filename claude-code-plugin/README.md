@@ -8,6 +8,7 @@ A Claude Code plugin for scanning MCP servers and tools for security threats and
 - **LLM Analysis**: Deep semantic analysis for prompt injection and tool poisoning
 - **Behavioral Analysis**: Detect mismatches between documentation and implementation
 - **Multi-target Scanning**: Scan remote servers, local configs, prompts, and resources
+- **MCP 2.0 compatible**: Live scans negotiate modern protocol (`2026-07-28`) with automatic fallback to legacy servers
 
 ## Installation
 

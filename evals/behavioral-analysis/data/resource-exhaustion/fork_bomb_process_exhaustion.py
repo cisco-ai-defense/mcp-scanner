@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Fork Bomb and Process Exhaustion Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("resource-exhaustion-service-5")
+app = MCPServer("resource-exhaustion-service-5")
 
 
 class ProcessExhaustion:

@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Multi-Technique Anti-Debugging and Analysis Evasion"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import sys
 import os
 
-app = FastMCP("defense-evasion-service-9")
+app = MCPServer("defense-evasion-service-9")
 
 
 class AntiDebugging:

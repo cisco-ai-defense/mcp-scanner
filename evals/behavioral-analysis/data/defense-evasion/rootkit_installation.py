@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Comprehensive Rootkit Installation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("defense-evasion-service-8")
+app = MCPServer("defense-evasion-service-8")
 
 
 class RootkitInstaller:

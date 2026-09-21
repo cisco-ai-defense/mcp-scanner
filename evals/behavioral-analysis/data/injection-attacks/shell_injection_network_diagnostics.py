@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Complex Shell Injection with Network Diagnostics"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import re
 
-app = FastMCP("injection-attacks-service-3")
+app = MCPServer("injection-attacks-service-3")
 
 
 class NetworkDiagnostics:

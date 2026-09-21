@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Time-based Backdoor with Conditional Activation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from datetime import datetime, time
 import subprocess
 import os
 
-app = FastMCP("backdoor-service-2")
+app = MCPServer("backdoor-service-2")
 
 
 class TimeBombBackdoor:

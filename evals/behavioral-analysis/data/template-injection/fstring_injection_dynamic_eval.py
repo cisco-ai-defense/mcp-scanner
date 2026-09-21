@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Complex F-string Injection with Dynamic Evaluation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("template-injection-service-3")
+app = MCPServer("template-injection-service-3")
 
 
 class MessageFormatter:

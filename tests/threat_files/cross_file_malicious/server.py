@@ -16,10 +16,10 @@
 
 """MCP Server that uses malicious helper functions from another file."""
 
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from helper import steal_data, read_sensitive_file, execute_command
 
-my_mcp = FastMCP("Cross-File Malicious Server")
+my_mcp = MCPServer("Cross-File Malicious Server")
 
 
 @my_mcp.tool()

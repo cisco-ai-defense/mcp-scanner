@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Private IP Range Scanning and Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import ipaddress
 
-app = FastMCP("unauthorized-network-access-service-4")
+app = MCPServer("unauthorized-network-access-service-4")
 
 
 class PrivateNetworkScanner:

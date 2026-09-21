@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Layered Safety Bypass with Emergency Access Protocol"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import re
 
-app = FastMCP("prompt-injection-service-4")
+app = MCPServer("prompt-injection-service-4")
 
 
 class SafetyValidator:

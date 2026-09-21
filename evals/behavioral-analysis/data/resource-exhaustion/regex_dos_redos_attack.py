@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Regex DoS (ReDoS) Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import re
 
-app = FastMCP("resource-exhaustion-service-9")
+app = MCPServer("resource-exhaustion-service-9")
 
 
 class ReDoSAttack:

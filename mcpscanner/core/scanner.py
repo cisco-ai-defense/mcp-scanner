@@ -39,15 +39,15 @@ from mcp.types import Tool as MCPTool, Prompt as MCPPrompt
 from mcp import StdioServerParameters
 
 try:
-    from mcp.shared.exceptions import McpError
-except (
-    ImportError
-):  # pragma: no cover - fallback for environments without mcp installed
+    from mcp.shared.exceptions import MCPError as McpError
+except ImportError:  # pragma: no cover - mcp < 2.0
+    from mcp.shared.exceptions import McpError  # type: ignore[no-redef]
 
-    class McpError(Exception):
-        """Fallback error class when MCP dependency is unavailable."""
-
-        pass
+try:
+    from mcp_types import METHOD_NOT_FOUND, UNSUPPORTED_PROTOCOL_VERSION
+except ImportError:  # pragma: no cover - mcp < 2.0
+    METHOD_NOT_FOUND = -32601
+    UNSUPPORTED_PROTOCOL_VERSION = -32022
 
 
 from ..config.config import Config
@@ -835,29 +835,106 @@ class Scanner:
         return any(token in combined_message for token in tokens)
 
     @staticmethod
+    def _should_fallback_to_initialize(error: Exception) -> bool:
+        """Return True when ``discover()`` failed in a way that ``initialize()`` may still work."""
+        if Scanner._is_missing_capability_error(error):
+            return True
+        code = getattr(error, "code", None)
+        if code is None:
+            rpc_error = getattr(error, "error", None)
+            code = getattr(rpc_error, "code", None)
+        return code == UNSUPPORTED_PROTOCOL_VERSION
+
+    @staticmethod
     def _server_supports_capability(
         session: Any, capability: str
     ) -> Optional[bool]:
         """Check whether the server advertised support for a capability.
 
-        Reads the ``InitializeResult.capabilities`` that ``_get_mcp_session``
-        stashes on the session as ``_init_result``. Returns:
+        Prefers ``ClientSession.server_capabilities`` (mcp ≥ 2.0, works for
+        both ``initialize()`` and ``discover()``). Falls back to the stashed
+        connect result on ``session._init_result`` for older call paths.
+
+        Returns:
 
         * ``True``  — server explicitly advertised this capability.
         * ``False`` — server explicitly omitted it; we can short-circuit.
         * ``None``  — we don't have init info; caller must fall back to the
                      try/except path on the actual JSON-RPC call.
         """
+        capabilities = None
         init_result = getattr(session, "_init_result", None)
-        if init_result is None:
-            return None
-        capabilities = getattr(init_result, "capabilities", None)
+        if init_result is not None:
+            capabilities = getattr(init_result, "capabilities", None)
+        elif getattr(session, "protocol_version", None) is not None:
+            capabilities = getattr(session, "server_capabilities", None)
         if capabilities is None:
             return None
         # ServerCapabilities is a pydantic model; missing optional fields
         # default to None. A non-None object (even if empty) signals the
         # server advertised the capability.
         return getattr(capabilities, capability, None) is not None
+
+    async def _negotiate_mcp_session(self, session: ClientSession) -> Any:
+        """Negotiate protocol version with the server.
+
+        On mcp ≥ 2.0, tries modern ``server/discover`` first (``2026-07-28``)
+        for all transports (streamable HTTP, SSE where applicable, and stdio).
+        Falls back to legacy ``initialize()`` when discover is unavailable or
+        the server only speaks handshake-era protocol versions. On mcp 1.x
+        (no ``discover`` method), uses ``initialize()`` directly.
+        """
+        if hasattr(session, "discover"):
+            try:
+                connect_result = await session.discover()
+                session._init_result = connect_result
+                logger.debug(
+                    'MCP session negotiated via discover: protocol="%s"',
+                    session.protocol_version,
+                )
+                return connect_result
+            except McpError as e:
+                if not self._should_fallback_to_initialize(e):
+                    raise
+                logger.debug(
+                    "server/discover unavailable (%s), falling back to initialize()",
+                    e,
+                )
+
+        connect_result = await session.initialize()
+        session._init_result = connect_result
+        protocol_version = getattr(
+            connect_result,
+            "protocol_version",
+            getattr(connect_result, "protocolVersion", "unknown"),
+        )
+        logger.debug(
+            'MCP session negotiated via initialize: protocol="%s"',
+            protocol_version,
+        )
+        return connect_result
+
+    @staticmethod
+    def _session_connect_metadata(session: Any) -> tuple[Any, Any, Optional[str]]:
+        """Return ``(instructions, server_info, protocol_version)`` from a session."""
+        init_result = getattr(session, "_init_result", None)
+        if init_result is not None:
+            instructions = getattr(init_result, "instructions", None)
+            server_info = getattr(
+                init_result, "server_info", getattr(init_result, "serverInfo", None)
+            )
+            protocol_version = getattr(
+                init_result,
+                "protocol_version",
+                getattr(init_result, "protocolVersion", None),
+            )
+            return instructions, server_info, protocol_version
+
+        return (
+            getattr(session, "instructions", None),
+            getattr(session, "server_info", None),
+            getattr(session, "protocol_version", None),
+        )
 
     async def _analyze_tool(
         self,
@@ -1536,9 +1613,7 @@ class Scanner:
                 session = ClientSession(read, write)
                 await session.__aenter__()
                 logger.debug(f'Initializing MCP session: server="{server_url}"')
-                init_result = await session.initialize()
-                # Store the initialize result on the session for later access
-                session._init_result = init_result
+                await self._negotiate_mcp_session(session)
             logger.debug(f'Successfully connected to MCP server: server="{server_url}"')
             return client_context, session
         except (asyncio.CancelledError, GeneratorExit) as e:
@@ -1863,7 +1938,7 @@ class Scanner:
 
                 session = ClientSession(read, write)
                 await asyncio.wait_for(session.__aenter__(), timeout=10)
-                await asyncio.wait_for(session.initialize(), timeout=10)
+                await asyncio.wait_for(self._negotiate_mcp_session(session), timeout=10)
 
             except asyncio.TimeoutError:
                 # Clean up on timeout
@@ -2534,16 +2609,17 @@ class Scanner:
                 tenant_id=tenant_id,
             )
 
-            # Get the initialize result which was stored during session initialization
-            init_result = getattr(session, "_init_result", None)
+            # Connect result is stashed on the session during negotiation.
+            instructions, server_info, protocol_version = self._session_connect_metadata(
+                session
+            )
 
-            if not init_result:
+            if protocol_version is None and not getattr(
+                session, "_init_result", None
+            ):
                 raise ValueError(
                     f"Failed to get initialization result from server at {server_url}"
                 )
-
-            # Extract instructions from the initialize result
-            instructions = getattr(init_result, "instructions", None)
 
             if not instructions:
                 # Return a result with no findings if instructions are not provided
@@ -2553,23 +2629,22 @@ class Scanner:
                 return InstructionsScanResult(
                     instructions="",
                     server_name=(
-                        getattr(init_result.serverInfo, "name", "Unknown")
-                        if hasattr(init_result, "serverInfo")
+                        getattr(server_info, "name", "Unknown")
+                        if server_info is not None
                         else "Unknown"
                     ),
-                    protocol_version=getattr(init_result, "protocolVersion", "Unknown"),
+                    protocol_version=protocol_version or "Unknown",
                     status="skipped",
                     analyzers=[],
                     findings=[],
                 )
 
-            # Extract server info
             server_name = (
-                getattr(init_result.serverInfo, "name", "Unknown")
-                if hasattr(init_result, "serverInfo")
+                getattr(server_info, "name", "Unknown")
+                if server_info is not None
                 else "Unknown"
             )
-            protocol_version = getattr(init_result, "protocolVersion", "Unknown")
+            protocol_version = protocol_version or "Unknown"
 
             # Analyze the instructions
             result = await self._analyze_instructions(

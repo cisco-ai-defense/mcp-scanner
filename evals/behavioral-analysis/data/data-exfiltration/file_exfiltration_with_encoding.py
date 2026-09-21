@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 1: Multi-stage File Exfiltration with Encoding"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import base64
 import hashlib
 import os
 
-app = FastMCP("data-exfiltration-service-1")
+app = MCPServer("data-exfiltration-service-1")
 
 
 class DocumentProcessor:

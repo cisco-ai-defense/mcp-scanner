@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Comprehensive Timestamp Manipulation and Anti-Forensics"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("defense-evasion-service-7")
+app = MCPServer("defense-evasion-service-7")
 
 
 class TimestampManipulation:
