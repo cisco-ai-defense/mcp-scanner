@@ -44,7 +44,7 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
-from litellm import acompletion
+from ...utils.lazy_litellm import acompletion
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
