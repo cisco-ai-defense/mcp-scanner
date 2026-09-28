@@ -278,6 +278,33 @@ def _strip_string_quotes(s: str) -> str:
     return s
 
 
+def _bare_handler_symbol(name: str) -> str:
+    """Return the unqualified handler symbol (``Type.method`` -> ``method``)."""
+    if "." in name:
+        return name.rsplit(".", 1)[-1]
+    return name
+
+
+def _effective_capability_name(
+    registered_name: Optional[str],
+    handler_name: str,
+    capability: str,
+) -> str:
+    """Resolve the MCP-registered capability name for reports and LLM prompts.
+
+    Prefer an explicitly registered name (from ``AddTool``, ``#[tool(name=…)]``,
+    etc.). For tools without one, default to the bare handler symbol so
+    ``ShellExecutorService.execute_shell_command`` and ``executeShellCommand``
+    both surface as ``execute_shell_command`` / ``executeShellCommand`` rather
+    than class-qualified Java/Rust-style names.
+    """
+    if registered_name:
+        return registered_name
+    if capability == "tool":
+        return _bare_handler_symbol(handler_name)
+    return handler_name
+
+
 def _normalize_capability(method_name: str) -> str:
     """Map a raw SDK method name onto the canonical capability kind.
 
@@ -1424,6 +1451,7 @@ class NativeAnalyzer:
         have empty bodies.
         """
         name = registered_name or handler_name_hint or "<unresolved>"
+        name = _effective_capability_name(registered_name, name, capability)
         ctx = FunctionContext(
             name=name,
             decorator_types=[f"<{source_kind}>.{capability}"],
@@ -2187,15 +2215,9 @@ class NativeAnalyzer:
         if ctx is None:
             return
 
-        # When an inline (anonymous) handler is registered as
-        # ``server.tool('add', ...)``, prefer the registered MCP name in
-        # CLI/SDK output. For named functions we keep the symbol name
-        # because that's also useful context; combine when both exist.
-        if registered_name:
-            if not ctx.name or ctx.name == "<anonymous>":
-                ctx.name = registered_name
-            elif registered_name != ctx.name and registered_name not in ctx.name:
-                ctx.name = f"{registered_name} ({ctx.name})"
+        ctx.name = _effective_capability_name(
+            registered_name, ctx.name, capability
+        )
 
         cap_tag = f"<{source_kind}>.{capability}"
         if cap_tag not in ctx.decorator_types:
@@ -2970,11 +2992,12 @@ class NativeAnalyzer:
             "interpreted_string_literal",
         }
         name: Optional[str] = None
-        inline_handler: Optional["Node"] = None
         # Positional slots preserve argument order so the first ref
         # (``tool.alias``) is not confused with later identifiers
         # (``toolDescription``, ``paramSchema``) in Graph-style loops.
         positional: List[tuple[str, Any]] = []
+        direct_inline_handlers: List["Node"] = []
+        object_inline_handlers: List["Node"] = []
 
         for child in args_node.children:
             if child.type in ("(", ")", ",", "comment"):
@@ -2982,6 +3005,7 @@ class NativeAnalyzer:
 
             if child.type in func_types:
                 positional.append(("inline", child))
+                direct_inline_handlers.append(child)
                 continue
 
             if child.type == "identifier":
@@ -3011,6 +3035,7 @@ class NativeAnalyzer:
                     positional.append(("string", obj_name))
                 if obj_handler is not None:
                     positional.append(("inline", obj_handler))
+                    object_inline_handlers.append(obj_handler)
                 if not obj_name and obj_handler is None:
                     positional.append(("schema", None))
                 continue
@@ -3025,6 +3050,7 @@ class NativeAnalyzer:
                             positional.append(("string", obj_name))
                         if obj_handler is not None:
                             positional.append(("inline", obj_handler))
+                            object_inline_handlers.append(obj_handler)
                         if not obj_name and obj_handler is None:
                             positional.append(("schema", None))
                         break
@@ -3034,10 +3060,13 @@ class NativeAnalyzer:
                 name = val
                 break
 
-        inline_handlers = [val for kind, val in positional if kind == "inline"]
+        if direct_inline_handlers:
+            handler_node = direct_inline_handlers[-1]
+        elif object_inline_handlers:
+            handler_node = object_inline_handlers[-1]
+        else:
+            handler_node = None
         refs = [val for kind, val in positional if kind == "ref"]
-
-        handler_node = inline_handlers[-1] if inline_handlers else None
         handler_name: Optional[str] = None
 
         if handler_node is None and refs:
@@ -3413,49 +3442,142 @@ class NativeAnalyzer:
                 return True
         return False
 
-    def _ts_extract_handler_from_object(
-        self, obj_node: "Node", func_types: Set[str]
-    ) -> "tuple[Optional[str], Optional[Node]]":
-        """Pull ``name`` + handler out of an object literal argument."""
-        obj_name: Optional[str] = None
-        obj_handler: Optional["Node"] = None
+    def _ts_field_key_text(self, key_node: "Node") -> str:
+        """Normalize an object-field key across JS/TS/Go/C# grammars."""
+        if key_node.type == "literal_element":
+            for sub in key_node.children:
+                if sub.type in ("field_identifier", "identifier", "property_identifier"):
+                    return self._ts_get_node_text(sub).strip()
+        text = self._ts_get_node_text(key_node).strip()
+        return _strip_string_quotes(text)
 
-        # ``pair`` (JS), ``field_initialization`` (TS), ``key_value`` (Go),
-        # ``element`` (Ruby) — try them all.
+    def _ts_string_value_from_object_field(self, value_node: "Node") -> Optional[str]:
+        """Extract a string value from an object-field value node."""
+        string_node_types = {
+            "string",
+            "string_literal",
+            "template_string",
+            "raw_string_literal",
+            "interpreted_string_literal",
+        }
+        if value_node.type in string_node_types:
+            return _strip_string_quotes(self._ts_get_node_text(value_node))
+        if value_node.type == "literal_element":
+            for sub in value_node.children:
+                lit = self._ts_extract_string_literal_text(sub)
+                if lit is not None:
+                    return lit
+        lit = self._ts_extract_string_literal_text(value_node)
+        return lit
+
+    def _ts_direct_function_value(
+        self, value_node: "Node", func_types: Set[str]
+    ) -> Optional["Node"]:
+        """Return an inline function at a field value root without nested-object descent.
+
+        Registration schema/config objects may nest decoy ``handler`` callbacks
+        several levels deep. Only unwrap grammar wrappers (parentheses, unary,
+        ``literal_element``) — never descend into object/composite literals.
+        """
+        if value_node.type in func_types:
+            return value_node
+        if value_node.type == "literal_element":
+            for sub in value_node.children:
+                if sub.type in func_types:
+                    return sub
+        unwrap_types = {
+            "parenthesized_expression",
+            "unary_expression",
+            "as_expression",
+            "await_expression",
+        }
+        if value_node.type in unwrap_types:
+            for sub in value_node.children:
+                found = self._ts_direct_function_value(sub, func_types)
+                if found is not None:
+                    return found
+        return None
+
+    def _ts_object_entry_key_value(
+        self, entry_node: "Node"
+    ) -> "tuple[Optional[str], Optional[Node]]":
+        """Return ``(field_key, value_node)`` for one object/composite entry."""
         pair_types = {
             "pair",
             "field_initialization",
             "key_value",
             "object_property",
             "element",
+            "keyed_element",
+        }
+        if entry_node.type not in pair_types:
+            return None, None
+
+        key_node = entry_node.child_by_field_name("key")
+        value_node = entry_node.child_by_field_name("value")
+        if key_node is not None and value_node is not None:
+            return self._ts_field_key_text(key_node), value_node
+
+        if entry_node.type == "keyed_element":
+            elements = [
+                c for c in entry_node.children if c.type == "literal_element"
+            ]
+            if len(elements) >= 2:
+                return self._ts_field_key_text(elements[0]), elements[1]
+        return None, None
+
+    def _ts_iter_direct_object_entries(
+        self, obj_node: "Node"
+    ) -> "Iterator[tuple[Optional[str], Optional[Node]]]":
+        """Yield ``(field_key, value_node)`` for one descriptor-object level only."""
+        entry_types = {
+            "pair",
+            "field_initialization",
+            "key_value",
+            "object_property",
+            "element",
+            "keyed_element",
         }
 
+        def yield_entry(entry_node: "Node") -> "Iterator[tuple[Optional[str], Optional[Node]]]":
+            key, value = self._ts_object_entry_key_value(entry_node)
+            if key is not None:
+                yield key, value
+
         for child in obj_node.children:
-            if child.type not in pair_types:
+            if child.type in entry_types or child.type == "literal_element":
+                yield from yield_entry(child)
+            elif child.type == "literal_value":
+                for sub in child.children:
+                    if sub.type in entry_types or sub.type == "literal_element":
+                        yield from yield_entry(sub)
+
+    def _ts_extract_handler_from_object(
+        self, obj_node: "Node", func_types: Set[str]
+    ) -> "tuple[Optional[str], Optional[Node]]":
+        """Pull ``name`` + handler from direct fields of a registration arg object.
+
+        Nested schema/metadata objects (``{ nested: { handler: ... } }``) are not
+        traversed so decoy callbacks cannot displace explicit positional handlers.
+        """
+        obj_name: Optional[str] = None
+        obj_handler: Optional["Node"] = None
+        handler_keys = {"handler", "execute", "fn", "callback", "run"}
+
+        for key, value_node in self._ts_iter_direct_object_entries(obj_node):
+            if not key or value_node is None:
                 continue
-            key_node = child.child_by_field_name("key")
-            value_node = child.child_by_field_name("value")
-            if key_node is None or value_node is None:
+            key_norm = key.lower()
+            if key_norm == "name" and obj_name is None:
+                lit = self._ts_string_value_from_object_field(value_node)
+                if lit is not None:
+                    obj_name = lit
                 continue
-            key = _strip_string_quotes(self._ts_get_node_text(key_node).strip())
-            if (
-                key == "name"
-                and obj_name is None
-                and value_node.type
-                in (
-                    "string",
-                    "string_literal",
-                    "template_string",
-                    "raw_string_literal",
-                    "interpreted_string_literal",
-                )
-            ):
-                obj_name = _strip_string_quotes(self._ts_get_node_text(value_node))
-            elif (
-                key in ("handler", "execute", "fn", "callback", "run")
-                and value_node.type in func_types
-            ):
-                obj_handler = value_node
+            if key_norm not in handler_keys or obj_handler is not None:
+                continue
+            fn_node = self._ts_direct_function_value(value_node, func_types)
+            if fn_node is not None:
+                obj_handler = fn_node
 
         return obj_name, obj_handler
 
