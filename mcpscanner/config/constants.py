@@ -134,10 +134,15 @@ class MCPScannerConstants:
     PROMPT_LENGTH_THRESHOLD: int = int(
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
     )
-    # Hard cap for alignment prompts sent to the LLM. Keep below
-    # PROMPT_LENGTH_THRESHOLD so Bedrock/Haiku is not fed truncated input.
+    # Hard cap for alignment prompts sent to the LLM. The default fits the
+    # shipped template (~73k chars) plus ~47k chars of analysis evidence.
+    # This is a cost guard, not a model context limit (current models accept
+    # far larger prompts). The prompt builder raises at init if the budget
+    # cannot fit the template plus the minimum evidence floor, so lowering
+    # it via MCP_SCANNER_ALIGNMENT_MAX_PROMPT_CHARS fails fast instead of
+    # silently truncating instructions and evidence.
     ALIGNMENT_MAX_PROMPT_CHARS: int = int(
-        os.getenv("MCP_SCANNER_ALIGNMENT_MAX_PROMPT_CHARS", "68000")
+        os.getenv("MCP_SCANNER_ALIGNMENT_MAX_PROMPT_CHARS", "120000")
     )
     LLM_MAX_RETRIES: int = int(os.getenv("MCP_SCANNER_LLM_MAX_RETRIES", "3"))
     LLM_RETRY_BASE_DELAY: float = float(

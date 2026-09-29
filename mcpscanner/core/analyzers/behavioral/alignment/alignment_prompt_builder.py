@@ -41,9 +41,16 @@ _ANALYSIS_TRUNCATION_SUFFIX = (
 _TEMPLATE_TRUNCATION_SUFFIX = (
     "\n\n... (alignment instructions truncated to fit model context budget)\n"
 )
-_MIN_ANALYSIS_CHARS = 500
+# Minimum analysis evidence reserved in every prompt. Must be large enough to
+# hold a function signature plus its operations; anything smaller starves the
+# judge of the code it is asked to evaluate.
+_MIN_ANALYSIS_CHARS = 8192
 # Newlines joining template, prefix, delimiter tags, and analysis body.
 _PROMPT_FRAME_CHARS = 5
+# Conservative allowance for randomized delimiter tags and the batch prefix
+# when validating the budget at init. _assemble_prompt computes the exact
+# per-call overhead; this only needs to bound it.
+_PROMPT_FRAME_ALLOWANCE_CHARS = 2048
 
 
 class AlignmentPromptBuilder:
@@ -85,6 +92,7 @@ class AlignmentPromptBuilder:
         """
         self.logger = logging.getLogger(__name__)
         self._template = self._load_template()
+        self._validate_budget()
 
         # Load limits from environment variables or use provided overrides
         self.MAX_OPERATIONS_PER_PARAM = (
@@ -545,9 +553,11 @@ For functions with no issues, just include function_index, function_name, and mi
         prefix: str = "",
     ) -> str:
         """Build the final prompt and enforce the alignment context budget."""
-        # Budget the *total* prompt against ALIGNMENT_MAX_PROMPT_CHARS (hard cap
-        # for Bedrock/Haiku), not the softer PROMPT_LENGTH_THRESHOLD warning.
-        # The markdown template alone is ~72 KiB, so it may need truncation too.
+        # Budget the *total* prompt against ALIGNMENT_MAX_PROMPT_CHARS, not
+        # the softer PROMPT_LENGTH_THRESHOLD warning. The evidence floor is
+        # reserved before the template is touched; init already guarantees
+        # the shipped template fits, so template truncation here can only
+        # trigger for custom templates passed by callers/tests.
         max_total = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
         frame_overhead = (
             len(prefix) + len(start_tag) + len(end_tag) + _PROMPT_FRAME_CHARS
@@ -626,6 +636,34 @@ For functions with no issues, just include function_index, function_name, and mi
             if call.get("calls"):
                 result += self._format_call_chain(call["calls"], indent + 3)
         return result
+
+    def _validate_budget(self) -> None:
+        """Fail fast when the prompt budget cannot hold a usable prompt.
+
+        A budget below template + evidence floor would silently truncate the
+        instructions and starve the analysis evidence, producing empty
+        alignment verdicts that still report success.
+
+        Raises:
+            ValueError: If ALIGNMENT_MAX_PROMPT_CHARS is too small.
+        """
+        budget = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        required = (
+            len(self._template)
+            + _MIN_ANALYSIS_CHARS
+            + len(_ANALYSIS_TRUNCATION_SUFFIX)
+            + _PROMPT_FRAME_ALLOWANCE_CHARS
+        )
+        if budget < required:
+            raise ValueError(
+                f"ALIGNMENT_MAX_PROMPT_CHARS={budget} cannot fit the "
+                f"alignment prompt: the shipped template is "
+                f"{len(self._template)} chars and the minimum analysis "
+                f"evidence floor is {_MIN_ANALYSIS_CHARS} chars, so the "
+                f"budget must be at least {required}. Raise it via "
+                f"MCP_SCANNER_ALIGNMENT_MAX_PROMPT_CHARS or restore the "
+                f"default."
+            )
 
     def _load_template(self) -> str:
         """Load the alignment verification prompt template.
