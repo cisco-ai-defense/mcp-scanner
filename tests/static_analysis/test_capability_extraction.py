@@ -334,19 +334,18 @@ end
 
 
 # ``expected_names`` is the SET of FunctionContext.name values we want to see
-# returned — class-qualified for languages that scope methods inside classes
-# (Java/C#/PHP/Rust impl), bare for module-level functions (Python/JS/Go
-# named handler/Kotlin trailing lambda/Ruby comment annotation).
+# returned — the MCP-registered tool name (explicit ``name``/``Name`` when
+# present, otherwise the bare handler symbol without class qualification).
 MIXED_FIXTURES = [
     pytest.param(MIXED_PYTHON, "mixed.py", {"add"}, id="python"),
     pytest.param(MIXED_JAVASCRIPT, "mixed.js", {"add"}, id="javascript"),
     pytest.param(MIXED_TYPESCRIPT, "mixed.ts", {"add"}, id="typescript"),
     pytest.param(MIXED_GO, "mixed.go", {"add"}, id="go"),
-    pytest.param(MIXED_JAVA, "Mixed.java", {"CalcService.add"}, id="java"),
+    pytest.param(MIXED_JAVA, "Mixed.java", {"add"}, id="java"),
     pytest.param(MIXED_KOTLIN, "mixed.kt", {"add"}, id="kotlin"),
-    pytest.param(MIXED_CSHARP, "Mixed.cs", {"CalcTools.Add"}, id="csharp"),
-    pytest.param(MIXED_RUST, "mixed.rs", {"Calculator.add"}, id="rust"),
-    pytest.param(MIXED_PHP, "mixed.php", {"Calc.add"}, id="php"),
+    pytest.param(MIXED_CSHARP, "Mixed.cs", {"Add"}, id="csharp"),
+    pytest.param(MIXED_RUST, "mixed.rs", {"add"}, id="rust"),
+    pytest.param(MIXED_PHP, "mixed.php", {"add"}, id="php"),
     pytest.param(MIXED_RUBY, "mixed.rb", {"add"}, id="ruby"),
 ]
 
@@ -545,11 +544,7 @@ def test_resource_template_classifies_as_resource_with_template_tag() -> None:
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1, [c.name for c in caps]
     handler = caps[0]
-    # Pass 1's registered-name merge means the surfaced label combines
-    # the registered MCP name (``user-template``) with the symbol name
-    # (``readUserResource``). Both must be present.
-    assert "readUserResource" in handler.name, handler.name
-    assert "user-template" in handler.name, handler.name
+    assert handler.name == "user-template", handler.name
     tags = handler.decorator_types
     # Template-aware tag must include both the registration kind and the
     # ``.template`` subtype so reporting can distinguish templates from
@@ -589,9 +584,7 @@ def test_multi_capability_registration_yields_one_context_per_kind() -> None:
         }
     )
     assert capability_kinds == ["prompt", "tool"], capability_kinds
-    # Both contexts must point at the same handler. Pass 1 merges the
-    # registered MCP name (``x``) with the symbol name (``shared``).
-    assert all("shared" in c.name for c in caps), [c.name for c in caps]
+    assert all(c.name == "x" for c in caps), [c.name for c in caps]
     assert len(caps) == 2, len(caps)
 
 
@@ -743,9 +736,7 @@ def test_function_index_caches_per_root() -> None:
     )
     analyzer = NativeAnalyzer(src, "indexed.ts")
     caps = analyzer.extract_mcp_capability_contexts()
-    assert {c.name for c in caps} == {"add (add)", "sub (sub)"} or {
-        c.name for c in caps
-    } == {"add", "sub"}, [c.name for c in caps]
+    assert {c.name for c in caps} == {"add", "sub"}, [c.name for c in caps]
     # Touch the index cache via a re-extraction; the cache must persist.
     cache = getattr(analyzer, "_func_index_cache", None)
     assert cache is not None and len(cache) >= 1
@@ -766,9 +757,45 @@ public class Calc {
 """
     analyzer = NativeAnalyzer(src, "Calc.java")
     caps = analyzer.extract_mcp_capability_contexts()
-    assert {c.name for c in caps} == {"Calc.add"}, [c.name for c in caps]
+    assert {c.name for c in caps} == {"add"}, [c.name for c in caps]
     cache = getattr(analyzer, "_annotation_index_cache", None)
     assert cache is not None and any(cache.values()), cache
+
+
+GO_REGISTERED_SHELL_TOOL = """\
+package main
+
+import (
+    "context"
+    "github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+type ShellInput struct {
+    Command string `json:"command"`
+}
+
+type ShellOutput struct {
+    Result string `json:"result"`
+}
+
+func executeShellCommand(ctx context.Context, req *mcp.CallToolRequest, in ShellInput) (*mcp.CallToolResult, ShellOutput, error) {
+    return nil, ShellOutput{Result: in.Command}, nil
+}
+
+func main() {
+    server := mcp.NewServer(&mcp.Implementation{Name: "demo", Version: "v1.0.0"}, nil)
+    mcp.AddTool(server, &mcp.Tool{Name: "execute_shell_command", Description: "Execute shell command"}, executeShellCommand)
+}
+"""
+
+
+def test_go_tool_struct_name_overrides_camelcase_handler() -> None:
+    """``mcp.Tool{Name: \"execute_shell_command\"}`` must win over handler
+    symbol ``executeShellCommand``."""
+    analyzer = NativeAnalyzer(GO_REGISTERED_SHELL_TOOL, "shell.go")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "execute_shell_command"
 
 
 DESCRIPTOR_OBJECT_TOOL = """\
@@ -874,6 +901,44 @@ server.tool(
 );
 """
 
+NESTED_DECOY_HANDLER_BEFORE_REAL = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.tool(
+  "real",
+  { nested: { handler: () => "safe" } },
+  async ({ cmd }) => execSync(cmd),
+);
+"""
+
+NESTED_DECOY_HANDLER_AFTER_REAL = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.tool(
+  "real",
+  async ({ cmd }) => execSync(cmd),
+  { nested: { handler: () => "safe" } },
+);
+"""
+
+DIRECT_EXECUTE_IN_DESCRIPTOR = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.registerTool("run", {
+  description: "Run",
+  execute: async ({ cmd }) => execSync(cmd),
+});
+"""
+
 
 def test_fastmcp_addtool_descriptor_keeps_inline_execute() -> None:
     """FastMCP-TS ``addTool({ name, execute })`` must resolve the tool and
@@ -909,3 +974,27 @@ def test_two_inline_handlers_pick_last() -> None:
     literals = cap.string_literals or []
     assert any("right-handler" in lit for lit in literals), literals
     assert not any("wrong-handler" in lit for lit in literals), literals
+
+
+def test_nested_decoy_handler_does_not_hide_positional_handler() -> None:
+    """Nested schema decoys must not displace the real positional handler."""
+    for source in (NESTED_DECOY_HANDLER_BEFORE_REAL, NESTED_DECOY_HANDLER_AFTER_REAL):
+        analyzer = NativeAnalyzer(source, "decoy.ts")
+        caps = analyzer.extract_mcp_capability_contexts()
+        assert len(caps) == 1, [c.name for c in caps]
+        cap = caps[0]
+        assert cap.name == "real", cap.name
+        call_names = {c.get("name") for c in cap.function_calls or []}
+        assert "execSync" in call_names, call_names
+        assert cap.has_subprocess_calls is True, cap.has_subprocess_calls
+
+
+def test_direct_execute_field_in_descriptor_object() -> None:
+    """Top-level ``execute`` on a descriptor object must resolve inline handlers."""
+    analyzer = NativeAnalyzer(DIRECT_EXECUTE_IN_DESCRIPTOR, "descriptor.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.name for c in caps]
+    cap = caps[0]
+    assert cap.name == "run", cap.name
+    call_names = {c.get("name") for c in cap.function_calls or []}
+    assert "execSync" in call_names, call_names

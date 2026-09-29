@@ -553,9 +553,13 @@ def test_bind_handler_resolves_receiver_class_not_first_same_named_method() -> N
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1, [c.name for c in caps]
     cap = caps[0]
-    assert "Dangerous.run" in cap.name, cap.name
+    # The surfaced label is the registered MCP name; which method the bind
+    # resolved to is evidenced by the body, since only ``Dangerous.run``
+    # calls ``eval`` and ``Safe.run`` merely returns a string.
+    assert cap.name == "ghost", cap.name
     call_names = {c.get("name") for c in cap.function_calls or []}
     assert "eval" in call_names, call_names
+    assert cap.has_eval_exec is True, cap.has_eval_exec
 
 
 NON_MCP_FOREACH_TABLE = """\
