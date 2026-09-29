@@ -314,7 +314,10 @@ def build_infrastructure_error_finding(
     Callers should emit this instead of returning an empty findings list so
     scan output cannot be mistaken for a clean LLM pass.
     """
-    from ..core.analyzers.base import SecurityFinding
+    from ..core.analyzers.base import (
+        INFRASTRUCTURE_THREAT_CATEGORY,
+        SecurityFinding,
+    )
     from .log_format import ERROR_TRUNCATE, truncate
 
     kind = classify_analyzer_error(error, context=context, model=model)
@@ -333,6 +336,6 @@ def build_infrastructure_error_finding(
             f"{analyzer_name} analysis did not complete for {subject}: {message}"
         ),
         analyzer=analyzer_name,
-        threat_category="ANALYZER INFRASTRUCTURE",
+        threat_category=INFRASTRUCTURE_THREAT_CATEGORY,
         details=details,
     )

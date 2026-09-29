@@ -19,6 +19,8 @@
 import ast
 from typing import Any
 
+import warnings
+
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
 
@@ -86,6 +88,11 @@ class NameResolver:
     """
 
     def __init__(self, analyzer: BaseParser, parameter_names: list[str] = None):
+        warnings.warn(
+            "NameResolver is unused in production; prefer CallGraphAnalyzer + code graph.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         """Initialize name resolver.
 
         Args:

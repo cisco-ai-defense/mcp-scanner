@@ -71,7 +71,7 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
         """
         super().__init__(analyzer)
         self.parameter_names = set(parameter_names or [])
-        self.dead_code: list[CFGNode] = []
+        self.dead_code: list[tuple[CFGNode, str]] = []
         self.param_influenced: set[str] = set(parameter_names or [])
 
     def analyze_liveness(self) -> dict[int, set[str]]:
@@ -80,7 +80,10 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
         Returns:
             Mapping of node_id -> set of live variables
         """
-        self.build_cfg()
+        # Preserve a function-scoped CFG from ``build_cfg_for_function``;
+        # rebuilding here would silently widen the analysis to the module.
+        if not self.cfg:
+            self.build_cfg()
 
         # Run BACKWARD dataflow analysis
         initial_fact = LivenessFact()
@@ -237,7 +240,7 @@ class LivenessAnalyzer(DataFlowAnalyzer[LivenessFact]):
                     for target in ast_node.targets:
                         if isinstance(target, ast.Name):
                             if target.id not in live_after.live_vars:
-                                self.dead_code.append(node)
+                                self.dead_code.append((node, target.id))
 
     def get_parameter_live_vars(self) -> set[str]:
         """Get all parameter-influenced variables that are live.

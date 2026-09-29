@@ -352,9 +352,7 @@ class OAuthHandler:
         )
 
         logger.debug(f"Creating OAuth provider for server: {server_url}")
-        logger.debug(
-            f"OAuth metadata: client_name={client_metadata.client_name}, scope={scope}"
-        )
+        logger.debug("OAuth metadata: scope_count=%d", len(scopes))
 
         return OAuthClientProvider(
             server_url=server_url,
@@ -447,9 +445,7 @@ def create_oauth_provider_from_auth(
     )
 
     logger.info(f"Creating OAuth provider from Auth parameter for server: {server_url}")
-    logger.debug(
-        f"OAuth metadata: client_name={client_metadata.client_name}, scope={scope}"
-    )
+    logger.debug("OAuth metadata: scope_count=%d", len(scopes))
 
     return OAuthClientProvider(
         server_url=server_url,
