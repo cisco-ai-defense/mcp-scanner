@@ -5610,31 +5610,27 @@ class NativeAnalyzer:
         network_sinks = sinks.get("network", set())
         deser_sinks = sinks.get("deserialization", set())
 
-        def matches_sink(func_text: str, sink_set: set, category: str) -> bool:
-            """Check if function text matches any sink pattern."""
-            normalized = func_text.replace("::", ".").replace("->", ".")
-            parts = normalized.split(".")
-            func_name = parts[-1] if parts else normalized
+        def matches_sink(func_text: str, sink_set: set) -> bool:
+            """Check if function text matches any sink pattern.
 
-            if self.language == "rust" and category == "eval":
-                for sink in sink_set:
-                    sink_normalized = sink.replace("::", ".").replace("->", ".")
-                    if normalized == sink_normalized:
-                        return True
-                    if normalized.endswith("." + sink_normalized):
-                        return True
-                return False
+            A qualified call must match a sink on a path-component boundary.
+            Comparing leaf names alone collides whenever unrelated types share
+            a method name: ``CString::new`` would match ``Command::new``.
+            Unqualified calls are matched against the sink leaf so that
+            imported names (``exec(cmd)`` after destructuring) still resolve;
+            aliases that rebind a sink are handled by the caller.
+            """
+            normalized = func_text.replace("::", ".").replace("->", ".")
+            qualified = "." in normalized
 
             for sink in sink_set:
                 sink_normalized = sink.replace("::", ".").replace("->", ".")
-                sink_parts = sink_normalized.split(".")
-                sink_func = sink_parts[-1] if sink_parts else sink_normalized
-
                 if normalized == sink_normalized:
                     return True
-                if func_name == sink_func:
-                    return True
-                if sink_normalized in normalized:
+                if qualified:
+                    if normalized.endswith("." + sink_normalized):
+                        return True
+                elif normalized == sink_normalized.rsplit(".", 1)[-1]:
                     return True
             return False
         
@@ -5652,17 +5648,17 @@ class NativeAnalyzer:
                     func_text = self._ts_get_node_text(n)
                 
                 # Check against sink patterns
-                if matches_sink(func_text, command_sinks, "command"):
+                if matches_sink(func_text, command_sinks):
                     has_subprocess = True
-                if matches_sink(func_text, sql_sinks, "sql"):
+                if matches_sink(func_text, sql_sinks):
                     has_sql = True
-                if matches_sink(func_text, eval_sinks, "eval"):
+                if matches_sink(func_text, eval_sinks):
                     has_eval = True
-                if matches_sink(func_text, file_sinks, "file"):
+                if matches_sink(func_text, file_sinks):
                     has_file = True
-                if matches_sink(func_text, network_sinks, "network"):
+                if matches_sink(func_text, network_sinks):
                     has_network = True
-                if matches_sink(func_text, deser_sinks, "deserialization"):
+                if matches_sink(func_text, deser_sinks):
                     has_deserialization = True
 
                 visible_aliases = self._ts_visible_sink_aliases_at(n)

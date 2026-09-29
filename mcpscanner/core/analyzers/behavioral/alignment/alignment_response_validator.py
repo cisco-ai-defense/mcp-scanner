@@ -66,6 +66,39 @@ def is_unanalysed(result: Any) -> bool:
     return isinstance(result, dict) and bool(result.get(_UNANALYSED_KEY))
 
 
+# The alignment prompt asks the model to declare which class a finding
+# belongs to, so that "an MCP parameter reaches a shell" (reachability)
+# is never conflated with "the author hid a backdoor" (intent).
+FINDING_CLASS_MALICIOUS = "MALICIOUS_BEHAVIOR"
+FINDING_CLASS_CAPABILITY = "CAPABILITY_RISK"
+FINDING_CLASS_DOCUMENTATION = "DOCUMENTATION_MISMATCH"
+FINDING_CLASS_UNSPECIFIED = "UNSPECIFIED"
+
+_VALID_FINDING_CLASSES = frozenset(
+    {
+        FINDING_CLASS_MALICIOUS,
+        FINDING_CLASS_CAPABILITY,
+        FINDING_CLASS_DOCUMENTATION,
+    }
+)
+
+
+def normalize_finding_class(value: Any) -> str:
+    """Coerce an LLM-supplied ``finding_class`` to a known value.
+
+    Anything absent or unrecognised becomes ``UNSPECIFIED`` rather than
+    defaulting to a security class: a missing declaration is not evidence
+    of intent, and inventing one would put words in the model's mouth.
+    ``UNSPECIFIED`` is ours, never accepted from the model.
+    """
+    if not isinstance(value, str):
+        return FINDING_CLASS_UNSPECIFIED
+    candidate = value.strip().upper().replace("-", "_").replace(" ", "_")
+    if candidate in _VALID_FINDING_CLASSES:
+        return candidate
+    return FINDING_CLASS_UNSPECIFIED
+
+
 class AlignmentResponseValidator:
     """Validates alignment verification responses from LLM.
 
@@ -257,6 +290,7 @@ class AlignmentResponseValidator:
                     else "unknown"
                 ),
                 "line_number": func_context.line_number,
+                "finding_class": normalize_finding_class(analysis.get("finding_class")),
                 "mismatch_type": analysis.get("mismatch_type"),
                 "description_claims": description_claims,
                 "actual_behavior": actual_behavior,
