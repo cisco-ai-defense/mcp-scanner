@@ -47,11 +47,29 @@ _GENERIC_LABELS = frozenset(
 
 
 def language_for_path(file_path: str) -> str:
+    """
+    Map a file path to its analyzer language.
+    
+    Parameters:
+        file_path (str): Path whose file extension determines the language.
+    
+    Returns:
+        str: The mapped analyzer language, or "unknown" when the extension is unsupported.
+    """
     ext = Path(file_path).suffix.lower()
     return NativeAnalyzer.EXTENSION_MAP.get(ext, "unknown")
 
 
 def is_graph_supported_language(language: str) -> bool:
+    """
+    Determine whether a language is supported by CodeGraph.
+    
+    Parameters:
+    	language (str): The language name to check.
+    
+    Returns:
+    	bool: `true` if the language is supported, `false` otherwise.
+    """
     return language in GRAPH_SUPPORTED_LANGUAGES
 
 
@@ -66,6 +84,14 @@ def build_code_graph(
     Prefer pre-built graphs from ``build_code_graphs_for_registry`` for directory
     scans. This path calls ``build_call_graph()`` on the analyzer and must not
     run concurrently on the same analyzer instance.
+
+    Parameters:
+        language (str): The analyzer language used to select or build the graph.
+        source_registry (dict[str, str] | None): Optional mapping of file paths
+            to source content used to build language-specific graphs.
+
+    Returns:
+        CodeGraph: The code graph for the requested language.
     """
     if source_registry:
         graphs = build_code_graphs_for_registry(source_registry)
@@ -106,7 +132,15 @@ def _normalized_source_registry(files: dict[str, str]) -> dict[str, str]:
 def build_code_graphs_for_registry(
     source_registry: dict[str, str],
 ) -> dict[str, CodeGraph]:
-    """Build language-scoped code graphs directly from a source registry."""
+    """
+    Build code graphs grouped by supported language from a source registry.
+    
+    Parameters:
+    	source_registry (dict[str, str]): A mapping of file paths to source code.
+    
+    Returns:
+    	dict[str, CodeGraph]: A mapping of supported language names to merged code graphs.
+    """
     from .cache import CodeGraphCache, graph_cache_for_scan
 
     buckets: dict[str, dict[str, str]] = {}
@@ -157,10 +191,31 @@ def build_code_graphs_for_registry(
 
 
 def _resolved_path(file_path: str) -> Path:
+    """Resolve a file path to an absolute path without touching the filesystem.
+
+    Resolution is non-strict on purpose: a missing path must resolve rather
+    than raise, and probing for existence here is what the path-injection
+    hardening removed.
+
+    Parameters:
+        file_path (str): Path to resolve.
+
+    Returns:
+        Path: The resolved absolute path.
+    """
     return Path(file_path).resolve(strict=False)
 
 
 def _node_file_path(node_id: str) -> Optional[Path]:
+    """
+    Extract the source file path encoded in a graph node identifier.
+    
+    Parameters:
+        node_id (str): Graph node identifier containing a file path and delimiter.
+    
+    Returns:
+        Optional[Path]: The resolved source file path, or `None` when the identifier does not include a file path.
+    """
     if "::" not in node_id:
         return None
     return Path(node_id.split("::", 1)[0]).resolve(strict=False)
@@ -247,7 +302,18 @@ def resolve_entry_id(
     decorator_name: str | None = None,
     line_number: int | None = None,
 ) -> Optional[str]:
-    """Map a FunctionContext to a graph node id."""
+    """
+    Resolve a function context to its corresponding graph node in the specified file, preferring MCP entry nodes.
+    
+    Parameters:
+        graph (CodeGraph): Graph containing function nodes.
+        file_path (str): Path of the file containing the function.
+        func_name (str): Function name to match.
+        decorator_name (str | None): Optional decorator-registered name to match.
+    
+    Returns:
+        str | None: Matching graph node ID, or None when no node matches.
+    """
     resolved = _resolved_path(file_path)
     entry_match: Optional[str] = None
     name_match: Optional[str] = None
@@ -278,6 +344,14 @@ def resolve_entry_id(
 
 
 def _external_labels(path: list[str]) -> list[str]:
+    """Extract labels from external nodes in a graph path.
+    
+    Parameters:
+    	path (list[str]): Node identifiers that make up the graph path.
+    
+    Returns:
+    	list[str]: Labels from nodes whose identifiers use the ``external::`` prefix.
+    """
     labels: list[str] = []
     for node_id in path:
         if node_id.startswith("external::"):
@@ -286,7 +360,15 @@ def _external_labels(path: list[str]) -> list[str]:
 
 
 def is_actionable_sink_hit(hit: SinkHit) -> bool:
-    """True when a sink hit is specific enough to raise without LLM."""
+    """
+    Determine whether a sink hit is specific enough to raise without LLM review.
+    
+    Parameters:
+        hit (SinkHit): Sink hit containing the analyzed path and sink category.
+    
+    Returns:
+        bool: `true` if the path contains a recognized sink category or destructive operation, `false` otherwise.
+    """
     externals = _external_labels(hit.path)
     if not externals:
         return False
@@ -321,7 +403,17 @@ def attach_graph_evidence(
     graph: CodeGraph,
     entry_id: str,
 ) -> SinkAnalysisResult:
-    """Annotate context and return sink analysis for one MCP function."""
+    """
+    Attach graph-derived evidence and taint-flow metadata to a function context.
+    
+    Parameters:
+        func_context (FunctionContext): Context to annotate with graph evidence.
+        graph (CodeGraph): Graph containing the function entry and analyzed flows.
+        entry_id (str): Graph node identifier for the function entry.
+    
+    Returns:
+        SinkAnalysisResult: Sink analysis results for the specified entry.
+    """
     slice_ = GraphSlicer(graph).slice(entry_id)
     sink_result = SinkAnalyzer(graph).analyze_entry(entry_id)
     evidence = EvidenceFormatter(graph).format_combined(slice_, sink_result)
@@ -351,6 +443,16 @@ def create_sink_finding(
 
     Not used by ``partition_functions_by_graph`` (graph enriches LLM context only).
     Sink hits are surfaced as ``code_graph_sink_hints`` on ``dataflow_summary``.
+
+    Parameters:
+        hit (SinkHit): Sink hit containing the category, name, path, and provenance.
+        func_context (FunctionContext): Function context associated with the sink.
+        file_path (str): Source file containing the function.
+        evidence (str): Optional formatted code graph evidence.
+
+    Returns:
+        Optional[SecurityFinding]: A finding for the mapped sink category, or
+            ``None`` when the category or threat mapping is unavailable.
     """
     threat_name = _SINK_CATEGORY_TO_THREAT.get(hit.category)
     if not threat_name:
@@ -403,7 +505,17 @@ def partition_functions_by_graph(
     graph: CodeGraph,
     file_path: str,
 ) -> tuple[list[SecurityFinding], list[FunctionContext]]:
-    """Attach graph evidence to every resolvable tool and return all for LLM alignment."""
+    """
+    Attach graph evidence and actionable sink hints to resolvable functions.
+    
+    Parameters:
+    	func_contexts (list[FunctionContext]): Function contexts to enrich.
+    	graph (CodeGraph): Code graph used to resolve function entries and analyze sinks.
+    	file_path (str): Source file containing the functions.
+    
+    Returns:
+    	tuple[list[SecurityFinding], list[FunctionContext]]: An empty list of deterministic findings and all input function contexts for LLM alignment.
+    """
     needs_llm: list[FunctionContext] = []
     resolved_count = 0
     unresolved_count = 0
