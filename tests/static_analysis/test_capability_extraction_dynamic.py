@@ -30,6 +30,8 @@ Covers:
   that emit unresolved-handler stubs.
 """
 
+import pytest
+
 from mcpscanner.core.static_analysis import NativeAnalyzer
 
 
@@ -610,3 +612,95 @@ def test_shadowed_wrapper_parameter_is_not_treated_as_registration() -> None:
     analyzer = NativeAnalyzer(SHADOWED_WRAPPER_PARAMETER, "shadow-wrapper.js")
     caps = analyzer.extract_mcp_capability_contexts()
     assert caps == [], [(c.name, c.decorator_types) for c in caps]
+
+
+# ---------------------------------------------------------------------------
+# Local declarations that rebind a wrapper name. Only parameters used to be
+# recognised as shadows, so any of these produced a ghost capability carrying
+# the local function's evidence (e.g. an ``eval`` that the MCP wrapper never
+# reaches).
+# ---------------------------------------------------------------------------
+
+_LOCAL_SHADOW_PREAMBLE = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+function safeTool(name, schema, handler) {
+  return server.tool(name, schema, handler);
+}
+
+safeTool("real", {}, async () => ({ content: [] }));
+"""
+
+
+LOCAL_SHADOW_BODIES = {
+    "const": """\
+function caller(other) {
+  const safeTool = other;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "let": """\
+function caller(other) {
+  let safeTool = other;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "var": """\
+function caller(other) {
+  var safeTool = other;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "destructured": """\
+function caller(mod) {
+  const { safeTool } = mod;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "renamed_destructure": """\
+function caller(mod) {
+  const { impl: safeTool } = mod;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "nested_function": """\
+function caller() {
+  function safeTool(a, b, c) { return 1; }
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "outer_scope": """\
+function outer(other) {
+  const safeTool = other;
+  function inner() {
+    safeTool("ghost", {}, () => eval("1"));
+  }
+}
+""",
+}
+
+
+@pytest.mark.parametrize("kind", sorted(LOCAL_SHADOW_BODIES))
+def test_local_binding_shadow_does_not_emit_ghost_capability(kind: str) -> None:
+    """A local rebinding of the wrapper name is not the MCP wrapper."""
+    source = _LOCAL_SHADOW_PREAMBLE + "\n" + LOCAL_SHADOW_BODIES[kind]
+    analyzer = NativeAnalyzer(source, "local-shadow.ts")
+    names = {c.name for c in analyzer.extract_mcp_capability_contexts()}
+    assert "ghost" not in names, names
+    # The genuine module-level registration must survive the stricter check.
+    assert "real" in names, names
+
+
+def test_unshadowed_wrapper_call_inside_function_still_registers() -> None:
+    """Tightening shadow detection must not suppress real wrapper calls."""
+    unshadowed_call = """\
+function caller() {
+  safeTool("legit", {}, async () => ({ content: [] }));
+}
+"""
+    source = _LOCAL_SHADOW_PREAMBLE + "\n" + unshadowed_call
+    analyzer = NativeAnalyzer(source, "unshadowed.ts")
+    names = {c.name for c in analyzer.extract_mcp_capability_contexts()}
+    assert {"real", "legit"} <= names, names

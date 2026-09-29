@@ -3276,18 +3276,96 @@ class NativeAnalyzer:
                 return loop_info
         return None
 
-    def _ts_is_parameter_shadow(self, use_site: "Node", name: str) -> bool:
-        """Return True when ``name`` is a parameter of the enclosing function."""
-        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set()) | {
+    def _ts_scope_node_types(self) -> Set[str]:
+        """Node types that introduce a new function scope."""
+        return self.FUNCTION_NODE_TYPES.get(self.language, set()) | {
             "function_declaration",
             "method_definition",
             "arrow_function",
             "function_expression",
         }
+
+    def _ts_pattern_binding_names(self, name_node: "Node") -> Set[str]:
+        """Identifiers bound by a declarator's name, including patterns.
+
+        For ``{ a: b }`` only ``b`` is bound; ``a`` is a property key and
+        must not be treated as a binding, or an unrelated wrapper named
+        ``a`` would be wrongly considered shadowed.
+        """
+        if name_node.type == "identifier":
+            return {self._ts_get_node_text(name_node)}
+
+        names: Set[str] = set()
+
+        def walk(n: "Node") -> None:
+            for child in n.children:
+                if child.type == "pair_pattern":
+                    value = child.child_by_field_name("value")
+                    if value is None:
+                        continue
+                    if value.type == "identifier":
+                        names.add(self._ts_get_node_text(value))
+                    else:
+                        walk(value)
+                    continue
+                if child.type in (
+                    "identifier",
+                    "shorthand_property_identifier_pattern",
+                ):
+                    names.add(self._ts_get_node_text(child))
+                    continue
+                walk(child)
+
+        walk(name_node)
+        return names
+
+    def _ts_local_binding_names(self, scope_node: "Node") -> Set[str]:
+        """Names declared directly inside ``scope_node``.
+
+        Nested function bodies are not descended into: their declarations
+        belong to their own scope. A nested ``function_declaration`` still
+        contributes its *name*, which binds in this scope.
+        """
+        names: Set[str] = set()
+        func_types = self._ts_scope_node_types()
+
+        def walk(node: "Node") -> None:
+            for child in node.children:
+                if child.type == "function_declaration":
+                    fname = child.child_by_field_name("name")
+                    if fname is not None:
+                        names.add(self._ts_get_node_text(fname))
+                    continue
+                if child.type in func_types:
+                    continue
+                if child.type == "variable_declarator":
+                    nname = child.child_by_field_name("name")
+                    if nname is not None:
+                        names.update(self._ts_pattern_binding_names(nname))
+                walk(child)
+
+        walk(scope_node)
+        return names
+
+    def _ts_is_local_shadow(self, use_site: "Node", name: str) -> bool:
+        """Return True when ``name`` resolves to a local binding.
+
+        Every enclosing function scope is checked for a parameter or a
+        local declaration that rebinds ``name``. Only parameters were
+        considered previously, so ``const safeTool = other`` inside a
+        helper was taken for the module-level MCP wrapper and produced a
+        ghost capability carrying the helper's evidence. Outer scopes are
+        checked too rather than stopping at the innermost function.
+        """
+        func_types = self._ts_scope_node_types()
         cur = use_site.parent
         while cur is not None:
             if cur.type in func_types:
-                return name in self._ts_function_parameter_names(cur)
+                if name in self._ts_function_parameter_names(cur):
+                    return True
+                body = cur.child_by_field_name("body") or cur
+                if name in self._ts_local_binding_names(body):
+                    return True
             cur = cur.parent
         return False
 
@@ -3607,7 +3685,7 @@ class NativeAnalyzer:
         def visit(node: "Node") -> None:
             if node.type == "call_expression":
                 callee = self._ts_call_callee_identifier(node)
-                if callee and self._ts_is_parameter_shadow(node, callee):
+                if callee and self._ts_is_local_shadow(node, callee):
                     for child in node.children:
                         visit(child)
                     return

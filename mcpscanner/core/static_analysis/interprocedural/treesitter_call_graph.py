@@ -31,6 +31,20 @@ from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.logging_config import get_logger
 
 
+# Resource budgets for call-graph construction.
+#
+# Aggregate file and byte budgets upstream bound how much source is read,
+# but not what that source expands into: a handful of near-limit files can
+# still carry enormous or densely connected ASTs. Nodes, functions, edges
+# and wall-clock therefore each need a ceiling. Exceeding any of them marks
+# the graph partial rather than returning a truncated graph that is
+# indistinguishable from a complete one.
+MAX_AST_NODES = 400_000
+MAX_FUNCTIONS = 20_000
+MAX_CALL_EDGES = 100_000
+MAX_BUILD_SECONDS = 30.0
+
+
 @dataclass
 class TSCallGraph:
     """Call graph for tree-sitter languages."""
@@ -38,7 +52,12 @@ class TSCallGraph:
     functions: Dict[str, Node] = field(default_factory=dict)  # full_name -> function node
     calls: List[tuple] = field(default_factory=list)  # (caller, callee) pairs
     entry_points: Set[str] = field(default_factory=set)  # Entry point functions
-    
+    # Adjacency indexes. Without them every callee/caller lookup rescans the
+    # whole edge list, making reachability O(V*E) on densely connected
+    # graphs -- a CPU blow-up that edge caps alone would not prevent.
+    callees_by_caller: Dict[str, List[str]] = field(default_factory=dict, repr=False)
+    callers_by_callee: Dict[str, List[str]] = field(default_factory=dict, repr=False)
+
     def add_function(self, name: str, node: Node, file_path: Path, is_entry: bool = False) -> None:
         """Add a function definition."""
         full_name = f"{file_path}::{name}"
@@ -49,14 +68,16 @@ class TSCallGraph:
     def add_call(self, caller: str, callee: str) -> None:
         """Add a function call edge."""
         self.calls.append((caller, callee))
+        self.callees_by_caller.setdefault(caller, []).append(callee)
+        self.callers_by_callee.setdefault(callee, []).append(caller)
     
     def get_callees(self, func_name: str) -> List[str]:
         """Get functions called by a function."""
-        return [callee for caller, callee in self.calls if caller == func_name]
+        return list(self.callees_by_caller.get(func_name, ()))
     
     def get_callers(self, func_name: str) -> List[str]:
         """Get functions that call a function."""
-        return [caller for caller, callee in self.calls if callee == func_name]
+        return list(self.callers_by_callee.get(func_name, ()))
 
 
 class TreeSitterCallGraphAnalyzer:
@@ -114,6 +135,11 @@ class TreeSitterCallGraphAnalyzer:
         self._skipped_files: int = 0
         self._added_files: int = 0
         self._language_load_warned: bool = False
+        # Set when any budget in this module is hit. Callers must treat the
+        # resulting graph as partial: absent edges mean "not analysed",
+        # not "no such call".
+        self.budget_exceeded: bool = False
+        self._ast_nodes: int = 0
 
         self._parser: Optional[Parser] = None
         self._lang: Optional[Language] = None
@@ -175,9 +201,32 @@ class TreeSitterCallGraphAnalyzer:
             self._skipped_files += 1
             return False
 
+        if self.budget_exceeded:
+            self._skipped_files += 1
+            return False
+
         try:
             source_bytes = source_code.encode("utf-8")
             tree = parser.parse(source_bytes)
+
+            # Bound cumulative AST size. A file can sit under the byte
+            # budget yet expand into a pathological node count.
+            node_count = getattr(tree.root_node, "descendant_count", 0) or 0
+            if self._ast_nodes + node_count > MAX_AST_NODES:
+                self.budget_exceeded = True
+                self._skipped_files += 1
+                self.logger.warning(
+                    "static_interproc treesitter ast_budget_exceeded language=%s "
+                    "nodes=%d incoming=%d limit=%d file=%s",
+                    self.language,
+                    self._ast_nodes,
+                    node_count,
+                    MAX_AST_NODES,
+                    sanitize_log_value(file_path),
+                )
+                return False
+            self._ast_nodes += node_count
+
             self.files[file_path] = (tree, source_bytes)
             
             # Extract functions
@@ -218,6 +267,17 @@ class TreeSitterCallGraphAnalyzer:
         }
 
         for child in root.children:
+            if len(self.call_graph.functions) >= MAX_FUNCTIONS:
+                if not self.budget_exceeded:
+                    self.budget_exceeded = True
+                    self.logger.warning(
+                        "static_interproc treesitter function_budget_exceeded "
+                        "language=%s limit=%d",
+                        self.language,
+                        MAX_FUNCTIONS,
+                    )
+                return
+
             if child.type in func_types:
                 name = self._get_function_name(child, source_bytes)
                 if class_name:
@@ -269,7 +329,21 @@ class TreeSitterCallGraphAnalyzer:
     def build_call_graph(self) -> TSCallGraph:
         """Build the complete call graph."""
         build_start = time.perf_counter()
-        for file_path, (tree, source_bytes) in self.files.items():
+        for done, (file_path, (tree, source_bytes)) in enumerate(self.files.items()):
+            # Wall-clock ceiling. Node and edge caps bound the output, but a
+            # deeply nested AST can burn CPU in traversal long before either
+            # is reached, so extraction is also time-boxed.
+            if time.perf_counter() - build_start > MAX_BUILD_SECONDS:
+                self.budget_exceeded = True
+                self.logger.warning(
+                    "static_interproc treesitter time_budget_exceeded "
+                    "language=%s limit_s=%.1f analysed_files=%d of=%d",
+                    self.language,
+                    MAX_BUILD_SECONDS,
+                    done,
+                    len(self.files),
+                )
+                break
             self._extract_calls(file_path, tree.root_node, source_bytes)
 
         functions = len(self.call_graph.functions)
@@ -286,6 +360,17 @@ class TreeSitterCallGraphAnalyzer:
             int((time.perf_counter() - build_start) * 1000),
         )
         return self.call_graph
+
+    def release_parsed_sources(self) -> None:
+        """Drop retained parse trees and source bytes.
+
+        ``self.files`` holds a tree plus the full source for every file and
+        is only needed while extracting calls. Callers that are done
+        building should release it; the function nodes kept in the graph
+        hold their own tree references and stay valid. Calling
+        ``build_call_graph`` again after this yields no further edges.
+        """
+        self.files.clear()
     
     def _extract_calls(self, file_path: Path, root: Node, source_bytes: bytes, current_func: str = "") -> None:
         """Extract function calls from AST."""
@@ -293,6 +378,17 @@ class TreeSitterCallGraphAnalyzer:
         call_types = self.CALL_TYPES.get(self.language, set())
         
         for child in root.children:
+            if len(self.call_graph.calls) >= MAX_CALL_EDGES:
+                if not self.budget_exceeded:
+                    self.budget_exceeded = True
+                    self.logger.warning(
+                        "static_interproc treesitter edge_budget_exceeded "
+                        "language=%s limit=%d",
+                        self.language,
+                        MAX_CALL_EDGES,
+                    )
+                return
+
             # Track current function context
             if child.type in func_types:
                 func_name = self._get_function_name(child, source_bytes)
@@ -363,8 +459,11 @@ class TreeSitterCallGraphAnalyzer:
             if func_name == entry_point:
                 continue
             
-            for caller, callee in self.call_graph.calls:
-                if callee == func_name and (caller == entry_point or caller in param_influenced):
+            # Indexed lookup; scanning every edge per reachable function was
+            # O(V*E) and dominated runtime on densely connected graphs.
+            callee = func_name
+            for caller in self.call_graph.get_callers(func_name):
+                if caller == entry_point or caller in param_influenced:
                     param_influenced.add(func_name)
                     
                     caller_file = caller.split("::")[0] if "::" in caller else "unknown"

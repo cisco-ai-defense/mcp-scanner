@@ -138,3 +138,130 @@ def test_build_directory_call_graphs_enforces_aggregate_budget(
     assert analyzer._call_graph_partial is True
     assert "typescript" in call_graphs
     assert len(call_graphs["typescript"].files) <= jmod._JS_CALL_GRAPH_MAX_FILES
+
+
+# ---------------------------------------------------------------------------
+# Discovery and call-graph budgets.
+#
+# File and byte budgets bound how much source is read, but not how much that
+# source expands into, nor how long the walk to find it takes. These pin the
+# remaining axes so a hostile package cannot exhaust CPU or memory while the
+# result still claims to be complete.
+# ---------------------------------------------------------------------------
+
+
+def test_find_js_files_caps_matched_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovery stops at the file cap and records partial coverage."""
+    monkeypatch.setattr(jmod, "_JS_MAX_FILES", 5)
+    monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
+    for idx in range(20):
+        (tmp_path / f"f{idx}.ts").write_text("export const x = 1;\n")
+
+    analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
+    files = analyzer._find_js_files(str(tmp_path))
+
+    assert len(files) <= 5, len(files)
+    assert analyzer._call_graph_partial is True
+
+
+def test_find_js_files_caps_directory_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A large tree holding few matches still costs a bounded walk."""
+    monkeypatch.setattr(jmod, "_JS_MAX_DIR_ENTRIES", 10)
+    monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
+    for idx in range(50):
+        (tmp_path / f"pad{idx}.txt").write_text("x")
+
+    analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
+    analyzer._find_js_files(str(tmp_path))
+
+    assert analyzer._call_graph_partial is True
+
+
+def test_find_js_files_clean_tree_is_not_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tree inside every budget must not be reported as partial."""
+    monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
+    (tmp_path / "only.ts").write_text("export const x = 1;\n")
+
+    analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
+    files = analyzer._find_js_files(str(tmp_path))
+
+    assert len(files) == 1
+    assert analyzer._call_graph_partial is False
+
+
+def test_call_graph_ast_budget_marks_partial(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cumulative AST size is capped even when byte budgets pass."""
+    from mcpscanner.core.static_analysis.interprocedural import (
+        treesitter_call_graph as tsmod,
+    )
+
+    monkeypatch.setattr(tsmod, "MAX_AST_NODES", 5)
+    analyzer = tsmod.TreeSitterCallGraphAnalyzer("typescript")
+    accepted = analyzer.add_file(
+        Path("big.ts"), "function a(){ b(); c(); d(); e(); f(); }\n"
+    )
+
+    assert accepted is False
+    assert analyzer.budget_exceeded is True
+
+
+def test_call_graph_edge_budget_marks_partial(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Densely connected sources stop adding edges once the cap is hit."""
+    from mcpscanner.core.static_analysis.interprocedural import (
+        treesitter_call_graph as tsmod,
+    )
+
+    monkeypatch.setattr(tsmod, "MAX_CALL_EDGES", 3)
+    analyzer = tsmod.TreeSitterCallGraphAnalyzer("typescript")
+    body = "".join(f"  callee{i}();\n" for i in range(40))
+    analyzer.add_file(Path("dense.ts"), f"function entry() {{\n{body}}}\n")
+    graph = analyzer.build_call_graph()
+
+    assert analyzer.budget_exceeded is True
+    assert len(graph.calls) <= 3 + 1, len(graph.calls)
+
+
+def test_release_parsed_sources_frees_trees_but_keeps_graph() -> None:
+    """Releasing retained source must not invalidate the built graph."""
+    from mcpscanner.core.static_analysis.interprocedural import (
+        treesitter_call_graph as tsmod,
+    )
+
+    analyzer = tsmod.TreeSitterCallGraphAnalyzer("typescript")
+    analyzer.add_file(Path("a.ts"), "export function helper(x){ return x; }\n")
+    analyzer.add_file(
+        Path("b.ts"),
+        "import {helper} from './a';\nfunction entry(y){ return helper(y); }\n",
+    )
+    graph = analyzer.build_call_graph()
+    functions_before = len(graph.functions)
+
+    analyzer.release_parsed_sources()
+
+    assert analyzer.files == {}
+    assert len(graph.functions) == functions_before
+    # Function nodes keep their own tree alive, so they stay usable.
+    assert next(iter(graph.functions.values())).type
+
+
+def test_call_graph_adjacency_matches_edge_list() -> None:
+    """The callee/caller indexes must agree with the raw edge list."""
+    from mcpscanner.core.static_analysis.interprocedural import (
+        treesitter_call_graph as tsmod,
+    )
+
+    graph = tsmod.TSCallGraph()
+    graph.add_call("a", "b")
+    graph.add_call("a", "c")
+    graph.add_call("d", "b")
+
+    assert graph.get_callees("a") == ["b", "c"]
+    assert graph.get_callers("b") == ["a", "d"]
+    assert graph.get_callees("zzz") == []
+    assert sorted(graph.calls) == [("a", "b"), ("a", "c"), ("d", "b")]
