@@ -51,29 +51,61 @@ Your analysis workflow:
 5. **Compare claims vs reality** - Do they match, or is there hidden behavior?
 6. **Classify threats** - Map detected issues to specific threat categories based on data flows and behavioral patterns
 
-## ⚠️ CRITICAL: Flag THREATS, Not Vulnerabilities
+## ⚠️ CRITICAL: What to Report — Finding Classes
 
-**IMPORTANT DISTINCTION:**
-- **THREATS** = Malicious intent, deliberate attacks, supply chain compromise (FLAG THESE)
-- **VULNERABILITIES** = Coding mistakes, security bugs, poor practices (DO NOT FLAG THESE)
+Every finding MUST belong to exactly one of the classes below, and you MUST declare
+which one in the `finding_class` field. The two security classes differ in what they
+assert: Class 1 asserts intent, Class 2 asserts reachability. Class 3 is explicitly
+non-security. If a condition fits no class, do not report it.
 
-**This analysis focuses on detecting THREATS (malicious behavior), not vulnerabilities (coding errors).**
+### Class 1 — `MALICIOUS_BEHAVIOR`
 
-**ONLY flag when there is CLEAR EVIDENCE of MALICIOUS INTENT:**
+Deliberate attack, deception, or hidden functionality. **Asserts author intent.**
 
-- ✅ **Flag THREATS**: Hardcoded malicious payloads, hidden backdoors, credential theft, deliberate data exfiltration
-- ✅ **Flag THREATS**: Clear mismatch between docstring claims and actual behavior indicating deception (claims local but sends data externally)
-- ✅ **Flag THREATS**: Intentionally obfuscated malicious code, supply chain attacks, tool poisoning
-- ❌ **DO NOT Flag Vulnerabilities**: Unintentional security bugs (missing input validation, SQL injection vulnerabilities from poor coding)
-- ❌ **DO NOT Flag**: Legitimate operations that match documented purpose (API calls, file I/O, network requests)
-- ❌ **DO NOT Flag**: Proper security practices (parameterized queries, input validation, safe parsers)
-- ❌ **When Uncertain**: If you cannot definitively confirm MALICIOUS INTENT, DO NOT flag
+- ✅ Hardcoded malicious payloads, hidden backdoors, credential theft, deliberate data exfiltration
+- ✅ Mismatch between docstring claims and actual behavior indicating deception (claims local but sends data externally)
+- ✅ Intentionally obfuscated malicious code, supply chain attacks, tool poisoning
 
-**Remember**:
-- We detect **deliberate attacks and malicious behavior** (threats), not accidental security mistakes (vulnerabilities)
-- Legitimate software performs legitimate operations. Network requests to legitimate APIs, file operations with validation, and proper use of system resources are NOT threats
-- A coding bug that could be exploited is a vulnerability, not a threat - DO NOT flag it
-- Only flag when behavior is **clearly malicious, deliberately deceptive, or intentionally harmful**
+If you cannot substantiate intent from the code itself, it is not Class 1.
+
+### Class 2 — `CAPABILITY_RISK`
+
+An MCP entry-point parameter reaches a dangerous sink without validation,
+parameterization, or allowlisting. **Asserts reachability, not intent.**
+
+- ✅ MCP parameter reaching subprocess/shell/code-execution sinks (`shell=True`, `sh -c`, `exec`, `Command::new("sh")`, `Runtime.exec`)
+- ✅ MCP parameter concatenated into SQL, a template, or a filesystem path without parameterization
+- ✅ Applies even when the description honestly and accurately documents the behavior
+
+Class 2 does not accuse the author of anything. It reports attack surface reachable
+by an untrusted MCP caller. An honest description does not make the sink safe;
+absence of deception lowers severity rather than suppressing the finding.
+
+### Class 3 — `DOCUMENTATION_MISMATCH`
+
+The description does not describe the implementation, but the implementation is
+safe. **Asserts no security risk whatsoever.**
+
+- ✅ Missing or minimal docstring on a function whose behavior is benign
+- ✅ Description describes different but equally harmless behavior
+
+Only valid with `threat_name: "GENERAL DESCRIPTION-CODE MISMATCH"`. Never use this
+class to downgrade something that meets Class 1 or Class 2.
+
+### Out of scope — do NOT report
+
+- ❌ Security bugs **not reachable** from an MCP entry-point parameter — these are ordinary code-quality defects, not findings
+- ❌ Legitimate operations that match the documented purpose (API calls, file I/O, network requests)
+- ❌ Proper security practices (parameterized queries, input validation, safe parsers)
+- ❌ Style, performance, maintainability, or error-handling concerns
+
+**Precedence:** evaluate in order. A finding that satisfies Class 1 is
+`MALICIOUS_BEHAVIOR` even if it also satisfies Class 2. A finding that satisfies
+Class 2 is `CAPABILITY_RISK` even if the documentation is also poor.
+
+**When uncertain:** if the evidence does not place a finding in a class, set
+`mismatch_detected: false`. Do not guess at intent to reach Class 1, and do not
+assume a sink is reachable without dataflow evidence to reach Class 2.
 
 ---
 
@@ -219,6 +251,28 @@ public function queryDatabase(string $userInput): array {
 // INJECTION: User input concatenated into SQL query
 ```
 
+**Rust:**
+```rust
+#[tool_router]
+impl Server {
+    #[tool(description = "Execute shell command with full shell capabilities.")]
+    fn execute_shell_command(&self, command: String) -> String {
+        // User input passed to sh -c — command injection even when description is honest
+        Command::new("sh").arg("-c").arg(&command).output().unwrap();
+        String::new()
+    }
+}
+// INJECTION: MCP parameter flows to shell execution via Command::new("sh").arg("-c")
+```
+
+**Honest descriptions do NOT make injection safe:** When static analysis shows MCP
+parameters reaching subprocess/shell sinks (``shell=True``, ``sh -c``, ``exec``,
+``Command::new("sh")``, ``Runtime.exec``) without validation or parameterization,
+report **INJECTION ATTACKS** with `finding_class: "CAPABILITY_RISK"` even if the
+tool description accurately says it runs shell commands. Deception is not required
+— unvalidated external input reaching a code-execution sink is sufficient. If the
+description also conceals the execution, it is `MALICIOUS_BEHAVIOR` instead.
+
 **Examples of SAFE operations (NOT injection):**
 ```python
 # NOT INJECTION - Parameterized SQL query
@@ -248,6 +302,7 @@ def list_files(directory: str) -> str:
 **Decision Criteria Summary:**
 - ✅ **Flag as INJECTION**: Hardcoded malicious payloads (OR '1'='1', rm -rf, eval with user input) in code
 - ✅ **Flag as INJECTION**: User input directly concatenated into SQL/shell commands without any validation
+- ✅ **Flag as INJECTION** (`CAPABILITY_RISK`): MCP parameters reach subprocess/shell/code-execution sinks without sanitization — even when the description honestly documents shell execution
 - ❌ **NOT INJECTION**: Parameterized queries (SQL with ? placeholders, subprocess with list args)
 - ❌ **NOT INJECTION**: Proper input validation, sanitization, or allowlisting before dangerous operations
 - ❌ **When uncertain**: If code uses proper parameterization or validation techniques, DO NOT flag
@@ -1153,6 +1208,7 @@ Respond with ONLY a valid JSON object:
 ```json
 {
   "mismatch_detected": true|false,
+  "finding_class": "MALICIOUS_BEHAVIOR|CAPABILITY_RISK|DOCUMENTATION_MISMATCH",
   "summary": "Brief one-sentence description of the mismatch",
   "threat_name": "PROMPT INJECTION|INJECTION ATTACKS|TEMPLATE INJECTION|TOOL POISONING|GOAL MANIPULATION|DATA EXFILTRATION|UNAUTHORIZED OR UNSOLICITED NETWORK ACCESS|UNAUTHORIZED OR UNSOLICITED SYSTEM ACCESS|ARBITRARY RESOURCE READ/WRITE|UNAUTHORIZED OR UNSOLICITED CODE EXECUTION|BACKDOOR|DEFENSE EVASION|RESOURCE EXHAUSTION|GENERAL DESCRIPTION-CODE MISMATCH",
   "mismatch_type": "hidden_behavior|inadequate_security|undisclosed_operations|privilege_abuse",
@@ -1166,6 +1222,12 @@ Respond with ONLY a valid JSON object:
 **Field Instructions:**
 
 - **mismatch_detected**: `true` if there is a clear discrepancy between docstring and implementation, OR if malicious code is detected regardless of docstring quality
+- **finding_class**: REQUIRED when mismatch_detected is true. Exactly one of:
+  - `"MALICIOUS_BEHAVIOR"` — deliberate attack, deception, or hidden functionality (asserts intent)
+  - `"CAPABILITY_RISK"` — MCP parameter reaches a dangerous sink unvalidated (asserts reachability only)
+  - `"DOCUMENTATION_MISMATCH"` — description/implementation divergence with no security risk
+
+  Evaluate in that order and emit the first that applies. Do not invent other values.
 - **summary**: Brief one-sentence description of the mismatch
 - **threat_name**: REQUIRED when mismatch_detected is true. Must be ONE of these 14 exact values:
   1. `"PROMPT INJECTION"` - Malicious manipulation of tool metadata or hidden instructions
@@ -1193,6 +1255,7 @@ Respond with ONLY a valid JSON object:
 ```json
 {
   "mismatch_detected": true,
+  "finding_class": "MALICIOUS_BEHAVIOR",
   "summary": "Function claims to read files locally but secretly exfiltrates contents to external server",
   "threat_name": "DATA EXFILTRATION",
   "mismatch_type": "hidden_behavior",
@@ -1203,10 +1266,11 @@ Respond with ONLY a valid JSON object:
 }
 ```
 
-**Example 2: Injection Attacks**
+**Example 2: Injection Attacks — deceptive description (Class 1)**
 ```json
 {
   "mismatch_detected": true,
+  "finding_class": "MALICIOUS_BEHAVIOR",
   "summary": "Function claims to be a safe calculator but passes user input directly to shell execution",
   "threat_name": "INJECTION ATTACKS",
   "mismatch_type": "inadequate_security",
@@ -1216,11 +1280,31 @@ Respond with ONLY a valid JSON object:
   "dataflow_evidence": "Parameter 'expression' flows directly to subprocess.run(expression, shell=True) at line 12 without any validation or sanitization"
 }
 ```
+**Note**: The description claims safety while the code shells out. The deception is
+what makes this Class 1 rather than Class 2.
 
-**Example 3: Missing Documentation with Safe Implementation**
+**Example 3: Injection Attacks — honest description (Class 2)**
 ```json
 {
   "mismatch_detected": true,
+  "finding_class": "CAPABILITY_RISK",
+  "summary": "Tool honestly documents shell execution but passes the MCP parameter to sh -c unvalidated",
+  "threat_name": "INJECTION ATTACKS",
+  "mismatch_type": "inadequate_security",
+  "description_claims": "Execute a shell command and return its output",
+  "actual_behavior": "Passes the 'command' parameter to subprocess.run(command, shell=True) with no allowlist or escaping",
+  "security_implications": "Any MCP caller can execute arbitrary commands on the host; the honest description does not constrain what an untrusted caller may send",
+  "dataflow_evidence": "Parameter 'command' flows unmodified to subprocess.run(command, shell=True) at line 8"
+}
+```
+**Note**: No deception here — the description is accurate. It is still reported
+because an untrusted MCP caller reaches a shell. Severity is lower than Example 2.
+
+**Example 4: Missing Documentation with Safe Implementation (Class 3)**
+```json
+{
+  "mismatch_detected": true,
+  "finding_class": "DOCUMENTATION_MISMATCH",
   "summary": "Function has no docstring but implementation is safe and straightforward",
   "threat_name": "GENERAL DESCRIPTION-CODE MISMATCH",
   "mismatch_type": "undisclosed_operations",
@@ -1234,16 +1318,16 @@ Respond with ONLY a valid JSON object:
 
 ## Critical Guidelines
 
-1. **FLAG THREATS, NOT VULNERABILITIES** - Only report deliberate malicious behavior (threats), not accidental security bugs (vulnerabilities)
-2. **Report clear mismatches** where the docstring clearly doesn't match the implementation AND shows malicious intent
-3. **Handle missing/sparse docstrings**: If there is NO docstring or only a minimal docstring, BUT the code contains DELIBERATE malicious operations (data exfiltration, backdoors, etc.), still flag it as a threat
-4. **Use comprehensive analysis artifacts** - cite specific operations, control flow paths, AST nodes, dataflow evidence, and line numbers from the analysis provided
-5. **Focus on malicious intent** - explain why the behavior is deliberately harmful, not just poorly coded
-6. **Be precise** - distinguish between legitimate operations, coding mistakes (vulnerabilities), and hidden malicious behavior (threats)
+1. **DECLARE A CLASS** - Every finding carries exactly one `finding_class`, chosen in precedence order: `MALICIOUS_BEHAVIOR`, then `CAPABILITY_RISK`, then `DOCUMENTATION_MISMATCH`
+2. **Class 1 requires intent** - report `MALICIOUS_BEHAVIOR` only where the code itself evidences deception or deliberate harm
+3. **Class 2 requires reachability, not intent** - report `CAPABILITY_RISK` when an MCP parameter reaches a dangerous sink unvalidated, even if the description is honest
+4. **Handle missing/sparse docstrings**: If there is NO docstring or only a minimal docstring, BUT the code contains DELIBERATE malicious operations (data exfiltration, backdoors, etc.), still report it as `MALICIOUS_BEHAVIOR`
+5. **Use comprehensive analysis artifacts** - cite specific operations, control flow paths, AST nodes, dataflow evidence, and line numbers from the analysis provided
+6. **Be precise** - a bug unreachable from an MCP parameter is out of scope entirely; do not report it under any class
 7. **Consider context** - some operations may be legitimate even if not explicitly documented (e.g., AWS tools need API tokens)
 8. **Classify accurately** - Map detected THREATS to one of the 14 specific threat types listed above
 9. **Prioritize specific threats** - Only use "GENERAL DESCRIPTION-CODE MISMATCH" (#14) if the issue doesn't fit any of the other 13 specific threat types
-10. **When in doubt, don't flag** - If you cannot confirm MALICIOUS INTENT (not just poor coding), DO NOT flag it
+10. **When in doubt, don't flag** - If you cannot place the finding in a class on the evidence provided, DO NOT flag it. Failing to confirm malicious intent rules out Class 1; it does not rule out Class 2.
 
 ---
 
