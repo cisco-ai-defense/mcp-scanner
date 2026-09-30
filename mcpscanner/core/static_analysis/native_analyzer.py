@@ -4192,6 +4192,168 @@ class NativeAnalyzer:
             "has_eval_exec": has_eval,
         }
 
+    def _py_citable_sink_name(self, call_name: str) -> Optional[str]:
+        """Return ``call_name`` when it is a Python sink a finding may cite.
+
+        The names come from the same catalog tree-sitter uses, including
+        SQL, eval, file, network, and deserialization sinks. Matching is
+        on a path boundary, so ``cursor.execute`` counts and ``buf.read``
+        does not.
+        """
+        if not call_name:
+            return None
+        sink_sets = getattr(self, "_py_citable_sink_sets", None)
+        if sink_sets is None:
+            from .taint.patterns import get_all_sinks_for_language
+
+            sink_sets = [
+                names
+                for names in get_all_sinks_for_language("python").values()
+                if names
+            ]
+            self._py_citable_sink_sets = sink_sets
+        if self._ts_text_matches_any_sink(call_name, sink_sets):
+            return call_name.replace("::", ".").replace("->", ".")
+        return None
+
+    def _py_positional_param_names(
+        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]
+    ) -> List[str]:
+        """Parameter names a caller can pass positionally, excluding self."""
+        names: List[str] = []
+        for arg in list(node.args.posonlyargs) + list(node.args.args):
+            if arg.arg in ("self", "cls"):
+                continue
+            names.append(arg.arg)
+        return names
+
+    def _py_param_sink_facts(
+        self,
+        node: Union[ast.FunctionDef, ast.AsyncFunctionDef],
+        index: Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]],
+        instance_map: Dict[str, str],
+    ) -> Tuple[Dict[str, Set[str]], List[Tuple[str, str, str]]]:
+        """Sinks each parameter reaches, and forwards into callee parameters.
+
+        A name is recorded only when that parameter flows into the call
+        argument. Other sinks in the same function are left out.
+        """
+        params = self._py_positional_param_names(node)
+        params.extend(arg.arg for arg in node.args.kwonlyargs)
+        env: Dict[str, Set[str]] = {name: {name} for name in params}
+        direct: Dict[str, Set[str]] = {name: set() for name in params}
+        forwards: List[Tuple[str, str, str]] = []
+        positional = self._py_positional_param_names(node)
+
+        def sources_of(expr: ast.AST) -> Set[str]:
+            found: Set[str] = set()
+            for child in ast.walk(expr):
+                if isinstance(child, ast.Name) and child.id in env:
+                    found.update(env[child.id])
+            return found
+
+        def note_call(call: ast.Call) -> None:
+            call_name = self._py_get_node_name(call.func)
+            citable = self._py_citable_sink_name(call_name)
+            resolved = self._py_resolve_indexed_call(call_name, index, instance_map)
+            callee_positional: List[str] = []
+            callee_names: List[str] = []
+            if resolved is not None:
+                callee_positional = self._py_positional_param_names(resolved[1])
+                callee_names = callee_positional + [
+                    arg.arg for arg in resolved[1].args.kwonlyargs
+                ]
+            position = 0
+            for arg in call.args:
+                sources = sources_of(arg)
+                if citable:
+                    for src in sources:
+                        direct.setdefault(src, set()).add(citable)
+                if isinstance(arg, ast.Starred):
+                    continue
+                if resolved is not None and position < len(callee_positional):
+                    for src in sources:
+                        forwards.append(
+                            (src, resolved[0], callee_positional[position])
+                        )
+                position += 1
+            for kw in call.keywords:
+                if kw.arg is None:
+                    continue
+                sources = sources_of(kw.value)
+                if citable:
+                    for src in sources:
+                        direct.setdefault(src, set()).add(citable)
+                if resolved is not None and kw.arg in callee_names:
+                    for src in sources:
+                        forwards.append((src, resolved[0], kw.arg))
+
+        def bind_target(target: ast.AST, srcs: Set[str]) -> None:
+            if isinstance(target, ast.Name):
+                env[target.id] = set(srcs)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for elt in target.elts:
+                    bind_target(elt, srcs)
+
+        def visit_expr(expr: ast.AST) -> None:
+            if isinstance(expr, ast.Call):
+                note_call(expr)
+            for child in ast.iter_child_nodes(expr):
+                if isinstance(child, ast.expr):
+                    visit_expr(child)
+
+        def visit_stmt(stmt: ast.stmt) -> None:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                return
+            if isinstance(stmt, ast.Assign):
+                srcs = sources_of(stmt.value)
+                for target in stmt.targets:
+                    bind_target(target, srcs)
+            elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+                bind_target(stmt.target, sources_of(stmt.value))
+            elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+                bind_target(stmt.target, sources_of(stmt.iter))
+            elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                for item in stmt.items:
+                    srcs = sources_of(item.context_expr)
+                    if item.optional_vars is not None:
+                        bind_target(item.optional_vars, srcs)
+            for child in ast.iter_child_nodes(stmt):
+                if isinstance(child, ast.stmt):
+                    visit_stmt(child)
+                elif isinstance(child, ast.expr):
+                    visit_expr(child)
+                elif isinstance(child, ast.withitem):
+                    visit_expr(child.context_expr)
+
+        for stmt in node.body:
+            visit_stmt(stmt)
+        return direct, forwards
+
+    def _propagate_param_sinks(
+        self,
+        graphs: Dict[str, Tuple[Dict[str, Set[str]], List[Tuple[str, str, str]]]],
+    ) -> Dict[str, Dict[str, Set[str]]]:
+        """Union callee sinks into the parameter that was forwarded."""
+        sinks: Dict[str, Dict[str, Set[str]]] = {
+            key: {param: set(names) for param, names in direct.items()}
+            for key, (direct, _forwards) in graphs.items()
+        }
+        changed = True
+        while changed:
+            changed = False
+            for key, (_direct, forwards) in graphs.items():
+                for src, callee, callee_param in forwards:
+                    extra = sinks.get(callee, {}).get(callee_param)
+                    if not extra:
+                        continue
+                    bucket = sinks.setdefault(key, {}).setdefault(src, set())
+                    before = len(bucket)
+                    bucket.update(extra)
+                    if len(bucket) != before:
+                        changed = True
+        return sinks
+
     def _py_build_function_index(
         self,
         class_methods: Dict[
@@ -4430,6 +4592,11 @@ class NativeAnalyzer:
                 frontier.append((target, depth + 1, resolved_key))
 
         if not reachable:
+            direct, _forwards = self._py_param_sink_facts(
+                handler_node, index, instance_map
+            )
+            self._ts_write_param_sinks(ctx, direct)
+            self._py_sync_param_flow_summary(ctx)
             return
 
         dangerous_refs: Set[str] = set()
@@ -4472,15 +4639,32 @@ class NativeAnalyzer:
 
         ctx.reachable_functions = reachable_names
 
+        graphs: Dict[
+            str, Tuple[Dict[str, Set[str]], List[Tuple[str, str, str]]]
+        ] = {
+            handler_key: self._py_param_sink_facts(
+                handler_node, index, instance_map
+            )
+        }
+        for resolved_key, target in reachable:
+            callee_class = self._py_find_enclosing_class(tree, target)
+            callee_instances = self._py_build_instance_class_map(
+                target, enclosing_class=callee_class
+            )
+            graphs[resolved_key] = self._py_param_sink_facts(
+                target, index, callee_instances
+            )
+        sinks_by_param = self._propagate_param_sinks(graphs).get(handler_key, {})
+
         if dangerous:
             for flow in ctx.parameter_flows:
-                reaches = flow.get("reaches_calls") or []
-                for call in reaches:
+                for call in flow.get("reaches_calls") or []:
                     if self._py_call_ref_matches_dangerous(
                         str(call), dangerous, instance_map
                     ):
                         flow["reaches_external"] = True
                         break
+        self._ts_write_param_sinks(ctx, sinks_by_param)
 
         self._py_sync_param_flow_summary(ctx)
 
@@ -4870,6 +5054,32 @@ class NativeAnalyzer:
                 ordered.append(nm)
         return ordered
 
+    def _ts_loop_binding_names(self, node: "Node") -> List[str]:
+        """Names bound by a ``for...in`` / ``for...of`` left-hand side."""
+        if node.type in (
+            "identifier",
+            "shorthand_property_identifier",
+            "shorthand_property_identifier_pattern",
+        ):
+            text = self._ts_get_node_text(node).strip()
+            return [text] if text else []
+        if node.type == "variable_declarator":
+            name = node.child_by_field_name("name")
+            if name is None:
+                return []
+            if name.type == "identifier":
+                text = self._ts_get_node_text(name).strip()
+                return [text] if text else []
+            return self._ts_extract_binding_identifiers(name)
+        if node.type in ("lexical_declaration", "variable_declaration"):
+            names: List[str] = []
+            for child in node.children:
+                names.extend(self._ts_loop_binding_names(child))
+            return names
+        if node.type in ("object_pattern", "array_pattern"):
+            return self._ts_extract_binding_identifiers(node)
+        return []
+
     @staticmethod
     def _ts_root(node: "Node") -> "Node":
         """Walk to the tree-sitter root from any node."""
@@ -5045,6 +5255,7 @@ class NativeAnalyzer:
             return cache[cache_key]
 
         visible: Dict[str, str] = {}
+        sink_names: Dict[str, str] = {}
         use_byte = use_node.start_byte
         sink_category_for = self._ts_sink_category_for_language()
         func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
@@ -5065,8 +5276,12 @@ class NativeAnalyzer:
                 and target.type == "identifier"
             ):
                 cat = self._ts_alias_value_category(value, sink_category_for)
+                binding = self._ts_get_node_text(target)
                 if cat:
-                    visible[self._ts_get_node_text(target)] = cat
+                    visible[binding] = cat
+                sink_text = self._ts_alias_value_sink_text(value)
+                if sink_text:
+                    sink_names[binding] = sink_text
 
         def walk_scope(node: "Node") -> None:
             if node.start_byte >= use_byte:
@@ -5088,7 +5303,25 @@ class NativeAnalyzer:
             walk_scope(child)
         walk_scope(fn)
         cache[cache_key] = visible
+        name_cache = getattr(self, "_visible_sink_name_cache", None)
+        if name_cache is None:
+            name_cache = {}
+            self._visible_sink_name_cache = name_cache
+        name_cache[cache_key] = sink_names
         return visible
+
+    def _ts_visible_sink_names_at(self, use_node: "Node") -> Dict[str, str]:
+        """Alias name to the sink call text visible at ``use_node``.
+
+        ``const run = promisify(exec)`` yields ``{"run": "exec"}`` so a
+        later reachability check can cite ``exec``, not the local alias.
+        """
+        fn = self._ts_enclosing_function(use_node)
+        if fn is None:
+            return {}
+        self._ts_visible_sink_aliases_at(use_node)
+        name_cache = getattr(self, "_visible_sink_name_cache", None) or {}
+        return name_cache.get(self._ts_scope_lookup_key(fn, use_node), {})
 
     def _ts_sync_param_flow_summary(self, ctx: FunctionContext) -> None:
         """Keep ``dataflow_summary['param_flows']`` aligned with ``parameter_flows``."""
@@ -5171,6 +5404,201 @@ class NativeAnalyzer:
                                 return cat
         return None
 
+    def _ts_alias_value_sink_text(self, value: "Node") -> Optional[str]:
+        """Return the sink call text a binding aliases, when it is one.
+
+        ``promisify(exec)`` and ``promisify(child_process.exec)`` yield
+        ``exec`` and ``child_process.exec``. ``os.executable``-style
+        names that are not sinks yield nothing.
+        """
+        from .taint.patterns import get_all_sinks_for_language
+
+        sink_sets = [
+            names
+            for names in get_all_sinks_for_language(self.language).values()
+            if names
+        ]
+
+        def matched(text: str) -> Optional[str]:
+            normalized = self._ts_normalize_call_ref(text)
+            if normalized and self._ts_text_matches_any_sink(normalized, sink_sets):
+                return normalized.replace("::", ".").replace("->", ".")
+            return None
+
+        if value.type in ("identifier", "member_expression"):
+            return matched(self._ts_get_node_text(value))
+        if value.type in ("call_expression", "new_expression"):
+            callee = value.child_by_field_name("function")
+            args = value.child_by_field_name("arguments")
+            if callee is None or args is None:
+                return None
+            leaf = self._ts_get_node_text(callee).split(".")[-1].strip()
+            if leaf != "promisify":
+                return None
+            for arg in args.children:
+                if arg.type in ("identifier", "member_expression"):
+                    found = matched(self._ts_get_node_text(arg))
+                    if found:
+                        return found
+        return None
+
+    def _ts_callable_param_names(self, node: "Node") -> List[str]:
+        """Bound parameter names, excluding ``this`` / ``self``."""
+        names: List[str] = []
+        for info in self._ts_extract_parameters(node):
+            raw = info.get("name")
+            if not isinstance(raw, str):
+                continue
+            name = raw.strip()
+            if name and name not in ("this", "self") and name not in names:
+                names.append(name)
+        return names
+
+    def _ts_param_sink_facts(
+        self,
+        node: "Node",
+        index: Dict[str, "Node"],
+        ambiguous_bare: Set[str],
+    ) -> Tuple[Dict[str, Set[str]], List[Tuple[str, str, str]]]:
+        """Sinks each parameter reaches, and forwards into callee parameters."""
+        from .taint.patterns import get_all_sinks_for_language
+
+        sink_sets = [
+            names
+            for names in get_all_sinks_for_language(self.language).values()
+            if names
+        ]
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        params = self._ts_callable_param_names(node)
+        env: Dict[str, Set[str]] = {name: {name} for name in params}
+        direct: Dict[str, Set[str]] = {name: set() for name in params}
+        forwards: List[Tuple[str, str, str]] = []
+
+        def sources_of(expr: "Node") -> Set[str]:
+            found: Set[str] = set()
+
+            def walk(current: "Node") -> None:
+                if current.type in (
+                    "identifier",
+                    "shorthand_property_identifier",
+                    "shorthand_property_identifier_pattern",
+                ):
+                    text = self._ts_get_node_text(current)
+                    if text in env:
+                        found.update(env[text])
+                for child in current.children:
+                    walk(child)
+
+            walk(expr)
+            return found
+
+        def note_call(call: "Node") -> None:
+            func = (
+                call.child_by_field_name("function")
+                or call.child_by_field_name("constructor")
+                or call.child_by_field_name("name")
+                or call.child_by_field_name("method")
+            )
+            if func is None:
+                return
+            call_name = self._ts_normalize_call_ref(self._ts_get_node_text(func))
+            citable_names: List[str] = []
+            if call_name and self._ts_text_matches_any_sink(call_name, sink_sets):
+                citable_names.append(call_name.replace("::", ".").replace("->", "."))
+            elif call_name:
+                leaf = call_name.rsplit(".", 1)[-1]
+                if leaf not in self._ts_shadowed_names_at(call):
+                    aliased = self._ts_visible_sink_names_at(call).get(leaf)
+                    if aliased:
+                        citable_names.append(aliased)
+            if call.type == "new_expression" and citable_names:
+                new_form = "new " + citable_names[0].rsplit(".", 1)[-1]
+                if (
+                    self._ts_text_matches_any_sink(new_form, sink_sets)
+                    and new_form not in citable_names
+                ):
+                    citable_names.append(new_form)
+            resolved = self._ts_resolve_indexed_function(
+                call_name, index, ambiguous_bare
+            )
+            callee_params: List[str] = []
+            if resolved is not None:
+                callee_params = self._ts_callable_param_names(resolved[1])
+            args = call.child_by_field_name("arguments")
+            arg_nodes = []
+            if args is not None:
+                arg_nodes = [
+                    child
+                    for child in args.children
+                    if child.type not in ("(", ")", ",", "comment")
+                ]
+            for position, arg in enumerate(arg_nodes):
+                sources = sources_of(arg)
+                for cited in citable_names:
+                    for src in sources:
+                        direct.setdefault(src, set()).add(cited)
+                if arg.type in ("spread_element", "rest_pattern"):
+                    continue
+                if resolved is not None and position < len(callee_params):
+                    for src in sources:
+                        forwards.append((src, resolved[0], callee_params[position]))
+
+        def visit(current: "Node", nested: bool) -> None:
+            if nested and current.type in func_types:
+                return
+            if current.type == "for_in_statement":
+                right = current.child_by_field_name("right")
+                left = current.child_by_field_name("left")
+                if right is not None and left is not None:
+                    srcs = sources_of(right)
+                    for name in self._ts_loop_binding_names(left):
+                        env[name] = set(srcs)
+            if current.type in ("assignment_expression", "variable_declarator"):
+                target = current.child_by_field_name(
+                    "left"
+                ) or current.child_by_field_name("name")
+                value = current.child_by_field_name(
+                    "right"
+                ) or current.child_by_field_name("value")
+                if (
+                    target is not None
+                    and value is not None
+                    and target.type == "identifier"
+                ):
+                    env[self._ts_get_node_text(target)] = sources_of(value)
+            if current.type in (
+                "call_expression",
+                "new_expression",
+                "method_invocation",
+                "function_call_expression",
+                "member_call_expression",
+                "scoped_call_expression",
+                "invocation_expression",
+                "object_creation_expression",
+            ):
+                note_call(current)
+            for child in current.children:
+                visit(child, True)
+
+        visit(node, False)
+        return direct, forwards
+
+    @staticmethod
+    def _ts_text_matches_any_sink(func_text: str, sink_sets: List[set]) -> bool:
+        """Boundary match a call against language sink patterns."""
+        normalized = func_text.replace("::", ".").replace("->", ".")
+        qualified = "." in normalized
+        for sink_set in sink_sets:
+            for sink in sink_set:
+                sink_normalized = sink.replace("::", ".").replace("->", ".")
+                if normalized == sink_normalized:
+                    return True
+                if qualified and normalized.endswith("." + sink_normalized):
+                    return True
+                if not qualified and normalized == sink_normalized.rsplit(".", 1)[-1]:
+                    return True
+        return False
+
     def _ts_enrich_capability_with_callees(
         self, ctx: FunctionContext, handler_node: "Node"
     ) -> None:
@@ -5201,7 +5629,7 @@ class NativeAnalyzer:
             )
             return
         if not index:
-            return
+            index = {}
 
         def callee_refs(node: "Node") -> List[str]:
             refs: List[str] = []
@@ -5240,6 +5668,11 @@ class NativeAnalyzer:
                 frontier.append((target, depth + 1, resolved_key))
 
         if not reachable:
+            direct, _forwards = self._ts_param_sink_facts(
+                handler_node, index, ambiguous_bare
+            )
+            self._ts_write_param_sinks(ctx, direct)
+            self._ts_sync_param_flow_summary(ctx)
             return
 
         dangerous_refs: Set[str] = set()
@@ -5282,26 +5715,52 @@ class NativeAnalyzer:
 
         ctx.reachable_functions = reachable_names
 
+        graphs: Dict[
+            str, Tuple[Dict[str, Set[str]], List[Tuple[str, str, str]]]
+        ] = {
+            handler_key: self._ts_param_sink_facts(
+                handler_node, index, ambiguous_bare
+            )
+        }
+        for resolved_key, target in reachable:
+            graphs[resolved_key] = self._ts_param_sink_facts(
+                target, index, ambiguous_bare
+            )
+        sinks_by_param = self._propagate_param_sinks(graphs).get(handler_key, {})
+
         # A tainted parameter that flows into a dangerous callee reaches a
         # security-relevant external operation, even though the sink itself
-        # lives in the callee. Reflect that so downstream analysis sees the
-        # parameter -> sink data flow.
+        # lives in the callee. Record only the sink that parameter's
+        # argument reaches, not every sink in the helper.
         if dangerous:
             for flow in ctx.parameter_flows:
-                reaches = flow.get("reaches_calls") or []
-                for call in reaches:
+                for call in flow.get("reaches_calls") or []:
                     norm = self._ts_normalize_call_ref(str(call))
-                    if norm in dangerous:
-                        flow["reaches_external"] = True
-                        break
-                    if any(
+                    matched = norm in dangerous or any(
                         norm.endswith("." + dref) or dref.endswith("." + norm)
                         for dref in dangerous
-                    ):
+                    )
+                    if matched:
                         flow["reaches_external"] = True
                         break
+        self._ts_write_param_sinks(ctx, sinks_by_param)
 
         self._ts_sync_param_flow_summary(ctx)
+
+    def _ts_write_param_sinks(
+        self, ctx: FunctionContext, sinks_by_param: Dict[str, Set[str]]
+    ) -> None:
+        """Copy parameter-reached sink names onto that parameter's flow."""
+        for flow in ctx.parameter_flows:
+            param_name = flow.get("parameter_name") or flow.get("parameter")
+            reached = sinks_by_param.get(param_name) or set()
+            if not reached:
+                continue
+            existing = list(flow.get("external_sinks") or [])
+            for name in sorted(reached):
+                if name not in existing:
+                    existing.append(name)
+            flow["external_sinks"] = existing
 
     def _ts_extract_return_type(self, node: "Node") -> Optional[str]:
         """Extract return type annotation from tree-sitter node."""
