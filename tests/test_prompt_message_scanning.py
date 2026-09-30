@@ -10,6 +10,7 @@ from mcp.types import PromptArgument, PromptMessage, TextContent
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 
 from mcpscanner import Config, Scanner
+from mcpscanner.config.constants import MCPScannerConstants
 from mcpscanner.core.models import AnalyzerEnum
 
 
@@ -211,3 +212,109 @@ async def test_prompt_scan_result_stores_messages_text(config):
         prompt_messages_text="sensitive body",
     )
     assert result.prompt_messages_text == "sensitive body"
+
+
+def _patch_prompt_session(scanner, session):
+    return (
+        patch.object(
+            scanner, "_get_mcp_session", AsyncMock(return_value=(AsyncMock(), session))
+        ),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+        patch.object(scanner, "_server_supports_capability", return_value=True),
+    )
+
+
+@pytest.mark.asyncio
+async def test_oversized_prompt_does_not_reach_analyzers(config, monkeypatch):
+    monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPT_BODY_CHARS", 4)
+    scanner = Scanner(config)
+    prompt = MCPPrompt(name="big", description="d", arguments=[])
+    session = AsyncMock()
+    session.list_prompts.return_value = SimpleNamespace(prompts=[prompt])
+    session.get_prompt.return_value = SimpleNamespace(
+        messages=[
+            PromptMessage(
+                role="user",
+                content=TextContent(type="text", text="0123456789"),
+            )
+        ]
+    )
+    scanner._analyze_prompt = AsyncMock()
+    patches = _patch_prompt_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_prompts(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+        )
+    scanner._analyze_prompt.assert_not_awaited()
+    assert results[0].status == "failed"
+    assert results[0].findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+    assert len(results[0].prompt_messages_text) <= 4
+    assert "0123456789" not in results[0].prompt_messages_text
+
+
+@pytest.mark.asyncio
+async def test_prompt_count_budget_stops_further_fetches(config, monkeypatch):
+    monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPTS_PER_SCAN", 1)
+    scanner = Scanner(config)
+    prompts = [
+        MCPPrompt(name="first", description="d", arguments=[]),
+        MCPPrompt(name="second", description="d", arguments=[]),
+    ]
+    session = AsyncMock()
+    session.list_prompts.return_value = SimpleNamespace(prompts=prompts)
+    session.get_prompt.return_value = SimpleNamespace(
+        messages=[
+            PromptMessage(
+                role="user",
+                content=TextContent(type="text", text="ok"),
+            )
+        ]
+    )
+    scanner._analyze_prompt = AsyncMock(
+        return_value=SimpleNamespace(status="completed", findings=[])
+    )
+    patches = _patch_prompt_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_prompts(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+        )
+    assert session.get_prompt.await_count == 1
+    scanner._analyze_prompt.assert_awaited_once()
+    assert results[0].status == "completed"
+    assert results[1].status == "failed"
+    assert results[1].prompt_name == "second"
+    assert results[1].findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+
+
+@pytest.mark.asyncio
+async def test_prompt_aggregate_budget_stops_further_fetches(config, monkeypatch):
+    monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPT_RESOURCE_AGGREGATE_CHARS", 2)
+    scanner = Scanner(config)
+    prompts = [
+        MCPPrompt(name="first", description="d", arguments=[]),
+        MCPPrompt(name="second", description="d", arguments=[]),
+    ]
+    session = AsyncMock()
+    session.list_prompts.return_value = SimpleNamespace(prompts=prompts)
+    session.get_prompt.return_value = SimpleNamespace(
+        messages=[
+            PromptMessage(
+                role="user",
+                content=TextContent(type="text", text="hello"),
+            )
+        ]
+    )
+    scanner._analyze_prompt = AsyncMock()
+    patches = _patch_prompt_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_prompts(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+        )
+    assert session.get_prompt.await_count == 1
+    scanner._analyze_prompt.assert_not_awaited()
+    assert results[0].status == "failed"
+    assert results[1].status == "failed"
+    assert results[1].prompt_name == "second"

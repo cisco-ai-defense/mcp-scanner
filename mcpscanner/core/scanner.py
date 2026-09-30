@@ -51,6 +51,7 @@ except (
 
 
 from ..config.config import Config
+from ..config.constants import MCPScannerConstants
 from ..utils.analyzer_errors import build_infrastructure_error_finding
 from ..utils.logging_config import get_logger
 from ..utils.proxy_relay import is_hybrid_connector_id, prepare_mcp_dial
@@ -95,6 +96,28 @@ from .result import (
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
 
 logger = get_logger(__name__)
+
+
+class CoverageLimitExceeded(Exception):
+    """A prompt or resource exceeded a configured size or count budget.
+
+    The scan must not report this as a complete clean result. ``excerpt`` is
+    the bounded evidence that was retained; analyzers are not given the
+    unbounded body.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        excerpt: str = "",
+        observed: int = 0,
+        limit: int = 0,
+    ):
+        super().__init__(message)
+        self.excerpt = excerpt
+        self.observed = observed
+        self.limit = limit
 
 
 class Scanner:
@@ -364,7 +387,10 @@ class Scanner:
         """
         try:
             arguments = self._default_prompt_arguments(prompt)
-            get_prompt_result = await session.get_prompt(prompt.name, arguments=arguments)
+            get_prompt_result = await asyncio.wait_for(
+                session.get_prompt(prompt.name, arguments=arguments),
+                timeout=MCPScannerConstants.MCP_CONTENT_READ_TIMEOUT_SECONDS,
+            )
             return self._extract_prompt_messages_text(get_prompt_result), None
         except Exception as e:
             logger.warning(
@@ -391,6 +417,51 @@ class Scanner:
         allowed = {cls._normalize_mime_type(m) for m in allowed_mime_types}
         return mime in allowed
 
+    @staticmethod
+    def _bound_text(text: str, limit: int) -> tuple[str, bool]:
+        """Return ``(excerpt, truncated)``.
+
+        ``limit`` is a character budget. The excerpt is the only text that
+        may be retained or passed to an analyzer.
+        """
+        if not text or limit <= 0:
+            return "", bool(text)
+        if len(text) <= limit:
+            return text, False
+        return text[:limit], True
+
+    @staticmethod
+    def _apply_body_budget(
+        text: str, per_item_limit: int, remaining: int
+    ) -> tuple[str, Optional["CoverageLimitExceeded"]]:
+        """Accept ``text`` only when it fits both the per-item and aggregate budgets."""
+        observed = len(text or "")
+        cap = min(per_item_limit, remaining)
+        if observed > per_item_limit or observed > remaining:
+            excerpt, _ = Scanner._bound_text(text or "", max(cap, 0))
+            return excerpt, CoverageLimitExceeded(
+                (
+                    f"body size {observed} exceeds limit {per_item_limit} "
+                    f"(aggregate remaining {remaining})"
+                ),
+                excerpt=excerpt,
+                observed=observed,
+                limit=per_item_limit,
+            )
+        return text or "", None
+
+    @staticmethod
+    def _consume_rejected_budget(observed: int, excerpt: str, remaining: int) -> int:
+        """Aggregate budget left after a body that was not analyzed.
+
+        A body larger than the remaining aggregate ends further collection.
+        A body rejected only by the per-item cap still charges the retained
+        excerpt, so a run of oversized responses cannot continue unbounded.
+        """
+        if observed > remaining:
+            return 0
+        return remaining - len(excerpt)
+
     def _prompt_messages_fetch_failure_result(
         self,
         prompt: MCPPrompt,
@@ -405,25 +476,66 @@ class Scanner:
             context="local",
         )
         active = [a for a in analyzers if a != AnalyzerEnum.META]
+        excerpt = ""
+        if isinstance(error, CoverageLimitExceeded):
+            excerpt = error.excerpt
         return PromptScanResult(
             prompt_name=prompt.name,
             prompt_description=prompt.description or "",
             status="failed",
             analyzers=active,
             findings=[finding],
-            prompt_messages_text="",
+            prompt_messages_text=excerpt,
         )
 
     async def _collect_prompt_message_bodies(
         self, session: ClientSession, prompts: Sequence[MCPPrompt]
     ) -> List[Tuple[MCPPrompt, str, Optional[Exception]]]:
-        """Fetch all ``prompts/get`` bodies sequentially (session-safe)."""
+        """Fetch ``prompts/get`` bodies sequentially, within count and byte budgets.
+
+        Prompts past the count or aggregate budget are not fetched. Their
+        results carry ``CoverageLimitExceeded`` so analysis tasks are not
+        created for them.
+        """
         collected: List[Tuple[MCPPrompt, str, Optional[Exception]]] = []
+        remaining = MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS
+        max_prompts = MCPScannerConstants.MAX_PROMPTS_PER_SCAN
+        accepted = 0
         for prompt in prompts:
+            if accepted >= max_prompts or remaining <= 0:
+                collected.append(
+                    (
+                        prompt,
+                        "",
+                        CoverageLimitExceeded(
+                            (
+                                "prompt scan budget exhausted "
+                                f"(accepted={accepted}, remaining={remaining})"
+                            ),
+                            observed=accepted,
+                            limit=max_prompts,
+                        ),
+                    )
+                )
+                continue
             text, fetch_error = await self._resolve_prompt_messages_text(
                 session, prompt
             )
-            collected.append((prompt, text, fetch_error))
+            accepted += 1
+            if fetch_error is not None:
+                collected.append((prompt, "", fetch_error))
+                continue
+            bounded, limit_error = self._apply_body_budget(
+                text,
+                MCPScannerConstants.MAX_PROMPT_BODY_CHARS,
+                remaining,
+            )
+            if limit_error is not None:
+                collected.append((prompt, bounded, limit_error))
+                remaining = self._consume_rejected_budget(len(text), bounded, remaining)
+                continue
+            remaining -= len(bounded)
+            collected.append((prompt, bounded, None))
         return collected
 
     async def _analyze_collected_prompts(
@@ -463,50 +575,113 @@ class Scanner:
                         prompt_messages_text=prompt_messages_text,
                     )
 
-        return list(
-            await asyncio.gather(
+        ordered: List[Optional[PromptScanResult]] = [None] * len(collected)
+        pending: List[Tuple[int, MCPPrompt, str]] = []
+        for index, (prompt, text, err) in enumerate(collected):
+            if err is not None:
+                ordered[index] = self._prompt_messages_fetch_failure_result(
+                    prompt, err, analyzers
+                )
+            else:
+                pending.append((index, prompt, text))
+
+        if pending:
+
+            async def analyze_pending(
+                index: int, prompt: MCPPrompt, text: str
+            ) -> Tuple[int, PromptScanResult]:
+                result = await analyze_one(prompt, text, None)
+                return index, result
+
+            analyzed = await asyncio.gather(
                 *[
-                    analyze_one(prompt, text, err)
-                    for prompt, text, err in collected
+                    analyze_pending(index, prompt, text)
+                    for index, prompt, text in pending
                 ]
             )
-        )
+            for index, result in analyzed:
+                ordered[index] = result
+
+        return [result for result in ordered if result is not None]
 
     @classmethod
     def _extract_resource_read_result(
         cls,
         read_resource_result: Any,
         list_mime_type: Optional[str] = None,
-    ) -> tuple[str, str, bool]:
+    ) -> tuple[str, str, bool, bool, int]:
         """Extract text and effective MIME type from ``resources/read`` result.
 
+        The MIME type on the read content wins over ``resources/list``
+        metadata. The list MIME is used only when the read response does
+        not provide one. Disagreeing MIME types across content blocks
+        resolve to ``conflicting``, which fails a normal allowlist.
+
+        Text concatenation stops at ``MAX_RESOURCE_BODY_CHARS``.
+
         Returns:
-            Tuple of (text_content, effective_mime_type, binary_only).
+            Tuple of (text, effective_mime, binary_only, truncated, observed).
             ``binary_only`` is True when contents had no usable text.
+            ``truncated`` is True when further text was dropped for the
+            per-resource budget. Callers must not treat that as complete.
+            ``observed`` is the total text length seen, including text that
+            was not retained.
         """
         contents = getattr(read_resource_result, "contents", None) or []
         text_content = ""
-        content_mime: Optional[str] = None
+        read_mimes: List[str] = []
         saw_binary = False
+        truncated = False
+        observed = 0
+        limit = MCPScannerConstants.MAX_RESOURCE_BODY_CHARS
 
         for content in contents:
             if hasattr(content, "text") and content.text:
-                text_content += content.text
-                if content_mime is None and getattr(content, "mimeType", None):
-                    content_mime = content.mimeType
+                piece = content.text
+                observed += len(piece)
+                raw_mime = getattr(content, "mimeType", None)
+                if raw_mime:
+                    read_mimes.append(raw_mime)
+                room = limit - len(text_content)
+                if room <= 0:
+                    truncated = True
+                    continue
+                if len(piece) > room:
+                    text_content += piece[:room]
+                    truncated = True
+                else:
+                    text_content += piece
             elif hasattr(content, "blob") and content.blob:
                 saw_binary = True
                 logger.info("Skipping binary blob segment in resource contents")
                 continue
 
-        effective_mime = (
-            (list_mime_type or "").strip()
-            or (content_mime or "").strip()
-            or "unknown"
-        )
+        effective_mime = cls._resolve_effective_mime(list_mime_type, read_mimes)
         if not text_content.strip() and saw_binary:
-            return "", effective_mime, True
-        return text_content, effective_mime, False
+            return "", effective_mime, True, False, observed
+        return text_content, effective_mime, False, truncated, observed
+
+    @classmethod
+    def _resolve_effective_mime(
+        cls, list_mime_type: Optional[str], read_mimes: List[str]
+    ) -> str:
+        """Pick the MIME type used for the allowlist decision.
+
+        A non-empty read MIME wins. Several different read MIME types
+        fail closed as ``conflicting`` rather than falling back to the
+        list advertisement.
+        """
+        normalized: List[str] = []
+        for raw in read_mimes:
+            mime = cls._normalize_mime_type(raw)
+            if mime and mime not in normalized:
+                normalized.append(mime)
+        if len(normalized) > 1:
+            return "conflicting"
+        if normalized:
+            return normalized[0]
+        listed = cls._normalize_mime_type(list_mime_type)
+        return listed or "unknown"
 
     @staticmethod
     def _combine_prompt_analysis_text(
@@ -3196,6 +3371,34 @@ class Scanner:
             resource_text=analysis_content,
         )
 
+    def _resource_coverage_limit_result(
+        self,
+        resource_uri: str,
+        resource_name: str,
+        resource_mime_type: str,
+        error: CoverageLimitExceeded,
+    ) -> ResourceScanResult:
+        """Failed resource result when a size budget is exceeded.
+
+        Analyzers are not invoked. ``resource_text`` keeps only the bounded
+        excerpt, never the unbounded body.
+        """
+        finding = build_infrastructure_error_finding(
+            analyzer_name="MCP",
+            subject=resource_name or str(resource_uri),
+            error=error,
+            context="local",
+        )
+        return ResourceScanResult(
+            resource_uri=resource_uri,
+            resource_name=resource_name,
+            resource_mime_type=resource_mime_type,
+            status="failed",
+            analyzers=[],
+            findings=[finding],
+            resource_text=error.excerpt,
+        )
+
     async def scan_remote_server_resources(
         self,
         server_url: str,
@@ -3272,7 +3475,22 @@ class Scanner:
                 raise
 
             results = []
+            aggregate_limit = MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS
+            remaining = aggregate_limit
             for resource in resource_list.resources:
+                if remaining <= 0:
+                    results.append(
+                        self._resource_coverage_limit_result(
+                            resource.uri,
+                            resource.name or "",
+                            self._normalize_mime_type(resource.mimeType) or "unknown",
+                            CoverageLimitExceeded(
+                                "resource scan aggregate budget exhausted",
+                                limit=aggregate_limit,
+                            ),
+                        )
+                    )
+                    continue
                 # Check if MIME type is allowed
                 if resource.mimeType and not self._resource_mime_is_allowed(
                     resource.mimeType, allowed_mime_types
@@ -3294,13 +3512,20 @@ class Scanner:
 
                 # Read resource content
                 try:
-                    resource_contents = await session.read_resource(resource.uri)
+                    resource_contents = await asyncio.wait_for(
+                        session.read_resource(resource.uri),
+                        timeout=MCPScannerConstants.MCP_CONTENT_READ_TIMEOUT_SECONDS,
+                    )
 
                     try:
-                        text_content, effective_mime, binary_only = (
-                            self._extract_resource_read_result(
-                                resource_contents, resource.mimeType
-                            )
+                        (
+                            text_content,
+                            effective_mime,
+                            binary_only,
+                            truncated,
+                            observed,
+                        ) = self._extract_resource_read_result(
+                            resource_contents, resource.mimeType
                         )
                     except (AttributeError, TypeError) as e:
                         logger.warning(
@@ -3353,10 +3578,53 @@ class Scanner:
                         )
                         continue
 
+                    if truncated:
+                        results.append(
+                            self._resource_coverage_limit_result(
+                                resource.uri,
+                                resource.name or "",
+                                effective_mime,
+                                CoverageLimitExceeded(
+                                    (
+                                        f"resource body size {observed} exceeds limit "
+                                        f"{MCPScannerConstants.MAX_RESOURCE_BODY_CHARS}"
+                                    ),
+                                    excerpt=text_content,
+                                    observed=observed,
+                                    limit=MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
+                                ),
+                            )
+                        )
+                        remaining = self._consume_rejected_budget(
+                            observed, text_content, remaining
+                        )
+                        continue
+
+                    bounded, limit_error = self._apply_body_budget(
+                        text_content,
+                        MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
+                        remaining,
+                    )
+                    if limit_error is not None:
+                        results.append(
+                            self._resource_coverage_limit_result(
+                                resource.uri,
+                                resource.name or "",
+                                effective_mime,
+                                limit_error,
+                            )
+                        )
+                        remaining = self._consume_rejected_budget(
+                            len(text_content), bounded, remaining
+                        )
+                        continue
+
+                    remaining -= len(bounded)
+
                     # Analyze the resource
                     try:
                         result = await self._analyze_resource(
-                            text_content,
+                            bounded,
                             resource.uri,
                             resource.name or "",
                             resource.description or "",
@@ -3528,13 +3796,20 @@ class Scanner:
 
             # Read resource content
             try:
-                resource_contents = await session.read_resource(target_resource.uri)
+                resource_contents = await asyncio.wait_for(
+                    session.read_resource(target_resource.uri),
+                    timeout=MCPScannerConstants.MCP_CONTENT_READ_TIMEOUT_SECONDS,
+                )
 
                 try:
-                    text_content, effective_mime, binary_only = (
-                        self._extract_resource_read_result(
-                            resource_contents, target_resource.mimeType
-                        )
+                    (
+                        text_content,
+                        effective_mime,
+                        binary_only,
+                        truncated,
+                        observed,
+                    ) = self._extract_resource_read_result(
+                        resource_contents, target_resource.mimeType
                     )
                 except (AttributeError, TypeError) as e:
                     logger.warning(
@@ -3576,9 +3851,38 @@ class Scanner:
                         findings=[],
                     )
 
+                if truncated:
+                    return self._resource_coverage_limit_result(
+                        target_resource.uri,
+                        target_resource.name or "",
+                        effective_mime,
+                        CoverageLimitExceeded(
+                            (
+                                f"resource body size {observed} exceeds "
+                                f"limit {MCPScannerConstants.MAX_RESOURCE_BODY_CHARS}"
+                            ),
+                            excerpt=text_content,
+                            observed=observed,
+                            limit=MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
+                        ),
+                    )
+
+                bounded, limit_error = self._apply_body_budget(
+                    text_content,
+                    MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
+                    MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS,
+                )
+                if limit_error is not None:
+                    return self._resource_coverage_limit_result(
+                        target_resource.uri,
+                        target_resource.name or "",
+                        effective_mime,
+                        limit_error,
+                    )
+
                 # Analyze the resource
                 result = await self._analyze_resource(
-                    text_content,
+                    bounded,
                     target_resource.uri,
                     target_resource.name or "",
                     target_resource.description or "",
