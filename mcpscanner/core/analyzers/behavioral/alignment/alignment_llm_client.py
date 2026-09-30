@@ -30,7 +30,8 @@ import itertools
 import logging
 import time
 
-from litellm import acompletion
+from .....utils.apple_fm import is_apple_fm_model
+from .....utils.llm_completion import acompletion
 
 from .....config.config import Config
 from .....config.constants import MCPScannerConstants
@@ -65,6 +66,7 @@ _PROVIDER_PREFIXES = {
     "groq": "groq",
     "ollama": "ollama",
     "huggingface": "huggingface",
+    "apple-fm": "apple-fm",
 }
 
 
@@ -117,10 +119,13 @@ class AlignmentLLMClient:
         self._api_version = config.llm_api_version
 
         is_bedrock = bool(self._model and "bedrock/" in self._model)
+        is_apple_fm = is_apple_fm_model(self._model)
         api_key = getattr(config, "llm_provider_api_key", None)
         bearer_token = getattr(config, "aws_bearer_token_bedrock", None)
 
-        if not is_bedrock:
+        if is_apple_fm:
+            self._api_key = None
+        elif not is_bedrock:
             if not api_key:
                 raise ValueError(
                     "LLM provider API key is required for alignment verification"
@@ -329,7 +334,7 @@ class AlignmentLLMClient:
             # (observed on Claude Haiku 4.5 cross-region profiles); Azure
             # older API versions also reject it. Rely on the prompt + validator
             # markdown fallbacks instead.
-            if not self._model.startswith(("azure/", "bedrock/")):
+            if not self._model.startswith(("azure/", "bedrock/", "apple-fm/")):
                 request_params["response_format"] = {"type": "json_object"}
 
             # Add optional parameters if configured

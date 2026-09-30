@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 
 from ..config.config import Config
+from ..utils.apple_fm import is_apple_fm_model
 from ..config.constants import CONSTANTS
 from ..core.models import AnalyzerEnum
 from ..core.scanner import Scanner, ScannerFactory
@@ -82,7 +83,10 @@ def _validate_api_config(
         # Check if it's a Bedrock model
         is_bedrock = llm_model and "bedrock/" in llm_model
 
-        if is_bedrock:
+        if is_apple_fm_model(llm_model):
+            # On-device Foundation Model: no API key or cloud credentials.
+            pass
+        elif is_bedrock:
             # For Bedrock: Either API key OR AWS credentials (region/profile) must be configured
             has_api_key = bool(llm_api_key)
             has_aws_credentials = bool(aws_profile)
