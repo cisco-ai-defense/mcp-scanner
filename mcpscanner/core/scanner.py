@@ -1439,6 +1439,16 @@ class Scanner:
         all_findings = []
         name = prompt.name
         description = prompt.description or ""
+        bounded_messages, limit_error = self._apply_body_budget(
+            prompt_messages_text,
+            MCPScannerConstants.MAX_PROMPT_BODY_CHARS,
+            MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS,
+        )
+        if limit_error is not None:
+            return self._prompt_messages_fetch_failure_result(
+                prompt, limit_error, analyzers
+            )
+        prompt_messages_text = bounded_messages
         combined_content = self._combine_prompt_analysis_text(
             description, prompt_messages_text
         )
@@ -3208,6 +3218,19 @@ class Scanner:
             ResourceScanResult: The result of the analysis.
         """
         all_findings = []
+        bounded_content, limit_error = self._apply_body_budget(
+            resource_content,
+            MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
+            MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS,
+        )
+        if limit_error is not None:
+            return self._resource_coverage_limit_result(
+                resource_uri,
+                resource_name,
+                resource_mime_type,
+                limit_error,
+            )
+        resource_content = bounded_content
 
         # Extract text from HTML if needed
         analysis_content = resource_content
@@ -3491,18 +3514,22 @@ class Scanner:
                         )
                     )
                     continue
-                # Check if MIME type is allowed
+                # Check if MIME type is allowed. The normalized list MIME is
+                # the effective type for this early decision, so the result
+                # reports that value rather than the raw advertisement.
+                listed_mime = self._normalize_mime_type(resource.mimeType) or "unknown"
                 if resource.mimeType and not self._resource_mime_is_allowed(
-                    resource.mimeType, allowed_mime_types
+                    listed_mime, allowed_mime_types
                 ):
                     logger.info(
-                        f"Skipping resource '{resource.uri}' with MIME type '{resource.mimeType}'"
+                        f"Skipping resource '{resource.uri}' with MIME type "
+                        f"'{listed_mime}'"
                     )
                     results.append(
                         ResourceScanResult(
                             resource_uri=resource.uri,
                             resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
+                            resource_mime_type=listed_mime,
                             status="skipped",
                             analyzers=[],
                             findings=[],
@@ -3778,17 +3805,22 @@ class Scanner:
                     f"Resource '{resource_uri}' not found on server {server_url}"
                 )
 
-            # Check if MIME type is allowed
+            # Check if MIME type is allowed. The normalized list MIME is
+            # the effective type for this early decision.
+            listed_mime = (
+                self._normalize_mime_type(target_resource.mimeType) or "unknown"
+            )
             if target_resource.mimeType and not self._resource_mime_is_allowed(
-                target_resource.mimeType, allowed_mime_types
+                listed_mime, allowed_mime_types
             ):
                 logger.info(
-                    f"Resource '{resource_uri}' has unsupported MIME type '{target_resource.mimeType}'"
+                    f"Resource '{resource_uri}' has unsupported MIME type "
+                    f"'{listed_mime}'"
                 )
                 return ResourceScanResult(
                     resource_uri=target_resource.uri,
                     resource_name=target_resource.name or "",
-                    resource_mime_type=target_resource.mimeType or "unknown",
+                    resource_mime_type=listed_mime,
                     status="skipped",
                     analyzers=[],
                     findings=[],

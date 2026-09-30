@@ -202,60 +202,130 @@ async def test_read_mime_disallowed_skips_analyzer(config, scan_one):
 
 
 @pytest.mark.asyncio
-async def test_list_mime_disallowed_skips_read(config):
+@pytest.mark.parametrize("scan_one", [False, True])
+async def test_list_mime_disallowed_skips_read(config, scan_one):
     scanner = Scanner(config)
-    resource = _listed_resource("resource://r", "image/png")
+    resource = _listed_resource("resource://r", "IMAGE/PNG; charset=binary", name="pic")
     session = AsyncMock()
     session.list_resources.return_value = SimpleNamespace(resources=[resource])
     patches = _patch_resource_session(scanner, session)
     with patches[0], patches[1], patches[2]:
-        results = await scanner.scan_remote_server_resources(
-            "https://example.com/mcp",
-            analyzers=[AnalyzerEnum.YARA],
-            allowed_mime_types=["text/plain"],
-        )
+        if scan_one:
+            result = await scanner.scan_remote_server_resource(
+                "https://example.com/mcp",
+                "resource://r",
+                analyzers=[AnalyzerEnum.YARA],
+                allowed_mime_types=["text/plain"],
+            )
+            results = [result]
+        else:
+            results = await scanner.scan_remote_server_resources(
+                "https://example.com/mcp",
+                analyzers=[AnalyzerEnum.YARA],
+                allowed_mime_types=["text/plain"],
+            )
     session.read_resource.assert_not_awaited()
     assert results[0].status == "skipped"
+    assert results[0].resource_name == "pic"
+    assert results[0].resource_mime_type == "image/png"
 
 
 @pytest.mark.asyncio
-async def test_read_mime_parameters_are_normalized(config):
+@pytest.mark.parametrize("scan_one", [False, True])
+async def test_read_mime_parameters_are_normalized(config, scan_one):
+    """Omitted list MIME plus an allowed, parameterized read MIME is analyzed."""
     scanner = Scanner(config)
-    resource = _listed_resource("resource://r", None)
+    resource = _listed_resource("resource://r", None, name="page")
     session = AsyncMock()
     session.list_resources.return_value = SimpleNamespace(resources=[resource])
     session.read_resource.return_value = _read_body("hi", "TEXT/HTML; charset=utf-8")
     scanner._analyze_resource = AsyncMock()
     patches = _patch_resource_session(scanner, session)
     with patches[0], patches[1], patches[2]:
-        results = await scanner.scan_remote_server_resources(
-            "https://example.com/mcp",
-            analyzers=[AnalyzerEnum.YARA],
-            allowed_mime_types=["text/html"],
-        )
+        if scan_one:
+            await scanner.scan_remote_server_resource(
+                "https://example.com/mcp",
+                "resource://r",
+                analyzers=[AnalyzerEnum.YARA],
+                allowed_mime_types=["text/html"],
+            )
+        else:
+            await scanner.scan_remote_server_resources(
+                "https://example.com/mcp",
+                analyzers=[AnalyzerEnum.YARA],
+                allowed_mime_types=["text/html"],
+            )
     scanner._analyze_resource.assert_awaited_once()
+    assert scanner._analyze_resource.await_args.args[0] == "hi"
+    assert scanner._analyze_resource.await_args.args[2] == "page"
     assert scanner._analyze_resource.await_args.args[4] == "text/html"
-    assert results
+
+
+class _RecordingAnalyzer:
+    def __init__(self, name):
+        self.name = name
+        self.seen = []
+
+    async def analyze(self, content, context=None):
+        self.seen.append(content)
+        return []
+
+
+def _install_recording_analyzers(scanner):
+    recorders = {
+        "api": _RecordingAnalyzer("API"),
+        "yara": _RecordingAnalyzer("YARA"),
+        "llm": _RecordingAnalyzer("LLM"),
+        "prompt_defense": _RecordingAnalyzer("PromptDefense"),
+        "custom": _RecordingAnalyzer("custom"),
+    }
+    scanner._api_analyzer = recorders["api"]
+    scanner._yara_analyzer = recorders["yara"]
+    scanner._llm_analyzer = recorders["llm"]
+    scanner._prompt_defense_analyzer = recorders["prompt_defense"]
+    scanner._custom_analyzers = [recorders["custom"]]
+    return recorders
+
+
+_ALL_CONTENT_ANALYZERS = [
+    AnalyzerEnum.API,
+    AnalyzerEnum.YARA,
+    AnalyzerEnum.LLM,
+    AnalyzerEnum.PROMPT_DEFENSE,
+]
 
 
 @pytest.mark.asyncio
-async def test_oversized_resource_does_not_reach_analyzers(config, monkeypatch):
+@pytest.mark.parametrize("scan_one", [False, True])
+async def test_oversized_resource_does_not_reach_analyzers(
+    config, monkeypatch, scan_one
+):
     monkeypatch.setattr(MCPScannerConstants, "MAX_RESOURCE_BODY_CHARS", 4)
     scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
     resource = _listed_resource("resource://r", "text/plain", name="big")
     session = AsyncMock()
     session.list_resources.return_value = SimpleNamespace(resources=[resource])
     session.read_resource.return_value = _read_body("0123456789", "text/plain")
-    scanner._analyze_resource = AsyncMock()
     patches = _patch_resource_session(scanner, session)
     with patches[0], patches[1], patches[2]:
-        results = await scanner.scan_remote_server_resources(
-            "https://example.com/mcp",
-            analyzers=[AnalyzerEnum.YARA],
-            allowed_mime_types=["text/plain"],
-        )
-    scanner._analyze_resource.assert_not_awaited()
+        if scan_one:
+            result = await scanner.scan_remote_server_resource(
+                "https://example.com/mcp",
+                "resource://r",
+                analyzers=_ALL_CONTENT_ANALYZERS,
+                allowed_mime_types=["text/plain"],
+            )
+            results = [result]
+        else:
+            results = await scanner.scan_remote_server_resources(
+                "https://example.com/mcp",
+                analyzers=_ALL_CONTENT_ANALYZERS,
+                allowed_mime_types=["text/plain"],
+            )
+    assert all(not recorder.seen for recorder in recorders.values())
     assert results[0].status == "failed"
+    assert results[0].resource_name == "big"
     assert results[0].findings
     assert results[0].findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
     assert "10" in results[0].findings[0].summary
@@ -265,13 +335,80 @@ async def test_oversized_resource_does_not_reach_analyzers(config, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_omitted_list_mime_uses_disallowed_read_mime(config):
+@pytest.mark.parametrize("scan_one", [False, True])
+async def test_omitted_list_mime_uses_disallowed_read_mime(config, scan_one):
     scanner = Scanner(config)
-    resource = _listed_resource("resource://r", None)
+    resource = _listed_resource("resource://r", None, name="page")
     session = AsyncMock()
     session.list_resources.return_value = SimpleNamespace(resources=[resource])
     session.read_resource.return_value = _read_body("<html>", "text/html")
-    scanner._analyze_resource = AsyncMock()
+    recorders = _install_recording_analyzers(scanner)
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        if scan_one:
+            result = await scanner.scan_remote_server_resource(
+                "https://example.com/mcp",
+                "resource://r",
+                analyzers=_ALL_CONTENT_ANALYZERS,
+                allowed_mime_types=["text/plain"],
+            )
+            results = [result]
+        else:
+            results = await scanner.scan_remote_server_resources(
+                "https://example.com/mcp",
+                analyzers=_ALL_CONTENT_ANALYZERS,
+                allowed_mime_types=["text/plain"],
+            )
+    assert all(not recorder.seen for recorder in recorders.values())
+    assert results[0].status == "skipped"
+    assert results[0].resource_name == "page"
+    assert results[0].resource_mime_type == "text/html"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan_one", [False, True])
+async def test_conflicting_read_mime_skips_analyzer(config, scan_one):
+    scanner = Scanner(config)
+    resource = _listed_resource("resource://r", "text/plain", name="mixed")
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.read_resource.return_value = SimpleNamespace(
+        contents=[
+            SimpleNamespace(text="plain", mimeType="text/plain", blob=None),
+            SimpleNamespace(text="html", mimeType="text/html", blob=None),
+        ]
+    )
+    recorders = _install_recording_analyzers(scanner)
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        if scan_one:
+            result = await scanner.scan_remote_server_resource(
+                "https://example.com/mcp",
+                "resource://r",
+                analyzers=_ALL_CONTENT_ANALYZERS,
+                allowed_mime_types=["text/plain"],
+            )
+            results = [result]
+        else:
+            results = await scanner.scan_remote_server_resources(
+                "https://example.com/mcp",
+                analyzers=_ALL_CONTENT_ANALYZERS,
+                allowed_mime_types=["text/plain"],
+            )
+    assert all(not recorder.seen for recorder in recorders.values())
+    assert results[0].status == "skipped"
+    assert results[0].resource_mime_type == "conflicting"
+    assert results[0].resource_name == "mixed"
+
+
+@pytest.mark.asyncio
+async def test_within_limit_resource_keeps_name_and_body(config):
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    resource = _listed_resource("resource://r", "text/plain", name="notes")
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.read_resource.return_value = _read_body("hello notes", "text/plain")
     patches = _patch_resource_session(scanner, session)
     with patches[0], patches[1], patches[2]:
         results = await scanner.scan_remote_server_resources(
@@ -279,9 +416,11 @@ async def test_omitted_list_mime_uses_disallowed_read_mime(config):
             analyzers=[AnalyzerEnum.YARA],
             allowed_mime_types=["text/plain"],
         )
-    scanner._analyze_resource.assert_not_awaited()
-    assert results[0].status == "skipped"
-    assert results[0].resource_mime_type == "text/html"
+    assert results[0].status == "completed"
+    assert results[0].resource_name == "notes"
+    assert results[0].resource_mime_type == "text/plain"
+    assert results[0].resource_text == "hello notes"
+    assert recorders["yara"].seen == ["hello notes"]
 
 
 @pytest.mark.asyncio

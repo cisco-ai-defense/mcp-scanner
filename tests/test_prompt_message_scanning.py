@@ -224,10 +224,45 @@ def _patch_prompt_session(scanner, session):
     )
 
 
+class _RecordingAnalyzer:
+    def __init__(self, name):
+        self.name = name
+        self.seen = []
+
+    async def analyze(self, content, context=None):
+        self.seen.append(content)
+        return []
+
+
+def _install_recording_analyzers(scanner):
+    recorders = {
+        "api": _RecordingAnalyzer("API"),
+        "yara": _RecordingAnalyzer("YARA"),
+        "llm": _RecordingAnalyzer("LLM"),
+        "prompt_defense": _RecordingAnalyzer("PromptDefense"),
+        "custom": _RecordingAnalyzer("custom"),
+    }
+    scanner._api_analyzer = recorders["api"]
+    scanner._yara_analyzer = recorders["yara"]
+    scanner._llm_analyzer = recorders["llm"]
+    scanner._prompt_defense_analyzer = recorders["prompt_defense"]
+    scanner._custom_analyzers = [recorders["custom"]]
+    return recorders
+
+
+_ALL_CONTENT_ANALYZERS = [
+    AnalyzerEnum.API,
+    AnalyzerEnum.YARA,
+    AnalyzerEnum.LLM,
+    AnalyzerEnum.PROMPT_DEFENSE,
+]
+
+
 @pytest.mark.asyncio
 async def test_oversized_prompt_does_not_reach_analyzers(config, monkeypatch):
     monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPT_BODY_CHARS", 4)
     scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
     prompt = MCPPrompt(name="big", description="d", arguments=[])
     session = AsyncMock()
     session.list_prompts.return_value = SimpleNamespace(prompts=[prompt])
@@ -239,15 +274,15 @@ async def test_oversized_prompt_does_not_reach_analyzers(config, monkeypatch):
             )
         ]
     )
-    scanner._analyze_prompt = AsyncMock()
     patches = _patch_prompt_session(scanner, session)
     with patches[0], patches[1], patches[2]:
         results = await scanner.scan_remote_server_prompts(
             "https://example.com/mcp",
-            analyzers=[AnalyzerEnum.YARA],
+            analyzers=_ALL_CONTENT_ANALYZERS,
         )
-    scanner._analyze_prompt.assert_not_awaited()
+    assert all(not recorder.seen for recorder in recorders.values())
     assert results[0].status == "failed"
+    assert results[0].prompt_name == "big"
     assert results[0].findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
     assert len(results[0].prompt_messages_text) <= 4
     assert "0123456789" not in results[0].prompt_messages_text
@@ -286,6 +321,82 @@ async def test_prompt_count_budget_stops_further_fetches(config, monkeypatch):
     assert results[1].status == "failed"
     assert results[1].prompt_name == "second"
     assert results[1].findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+
+
+@pytest.mark.asyncio
+async def test_prompt_count_budget_does_not_schedule_every_prompt(
+    config, monkeypatch
+):
+    """Only prompts inside the count budget become analysis tasks."""
+    import asyncio
+
+    monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPTS_PER_SCAN", 1)
+    scanner = Scanner(config)
+    prompts = [
+        MCPPrompt(name="first", description="d", arguments=[]),
+        MCPPrompt(name="second", description="d", arguments=[]),
+        MCPPrompt(name="third", description="d", arguments=[]),
+    ]
+    session = AsyncMock()
+    session.list_prompts.return_value = SimpleNamespace(prompts=prompts)
+    session.get_prompt.return_value = SimpleNamespace(
+        messages=[
+            PromptMessage(
+                role="user",
+                content=TextContent(type="text", text="ok"),
+            )
+        ]
+    )
+    scheduled = []
+    real_gather = asyncio.gather
+
+    async def counting_gather(*args, **kwargs):
+        scheduled.append(args)
+        return await real_gather(*args, **kwargs)
+
+    patches = _patch_prompt_session(scanner, session)
+    with patches[0], patches[1], patches[2], patch(
+        "mcpscanner.core.scanner.asyncio.gather", counting_gather
+    ):
+        results = await scanner.scan_remote_server_prompts(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+        )
+    assert session.get_prompt.await_count == 1
+    assert len(scheduled) == 1
+    assert len(scheduled[0]) == 1
+    assert [result.prompt_name for result in results] == ["first", "second", "third"]
+    assert results[0].status == "completed"
+    assert results[1].status == "failed"
+    assert results[2].status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_within_limit_prompt_keeps_name_and_body(config):
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    prompt = MCPPrompt(name="notes", description="a note", arguments=[])
+    session = AsyncMock()
+    session.list_prompts.return_value = SimpleNamespace(prompts=[prompt])
+    session.get_prompt.return_value = SimpleNamespace(
+        messages=[
+            PromptMessage(
+                role="user",
+                content=TextContent(type="text", text="hello notes"),
+            )
+        ]
+    )
+    patches = _patch_prompt_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_prompts(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+        )
+    assert results[0].status == "completed"
+    assert results[0].prompt_name == "notes"
+    assert "hello notes" in results[0].prompt_messages_text
+    assert recorders["yara"].seen
+    assert "hello notes" in recorders["yara"].seen[0]
 
 
 @pytest.mark.asyncio
