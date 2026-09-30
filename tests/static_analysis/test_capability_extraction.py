@@ -334,19 +334,18 @@ end
 
 
 # ``expected_names`` is the SET of FunctionContext.name values we want to see
-# returned — class-qualified for languages that scope methods inside classes
-# (Java/C#/PHP/Rust impl), bare for module-level functions (Python/JS/Go
-# named handler/Kotlin trailing lambda/Ruby comment annotation).
+# returned — the MCP-registered tool name (explicit ``name``/``Name`` when
+# present, otherwise the bare handler symbol without class qualification).
 MIXED_FIXTURES = [
     pytest.param(MIXED_PYTHON, "mixed.py", {"add"}, id="python"),
     pytest.param(MIXED_JAVASCRIPT, "mixed.js", {"add"}, id="javascript"),
     pytest.param(MIXED_TYPESCRIPT, "mixed.ts", {"add"}, id="typescript"),
     pytest.param(MIXED_GO, "mixed.go", {"add"}, id="go"),
-    pytest.param(MIXED_JAVA, "Mixed.java", {"CalcService.add"}, id="java"),
+    pytest.param(MIXED_JAVA, "Mixed.java", {"add"}, id="java"),
     pytest.param(MIXED_KOTLIN, "mixed.kt", {"add"}, id="kotlin"),
-    pytest.param(MIXED_CSHARP, "Mixed.cs", {"CalcTools.Add"}, id="csharp"),
-    pytest.param(MIXED_RUST, "mixed.rs", {"Calculator.add"}, id="rust"),
-    pytest.param(MIXED_PHP, "mixed.php", {"Calc.add"}, id="php"),
+    pytest.param(MIXED_CSHARP, "Mixed.cs", {"Add"}, id="csharp"),
+    pytest.param(MIXED_RUST, "mixed.rs", {"add"}, id="rust"),
+    pytest.param(MIXED_PHP, "mixed.php", {"add"}, id="php"),
     pytest.param(MIXED_RUBY, "mixed.rb", {"add"}, id="ruby"),
 ]
 
@@ -545,11 +544,7 @@ def test_resource_template_classifies_as_resource_with_template_tag() -> None:
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1, [c.name for c in caps]
     handler = caps[0]
-    # Pass 1's registered-name merge means the surfaced label combines
-    # the registered MCP name (``user-template``) with the symbol name
-    # (``readUserResource``). Both must be present.
-    assert "readUserResource" in handler.name, handler.name
-    assert "user-template" in handler.name, handler.name
+    assert handler.name == "user-template", handler.name
     tags = handler.decorator_types
     # Template-aware tag must include both the registration kind and the
     # ``.template`` subtype so reporting can distinguish templates from
@@ -589,9 +584,7 @@ def test_multi_capability_registration_yields_one_context_per_kind() -> None:
         }
     )
     assert capability_kinds == ["prompt", "tool"], capability_kinds
-    # Both contexts must point at the same handler. Pass 1 merges the
-    # registered MCP name (``x``) with the symbol name (``shared``).
-    assert all("shared" in c.name for c in caps), [c.name for c in caps]
+    assert all(c.name == "x" for c in caps), [c.name for c in caps]
     assert len(caps) == 2, len(caps)
 
 
@@ -743,9 +736,7 @@ def test_function_index_caches_per_root() -> None:
     )
     analyzer = NativeAnalyzer(src, "indexed.ts")
     caps = analyzer.extract_mcp_capability_contexts()
-    assert {c.name for c in caps} == {"add (add)", "sub (sub)"} or {
-        c.name for c in caps
-    } == {"add", "sub"}, [c.name for c in caps]
+    assert {c.name for c in caps} == {"add", "sub"}, [c.name for c in caps]
     # Touch the index cache via a re-extraction; the cache must persist.
     cache = getattr(analyzer, "_func_index_cache", None)
     assert cache is not None and len(cache) >= 1
@@ -766,9 +757,91 @@ public class Calc {
 """
     analyzer = NativeAnalyzer(src, "Calc.java")
     caps = analyzer.extract_mcp_capability_contexts()
-    assert {c.name for c in caps} == {"Calc.add"}, [c.name for c in caps]
+    assert {c.name for c in caps} == {"add"}, [c.name for c in caps]
     cache = getattr(analyzer, "_annotation_index_cache", None)
     assert cache is not None and any(cache.values()), cache
+
+
+# ---------------------------------------------------------------------------
+# Destructured-parameter taint flows:
+# TypeScript/JavaScript MCP handlers almost always receive their arguments
+# as a destructured object (``async ({ command }) => ...``). The bound
+# identifiers must be expanded so parameter -> sink taint flows are tracked;
+# otherwise a tool that pipes its argument into ``execSync``/``eval`` looks
+# SAFE while the named-parameter equivalents (Go/Rust) correctly flag.
+# ---------------------------------------------------------------------------
+
+DESTRUCTURED_SHELL_TS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Run a shell command" },
+  async ({ command }: { command: string }) => {
+    const output = execSync(command).toString();
+    return { content: [{ type: "text", text: output }] };
+  }
+);
+"""
+
+DESTRUCTURED_EVAL_JS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.tool("evaluate_expression", { expr: {} }, async ({ expr }) => {
+  const result = eval(expr);
+  return { content: [{ type: "text", text: String(result) }] };
+});
+"""
+
+RENAMED_DESTRUCTURE_TS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.tool("run", { cmd: {} }, async ({ cmd: shellCmd, ...rest }) => {
+  return { content: [{ type: "text", text: execSync(shellCmd).toString() }] };
+});
+"""
+
+
+GO_REGISTERED_SHELL_TOOL = """\
+package main
+
+import (
+    "context"
+    "github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+type ShellInput struct {
+    Command string `json:"command"`
+}
+
+type ShellOutput struct {
+    Result string `json:"result"`
+}
+
+func executeShellCommand(ctx context.Context, req *mcp.CallToolRequest, in ShellInput) (*mcp.CallToolResult, ShellOutput, error) {
+    return nil, ShellOutput{Result: in.Command}, nil
+}
+
+func main() {
+    server := mcp.NewServer(&mcp.Implementation{Name: "demo", Version: "v1.0.0"}, nil)
+    mcp.AddTool(server, &mcp.Tool{Name: "execute_shell_command", Description: "Execute shell command"}, executeShellCommand)
+}
+"""
+
+
+def test_go_tool_struct_name_overrides_camelcase_handler() -> None:
+    """``mcp.Tool{Name: \"execute_shell_command\"}`` must win over handler
+    symbol ``executeShellCommand``."""
+    analyzer = NativeAnalyzer(GO_REGISTERED_SHELL_TOOL, "shell.go")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].name == "execute_shell_command"
 
 
 DESCRIPTOR_OBJECT_TOOL = """\
@@ -874,6 +947,44 @@ server.tool(
 );
 """
 
+NESTED_DECOY_HANDLER_BEFORE_REAL = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.tool(
+  "real",
+  { nested: { handler: () => "safe" } },
+  async ({ cmd }) => execSync(cmd),
+);
+"""
+
+NESTED_DECOY_HANDLER_AFTER_REAL = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.tool(
+  "real",
+  async ({ cmd }) => execSync(cmd),
+  { nested: { handler: () => "safe" } },
+);
+"""
+
+DIRECT_EXECUTE_IN_DESCRIPTOR = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+server.registerTool("run", {
+  description: "Run",
+  execute: async ({ cmd }) => execSync(cmd),
+});
+"""
+
 
 def test_fastmcp_addtool_descriptor_keeps_inline_execute() -> None:
     """FastMCP-TS ``addTool({ name, execute })`` must resolve the tool and
@@ -909,3 +1020,423 @@ def test_two_inline_handlers_pick_last() -> None:
     literals = cap.string_literals or []
     assert any("right-handler" in lit for lit in literals), literals
     assert not any("wrong-handler" in lit for lit in literals), literals
+
+
+def _flow_for(ctx, param_name):
+    for flow in ctx.parameter_flows:
+        if flow.get("parameter_name") == param_name:
+            return flow
+    return None
+
+
+def test_ts_destructured_param_taints_command_sink() -> None:
+    """A TS tool that runs a destructured ``{ command }`` arg through
+    ``execSync`` must record the parameter -> sink flow."""
+    analyzer = NativeAnalyzer(DESTRUCTURED_SHELL_TS, "shell.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    param_names = {p.get("name") for p in ctx.parameters}
+    assert "command" in param_names, param_names
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert "execSync" in flow["reaches_calls"], flow
+    assert flow["reaches_external"] is True, flow
+
+
+def test_js_destructured_param_taints_eval_sink() -> None:
+    """A JS tool that evaluates a destructured ``{ expr }`` arg must record
+    the parameter -> eval sink flow."""
+    analyzer = NativeAnalyzer(DESTRUCTURED_EVAL_JS, "eval.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_eval_exec is True
+    param_names = {p.get("name") for p in ctx.parameters}
+    assert "expr" in param_names, param_names
+    flow = _flow_for(ctx, "expr")
+    assert flow is not None, ctx.parameter_flows
+    assert "eval" in flow["reaches_calls"], flow
+    assert flow["reaches_external"] is True, flow
+
+
+def test_ts_renamed_and_rest_destructure_binds_value_identifier() -> None:
+    """``{ cmd: shellCmd, ...rest }`` binds ``shellCmd`` (the value side) and
+    ``rest``, and the renamed binding must carry the taint flow."""
+    analyzer = NativeAnalyzer(RENAMED_DESTRUCTURE_TS, "renamed.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    param_names = {p.get("name") for p in ctx.parameters}
+    assert "shellCmd" in param_names, param_names
+    assert "rest" in param_names, param_names
+    # The property *key* ``cmd`` is not a binding and must not appear.
+    assert "cmd" not in param_names, param_names
+    flow = _flow_for(ctx, "shellCmd")
+    assert flow is not None, ctx.parameter_flows
+    assert "execSync" in flow["reaches_calls"], flow
+
+
+# ---------------------------------------------------------------------------
+# Delegated sinks + aliased sinks (Example 9):
+# A handler that forwards its argument to a same-file helper which runs the
+# sink (optionally through a ``promisify(exec)`` alias) must still surface the
+# subprocess behavior on the tool, not appear SAFE.
+# ---------------------------------------------------------------------------
+
+# Mirrors the real fixture: alias ``execAsync = promisify(exec)`` invoked from
+# a static class method that the tool handler delegates to.
+DELEGATED_ALIASED_SHELL_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const execAsync = promisify(exec);
+const server = new McpServer({ name: "ex9", version: "1.0.0" });
+
+class ShellExecutor {
+  static async executeCommand(command: string) {
+    const result = await execAsync(command, { shell: true });
+    return { stdout: result.stdout };
+  }
+}
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Execute shell command with full shell capabilities." },
+  async ({ command }) => {
+    const result = await ShellExecutor.executeCommand(command);
+    return { content: [{ type: "text", text: result.stdout }] };
+  }
+);
+"""
+
+# Same shape but with a clean alias name (``run``) and helper name (``go``)
+# that share NO substring with the SDK sink, so detection cannot rely on a
+# coincidental ``"exec" in "executeCommand"`` match.
+DELEGATED_CLEAN_NAMES_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const run = promisify(exec);
+const server = new McpServer({ name: "ex9", version: "1.0.0" });
+
+class Worker {
+  static async go(input: string) {
+    const result = await run(input, { shell: true });
+    return { stdout: result.stdout };
+  }
+}
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Execute shell command." },
+  async ({ command }) => {
+    const result = await Worker.go(command);
+    return { content: [{ type: "text", text: result.stdout }] };
+  }
+);
+"""
+
+RUST_DELEGATED_SHELL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct ShellExecutor;
+
+impl ShellExecutor {
+    fn execute_command(command: String) -> String {
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+}
+
+#[derive(Clone)]
+struct Server;
+
+#[tool_router]
+impl Server {
+    #[tool(description = "Execute shell command with full shell capabilities.")]
+    fn execute_shell_command(&self, command: String) -> String {
+        ShellExecutor::execute_command(command)
+    }
+}
+"""
+
+
+def test_promisify_alias_detected_as_command_sink() -> None:
+    """``const run = promisify(exec)`` must mark the helper that calls
+    ``run(...)`` as a subprocess sink, even with a clean alias name."""
+    analyzer = NativeAnalyzer(DELEGATED_CLEAN_NAMES_TS, "alias.ts")
+    # The helper method itself must be recognized as running a subprocess.
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    helper = funcs.get("Worker.go")
+    assert helper is not None, list(funcs)
+    assert helper.has_subprocess_calls is True
+
+
+def test_handler_inherits_delegated_aliased_shell_sink() -> None:
+    """The real Example 9 shape: handler -> static method -> ``execAsync``
+    alias. The tool must surface the subprocess behavior and the parameter
+    flow must reach an external sink."""
+    analyzer = NativeAnalyzer(DELEGATED_ALIASED_SHELL_TS, "ex9.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "ShellExecutor.executeCommand" in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+    summary_flow = (ctx.dataflow_summary or {}).get("param_flows", {}).get("command")
+    assert summary_flow is not None, ctx.dataflow_summary
+    assert summary_flow["reaches_external"] is True, summary_flow
+
+
+def test_handler_inherits_delegated_sink_with_clean_names() -> None:
+    """Detection must not rely on the helper/alias names coincidentally
+    containing the SDK sink name."""
+    analyzer = NativeAnalyzer(DELEGATED_CLEAN_NAMES_TS, "clean.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True, "delegated aliased sink not propagated"
+    assert "Worker.go" in (ctx.reachable_functions or []), ctx.reachable_functions
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+def test_rust_handler_inherits_delegated_shell_sink() -> None:
+    """Rust rmcp tool -> helper with ``Command::new(\"sh\").arg(\"-c\")`` must
+    surface subprocess behavior on the MCP handler."""
+    analyzer = NativeAnalyzer(RUST_DELEGATED_SHELL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True, "delegated shell sink not propagated"
+    assert "ShellExecutor.execute_command" in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
+    assert ctx.docstring == "Execute shell command with full shell capabilities."
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+PYTHON_DELEGATED_SHELL = """\
+from mcp import FastMCP
+import subprocess
+
+app = FastMCP("unauthorized-code-execution-service-9")
+
+
+class ShellExecutor:
+    @staticmethod
+    def execute_command(command: str) -> dict:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=10
+        )
+        return {"returncode": result.returncode, "stdout": result.stdout}
+
+
+@app.tool()
+def execute_shell_command(command: str) -> str:
+    \"\"\"Execute shell command with full shell capabilities.\"\"\"
+    executor = ShellExecutor()
+    result = executor.execute_command(command)
+    return f"Command executed: return code {result.get('returncode', 'unknown')}"
+"""
+
+
+def test_python_handler_inherits_delegated_shell_sink() -> None:
+    """Python FastMCP tool -> ``ShellExecutor.execute_command`` with
+    ``subprocess.run(..., shell=True)`` must surface subprocess behavior."""
+    analyzer = NativeAnalyzer(PYTHON_DELEGATED_SHELL, "shell.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.name == "execute_shell_command"
+    assert ctx.has_subprocess_calls is True, "delegated shell sink not propagated"
+    assert "ShellExecutor.execute_command" in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+SHADOWED_ALIAS_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const run = promisify(exec);
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "safe_echo",
+  { description: "Echo input without shell execution." },
+  async ({ run }) => {
+    // parameter ``run`` shadows the module-level promisify(exec) alias
+    const out = await run(run);
+    return { content: [{ type: "text", text: out.stdout ?? "" }] };
+  }
+);
+"""
+
+LOCAL_ALIAS_IN_HANDLER_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Run shell command in handler scope." },
+  async ({ command }) => {
+    const run = promisify(exec);
+    await run(command);
+    return { content: [{ type: "text", text: "done" }] };
+  }
+);
+"""
+
+NESTED_SCOPE_SHADOW_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const run = promisify(exec);
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Run shell command." },
+  async ({ command }) => {
+    function helper() {
+      const run = "local-only";
+      return run;
+    }
+    helper();
+    await run(command);
+    return { content: [{ type: "text", text: "done" }] };
+  }
+);
+"""
+
+AMBIGUOUS_DELEGATE_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const run = promisify(exec);
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+class SafeWorker {
+  static async executeCommand(input: string) {
+    return { stdout: input };
+  }
+}
+
+class ShellExecutor {
+  static async executeCommand(input: string) {
+    const result = await run(input, { shell: true });
+    return { stdout: result.stdout };
+  }
+}
+
+server.registerTool(
+  "execute_shell_command",
+  { description: "Run shell command." },
+  async ({ command }) => {
+    const result = await ShellExecutor.executeCommand(command);
+    return { content: [{ type: "text", text: result.stdout }] };
+  }
+);
+"""
+
+
+def test_shadowed_parameter_does_not_inherit_module_alias() -> None:
+    """A parameter named like a module alias must not inherit that alias when
+    invoked as the callee of a call expression."""
+    analyzer = NativeAnalyzer(SHADOWED_ALIAS_TS, "shadow.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is False
+
+
+def test_local_sink_alias_in_handler_is_detected() -> None:
+    """A sink alias declared inside the handler (``const run = promisify(exec)``
+    then ``run(cmd)``) must still classify as a subprocess sink."""
+    analyzer = NativeAnalyzer(LOCAL_ALIAS_IN_HANDLER_TS, "local_alias.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+def test_nested_scope_locals_do_not_shadow_outer_alias() -> None:
+    """A same-named local inside a nested helper must not suppress the module
+    alias visible to the enclosing tool handler."""
+    analyzer = NativeAnalyzer(NESTED_SCOPE_SHADOW_TS, "nested_scope.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+def test_qualified_delegate_resolves_correct_class_method() -> None:
+    """When two classes share a method name, delegation must resolve the
+    qualified ``Class.method`` target, not the first bare leaf match."""
+    analyzer = NativeAnalyzer(AMBIGUOUS_DELEGATE_TS, "ambig.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "ShellExecutor.executeCommand" in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
+    assert "SafeWorker.executeCommand" not in (ctx.reachable_functions or []), (
+        ctx.reachable_functions
+    )
+
+
+def test_nested_decoy_handler_does_not_hide_positional_handler() -> None:
+    """Nested schema decoys must not displace the real positional handler."""
+    for source in (NESTED_DECOY_HANDLER_BEFORE_REAL, NESTED_DECOY_HANDLER_AFTER_REAL):
+        analyzer = NativeAnalyzer(source, "decoy.ts")
+        caps = analyzer.extract_mcp_capability_contexts()
+        assert len(caps) == 1, [c.name for c in caps]
+        cap = caps[0]
+        assert cap.name == "real", cap.name
+        call_names = {c.get("name") for c in cap.function_calls or []}
+        assert "execSync" in call_names, call_names
+        assert cap.has_subprocess_calls is True, cap.has_subprocess_calls
+
+
+def test_direct_execute_field_in_descriptor_object() -> None:
+    """Top-level ``execute`` on a descriptor object must resolve inline handlers."""
+    analyzer = NativeAnalyzer(DIRECT_EXECUTE_IN_DESCRIPTOR, "descriptor.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.name for c in caps]
+    cap = caps[0]
+    assert cap.name == "run", cap.name
+    call_names = {c.get("name") for c in cap.function_calls or []}
+    assert "execSync" in call_names, call_names

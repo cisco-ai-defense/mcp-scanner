@@ -158,3 +158,68 @@ class TestResponseValidatorSeverityFromThreatMapping:
 
         # DATA EXFILTRATION severity is HIGH in threats.py BEHAVIORAL_THREATS
         assert finding.severity == "HIGH"
+
+
+class TestFindingClassContract:
+    """The alignment prompt declares which class a finding belongs to.
+
+    Reachability findings (an MCP parameter reaching a shell) must stay
+    distinguishable from intent findings (a deliberately hidden backdoor),
+    so a consumer can treat an honest-but-dangerous tool differently from
+    a malicious one.
+    """
+
+    def _make_func_context(self):
+        ctx = MagicMock()
+        ctx.name = "test_func"
+        ctx.line_number = 10
+        ctx.decorator_types = ["tool"]
+        ctx.parameter_flows = {}
+        return ctx
+
+    @pytest.mark.parametrize(
+        "declared,expected",
+        [
+            ("MALICIOUS_BEHAVIOR", "MALICIOUS_BEHAVIOR"),
+            ("CAPABILITY_RISK", "CAPABILITY_RISK"),
+            ("DOCUMENTATION_MISMATCH", "DOCUMENTATION_MISMATCH"),
+            ("capability risk", "CAPABILITY_RISK"),
+            ("Malicious-Behavior", "MALICIOUS_BEHAVIOR"),
+        ],
+    )
+    def test_declared_classes_are_preserved(self, declared, expected):
+        finding = AlignmentResponseValidator().create_security_finding(
+            {
+                "threat_name": "INJECTION ATTACKS",
+                "summary": "x",
+                "finding_class": declared,
+            },
+            self._make_func_context(),
+        )
+        assert finding.details["finding_class"] == expected
+
+    @pytest.mark.parametrize("bogus", [None, "", "SAFE", "TOTALLY_FINE", 42, {}])
+    def test_unknown_or_missing_class_is_unspecified(self, bogus):
+        """A missing declaration must not be upgraded into a claim of intent."""
+        analysis = {"threat_name": "INJECTION ATTACKS", "summary": "x"}
+        if bogus is not None:
+            analysis["finding_class"] = bogus
+
+        finding = AlignmentResponseValidator().create_security_finding(
+            analysis, self._make_func_context()
+        )
+        assert finding.details["finding_class"] == "UNSPECIFIED"
+
+    def test_finding_class_does_not_affect_severity(self):
+        """Severity stays owned by ThreatMapping, not by the model's class."""
+        ctx = self._make_func_context()
+        validator = AlignmentResponseValidator()
+        base = {"threat_name": "DATA EXFILTRATION", "summary": "x"}
+
+        malicious = validator.create_security_finding(
+            {**base, "finding_class": "MALICIOUS_BEHAVIOR"}, ctx
+        )
+        capability = validator.create_security_finding(
+            {**base, "finding_class": "CAPABILITY_RISK"}, ctx
+        )
+        assert malicious.severity == capability.severity == "HIGH"
