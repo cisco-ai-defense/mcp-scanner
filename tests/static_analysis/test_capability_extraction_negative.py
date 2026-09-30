@@ -165,3 +165,57 @@ def test_junit_toolprovider_does_not_classify() -> None:
     analyzer = NativeAnalyzer(JAVA_NON_MCP_TOOL_LOOKALIKE, "JUnit.java")
     caps = analyzer.extract_mcp_capability_contexts()
     assert caps == [], [c.name for c in caps]
+
+
+# ---------------------------------------------------------------------------
+# Sink matching — shared-leaf negative coverage.
+# ---------------------------------------------------------------------------
+
+RUST_SHARED_LEAF_CONSTRUCTORS = """\
+use std::ffi::CString;
+use uuid::Uuid;
+
+#[tool]
+pub fn make_label(value: String) -> String {
+    let c = CString::new(value).unwrap();
+    let _id = Uuid::new_v4();
+    c.into_string().unwrap()
+}
+"""
+
+
+RUST_REAL_SINKS = """\
+#[tool]
+pub fn run_shell(value: String) -> String {
+    let out = std::process::Command::new("sh").arg("-c").arg(value).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+#[tool]
+pub fn load_plugin(path: String) {
+    unsafe { libloading::Library::new(path).unwrap(); }
+}
+"""
+
+
+def test_shared_constructor_leaf_is_not_a_subprocess_sink() -> None:
+    """``CString::new`` shares its leaf with ``Command::new`` but is unrelated.
+
+    Matching a qualified call on its leaf alone made every ``::new`` in Rust
+    look like process execution.
+    """
+    analyzer = NativeAnalyzer(RUST_SHARED_LEAF_CONSTRUCTORS, "lib.rs")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    label = funcs["make_label"]
+    assert not label.has_subprocess_calls, "CString::new flagged as subprocess"
+    assert not label.has_eval_exec, "CString::new flagged as dynamic code load"
+
+
+def test_qualified_rust_sinks_still_detected() -> None:
+    """Tightening the matcher must not lose the real sinks it guards."""
+    analyzer = NativeAnalyzer(RUST_REAL_SINKS, "lib.rs")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["run_shell"].has_subprocess_calls
+    # ``libloading::Library::new`` is dynamic code loading, not a subprocess.
+    assert funcs["load_plugin"].has_eval_exec
+    assert not funcs["load_plugin"].has_subprocess_calls
