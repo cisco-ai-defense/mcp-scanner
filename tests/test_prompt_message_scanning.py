@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from mcp.types import Prompt as MCPPrompt
-from mcp.types import PromptMessage, TextContent
+from mcp.types import PromptArgument, PromptMessage, TextContent
+
+from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 
 from mcpscanner import Config, Scanner
 from mcpscanner.core.models import AnalyzerEnum
@@ -74,6 +76,51 @@ async def test_analyze_prompt_passes_messages_to_llm(config):
     assert "email john@example.com" in content
     assert "Messages:" in content
     assert context["prompt_name"] == "pii_test_prompt"
+
+
+@pytest.mark.asyncio
+async def test_analyze_prompt_places_arguments_before_messages(config):
+    """Generated argument JSON must not follow Messages:.
+
+    The body extractor returns everything after Messages:. Putting
+    Arguments: after that marker made schema JSON look like message text.
+    Messages themselves may contain the literal sequence Arguments:.
+    """
+    scanner = Scanner(config)
+    prompt = MCPPrompt(
+        name="draft",
+        description="draft a note",
+        arguments=[PromptArgument(name="topic", description="subject", required=True)],
+    )
+    captured = []
+
+    class FakeLLM:
+        async def analyze(self, content, context=None):
+            captured.append(content)
+            return []
+
+    scanner._llm_analyzer = FakeLLM()
+    message = "remember Arguments: this stays in the message"
+    await scanner._analyze_prompt(
+        prompt,
+        [AnalyzerEnum.LLM],
+        prompt_messages_text=message,
+    )
+
+    content = captured[0]
+    assert content.index("Arguments:") < content.index("Messages:")
+    body = LLMAnalyzer._extract_mcp_entity_body(content, "prompt")
+    assert body == message
+    assert '"name": "topic"' not in body
+
+
+def test_prompt_without_messages_has_empty_body():
+    content = (
+        "Prompt Name: draft\n"
+        "Description: draft a note\n"
+        'Arguments: [\n  {\n    "name": "topic"\n  }\n]\n'
+    )
+    assert LLMAnalyzer._extract_mcp_entity_body(content, "prompt") == ""
 
 
 @pytest.mark.asyncio

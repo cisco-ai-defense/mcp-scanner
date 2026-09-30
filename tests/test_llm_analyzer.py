@@ -248,6 +248,46 @@ class TestLLMAnalyzer:
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
+    async def test_metadata_only_prompt_stays_analyzable(self, mock_completion):
+        """A prompt with no rendered messages is still sent for analysis.
+
+        Its body is empty, so argument schema is not presented as message
+        text, while the description remains in metadata.
+        """
+        config = Config(llm_provider_api_key="test-api-key")
+        analyzer = LLMAnalyzer(config)
+
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = json.dumps(
+            {
+                "threat_analysis": {
+                    "malicious_content_detected": False,
+                    "primary_threats": [],
+                }
+            }
+        )
+        mock_response.choices[0].finish_reason = "stop"
+        mock_completion.return_value = mock_response
+
+        content = (
+            "Prompt Name: draft\n"
+            "Description: writes a note\n"
+            'Arguments: [{"name": "topic"}]\n'
+        )
+        findings = await analyzer.analyze(
+            content, {"prompt_name": "draft", "entity_type": "prompt"}
+        )
+
+        assert findings == []
+        user = mock_completion.call_args[1]["messages"][1]["content"]
+        body = user.split("Body:\n", 1)[1].split("Parameters:\n", 1)[0]
+        assert body.strip() == ""
+        assert "writes a note" in user
+        assert "topic" in user.split("Body:\n", 1)[0]
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_analyze_empty_llm_response_infrastructure_finding(
         self, mock_completion
     ):

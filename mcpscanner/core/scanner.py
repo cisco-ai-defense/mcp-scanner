@@ -1330,14 +1330,18 @@ class Scanner:
             # Run LLM analysis on list metadata + rendered prompt messages
             try:
                 # Format content for comprehensive analysis
+                # Arguments are generated metadata. They must precede
+                # Messages: so a later body slice cannot swallow them.
+                # Splitting the body on the literal "Arguments:" is unsafe:
+                # rendered prompt messages may contain that sequence.
                 analysis_content = f"Prompt Name: {name}\n"
                 analysis_content += f"Description: {description}\n"
-                if prompt_messages_text:
-                    analysis_content += f"Messages:\n{prompt_messages_text}\n"
                 if "arguments" in prompt_data and prompt_data["arguments"]:
                     analysis_content += (
                         f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
                     )
+                if prompt_messages_text:
+                    analysis_content += f"Messages:\n{prompt_messages_text}\n"
 
                 llm_context = {
                     "prompt_name": name,

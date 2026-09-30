@@ -266,7 +266,10 @@ class LLMAnalyzer(BaseAnalyzer):
             return content.strip()
         idx = content.find(marker)
         if idx == -1:
-            return content.strip()
+            # No rendered messages or resource content. The formatted
+            # string is metadata only; returning it would present name,
+            # description, and arguments as the body.
+            return ""
         return content[idx + len(marker) :].strip()
 
     def _parse_response(self, response_content: str) -> Dict[str, Any]:
