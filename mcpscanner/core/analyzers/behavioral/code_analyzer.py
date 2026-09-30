@@ -47,6 +47,7 @@ from ...static_analysis.interprocedural.treesitter_call_graph import (
 )
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
+from .alignment.alignment_response_validator import normalize_finding_class
 
 
 def _context_dedupe_key(ctx: FunctionContext) -> tuple[Any, ...]:
@@ -1152,7 +1153,12 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     "security_implications": analysis.get("security_implications"),
                     "confidence": analysis.get("confidence"),
                     "dataflow_evidence": analysis.get("dataflow_evidence"),
-                    # Include threat/vulnerability classification from second alignment layer
+                    # Reachability vs intent. Distinct from
+                    # threat_vulnerability_classification, which is the
+                    # second-pass label and does not carry this value.
+                    "finding_class": normalize_finding_class(
+                        analysis.get("finding_class")
+                    ),
                     "threat_vulnerability_classification": analysis.get(
                         "threat_vulnerability_classification"
                     ),

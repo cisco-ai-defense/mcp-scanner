@@ -42,6 +42,7 @@ from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
+from .alignment.alignment_response_validator import normalize_finding_class
 
 
 # Source extensions we treat as JS/TS. Keep in sync with
@@ -236,11 +237,20 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         )
 
         findings: List[SecurityFinding] = []
-        for ctx in contexts:
-            result = await self.alignment_orchestrator.check_alignment(ctx)
-            if result is None:
-                continue
-            analysis, returned_ctx = result
+        use_batching = context.get("use_batching", True)
+        batch_size = context.get("batch_size", 5)
+        pairs: List[tuple] = []
+        if use_batching and len(contexts) > 1:
+            batch_results = await self.alignment_orchestrator.check_alignment_batch(
+                contexts, batch_size=batch_size
+            )
+            pairs = list(batch_results or [])
+        else:
+            for ctx in contexts:
+                result = await self.alignment_orchestrator.check_alignment(ctx)
+                if result is not None:
+                    pairs.append(result)
+        for analysis, returned_ctx in pairs:
             finding = self._create_security_finding(analysis, returned_ctx, file_path)
             if finding is not None:
                 findings.append(finding)
@@ -310,6 +320,9 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                     "security_implications": analysis.get("security_implications"),
                     "confidence": analysis.get("confidence"),
                     "dataflow_evidence": analysis.get("dataflow_evidence"),
+                    "finding_class": normalize_finding_class(
+                        analysis.get("finding_class")
+                    ),
                     "threat_vulnerability_classification": analysis.get(
                         "threat_vulnerability_classification"
                     ),
