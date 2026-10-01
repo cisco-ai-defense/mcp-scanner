@@ -687,7 +687,7 @@ def display_resource_results_table(
     for result in results:
         status = result.get("status", "unknown")
 
-        if status == "completed":
+        if status in {"completed", "partial"}:
             status_icon = _safety_status_icon(result.get("is_safe"))
         elif status == "skipped":
             status_icon = "⏭️"
@@ -699,7 +699,9 @@ def display_resource_results_table(
         uri_short = uri[:40] + "..." if len(uri) > 40 else uri
         mime_type = result.get("resource_mime_type", "unknown")
         findings_count = (
-            len(result.get("findings", [])) if status == "completed" else "-"
+            len(result.get("findings", []))
+            if status in {"completed", "partial"}
+            else "-"
         )
 
         table_data.append(

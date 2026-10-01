@@ -18,6 +18,7 @@
 
 import asyncio
 import json
+import sys
 from io import StringIO
 from logging import StreamHandler
 from types import SimpleNamespace
@@ -29,7 +30,7 @@ from mcpscanner.api.router import (
     _group_findings_for_api,
     scan_all_resources_endpoint,
 )
-from mcpscanner.cli import display_results
+from mcpscanner.cli import display_resource_results_table, display_results
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.analyzers.meta_analyzer import MetaAnalysisResult
 from mcpscanner.core.models import APIScanRequest, AnalyzerEnum, OutputFormat
@@ -242,6 +243,33 @@ async def test_partial_resource_with_finding_counts_as_scanned():
     assert response["failed_resources"] == 0
     assert response["unsafe_resources"] == 1
     assert response["resources"][0]["findings"]["api_analyzer"]["severity"] == "HIGH"
+
+
+def test_partial_resource_table_shows_unsafe_finding(monkeypatch):
+    rows = []
+
+    def tabulate(data, **kwargs):
+        rows.extend(data)
+        return "table"
+
+    monkeypatch.setitem(sys.modules, "tabulate", SimpleNamespace(tabulate=tabulate))
+    display_resource_results_table(
+        [
+            {
+                "resource_name": "example",
+                "resource_uri": "file:///example.txt",
+                "resource_mime_type": "text/plain",
+                "status": "partial",
+                "is_safe": False,
+                "findings": [{"severity": "HIGH"}],
+            }
+        ],
+        "https://example.com/mcp",
+    )
+
+    assert rows[0][0] == "⚠️"
+    assert rows[0][4] == 1
+    assert rows[0][5] == "partial"
 
 
 @pytest.mark.asyncio
