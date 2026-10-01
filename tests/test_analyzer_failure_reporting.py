@@ -185,6 +185,31 @@ async def test_clean_scan_reports_safe_only_for_analyzers_that_ran():
 
 
 @pytest.mark.asyncio
+async def test_prompt_defense_finding_uses_single_analyzer_entry():
+    finding = SecurityFinding(
+        severity="HIGH",
+        summary="Threat detected",
+        analyzer="PromptDefense",
+        threat_category="TEST",
+        details={},
+    )
+    result = ToolScanResult(
+        tool_name="example",
+        tool_description="Example tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.PROMPT_DEFENSE],
+        findings=[finding],
+    )
+
+    sdk_row = json.loads(format_results_as_json([result]))["scan_results"][0]
+    report_row = (await results_to_json([result]))[0]
+    for row in (sdk_row, report_row):
+        assert list(row["findings"]) == ["prompt_defense_analyzer"]
+        assert row["findings"]["prompt_defense_analyzer"]["severity"] == "HIGH"
+        assert row["findings"]["prompt_defense_analyzer"]["total_findings"] == 1
+
+
+@pytest.mark.asyncio
 async def test_report_summary_keeps_incomplete_scan_separate_from_unsafe():
     result = await _scan_entity(
         _scanner(CleanAnalyzer(), CrashingAnalyzer()),

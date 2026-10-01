@@ -26,6 +26,12 @@ from .analyzers.base import SecurityFinding
 from .analyzers.meta_analyzer import build_meta_audit_payload
 
 
+def analyzer_result_key(analyzer: Any) -> str:
+    """Use one result key for an analyzer's enum, findings, and errors."""
+    name = str(getattr(analyzer, "value", analyzer)).casefold().replace(" ", "_")
+    return {"promptdefense": "prompt_defense"}.get(name, name)
+
+
 class ScanResult:
     """Base class for all scan results.
 
@@ -622,46 +628,37 @@ def format_results_as_json(
 
         # Group findings by analyzer
         analyzer_groups = group_findings_by_analyzer(scan_result.findings)
-        analyzer_name_mapping = {
-            "API": "api_analyzer",
-            "YARA": "yara_analyzer",
-            "LLM": "llm_analyzer",
-        }
-
         # Report only analyzers that were requested or produced findings, and
         # include failed analyzers explicitly. This keeps "not requested"
         # distinct from "ran clean" and "failed before completing".
         all_analyzers = {}
         for analyzer in scan_result.analyzers:
             label = str(getattr(analyzer, "value", analyzer))
-            all_analyzers[label.casefold()] = label
+            all_analyzers[analyzer_result_key(label)] = label
         for analyzer in analyzer_groups:
-            all_analyzers.setdefault(analyzer.casefold(), analyzer)
+            all_analyzers.setdefault(analyzer_result_key(analyzer), analyzer)
         for error in scan_result.analyzer_errors:
             label = error.get("analyzer", "Unknown")
-            all_analyzers[label.casefold()] = label
+            all_analyzers[analyzer_result_key(label)] = label
 
-        for analyzer_key, analyzer in all_analyzers.items():
-            analyzer_display_name = analyzer_name_mapping.get(
-                analyzer.upper(),
-                f"{analyzer.casefold().replace(' ', '_')}_analyzer",
-            )
+        for analyzer_key in all_analyzers:
+            analyzer_display_name = f"{analyzer_key}_analyzer"
             vulns = next(
                 (
                     findings
                     for group_name, findings in analyzer_groups.items()
-                    if group_name.casefold() == analyzer_key
+                    if analyzer_result_key(group_name) == analyzer_key
                 ),
                 [],
             )
             analyzer_errors = [
                 error
                 for error in scan_result.analyzer_errors
-                if error.get("analyzer", "").casefold() == analyzer_key
+                if analyzer_result_key(error.get("analyzer", "")) == analyzer_key
             ]
 
             analyzer_ran = any(
-                str(getattr(name, "value", name)).casefold() == analyzer_key
+                analyzer_result_key(name) == analyzer_key
                 for name in scan_result.analyzers
             )
             if vulns or (not analyzer_errors and analyzer_ran):

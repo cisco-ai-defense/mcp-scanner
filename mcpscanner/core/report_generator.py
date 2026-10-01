@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from .analyzers.meta_analyzer import build_meta_audit_payload
 from .models import OutputFormat, SeverityFilter
-from .result import get_highest_severity
+from .result import analyzer_result_key, get_highest_severity
 
 
 async def results_to_json(scan_results) -> List[Dict[str, Any]]:
@@ -48,10 +48,7 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
         # Initialize analyzers that completed with no findings as SAFE.
         if hasattr(result, "analyzers"):
             for analyzer in result.analyzers:
-                analyzer_name = str(analyzer).lower()
-                if hasattr(analyzer, "value"):  # AnalyzerEnum objects
-                    analyzer_name = analyzer.value.lower()
-                analyzer_key = analyzer_name + "_analyzer"
+                analyzer_key = analyzer_result_key(analyzer) + "_analyzer"
                 findings_by_analyzer[analyzer_key] = {
                     "severity": "SAFE",
                     "threat_names": [],
@@ -62,7 +59,7 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
 
         # Process actual findings and update analyzer data
         for finding in result.findings:
-            analyzer = finding.analyzer.lower() + "_analyzer"
+            analyzer = analyzer_result_key(finding.analyzer) + "_analyzer"
             if analyzer not in findings_by_analyzer:
                 findings_by_analyzer[analyzer] = {
                     "severity": "SAFE",
@@ -120,10 +117,9 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                     )
 
         for error in result.analyzer_errors:
-            analyzer_name = (
-                error.get("analyzer", "unknown").casefold().replace(" ", "_")
+            analyzer_key = (
+                analyzer_result_key(error.get("analyzer", "unknown")) + "_analyzer"
             )
-            analyzer_key = analyzer_name + "_analyzer"
             analyzer_result = findings_by_analyzer.get(analyzer_key)
             if analyzer_result is None:
                 analyzer_result = {
