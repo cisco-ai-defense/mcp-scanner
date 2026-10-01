@@ -38,7 +38,7 @@ class ScanResult:
     Attributes:
         status (str): The status of the scan (e.g., "completed", "partial",
             "failed", "skipped").
-        analyzers (List[str]): Analyzers that completed without invocation errors.
+        analyzers (List[str]): Analyzers with at least one successful invocation.
         findings (List[SecurityFinding]): The security findings found during the scan.
         analyzer_errors (List[Dict[str, str]]): Analyzer invocation failures,
             including the affected content type and error message.
@@ -433,8 +433,10 @@ def filter_results_by_severity(
             f for f in result.findings if f.severity.lower() == severity.lower()
         ]
 
-        # If there are findings matching the severity, include this result
-        if filtered_findings:
+        # Keep incomplete scans visible even when none of their findings
+        # match the severity filter. Otherwise a failed analyzer disappears
+        # from a filtered view.
+        if filtered_findings or result.status != "completed" or result.analyzer_errors:
             # Create a new result with only the filtered findings (preserve
             # type AND every state-bearing attribute).
             #

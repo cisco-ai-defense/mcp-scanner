@@ -820,7 +820,7 @@ class Scanner:
                 enriched.meta_filtered_findings = dropped
                 return enriched
             except Exception as e:
-                logger.error(f'Meta-analysis failed for tool "{result.tool_name}": {e}')
+                logger.error("Meta-analysis failed for tool: %s", type(e).__name__)
                 # P2-2: same reset on the failure path. Returning the
                 # original with stale ``meta_filtered_findings`` would
                 # claim findings were filtered when meta in fact errored.
@@ -868,7 +868,7 @@ class Scanner:
                 enriched.meta_filtered_findings = dropped
                 return enriched
             except Exception as e:
-                logger.error(f'Meta-analysis failed for prompt "{result.prompt_name}": {e}')
+                logger.error("Meta-analysis failed for prompt: %s", type(e).__name__)
                 result.meta_filtered_findings = []
                 return result
 
@@ -926,7 +926,7 @@ class Scanner:
                 enriched.meta_filtered_findings = dropped
                 return enriched
             except Exception as e:
-                logger.error(f'Meta-analysis failed for resource "{result.resource_uri}": {e}')
+                logger.error("Meta-analysis failed for resource: %s", type(e).__name__)
                 result.meta_filtered_findings = []
                 return result
 
@@ -1147,7 +1147,7 @@ class Scanner:
             enriched_result.meta_filtered_findings = dropped
             return enriched_result
         except Exception as e:
-            logger.error(f'Meta-analysis failed for instructions from "{result.server_name}": {e}')
+            logger.error("Meta-analysis failed for instructions: %s", type(e).__name__)
             result.meta_filtered_findings = []
             return result
 
@@ -1277,18 +1277,21 @@ class Scanner:
         custom_analyzers: List[str],
         analyzer_errors: List[Dict[str, str]],
     ) -> Tuple[List[Any], str]:
-        """Return analyzers that completed and a coverage-aware scan status."""
-        failed = {error["analyzer"].casefold() for error in analyzer_errors}
-        completed = []
+        """Return analyzers with successful invocations and scan status.
+
+        A multi-part analyzer remains listed when one part succeeds and
+        another fails; the errors and partial status describe the gap.
+        """
+        succeeded = []
         seen = set()
         for analyzer in [*successful_analyzers, *custom_analyzers]:
             label = cls._analyzer_label(analyzer).casefold()
-            if label not in failed and label not in seen:
-                completed.append(analyzer)
+            if label not in seen:
+                succeeded.append(analyzer)
                 seen.add(label)
         if not analyzer_errors:
-            return completed, "completed" if completed else "skipped"
-        return completed, "partial" if completed else "failed"
+            return succeeded, "completed" if succeeded else "skipped"
+        return succeeded, "partial" if succeeded else "failed"
 
     @staticmethod
     def _record_analyzer_error(
@@ -1297,15 +1300,18 @@ class Scanner:
         content_type: str,
         error: Exception,
     ) -> None:
+        label = Scanner._analyzer_label(analyzer)
+        error_type = type(error).__name__
         analyzer_errors.append(
             {
-                "analyzer": Scanner._analyzer_label(analyzer),
+                "analyzer": label,
                 "content_type": content_type,
                 # Provider exceptions can contain URLs, headers, or input.
                 # Keep the public result useful without echoing those values.
-                "message": f"{type(error).__name__} during analysis",
+                "message": f"{error_type} during analysis",
             }
         )
+        logger.error("%s analysis failed on %s: %s", label, content_type, error_type)
 
     async def _analyze_tool(
         self,
@@ -1345,9 +1351,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "API", "description", e
                 )
-                logger.error(
-                    f'API analysis failed on description: tool="{name}", error="{e}"'
-                )
 
         if AnalyzerEnum.YARA in analyzers:
             # Run YARA analysis on the description
@@ -1363,9 +1366,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, "YARA", "description", e
-                )
-                logger.error(
-                    f'YARA analysis failed on description: tool="{name}", error="{e}"'
                 )
 
             # Run YARA analysis on the tool parameters
@@ -1385,9 +1385,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, "YARA", "parameters", e
-                )
-                logger.error(
-                    f'YARA analysis failed on parameters: tool="{name}", error="{e}"'
                 )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
@@ -1411,7 +1408,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "LLM", "comprehensive", e
                 )
-                logger.error(f'LLM analysis failed: tool="{name}", error="{e}"')
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for tool \"'{name}'\" but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
@@ -1437,7 +1433,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "READINESS", "tool_definition", e
                 )
-                logger.error(f'Readiness analysis failed: tool="{name}", error="{e}"')
 
         if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
             # Run PROMPT_DEFENSE analysis on the tool description
@@ -1454,7 +1449,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "PROMPT_DEFENSE", "description", e
                 )
-                logger.error(f'Prompt defense analysis failed: tool="{name}", error="{e}"')
 
         # Run custom analyzers
         custom_analyzer_names = []
@@ -1473,9 +1467,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, analyzer.name, "description", e
-                )
-                logger.error(
-                    f'Custom analyzer "{analyzer.name}" failed: tool="{name}", error="{e}"'
                 )
 
         # Combine enum analyzers and custom analyzer names, excluding META
@@ -1556,9 +1547,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "API", "prompt_content", e
                 )
-                logger.error(
-                    f'API analysis failed on prompt description: prompt="{name}", error="{e}"'
-                )
 
         if AnalyzerEnum.YARA in analyzers:
             # Run YARA analysis on description + rendered messages
@@ -1574,9 +1562,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, "YARA", "prompt_content", e
-                )
-                logger.error(
-                    f'YARA analysis failed on prompt content: prompt="{name}", error="{e}"'
                 )
 
             # Run YARA analysis on the prompt arguments/structure
@@ -1596,9 +1581,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, "YARA", "arguments", e
-                )
-                logger.error(
-                    f'YARA analysis failed on prompt arguments: prompt="{name}", error="{e}"'
                 )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
@@ -1634,7 +1616,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "LLM", "comprehensive", e
                 )
-                logger.error(f'LLM analysis failed: prompt="{name}", error="{e}"')
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for prompt '{name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
@@ -1655,7 +1636,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "PROMPT_DEFENSE", "prompt_content", e
                 )
-                logger.error(f'Prompt defense analysis failed: prompt="{name}", error="{e}"')
 
         # Run custom analyzers
         custom_analyzer_names = []
@@ -1676,9 +1656,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, analyzer.name, "prompt_content", e
-                )
-                logger.error(
-                    f'Custom analyzer "{analyzer.name}" failed: prompt="{name}", error="{e}"'
                 )
 
         # Combine enum analyzers and custom analyzer names, excluding META
@@ -1738,9 +1715,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "API", "instructions", e
                 )
-                logger.error(
-                    f'API analysis failed on instructions: server="{server_name}", error="{e}"'
-                )
 
         if AnalyzerEnum.YARA in analyzers:
             # Run YARA analysis on the instructions
@@ -1759,9 +1733,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, "YARA", "instructions", e
-                )
-                logger.error(
-                    f'YARA analysis failed on instructions: server="{server_name}", error="{e}"'
                 )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
@@ -1787,9 +1758,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "LLM", "instructions", e
                 )
-                logger.error(
-                    f'LLM analysis failed on instructions: server="{server_name}", error="{e}"'
-                )
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for instructions from '{server_name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
@@ -1809,9 +1777,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, "PROMPT_DEFENSE", "instructions", e
-                )
-                logger.error(
-                    f'Prompt defense analysis failed on instructions: server="{server_name}", error="{e}"'
                 )
 
         # Run custom analyzers
@@ -1834,9 +1799,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, analyzer.name, "instructions", e
-                )
-                logger.error(
-                    f'Custom analyzer "{analyzer.name}" failed on instructions: server="{server_name}", error="{e}"'
                 )
 
         # Combine enum analyzers and custom analyzer names, excluding META
@@ -3405,9 +3367,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "API", "resource_content", e
                 )
-                logger.error(
-                    f'API analysis failed on resource: uri="{resource_uri}", error="{e}"'
-                )
 
         if AnalyzerEnum.YARA in analyzers:
             try:
@@ -3426,9 +3385,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, "YARA", "resource_content", e
-                )
-                logger.error(
-                    f'YARA analysis failed on resource: uri="{resource_uri}", error="{e}"'
                 )
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
@@ -3462,9 +3418,6 @@ class Scanner:
                 self._record_analyzer_error(
                     analyzer_errors, "LLM", "resource_content", e
                 )
-                logger.error(
-                    f'LLM analysis failed: resource="{resource_uri}", error="{e}"'
-                )
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for resource '{resource_uri}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
@@ -3487,9 +3440,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, "PROMPT_DEFENSE", "resource_content", e
-                )
-                logger.error(
-                    f'Prompt defense analysis failed: resource="{resource_uri}", error="{e}"'
                 )
 
         # Run custom analyzers
@@ -3514,9 +3464,6 @@ class Scanner:
             except Exception as e:
                 self._record_analyzer_error(
                     analyzer_errors, analyzer.name, "resource_content", e
-                )
-                logger.error(
-                    f'Custom analyzer "{analyzer.name}" failed: resource="{resource_uri}", error="{e}"'
                 )
 
         all_analyzers, status = self._analysis_outcome(

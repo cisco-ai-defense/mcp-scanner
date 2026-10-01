@@ -18,6 +18,8 @@
 
 import asyncio
 import json
+from io import StringIO
+from logging import StreamHandler
 from types import SimpleNamespace
 
 import pytest
@@ -25,14 +27,19 @@ import pytest
 from mcpscanner.api.router import (
     _convert_scanner_result_to_tool_api_result,
     _group_findings_for_api,
+    scan_all_resources_endpoint,
 )
 from mcpscanner.cli import display_results
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.analyzers.meta_analyzer import MetaAnalysisResult
-from mcpscanner.core.models import AnalyzerEnum, OutputFormat
+from mcpscanner.core.models import APIScanRequest, AnalyzerEnum, OutputFormat
 from mcpscanner.core.report_generator import ReportGenerator, results_to_json
-from mcpscanner.core.result import ToolScanResult, format_results_as_json
-from mcpscanner.core.scanner import Scanner
+from mcpscanner.core.result import (
+    ToolScanResult,
+    filter_results_by_severity,
+    format_results_as_json,
+)
+from mcpscanner.core.scanner import Scanner, logger as scanner_logger
 
 
 class CleanAnalyzer:
@@ -97,7 +104,15 @@ async def _scan_entity(scanner, entity, analyzers):
 async def test_crashed_analyzer_is_not_reported_safe(entity):
     scanner = _scanner(CleanAnalyzer(), CrashingAnalyzer())
 
-    result = await _scan_entity(scanner, entity, [AnalyzerEnum.API, AnalyzerEnum.YARA])
+    log_output = StringIO()
+    log_handler = StreamHandler(log_output)
+    scanner_logger.addHandler(log_handler)
+    try:
+        result = await _scan_entity(
+            scanner, entity, [AnalyzerEnum.API, AnalyzerEnum.YARA]
+        )
+    finally:
+        scanner_logger.removeHandler(log_handler)
     payload = json.loads(format_results_as_json([result]))["scan_results"][0]
 
     assert result.status == "partial"
@@ -105,6 +120,8 @@ async def test_crashed_analyzer_is_not_reported_safe(entity):
     assert result.is_safe is None
     assert {error["analyzer"] for error in result.analyzer_errors} == {"YARA"}
     assert "secret-token-must-not-leak" not in json.dumps(payload)
+    assert "secret-token-must-not-leak" not in log_output.getvalue()
+    assert "RuntimeError" in log_output.getvalue()
     assert payload["status"] == "partial"
     assert payload["is_safe"] is None
     assert payload["findings"]["api_analyzer"]["severity"] == "SAFE"
@@ -130,6 +147,7 @@ async def test_all_analyzers_crashed_reports_failed():
     assert result.status == "failed"
     assert result.analyzers == []
     assert result.is_safe is None
+    assert filter_results_by_severity([result], "HIGH")[0].status == "failed"
 
 
 @pytest.mark.asyncio
@@ -153,16 +171,77 @@ async def test_partial_analyzer_failure_retains_findings():
     )
     payload = json.loads(format_results_as_json([result]))["scan_results"][0]
 
-    assert result.status == "failed"
+    assert result.status == "partial"
     assert result.is_safe is False
-    assert result.analyzers == []
+    assert result.analyzers == [AnalyzerEnum.YARA]
     assert len(result.findings) == 1
     assert payload["findings"]["yara_analyzer"]["severity"] == "HIGH"
     assert payload["findings"]["yara_analyzer"]["status"] == "partial"
+    assert payload["status"] == "partial"
 
     report_rows = await results_to_json([result])
     assert report_rows[0]["findings"]["yara_analyzer"]["severity"] == "HIGH"
     assert report_rows[0]["findings"]["yara_analyzer"]["status"] == "partial"
+
+
+@pytest.mark.asyncio
+async def test_partial_analyzer_without_findings_stays_visible_when_filtered():
+    class CleanThenCrash:
+        async def analyze(self, content, context=None):
+            if context["content_type"] == "parameters":
+                raise RuntimeError("secret-token-must-not-leak")
+            return []
+
+    result = await _scan_entity(
+        _scanner(yara_analyzer=CleanThenCrash()), "tool", [AnalyzerEnum.YARA]
+    )
+
+    assert result.status == "partial"
+    assert result.analyzers == [AnalyzerEnum.YARA]
+    assert result.is_safe is None
+    filtered = filter_results_by_severity([result], "HIGH")
+    assert len(filtered) == 1
+    assert filtered[0].status == "partial"
+    assert filtered[0].is_safe is None
+    assert filtered[0].analyzer_errors == result.analyzer_errors
+
+
+@pytest.mark.asyncio
+async def test_partial_resource_with_finding_counts_as_scanned():
+    class FindingAnalyzer:
+        async def analyze(self, content, context=None):
+            return [
+                SecurityFinding(
+                    severity="HIGH",
+                    summary="Threat detected",
+                    analyzer="API",
+                    threat_category="TEST",
+                    details={},
+                )
+            ]
+
+    scanner = _scanner(FindingAnalyzer(), CrashingAnalyzer())
+    result = await _scan_entity(
+        scanner, "resource", [AnalyzerEnum.API, AnalyzerEnum.YARA]
+    )
+
+    async def scan_resources(**kwargs):
+        return [result]
+
+    scanner.scan_remote_server_resources = scan_resources
+    response = await scan_all_resources_endpoint(
+        APIScanRequest(
+            server_url="https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        ),
+        SimpleNamespace(headers={}),
+        scanner_factory=lambda _: scanner,
+    )
+
+    assert response["scanned_resources"] == 1
+    assert response["partial_resources"] == 1
+    assert response["failed_resources"] == 0
+    assert response["unsafe_resources"] == 1
+    assert response["resources"][0]["findings"]["api_analyzer"]["severity"] == "HIGH"
 
 
 @pytest.mark.asyncio
@@ -288,3 +367,39 @@ async def test_meta_enrichment_preserves_primary_analyzer_errors():
     assert enriched.analyzer_errors == result.analyzer_errors
     assert enriched.status == "partial"
     assert enriched.is_safe is False
+
+
+@pytest.mark.asyncio
+async def test_meta_analyzer_error_log_does_not_echo_provider_message():
+    class CrashingMetaAnalyzer:
+        async def analyze_findings(self, findings, analyzers_used, entity_context):
+            raise RuntimeError("secret-token-must-not-leak")
+
+    scanner = _scanner()
+    scanner._meta_analyzer = CrashingMetaAnalyzer()
+    result = ToolScanResult(
+        tool_name="example",
+        tool_description="Example tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.YARA],
+        findings=[
+            SecurityFinding(
+                severity="HIGH",
+                summary="Threat detected",
+                analyzer="YARA",
+                threat_category="TEST",
+                details={},
+            )
+        ],
+    )
+
+    log_output = StringIO()
+    log_handler = StreamHandler(log_output)
+    scanner_logger.addHandler(log_handler)
+    try:
+        await scanner._meta_analyze_one_tool(result, asyncio.Semaphore(1))
+    finally:
+        scanner_logger.removeHandler(log_handler)
+
+    assert "secret-token-must-not-leak" not in log_output.getvalue()
+    assert "RuntimeError" in log_output.getvalue()
