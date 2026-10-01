@@ -815,6 +815,7 @@ class Scanner:
                     findings=kept,
                     server_source=result.server_source,
                     server_name=result.server_name,
+                    analyzer_errors=result.analyzer_errors,
                 )
                 enriched.meta_filtered_findings = dropped
                 return enriched
@@ -862,6 +863,7 @@ class Scanner:
                     server_name=result.server_name,
                     prompt_messages_text=getattr(result, "prompt_messages_text", "")
                     or "",
+                    analyzer_errors=result.analyzer_errors,
                 )
                 enriched.meta_filtered_findings = dropped
                 return enriched
@@ -911,6 +913,7 @@ class Scanner:
                     findings=kept,
                     server_source=result.server_source,
                     server_name=result.server_name,
+                    analyzer_errors=result.analyzer_errors,
                     # P0-3 carry-through: preserve the description and text
                     # the primary analyzers consumed. Without this, every
                     # ``--enable-meta`` (or API ``enable_meta=True``) run
@@ -1139,6 +1142,7 @@ class Scanner:
                 analyzers=result.analyzers,
                 findings=kept,
                 server_source=result.server_source,
+                analyzer_errors=result.analyzer_errors,
             )
             enriched_result.meta_filtered_findings = dropped
             return enriched_result
@@ -1261,6 +1265,48 @@ class Scanner:
         # server advertised the capability.
         return getattr(capabilities, capability, None) is not None
 
+    @staticmethod
+    def _analyzer_label(analyzer: Any) -> str:
+        """Return a stable display name for enum and custom analyzers."""
+        return str(getattr(analyzer, "value", analyzer))
+
+    @classmethod
+    def _analysis_outcome(
+        cls,
+        successful_analyzers: List[AnalyzerEnum],
+        custom_analyzers: List[str],
+        analyzer_errors: List[Dict[str, str]],
+    ) -> Tuple[List[Any], str]:
+        """Return analyzers that completed and a coverage-aware scan status."""
+        failed = {error["analyzer"].casefold() for error in analyzer_errors}
+        completed = []
+        seen = set()
+        for analyzer in [*successful_analyzers, *custom_analyzers]:
+            label = cls._analyzer_label(analyzer).casefold()
+            if label not in failed and label not in seen:
+                completed.append(analyzer)
+                seen.add(label)
+        if not analyzer_errors:
+            return completed, "completed" if completed else "skipped"
+        return completed, "partial" if completed else "failed"
+
+    @staticmethod
+    def _record_analyzer_error(
+        analyzer_errors: List[Dict[str, str]],
+        analyzer: Any,
+        content_type: str,
+        error: Exception,
+    ) -> None:
+        analyzer_errors.append(
+            {
+                "analyzer": Scanner._analyzer_label(analyzer),
+                "content_type": content_type,
+                # Provider exceptions can contain URLs, headers, or input.
+                # Keep the public result useful without echoing those values.
+                "message": f"{type(error).__name__} during analysis",
+            }
+        )
+
     async def _analyze_tool(
         self,
         tool: MCPTool,
@@ -1277,6 +1323,8 @@ class Scanner:
             ScanResult: The result of the analysis.
         """
         all_findings = []
+        successful_analyzers: List[AnalyzerEnum] = []
+        analyzer_errors: List[Dict[str, str]] = []
         name = tool.name
         description = tool.description
         tool_json = tool.model_dump_json()
@@ -1292,7 +1340,11 @@ class Scanner:
                 for finding in api_findings:
                     finding.analyzer = "API"
                 all_findings.extend(api_findings)
+                successful_analyzers.append(AnalyzerEnum.API)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "API", "description", e
+                )
                 logger.error(
                     f'API analysis failed on description: tool="{name}", error="{e}"'
                 )
@@ -1307,7 +1359,11 @@ class Scanner:
                 for finding in yara_desc_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_desc_findings)
+                successful_analyzers.append(AnalyzerEnum.YARA)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "YARA", "description", e
+                )
                 logger.error(
                     f'YARA analysis failed on description: tool="{name}", error="{e}"'
                 )
@@ -1325,7 +1381,11 @@ class Scanner:
                 for finding in yara_params_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_params_findings)
+                successful_analyzers.append(AnalyzerEnum.YARA)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "YARA", "parameters", e
+                )
                 logger.error(
                     f'YARA analysis failed on parameters: tool="{name}", error="{e}"'
                 )
@@ -1346,7 +1406,11 @@ class Scanner:
                 for finding in llm_findings:
                     finding.analyzer = "LLM"
                 all_findings.extend(llm_findings)
+                successful_analyzers.append(AnalyzerEnum.LLM)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "LLM", "comprehensive", e
+                )
                 logger.error(f'LLM analysis failed: tool="{name}", error="{e}"')
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
@@ -1368,7 +1432,11 @@ class Scanner:
                 for finding in readiness_findings:
                     finding.analyzer = "READINESS"
                 all_findings.extend(readiness_findings)
+                successful_analyzers.append(AnalyzerEnum.READINESS)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "READINESS", "tool_definition", e
+                )
                 logger.error(f'Readiness analysis failed: tool="{name}", error="{e}"')
 
         if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
@@ -1381,7 +1449,11 @@ class Scanner:
                 for finding in pd_findings:
                     finding.analyzer = "PromptDefense"
                 all_findings.extend(pd_findings)
+                successful_analyzers.append(AnalyzerEnum.PROMPT_DEFENSE)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "PROMPT_DEFENSE", "description", e
+                )
                 logger.error(f'Prompt defense analysis failed: tool="{name}", error="{e}"')
 
         # Run custom analyzers
@@ -1399,6 +1471,9 @@ class Scanner:
                 # Track which custom analyzers were successfully run
                 custom_analyzer_names.append(analyzer.name)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, analyzer.name, "description", e
+                )
                 logger.error(
                     f'Custom analyzer "{analyzer.name}" failed: tool="{name}", error="{e}"'
                 )
@@ -1406,16 +1481,17 @@ class Scanner:
         # Combine enum analyzers and custom analyzer names, excluding META
         # since meta-analysis enriches existing findings rather than producing
         # its own output section
-        all_analyzers = [
-            a for a in analyzers if a != AnalyzerEnum.META
-        ] + custom_analyzer_names
+        all_analyzers, status = self._analysis_outcome(
+            successful_analyzers, custom_analyzer_names, analyzer_errors
+        )
 
         return ToolScanResult(
             tool_name=name,
             tool_description=description,
-            status="completed",
+            status=status,
             analyzers=all_analyzers,
             findings=all_findings,
+            analyzer_errors=analyzer_errors,
         )
 
     async def _analyze_prompt(
@@ -1437,6 +1513,8 @@ class Scanner:
             PromptScanResult: The result of the analysis.
         """
         all_findings = []
+        successful_analyzers: List[AnalyzerEnum] = []
+        analyzer_errors: List[Dict[str, str]] = []
         name = prompt.name
         description = prompt.description or ""
         bounded_messages, limit_error = self._apply_body_budget(
@@ -1473,7 +1551,11 @@ class Scanner:
                 for finding in api_findings:
                     finding.analyzer = "API"
                 all_findings.extend(api_findings)
+                successful_analyzers.append(AnalyzerEnum.API)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "API", "prompt_content", e
+                )
                 logger.error(
                     f'API analysis failed on prompt description: prompt="{name}", error="{e}"'
                 )
@@ -1488,7 +1570,11 @@ class Scanner:
                 for finding in yara_desc_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_desc_findings)
+                successful_analyzers.append(AnalyzerEnum.YARA)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "YARA", "prompt_content", e
+                )
                 logger.error(
                     f'YARA analysis failed on prompt content: prompt="{name}", error="{e}"'
                 )
@@ -1506,7 +1592,11 @@ class Scanner:
                 for finding in yara_params_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_params_findings)
+                successful_analyzers.append(AnalyzerEnum.YARA)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "YARA", "arguments", e
+                )
                 logger.error(
                     f'YARA analysis failed on prompt arguments: prompt="{name}", error="{e}"'
                 )
@@ -1539,7 +1629,11 @@ class Scanner:
                 for finding in llm_findings:
                     finding.analyzer = "LLM"
                 all_findings.extend(llm_findings)
+                successful_analyzers.append(AnalyzerEnum.LLM)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "LLM", "comprehensive", e
+                )
                 logger.error(f'LLM analysis failed: prompt="{name}", error="{e}"')
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
@@ -1556,7 +1650,11 @@ class Scanner:
                 for finding in pd_findings:
                     finding.analyzer = "PromptDefense"
                 all_findings.extend(pd_findings)
+                successful_analyzers.append(AnalyzerEnum.PROMPT_DEFENSE)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "PROMPT_DEFENSE", "prompt_content", e
+                )
                 logger.error(f'Prompt defense analysis failed: prompt="{name}", error="{e}"')
 
         # Run custom analyzers
@@ -1576,22 +1674,26 @@ class Scanner:
                 # Track which custom analyzers were successfully run
                 custom_analyzer_names.append(analyzer.name)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, analyzer.name, "prompt_content", e
+                )
                 logger.error(
                     f'Custom analyzer "{analyzer.name}" failed: prompt="{name}", error="{e}"'
                 )
 
         # Combine enum analyzers and custom analyzer names, excluding META
-        all_analyzers = [
-            a for a in analyzers if a != AnalyzerEnum.META
-        ] + custom_analyzer_names
+        all_analyzers, status = self._analysis_outcome(
+            successful_analyzers, custom_analyzer_names, analyzer_errors
+        )
 
         return PromptScanResult(
             prompt_name=name,
             prompt_description=description,
-            status="completed",
+            status=status,
             analyzers=all_analyzers,
             findings=all_findings,
             prompt_messages_text=prompt_messages_text,
+            analyzer_errors=analyzer_errors,
         )
 
     async def _analyze_instructions(
@@ -1615,6 +1717,8 @@ class Scanner:
             InstructionsScanResult: The result of the analysis.
         """
         all_findings = []
+        successful_analyzers: List[AnalyzerEnum] = []
+        analyzer_errors: List[Dict[str, str]] = []
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the instructions
@@ -1629,7 +1733,11 @@ class Scanner:
                 for finding in api_findings:
                     finding.analyzer = "API"
                 all_findings.extend(api_findings)
+                successful_analyzers.append(AnalyzerEnum.API)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "API", "instructions", e
+                )
                 logger.error(
                     f'API analysis failed on instructions: server="{server_name}", error="{e}"'
                 )
@@ -1647,7 +1755,11 @@ class Scanner:
                 for finding in yara_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_findings)
+                successful_analyzers.append(AnalyzerEnum.YARA)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "YARA", "instructions", e
+                )
                 logger.error(
                     f'YARA analysis failed on instructions: server="{server_name}", error="{e}"'
                 )
@@ -1670,7 +1782,11 @@ class Scanner:
                 for finding in llm_findings:
                     finding.analyzer = "LLM"
                 all_findings.extend(llm_findings)
+                successful_analyzers.append(AnalyzerEnum.LLM)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "LLM", "instructions", e
+                )
                 logger.error(
                     f'LLM analysis failed on instructions: server="{server_name}", error="{e}"'
                 )
@@ -1689,7 +1805,11 @@ class Scanner:
                 for finding in pd_findings:
                     finding.analyzer = "PromptDefense"
                 all_findings.extend(pd_findings)
+                successful_analyzers.append(AnalyzerEnum.PROMPT_DEFENSE)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "PROMPT_DEFENSE", "instructions", e
+                )
                 logger.error(
                     f'Prompt defense analysis failed on instructions: server="{server_name}", error="{e}"'
                 )
@@ -1712,22 +1832,26 @@ class Scanner:
                 # Track which custom analyzers were successfully run
                 custom_analyzer_names.append(analyzer.name)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, analyzer.name, "instructions", e
+                )
                 logger.error(
                     f'Custom analyzer "{analyzer.name}" failed on instructions: server="{server_name}", error="{e}"'
                 )
 
         # Combine enum analyzers and custom analyzer names, excluding META
-        all_analyzers = [
-            a for a in analyzers if a != AnalyzerEnum.META
-        ] + custom_analyzer_names
+        all_analyzers, status = self._analysis_outcome(
+            successful_analyzers, custom_analyzer_names, analyzer_errors
+        )
 
         return InstructionsScanResult(
             instructions=instructions,
             server_name=server_name,
             protocol_version=protocol_version,
-            status="completed",
+            status=status,
             analyzers=all_analyzers,
             findings=all_findings,
+            analyzer_errors=analyzer_errors,
         )
 
     def _check_http_error_in_logs(self, msg: str) -> Optional[int]:
@@ -3218,6 +3342,8 @@ class Scanner:
             ResourceScanResult: The result of the analysis.
         """
         all_findings = []
+        successful_analyzers: List[AnalyzerEnum] = []
+        analyzer_errors: List[Dict[str, str]] = []
         bounded_content, limit_error = self._apply_body_budget(
             resource_content,
             MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
@@ -3274,7 +3400,11 @@ class Scanner:
                 for finding in api_findings:
                     finding.analyzer = "API"
                 all_findings.extend(api_findings)
+                successful_analyzers.append(AnalyzerEnum.API)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "API", "resource_content", e
+                )
                 logger.error(
                     f'API analysis failed on resource: uri="{resource_uri}", error="{e}"'
                 )
@@ -3292,7 +3422,11 @@ class Scanner:
                 for finding in yara_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_findings)
+                successful_analyzers.append(AnalyzerEnum.YARA)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "YARA", "resource_content", e
+                )
                 logger.error(
                     f'YARA analysis failed on resource: uri="{resource_uri}", error="{e}"'
                 )
@@ -3323,7 +3457,11 @@ class Scanner:
                 for finding in llm_findings:
                     finding.analyzer = "LLM"
                 all_findings.extend(llm_findings)
+                successful_analyzers.append(AnalyzerEnum.LLM)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "LLM", "resource_content", e
+                )
                 logger.error(
                     f'LLM analysis failed: resource="{resource_uri}", error="{e}"'
                 )
@@ -3345,7 +3483,11 @@ class Scanner:
                 for finding in pd_findings:
                     finding.analyzer = "PromptDefense"
                 all_findings.extend(pd_findings)
+                successful_analyzers.append(AnalyzerEnum.PROMPT_DEFENSE)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, "PROMPT_DEFENSE", "resource_content", e
+                )
                 logger.error(
                     f'Prompt defense analysis failed: resource="{resource_uri}", error="{e}"'
                 )
@@ -3370,21 +3512,25 @@ class Scanner:
                 # Track which custom analyzers were successfully run
                 custom_analyzer_names.append(analyzer.name)
             except Exception as e:
+                self._record_analyzer_error(
+                    analyzer_errors, analyzer.name, "resource_content", e
+                )
                 logger.error(
                     f'Custom analyzer "{analyzer.name}" failed: resource="{resource_uri}", error="{e}"'
                 )
 
-        all_analyzers = [
-            a for a in analyzers if a != AnalyzerEnum.META
-        ] + custom_analyzer_names
+        all_analyzers, status = self._analysis_outcome(
+            successful_analyzers, custom_analyzer_names, analyzer_errors
+        )
 
         return ResourceScanResult(
             resource_uri=resource_uri,
             resource_name=resource_name,
             resource_mime_type=resource_mime_type,
-            status="completed",
+            status=status,
             analyzers=all_analyzers,
             findings=all_findings,
+            analyzer_errors=analyzer_errors,
             # P0-3 fix: persist the actual content the analyzers consumed
             # so the meta-analyzer (a downstream second-pass FP filter) can
             # second-guess decisions against the same evidence. ``analysis_content``
