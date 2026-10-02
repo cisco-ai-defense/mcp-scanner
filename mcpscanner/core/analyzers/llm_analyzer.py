@@ -154,7 +154,7 @@ class LLMAnalyzer(BaseAnalyzer):
             self.logger.error(f"Prompt file not found: {prompt_file_name}")
             raise
         except Exception as e:
-            self.logger.error(f"Failed to load prompt {prompt_file_name}: {e}")
+            self.logger.error("Failed to load LLM prompt: %s", type(e).__name__)
             raise IOError(f"Could not load prompt {prompt_file_name}: {e}")
 
     def _create_threat_analysis_prompt(
@@ -323,17 +323,21 @@ class LLMAnalyzer(BaseAnalyzer):
             return json.loads(json_content)
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse LLM response as JSON: {e}")
+            self.logger.error(
+                "Failed to parse LLM response as JSON: %s", type(e).__name__
+            )
             self.logger.error(
                 f"Response content length: {len(response_content)} characters"
             )
-            raise ValueError(f"Invalid JSON in LLM response: {e}")
+            raise ValueError("Invalid JSON in LLM response") from e
         except Exception as e:
-            self.logger.error(f"Unexpected error parsing LLM response: {e}")
+            self.logger.error(
+                "Unexpected error parsing LLM response: %s", type(e).__name__
+            )
             self.logger.error(
                 f"Response content length: {len(response_content)} characters"
             )
-            raise ValueError(f"Failed to parse LLM response: {e}")
+            raise ValueError("Failed to parse LLM response") from e
 
     def _create_findings_from_threat_analysis(
         self, analysis_result: Dict[str, Any], tool_name: str
@@ -543,8 +547,7 @@ class LLMAnalyzer(BaseAnalyzer):
             return findings
 
         except Exception as e:
-            self.logger.error(f"LLM analysis failed for {entity_name}: {str(e)}")
-            self.logger.error(f"Full traceback for {entity_name}:", exc_info=True)
+            self.logger.error("LLM analysis failed: %s", type(e).__name__)
             return [
                 build_infrastructure_error_finding(
                     analyzer_name="LLM",
@@ -649,13 +652,12 @@ class LLMAnalyzer(BaseAnalyzer):
             exc: BaseException, attempt: int, delay: float
         ) -> None:
             self.logger.warning(
-                "LLM API transient error for %s, retrying in %.1fs "
+                "LLM API transient error, retrying in %.1fs "
                 "(attempt %d/%d): %s",
-                context,
                 delay,
                 attempt,
                 max_attempts,
-                exc,
+                type(exc).__name__,
             )
 
         try:
@@ -669,11 +671,10 @@ class LLMAnalyzer(BaseAnalyzer):
         except Exception as e:
             kind = classify_analyzer_error(e, context="llm", model=self._model)
             if kind is ErrorKind.FINAL:
-                self.logger.error("LLM API final error for %s: %s", context, e)
+                self.logger.error("LLM API final error: %s", type(e).__name__)
             else:
                 self.logger.error(
-                    "LLM API transient error for %s, retries exhausted: %s",
-                    context,
-                    e,
+                    "LLM API transient error, retries exhausted: %s",
+                    type(e).__name__,
                 )
             raise

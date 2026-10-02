@@ -23,6 +23,7 @@ from io import StringIO
 from logging import StreamHandler
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from mcpscanner.api.router import (
@@ -31,8 +32,11 @@ from mcpscanner.api.router import (
     scan_all_resources_endpoint,
 )
 from mcpscanner.cli import display_resource_results_table, display_results
-from mcpscanner.core.analyzers.base import SecurityFinding
+from mcpscanner.config.config import Config
+from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
+from mcpscanner.core.analyzers.base import BaseAnalyzer, SecurityFinding
 from mcpscanner.core.analyzers.meta_analyzer import MetaAnalysisResult
+from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.models import APIScanRequest, AnalyzerEnum, OutputFormat
 from mcpscanner.core.report_generator import ReportGenerator, results_to_json
 from mcpscanner.core.result import (
@@ -428,6 +432,57 @@ async def test_meta_analyzer_error_log_does_not_echo_provider_message():
         await scanner._meta_analyze_one_tool(result, asyncio.Semaphore(1))
     finally:
         scanner_logger.removeHandler(log_handler)
+
+    assert "secret-token-must-not-leak" not in log_output.getvalue()
+    assert "RuntimeError" in log_output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_api_analyzer_log_does_not_echo_provider_message(monkeypatch):
+    class CrashingClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, *args, **kwargs):
+            raise httpx.ConnectError("secret-token-must-not-leak")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: CrashingClient())
+    analyzer = ApiAnalyzer(
+        Config(api_key="test", endpoint_url="https://example.invalid/api/v1")
+    )
+    log_output = StringIO()
+    handler = StreamHandler(log_output)
+    analyzer.logger.addHandler(handler)
+    try:
+        with pytest.raises(httpx.ConnectError):
+            await analyzer.analyze("content", {"tool_name": "example"})
+    finally:
+        analyzer.logger.removeHandler(handler)
+
+    assert "secret-token-must-not-leak" not in log_output.getvalue()
+    assert "ConnectError" in log_output.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_yara_analyzer_log_does_not_echo_parser_message():
+    class CrashingRules:
+        def match(self, data):
+            raise RuntimeError("secret-token-must-not-leak")
+
+    analyzer = YaraAnalyzer.__new__(YaraAnalyzer)
+    BaseAnalyzer.__init__(analyzer, "YARA")
+    analyzer._rules = CrashingRules()
+    log_output = StringIO()
+    handler = StreamHandler(log_output)
+    analyzer.logger.addHandler(handler)
+    try:
+        with pytest.raises(RuntimeError):
+            await analyzer.analyze("content", {"tool_name": "example"})
+    finally:
+        analyzer.logger.removeHandler(handler)
 
     assert "secret-token-must-not-leak" not in log_output.getvalue()
     assert "RuntimeError" in log_output.getvalue()

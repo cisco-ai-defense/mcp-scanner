@@ -238,7 +238,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                     llm_findings = await self._llm_judge.analyze(tool_def, tool_name)
                     findings.extend(llm_findings)
                 except Exception as e:
-                    self.logger.warning(f"LLM judge analysis failed: {e}")
+                    self.logger.warning(
+                        "LLM judge analysis failed: %s", type(e).__name__
+                    )
 
         # Calculate readiness score
         score = self._calculate_readiness_score(findings)
