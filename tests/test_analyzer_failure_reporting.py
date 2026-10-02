@@ -45,6 +45,7 @@ from mcpscanner.core.result import (
     format_results_as_json,
 )
 from mcpscanner.core.scanner import Scanner, logger as scanner_logger
+from mcpscanner.utils.analyzer_errors import build_infrastructure_error_finding
 
 
 class CleanAnalyzer:
@@ -486,3 +487,16 @@ async def test_yara_analyzer_log_does_not_echo_parser_message():
 
     assert "secret-token-must-not-leak" not in log_output.getvalue()
     assert "RuntimeError" in log_output.getvalue()
+
+
+def test_infrastructure_finding_does_not_publish_provider_message():
+    finding = build_infrastructure_error_finding(
+        analyzer_name="LLM",
+        subject="example",
+        error=RuntimeError("secret-token-must-not-leak"),
+    )
+
+    assert "secret-token-must-not-leak" not in finding.summary
+    assert "secret-token-must-not-leak" not in json.dumps(finding.details)
+    assert finding.details["error"] == "RuntimeError during analysis"
+    assert finding.details["error_type"] == "RuntimeError"

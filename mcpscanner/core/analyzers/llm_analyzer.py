@@ -523,9 +523,8 @@ class LLMAnalyzer(BaseAnalyzer):
                             )
                         )
                         self.logger.warning(
-                            "LLM threat analysis skipped for %s: %s",
-                            entity_name,
-                            empty_error,
+                            "LLM threat analysis skipped after %d empty attempt(s)",
+                            max_attempts,
                         )
                         findings.append(
                             build_infrastructure_error_finding(
@@ -533,6 +532,7 @@ class LLMAnalyzer(BaseAnalyzer):
                                 subject=entity_name,
                                 error=empty_error,
                                 model=self._model,
+                                safe_reason="empty_response",
                             )
                         )
                     else:

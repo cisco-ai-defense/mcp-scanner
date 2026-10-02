@@ -474,6 +474,9 @@ class Scanner:
             subject=prompt.name,
             error=error,
             context="local",
+            safe_reason=(
+                "coverage_limit" if isinstance(error, CoverageLimitExceeded) else None
+            ),
         )
         active = [a for a in analyzers if a != AnalyzerEnum.META]
         excerpt = ""
@@ -3504,6 +3507,7 @@ class Scanner:
             subject=resource_name or str(resource_uri),
             error=error,
             context="local",
+            safe_reason="coverage_limit",
         )
         return ResourceScanResult(
             resource_uri=resource_uri,
