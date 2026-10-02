@@ -1504,6 +1504,27 @@ function blockShadows(command) {
   early(command);
 }
 
+function blockLocalShadowThenCall(command) {
+  if (flag) {
+    const run = "local";
+  }
+  run(command);
+}
+
+function blockLocalShadowInside(command) {
+  if (flag) {
+    const run = "local";
+    run(command);
+  }
+}
+
+function blockDestructureThenCall(command) {
+  if (flag) {
+    const { run } = command;
+  }
+  run(command);
+}
+
 function uninitializedLet(command) {
   let early;
   early(command);
@@ -1657,7 +1678,10 @@ def test_scope_index_keeps_declaration_order_and_nested_scopes() -> None:
     assert flags["aliasAfterUse"] is False
     assert flags["siblingDoesNotLeak"] is False
     assert flags["helper"] is False
-    assert flags["blockShadows"] is False
+    assert flags["blockShadows"] is True
+    assert flags["blockLocalShadowThenCall"] is True
+    assert flags["blockLocalShadowInside"] is False
+    assert flags["blockDestructureThenCall"] is True
     assert flags["uninitializedLet"] is False
     assert flags["bareLetThenAlias"] is False
     assert flags["forOfShadows"] is False

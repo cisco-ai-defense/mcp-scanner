@@ -5025,11 +5025,13 @@ class NativeAnalyzer:
                     )
                     return
             if current.get("is_function"):
-                # None ends at the function. Block-scoped names set an end.
+                # ``var`` and function-body bindings last for the function.
+                # A ``const`` or ``let`` in a nested block ends with that block.
                 bound_at = binding_node.start_byte
                 if value is not None:
                     bound_at = value.end_byte
-                current["shadows"].append((bound_at, None, name))
+                _block_start, block_end = self._ts_alias_block_extent(binding_node)
+                current["shadows"].append((bound_at, block_end, name))
 
         def visit(node: "Node") -> None:
             self._ts_scope_nodes_visited += 1
@@ -5069,8 +5071,9 @@ class NativeAnalyzer:
                     bound_at = node.start_byte
                     if value is not None:
                         bound_at = value.end_byte
+                    _block_start, block_end = self._ts_alias_block_extent(node)
                     for name in self._ts_extract_binding_identifiers(target):
-                        stack[-1]["shadows"].append((bound_at, None, name))
+                        stack[-1]["shadows"].append((bound_at, block_end, name))
             elif node.type == "for_in_statement" and stack[-1].get("is_function"):
                 # ``for (const run of xs)`` binds ``run`` for the loop body.
                 # The iterable is outside that binding. ``var`` stays visible
@@ -5116,12 +5119,13 @@ class NativeAnalyzer:
     def _ts_alias_block_extent(
         self, binding_node: "Node"
     ) -> Tuple[Optional[int], Optional[int]]:
-        """Return the block that can see a ``const``/``let`` sink alias.
+        """Return the block that can see a ``const``/``let`` binding.
 
-        ``(None, None)`` means the alias is visible throughout the function
-        or module that owns it, including nested functions. A binding inside
-        ``if``, ``for``, or ``catch`` is visible only inside that statement.
-        ``var`` and assignments stay function-wide.
+        Used for sink aliases and for ordinary shadows. ``(None, None)``
+        means the binding is visible throughout the function or module that
+        owns it, including nested functions. A binding inside ``if``,
+        ``for``, or ``catch`` is visible only inside that statement. ``var``
+        and assignments stay function-wide.
         """
         declaration = binding_node.parent
         if declaration is None or declaration.type != "lexical_declaration":
@@ -5181,6 +5185,8 @@ class NativeAnalyzer:
 
         Bindings in nested functions/classes that do not enclose ``use_node``
         are ignored so out-of-scope locals cannot suppress a visible alias.
+        A ``const`` or ``let`` in a nested block stops shadowing when that
+        block ends.
         """
         fn = self._ts_enclosing_function(use_node)
         if fn is None:
