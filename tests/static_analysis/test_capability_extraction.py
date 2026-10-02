@@ -1450,6 +1450,34 @@ function outerAliasAfterNested(command) {
   return nestedUsesLater(command);
 }
 
+function innerMissesBlockAlias(command) {
+  function missesBlockAlias(command) {
+    blocked(command);
+  }
+  if (command) {
+    const blocked = promisify(exec);
+    blocked(command);
+  }
+  return missesBlockAlias(command);
+}
+
+function innerSeesBlockAlias(command) {
+  if (command) {
+    function seesBlockAlias(command) {
+      blocked(command);
+    }
+    const blocked = promisify(exec);
+    return seesBlockAlias(command);
+  }
+}
+
+function callOutsideBlock(command) {
+  if (command) {
+    const blocked = promisify(exec);
+  }
+  blocked(command);
+}
+
 const early = promisify(exec);
 
 function seesModule(command) {
@@ -1611,7 +1639,10 @@ function typedUninitializedLet(command: string) {
 
 
 def test_scope_index_keeps_declaration_order_and_nested_scopes() -> None:
-    """Source order applies inside one function. Outer aliases stay visible."""
+    """Source order applies inside one function. Outer aliases stay visible.
+
+    A const or let inside a nested block is visible only inside that block.
+    """
     analyzer = NativeAnalyzer(SCOPE_ORDER_TS, "scope_order.js")
     result = analyzer.analyze()
     assert result.success, result.errors
@@ -1619,6 +1650,10 @@ def test_scope_index_keeps_declaration_order_and_nested_scopes() -> None:
     assert flags["seesModule"] is True
     assert flags["helperBeforeModuleAlias"] is True
     assert flags["nestedUsesLater"] is True
+    assert flags["missesBlockAlias"] is False
+    assert flags["innerMissesBlockAlias"] is True
+    assert flags["seesBlockAlias"] is True
+    assert flags["callOutsideBlock"] is False
     assert flags["aliasAfterUse"] is False
     assert flags["siblingDoesNotLeak"] is False
     assert flags["helper"] is False

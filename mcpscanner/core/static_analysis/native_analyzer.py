@@ -5013,8 +5013,15 @@ class NativeAnalyzer:
             if value is not None:
                 category = self._ts_alias_value_category(value, sink_category_for)
                 if category:
+                    block_start, block_end = self._ts_alias_block_extent(binding_node)
                     current["aliases"].append(
-                        (binding_node.start_byte, name, category)
+                        (
+                            binding_node.start_byte,
+                            block_start,
+                            block_end,
+                            name,
+                            category,
+                        )
                     )
                     return
             if current.get("is_function"):
@@ -5106,6 +5113,50 @@ class NativeAnalyzer:
         cache[cache_key] = built
         return built
 
+    def _ts_alias_block_extent(
+        self, binding_node: "Node"
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """Return the block that can see a ``const``/``let`` sink alias.
+
+        ``(None, None)`` means the alias is visible throughout the function
+        or module that owns it, including nested functions. A binding inside
+        ``if``, ``for``, or ``catch`` is visible only inside that statement.
+        ``var`` and assignments stay function-wide.
+        """
+        declaration = binding_node.parent
+        if declaration is None or declaration.type != "lexical_declaration":
+            return None, None
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
+        scope_types = func_types | class_types
+        header_scopes = {
+            "for_statement",
+            "for_in_statement",
+            "for_of_statement",
+            "catch_clause",
+            "switch_body",
+            "switch_statement",
+        }
+        current: Optional["Node"] = declaration.parent
+        while current is not None and current.type not in scope_types:
+            if current.type in header_scopes:
+                return current.start_byte, current.end_byte
+            if current.type == "statement_block":
+                parent = current.parent
+                if parent is not None and parent.type in scope_types:
+                    return None, None
+                return current.start_byte, current.end_byte
+            current = current.parent
+        return None, None
+
+    @staticmethod
+    def _ts_alias_covers_use(alias: Tuple, use_byte: int) -> bool:
+        """Return True when ``use_byte`` is inside the alias's block."""
+        _declared_at, block_start, block_end, _name, _category = alias
+        if block_start is None or block_end is None:
+            return True
+        return block_start <= use_byte < block_end
+
     @staticmethod
     def _ts_events_before(events: List[Tuple], use_byte: int) -> int:
         """Index of the first event whose byte is not before ``use_byte``."""
@@ -5152,8 +5203,10 @@ class NativeAnalyzer:
         Source order applies only inside the function that contains the use.
         A function body runs when the function is called, so an alias in the
         module or in an enclosing function is visible even when its
-        declaration appears later in the file. Shadowing of those names is
-        still decided by ``_ts_shadowed_names_at``.
+        declaration appears later in the file. A ``const`` or ``let`` inside
+        a nested block stays inside that block, so a nested function declared
+        outside the block does not see it. Shadowing of those names is still
+        decided by ``_ts_shadowed_names_at``.
         """
         fn = self._ts_enclosing_function(use_node)
         if fn is None:
@@ -5161,8 +5214,9 @@ class NativeAnalyzer:
         index = self._ts_build_scope_index(self._ts_root(use_node))
         use_byte = use_node.start_byte
         visible: Dict[str, str] = {}
-        for _byte, name, category in index["module"]["aliases"]:
-            visible[name] = category
+        for alias in index["module"]["aliases"]:
+            if self._ts_alias_covers_use(alias, use_byte):
+                visible[alias[3]] = alias[4]
         innermost = index["by_span"].get((fn.start_byte, fn.end_byte))
         ancestors: List[Dict[str, Any]] = []
         current: Optional["Node"] = use_node
@@ -5176,8 +5230,9 @@ class NativeAnalyzer:
             if facts is innermost:
                 cutoff = self._ts_events_before(aliases, use_byte)
                 aliases = aliases[:cutoff]
-            for _byte, name, category in aliases:
-                visible[name] = category
+            for alias in aliases:
+                if self._ts_alias_covers_use(alias, use_byte):
+                    visible[alias[3]] = alias[4]
         return visible
 
     def _ts_sync_param_flow_summary(self, ctx: FunctionContext) -> None:
