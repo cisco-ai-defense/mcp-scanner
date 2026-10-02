@@ -5006,8 +5006,10 @@ class NativeAnalyzer:
 
             A missing initializer still shadows. Only a sink-alias initializer
             is an alias, and it does not remove an earlier shadow of the name.
-            The right-hand side runs before the new binding, so a shadow
-            starts after that expression.
+            A ``const`` or ``let`` is in the temporal dead zone for its
+            initializer, so that shadow starts at the declaration. An
+            assignment still starts after its right-hand side, which resolves
+            to the previous binding.
             """
             current = stack[-1]
             if value is not None:
@@ -5028,7 +5030,12 @@ class NativeAnalyzer:
                 # ``var`` and function-body bindings last for the function.
                 # A ``const`` or ``let`` in a nested block ends with that block.
                 bound_at = binding_node.start_byte
-                if value is not None:
+                declaration = binding_node.parent
+                lexical = (
+                    declaration is not None
+                    and declaration.type == "lexical_declaration"
+                )
+                if value is not None and not lexical:
                     bound_at = value.end_byte
                 _block_start, block_end = self._ts_alias_block_extent(binding_node)
                 current["shadows"].append((bound_at, block_end, name))

@@ -1699,7 +1699,7 @@ def test_scope_index_keeps_declaration_order_and_nested_scopes() -> None:
     assert flags["destructureDefault"] is True
     assert flags["defaultAfterAssign"] is True
     assert flags["forOfIterableAssign"] is True
-    assert flags["identInit"] is True
+    assert flags["identInit"] is False
     assert flags["assignInit"] is True
     assert flags["assignThenCall"] is False
 
