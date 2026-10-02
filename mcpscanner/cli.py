@@ -2440,7 +2440,6 @@ async def main():
                 sys.exit(1)
 
         elif args.cmd == "vulnerable-package":
-            import os
             from mcpscanner.core.analyzers.vulnerable_package_analyzer import VulnerablePackageAnalyzer
             from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
 
