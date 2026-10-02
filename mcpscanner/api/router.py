@@ -307,6 +307,17 @@ def _group_findings_for_api(
             "total_findings": len(vulns),
         }
 
+        errors = [
+            error
+            for error in scanner_result.analyzer_errors
+            if error.get("analyzer", "").casefold() == internal_name.casefold()
+        ]
+        if errors:
+            analyzer_result["status"] = "partial" if vulns else "error"
+            analyzer_result["errors"] = errors
+            if not vulns:
+                analyzer_result["severity"] = "UNKNOWN"
+
         # Add MCP Taxonomy hierarchy if there are findings
         if vulns:
             threats_hierarchy = _build_taxonomy_hierarchy(vulns)
@@ -329,6 +340,7 @@ def _convert_scanner_result_to_tool_api_result(
         status=scanner_result.status,
         findings=grouped_findings,
         is_safe=scanner_result.is_safe,
+        analyzer_errors=scanner_result.analyzer_errors,
         meta_analysis=_build_meta_analysis_audit(scanner_result),
     )
 
@@ -622,6 +634,7 @@ async def scan_prompt_endpoint(
             "status": result.status,
             "is_safe": result.is_safe,
             "findings": grouped_findings,
+            "analyzer_errors": result.analyzer_errors,
         }
         meta_audit = _build_meta_analysis_audit(result)
         if meta_audit is not None:
@@ -701,6 +714,7 @@ async def scan_all_prompts_endpoint(
                 "status": result.status,
                 "is_safe": result.is_safe,
                 "findings": grouped_findings,
+                "analyzer_errors": result.analyzer_errors,
             }
             meta_audit = _build_meta_analysis_audit(result)
             if meta_audit is not None:
@@ -710,8 +724,9 @@ async def scan_all_prompts_endpoint(
         response = {
             "server_url": request.server_url,
             "total_prompts": len(results),
-            "safe_prompts": sum(1 for r in results if r.is_safe),
-            "unsafe_prompts": sum(1 for r in results if not r.is_safe),
+            "safe_prompts": sum(1 for r in results if r.is_safe is True),
+            "unsafe_prompts": sum(1 for r in results if r.is_safe is False),
+            "incomplete_prompts": sum(1 for r in results if r.is_safe is None),
             "prompts": prompt_results,
         }
 
@@ -787,10 +802,7 @@ async def scan_resource_endpoint(
         logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
 
         # Convert result to API format using helper function
-        if result.status == "completed":
-            grouped_findings = _group_findings_for_api(result, scanner)
-        else:
-            grouped_findings = {}
+        grouped_findings = _group_findings_for_api(result, scanner)
 
         response = {
             "server_url": request.server_url,
@@ -798,8 +810,9 @@ async def scan_resource_endpoint(
             "resource_name": result.resource_name,
             "resource_mime_type": result.resource_mime_type,
             "status": result.status,
-            "is_safe": result.is_safe if result.status == "completed" else None,
+            "is_safe": result.is_safe,
             "findings": grouped_findings,
+            "analyzer_errors": result.analyzer_errors,
         }
         meta_audit = _build_meta_analysis_audit(result)
         if meta_audit is not None:
@@ -876,7 +889,7 @@ async def scan_all_resources_endpoint(
         # Convert results to API format
         resource_results = []
         for result in results:
-            if result.status == "completed":
+            if result.status in {"completed", "partial", "failed"}:
                 # Use helper function to group findings
                 grouped_findings = _group_findings_for_api(result, scanner)
 
@@ -887,6 +900,7 @@ async def scan_all_resources_endpoint(
                     "status": result.status,
                     "is_safe": result.is_safe,
                     "findings": grouped_findings,
+                    "analyzer_errors": result.analyzer_errors,
                 }
                 meta_audit = _build_meta_analysis_audit(result)
                 if meta_audit is not None:
@@ -902,18 +916,21 @@ async def scan_all_resources_endpoint(
                         "status": result.status,
                         "is_safe": None,
                         "findings": {},
+                        "analyzer_errors": result.analyzer_errors,
                     }
                 )
 
-        completed = [r for r in results if r.status == "completed"]
+        completed = [r for r in results if r.status in {"completed", "partial"}]
         response = {
             "server_url": request.server_url,
             "total_resources": len(results),
             "scanned_resources": len(completed),
             "skipped_resources": sum(1 for r in results if r.status == "skipped"),
             "failed_resources": sum(1 for r in results if r.status == "failed"),
-            "safe_resources": sum(1 for r in completed if r.is_safe),
-            "unsafe_resources": sum(1 for r in completed if not r.is_safe),
+            "partial_resources": sum(1 for r in results if r.status == "partial"),
+            "safe_resources": sum(1 for r in results if r.is_safe is True),
+            "unsafe_resources": sum(1 for r in results if r.is_safe is False),
+            "incomplete_resources": sum(1 for r in results if r.is_safe is None),
             "allowed_mime_types": allowed_mime_types,
             "resources": resource_results,
         }
@@ -979,10 +996,7 @@ async def scan_instructions_endpoint(
         logger.debug(f"Scanner completed - scanned instructions from server")
 
         # Convert result to API format using helper function
-        if result.status == "completed":
-            grouped_findings = _group_findings_for_api(result, scanner)
-        else:
-            grouped_findings = {}
+        grouped_findings = _group_findings_for_api(result, scanner)
 
         response = {
             "server_url": request.server_url,
@@ -990,8 +1004,9 @@ async def scan_instructions_endpoint(
             "protocol_version": result.protocol_version,
             "instructions": result.instructions,
             "status": result.status,
-            "is_safe": result.is_safe if result.status == "completed" else None,
+            "is_safe": result.is_safe,
             "findings": grouped_findings,
+            "analyzer_errors": result.analyzer_errors,
         }
         meta_audit = _build_meta_analysis_audit(result)
         if meta_audit is not None:

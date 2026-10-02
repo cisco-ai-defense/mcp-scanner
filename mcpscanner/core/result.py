@@ -26,13 +26,22 @@ from .analyzers.base import SecurityFinding
 from .analyzers.meta_analyzer import build_meta_audit_payload
 
 
+def analyzer_result_key(analyzer: Any) -> str:
+    """Use one result key for an analyzer's enum, findings, and errors."""
+    name = str(getattr(analyzer, "value", analyzer)).casefold().replace(" ", "_")
+    return {"promptdefense": "prompt_defense"}.get(name, name)
+
+
 class ScanResult:
     """Base class for all scan results.
 
     Attributes:
-        status (str): The status of the scan (e.g., "completed", "failed", "skipped").
-        analyzers (List[str]): List of analyzers used.
+        status (str): The status of the scan (e.g., "completed", "partial",
+            "failed", "skipped").
+        analyzers (List[str]): Analyzers with at least one successful invocation.
         findings (List[SecurityFinding]): The security findings found during the scan.
+        analyzer_errors (List[Dict[str, str]]): Analyzer invocation failures,
+            including the affected content type and error message.
         server_source (str): The source server/config for this result.
         server_name (str): The name of the server from config.
         meta_filtered_findings (List[SecurityFinding]): Findings the meta-analyzer
@@ -51,6 +60,7 @@ class ScanResult:
         findings: List[SecurityFinding],
         server_source: str = None,
         server_name: str = None,
+        analyzer_errors: Optional[List[Dict[str, str]]] = None,
     ):
         """Initialize a new ScanResult instance.
 
@@ -66,19 +76,27 @@ class ScanResult:
         self.findings = findings
         self.server_source = server_source
         self.server_name = server_name
+        # Errors are recorded per analyzer invocation, including the affected
+        # content type, so a partial scan cannot look like a clean scan.
+        self.analyzer_errors: List[Dict[str, str]] = list(analyzer_errors or [])
         # Set by ``Scanner._run_meta_analysis_on_*`` after meta filtering.
         # Default empty so every result has the attribute and downstream
         # serializers don't need ``getattr(..., default=[])`` everywhere.
         self.meta_filtered_findings: List[SecurityFinding] = []
 
     @property
-    def is_safe(self) -> bool:
+    def is_safe(self) -> Optional[bool]:
         """Check if the scan result indicates the item is safe.
 
         Returns:
-            bool: True if no security findings were found, False otherwise.
+            bool | None: False when findings exist, True when a complete scan
+                found none, and None when coverage is incomplete.
         """
-        return len(self.findings) == 0
+        if self.findings:
+            return False
+        if self.status != "completed" or self.analyzer_errors:
+            return None
+        return True
 
     def __str__(self) -> str:
         """Return a string representation of the scan result."""
@@ -102,6 +120,7 @@ class ToolScanResult(ScanResult):
         findings: List[SecurityFinding],
         server_source: str = None,
         server_name: str = None,
+        analyzer_errors: Optional[List[Dict[str, str]]] = None,
     ):
         """Initialize a new ToolScanResult instance.
 
@@ -116,7 +135,9 @@ class ToolScanResult(ScanResult):
         """
         self.tool_name = tool_name
         self.tool_description = tool_description
-        super().__init__(status, analyzers, findings, server_source, server_name)
+        super().__init__(
+            status, analyzers, findings, server_source, server_name, analyzer_errors
+        )
 
     def __str__(self) -> str:
         """Return a string representation of the tool scan result."""
@@ -141,6 +162,7 @@ class PromptScanResult(ScanResult):
         server_source: str = None,
         server_name: str = None,
         prompt_messages_text: str = "",
+        analyzer_errors: Optional[List[Dict[str, str]]] = None,
     ):
         """Initialize a new PromptScanResult instance.
 
@@ -158,7 +180,9 @@ class PromptScanResult(ScanResult):
         self.prompt_name = prompt_name
         self.prompt_description = prompt_description
         self.prompt_messages_text = prompt_messages_text or ""
-        super().__init__(status, analyzers, findings, server_source, server_name)
+        super().__init__(
+            status, analyzers, findings, server_source, server_name, analyzer_errors
+        )
 
     def __str__(self) -> str:
         """Return a string representation of the prompt scan result."""
@@ -197,6 +221,7 @@ class ResourceScanResult(ScanResult):
         server_name: str = None,
         resource_description: Optional[str] = None,
         resource_text: Optional[str] = None,
+        analyzer_errors: Optional[List[Dict[str, str]]] = None,
     ):
         """Initialize a new ResourceScanResult instance.
 
@@ -223,7 +248,9 @@ class ResourceScanResult(ScanResult):
         # truthiness / ``str`` operations without ``getattr(..., "") or ""``.
         self.resource_description = resource_description or ""
         self.resource_text = resource_text or ""
-        super().__init__(status, analyzers, findings, server_source, server_name)
+        super().__init__(
+            status, analyzers, findings, server_source, server_name, analyzer_errors
+        )
 
     def __str__(self) -> str:
         """Return a string representation of the resource scan result."""
@@ -248,6 +275,7 @@ class InstructionsScanResult(ScanResult):
         analyzers: List[str],
         findings: List[SecurityFinding],
         server_source: str = None,
+        analyzer_errors: Optional[List[Dict[str, str]]] = None,
     ):
         """Initialize a new InstructionsScanResult instance.
 
@@ -263,7 +291,9 @@ class InstructionsScanResult(ScanResult):
         self.instructions = instructions
         self.server_name = server_name
         self.protocol_version = protocol_version
-        super().__init__(status, analyzers, findings, server_source, server_name)
+        super().__init__(
+            status, analyzers, findings, server_source, server_name, analyzer_errors
+        )
 
     def __str__(self) -> str:
         """Return a string representation of the instructions scan result."""
@@ -286,8 +316,9 @@ def process_scan_results(
         Dict[str, Any]: A dictionary containing summary statistics about the scan results.
     """
     total_tools = len(results)
-    safe_tools = [r for r in results if r.is_safe]
-    unsafe_tools = [r for r in results if not r.is_safe]
+    safe_tools = [r for r in results if r.is_safe is True]
+    unsafe_tools = [r for r in results if r.is_safe is False]
+    incomplete_tools = [r for r in results if r.is_safe is None]
 
     # Count findings by severity.
     #
@@ -362,6 +393,7 @@ def process_scan_results(
         "total_tools": total_tools,
         "safe_tools": len(safe_tools),
         "unsafe_tools": len(unsafe_tools),
+        "incomplete_tools": len(incomplete_tools),
         "severity_counts": severity_counts,
         "meta_filtered_counts": meta_filtered_counts,
         "total_meta_filtered": total_meta_filtered,
@@ -401,8 +433,10 @@ def filter_results_by_severity(
             f for f in result.findings if f.severity.lower() == severity.lower()
         ]
 
-        # If there are findings matching the severity, include this result
-        if filtered_findings:
+        # Keep incomplete scans visible even when none of their findings
+        # match the severity filter. Otherwise a failed analyzer disappears
+        # from a filtered view.
+        if filtered_findings or result.status != "completed" or result.analyzer_errors:
             # Create a new result with only the filtered findings (preserve
             # type AND every state-bearing attribute).
             #
@@ -427,6 +461,7 @@ def filter_results_by_severity(
                     findings=filtered_findings,
                     server_source=result.server_source,
                     server_name=result.server_name,
+                    analyzer_errors=result.analyzer_errors,
                 )
             elif isinstance(result, PromptScanResult):
                 filtered_result = PromptScanResult(
@@ -439,6 +474,7 @@ def filter_results_by_severity(
                     server_name=result.server_name,
                     prompt_messages_text=getattr(result, "prompt_messages_text", "")
                     or "",
+                    analyzer_errors=result.analyzer_errors,
                 )
             elif isinstance(result, ResourceScanResult):
                 filtered_result = ResourceScanResult(
@@ -450,8 +486,10 @@ def filter_results_by_severity(
                     findings=filtered_findings,
                     server_source=result.server_source,
                     server_name=result.server_name,
-                    resource_description=getattr(result, "resource_description", "") or "",
+                    resource_description=getattr(result, "resource_description", "")
+                    or "",
                     resource_text=getattr(result, "resource_text", "") or "",
+                    analyzer_errors=result.analyzer_errors,
                 )
             elif isinstance(result, InstructionsScanResult):
                 filtered_result = InstructionsScanResult(
@@ -462,6 +500,7 @@ def filter_results_by_severity(
                     analyzers=result.analyzers,
                     findings=filtered_findings,
                     server_source=result.server_source,
+                    analyzer_errors=result.analyzer_errors,
                 )
             else:
                 continue  # Skip unknown types
@@ -591,25 +630,41 @@ def format_results_as_json(
 
         # Group findings by analyzer
         analyzer_groups = group_findings_by_analyzer(scan_result.findings)
+        # Report only analyzers that were requested or produced findings, and
+        # include failed analyzers explicitly. This keeps "not requested"
+        # distinct from "ran clean" and "failed before completing".
+        all_analyzers = {}
+        for analyzer in scan_result.analyzers:
+            label = str(getattr(analyzer, "value", analyzer))
+            all_analyzers[analyzer_result_key(label)] = label
+        for analyzer in analyzer_groups:
+            all_analyzers.setdefault(analyzer_result_key(analyzer), analyzer)
+        for error in scan_result.analyzer_errors:
+            label = error.get("analyzer", "Unknown")
+            all_analyzers[analyzer_result_key(label)] = label
 
-        # Always include all analyzers, even if they have no findings
-        all_analyzers = ["API", "YARA", "LLM"]
-        analyzer_name_mapping = {
-            "API": "api_analyzer",
-            "YARA": "yara_analyzer",
-            "LLM": "llm_analyzer",
-        }
+        for analyzer_key in all_analyzers:
+            analyzer_display_name = f"{analyzer_key}_analyzer"
+            vulns = next(
+                (
+                    findings
+                    for group_name, findings in analyzer_groups.items()
+                    if analyzer_result_key(group_name) == analyzer_key
+                ),
+                [],
+            )
+            analyzer_errors = [
+                error
+                for error in scan_result.analyzer_errors
+                if analyzer_result_key(error.get("analyzer", "")) == analyzer_key
+            ]
 
-        for analyzer in all_analyzers:
-            analyzer_key = analyzer.upper()
-            analyzer_display_name = analyzer_name_mapping[analyzer]
-
-            if analyzer_key in [a.upper() for a in analyzer_groups.keys()]:
+            analyzer_ran = any(
+                analyzer_result_key(name) == analyzer_key
+                for name in scan_result.analyzers
+            )
+            if vulns or (not analyzer_errors and analyzer_ran):
                 # Analyzer has findings
-                vulns = analyzer_groups.get(
-                    analyzer, analyzer_groups.get(analyzer.lower(), [])
-                )
-
                 # Extract threat names, severities, and summaries
                 threat_names = []
                 summaries = []
@@ -656,7 +711,9 @@ def format_results_as_json(
                         )
 
                 # Get the highest severity for this analyzer
-                analyzer_severity = get_highest_severity(severities)
+                analyzer_severity = (
+                    get_highest_severity(severities) if vulns else "SAFE"
+                )
 
                 # Get threat_summary from analyzer (each analyzer should provide this)
                 if analyzer_severity == "UNKNOWN":
@@ -665,6 +722,8 @@ def format_results_as_json(
                         len(threat_names) == 1 and threat_names[0].lower() == "unknown"
                     ):
                         threat_names = ["UNKNOWN"]
+                elif analyzer_severity == "SAFE":
+                    threat_summary = "No threats detected"
                 elif len(threat_names) == 0:
                     threat_summary = "No specific threats identified"
                 else:
@@ -690,14 +749,23 @@ def format_results_as_json(
                     # Also add as mcp_taxonomy for CLI display compatibility
                     analyzer_finding["mcp_taxonomy"] = mcp_taxonomy
 
+                if analyzer_errors:
+                    analyzer_finding["status"] = "partial"
+                    analyzer_finding["errors"] = analyzer_errors
+
                 result_dict["findings"][analyzer_display_name] = analyzer_finding
             else:
-                # Analyzer has no findings - set default values
+                # The analyzer failed without producing findings. Never make
+                # that indistinguishable from a clean SAFE result.
                 result_dict["findings"][analyzer_display_name] = {
-                    "severity": "SAFE",
+                    "severity": "UNKNOWN",
                     "total_findings": 0,
+                    "status": "error" if analyzer_errors else "not_run",
+                    "errors": analyzer_errors,
                 }
 
+        if scan_result.analyzer_errors:
+            result_dict["analyzer_errors"] = scan_result.analyzer_errors
         # H3 fix: surface the meta-analysis audit trail on the SDK
         # JSON serializer too. Previously only ``report_generator`` (CLI
         # artifacts) and ``api/router`` (HTTP responses) emitted this
@@ -766,7 +834,12 @@ def format_results_by_analyzer(
             )
         return "\n".join(suffix_lines)
 
-    output = [f"🚨 {item_name} - Found {len(scan_result.findings)} potential threats\n"]
+    if scan_result.is_safe is None:
+        output = [f"⚠️ {item_name} scan is incomplete (status: {scan_result.status})\n"]
+    else:
+        output = [
+            f"🚨 {item_name} - Found {len(scan_result.findings)} potential threats\n"
+        ]
 
     # Group findings by analyzer
     analyzer_groups = group_findings_by_analyzer(scan_result.findings)
@@ -791,6 +864,17 @@ def format_results_by_analyzer(
             reason = details.get("meta_reason", "Identified as likely false positive")
             output.append(
                 f"  • [{f.analyzer}/{f.severity}] {f.summary} — {reason}"
+            )
+
+    if scan_result.analyzer_errors:
+        output.append("⚠️ Analyzer errors:")
+        for error in scan_result.analyzer_errors:
+            output.append(
+                "  • {analyzer} failed on {content_type}: {message}".format(
+                    analyzer=error.get("analyzer", "Unknown"),
+                    content_type=error.get("content_type", "content"),
+                    message=error.get("message", "Unknown error"),
+                )
             )
 
     return "\n".join(output)

@@ -63,6 +63,15 @@ def _get_endpoint_from_env() -> str:
     return os.environ.get("MCP_SCANNER_ENDPOINT", "")
 
 
+def _safety_status_icon(is_safe: Optional[bool]) -> str:
+    """Render safe, unsafe, and unknown outcomes distinctly."""
+    if is_safe is True:
+        return "✅"
+    if is_safe is False:
+        return "⚠️"
+    return "❌"
+
+
 def _parse_custom_headers(header_list: Optional[List[str]]) -> Dict[str, str]:
     """Parse custom headers from CLI arguments.
 
@@ -534,11 +543,22 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
     scan_results = results.get("scan_results", [])
     print(f"Tools scanned: {len(scan_results)}")
 
-    safe_tools = [tool for tool in scan_results if tool.get("is_safe", False)]
-    unsafe_tools = [tool for tool in scan_results if not tool.get("is_safe", False)]
+    safe_tools = [tool for tool in scan_results if tool.get("is_safe") is True]
+    unsafe_tools = [tool for tool in scan_results if tool.get("is_safe") is False]
+    incomplete_tools = [tool for tool in scan_results if tool.get("is_safe") is None]
 
     print(f"Safe tools: {len(safe_tools)}")
     print(f"Unsafe tools: {len(unsafe_tools)}")
+    print(f"Incomplete tools: {len(incomplete_tools)}")
+
+    if incomplete_tools:
+        print("\n=== Incomplete Tools ===\n")
+        for tool in incomplete_tools:
+            print(
+                f"{tool.get('tool_name', 'Unknown')}: {tool.get('status', 'unknown')}"
+            )
+            for error in tool.get("analyzer_errors", []):
+                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
 
     # Display unsafe tools
     if unsafe_tools:
@@ -624,7 +644,7 @@ def display_prompt_results_table(
     # Prepare table data
     table_data = []
     for result in results:
-        status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        status_icon = _safety_status_icon(result.get("is_safe"))
         prompt_name = result.get("prompt_name", "Unknown")
         desc = result.get("prompt_description", "")
         desc_short = desc[:40] + "..." if len(desc) > 40 else desc
@@ -639,9 +659,12 @@ def display_prompt_results_table(
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
     # Summary
-    safe = sum(1 for r in results if r.get("is_safe", False))
-    unsafe = sum(1 for r in results if not r.get("is_safe", False))
-    print(f"\n📊 Summary: {len(results)} total | {safe} safe | {unsafe} unsafe")
+    safe = sum(1 for r in results if r.get("is_safe") is True)
+    unsafe = sum(1 for r in results if r.get("is_safe") is False)
+    unknown = sum(1 for r in results if r.get("is_safe") is None)
+    print(
+        f"\n📊 Summary: {len(results)} total | {safe} safe | {unsafe} unsafe | {unknown} unknown"
+    )
 
 
 def display_resource_results_table(
@@ -664,8 +687,8 @@ def display_resource_results_table(
     for result in results:
         status = result.get("status", "unknown")
 
-        if status == "completed":
-            status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        if status in {"completed", "partial"}:
+            status_icon = _safety_status_icon(result.get("is_safe"))
         elif status == "skipped":
             status_icon = "⏭️"
         else:
@@ -676,7 +699,9 @@ def display_resource_results_table(
         uri_short = uri[:40] + "..." if len(uri) > 40 else uri
         mime_type = result.get("resource_mime_type", "unknown")
         findings_count = (
-            len(result.get("findings", [])) if status == "completed" else "-"
+            len(result.get("findings", []))
+            if status in {"completed", "partial"}
+            else "-"
         )
 
         table_data.append(
@@ -688,16 +713,17 @@ def display_resource_results_table(
 
     # Summary
     completed = [r for r in results if r.get("status") == "completed"]
+    partial = [r for r in results if r.get("status") == "partial"]
     skipped = [r for r in results if r.get("status") == "skipped"]
     failed = [r for r in results if r.get("status") == "failed"]
-    safe = sum(1 for r in completed if r.get("is_safe", False))
-    unsafe = sum(1 for r in completed if not r.get("is_safe", False))
+    safe = sum(1 for r in results if r.get("is_safe") is True)
+    unsafe = sum(1 for r in results if r.get("is_safe") is False)
+    unknown = sum(1 for r in results if r.get("is_safe") is None)
 
     print(
-        f"\n📊 Summary: {len(results)} total | {len(completed)} scanned | {len(skipped)} skipped | {len(failed)} failed"
+        f"\n📊 Summary: {len(results)} total | {len(completed)} completed | {len(partial)} partial | {len(skipped)} skipped | {len(failed)} failed"
     )
-    if completed:
-        print(f"   Security: {safe} safe | {unsafe} unsafe")
+    print(f"   Security: {safe} safe | {unsafe} unsafe | {unknown} unknown")
 
 
 def display_prompt_results(
@@ -715,11 +741,22 @@ def display_prompt_results(
     print(f"Server URL: {server_url}")
     print(f"Prompts scanned: {len(results)}")
 
-    safe_prompts = [p for p in results if p.get("is_safe", False)]
-    unsafe_prompts = [p for p in results if not p.get("is_safe", False)]
+    safe_prompts = [p for p in results if p.get("is_safe") is True]
+    unsafe_prompts = [p for p in results if p.get("is_safe") is False]
+    incomplete_prompts = [p for p in results if p.get("is_safe") is None]
 
     print(f"Safe prompts: {len(safe_prompts)}")
     print(f"Unsafe prompts: {len(unsafe_prompts)}")
+    print(f"Incomplete prompts: {len(incomplete_prompts)}")
+
+    if incomplete_prompts:
+        print("\n=== Incomplete Prompts ===\n")
+        for prompt in incomplete_prompts:
+            print(
+                f"{prompt.get('prompt_name', 'Unknown')}: {prompt.get('status', 'unknown')}"
+            )
+            for error in prompt.get("analyzer_errors", []):
+                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
 
     # Display unsafe prompts
     if unsafe_prompts:
@@ -795,75 +832,87 @@ def display_resource_results(
     print(f"Resources found: {len(results)}")
 
     completed = [r for r in results if r.get("status") == "completed"]
+    partial = [r for r in results if r.get("status") == "partial"]
     skipped = [r for r in results if r.get("status") == "skipped"]
     failed = [r for r in results if r.get("status") == "failed"]
 
     print(f"Scanned: {len(completed)}")
+    print(f"Partial: {len(partial)}")
     print(f"Skipped: {len(skipped)}")
     print(f"Failed: {len(failed)}")
 
-    if completed:
-        safe_resources = [r for r in completed if r.get("is_safe", False)]
-        unsafe_resources = [r for r in completed if not r.get("is_safe", False)]
+    safe_resources = [r for r in results if r.get("is_safe") is True]
+    unsafe_resources = [r for r in results if r.get("is_safe") is False]
+    incomplete_resources = [r for r in results if r.get("is_safe") is None]
 
-        print(f"Safe resources: {len(safe_resources)}")
-        print(f"Unsafe resources: {len(unsafe_resources)}")
+    print(f"Safe resources: {len(safe_resources)}")
+    print(f"Unsafe resources: {len(unsafe_resources)}")
+    print(f"Incomplete resources: {len(incomplete_resources)}")
 
-        # Display unsafe resources
-        if unsafe_resources:
-            print("\n=== Unsafe Resources ===\n")
-            for i, resource in enumerate(unsafe_resources, 1):
-                print(f"{i}. {resource.get('resource_name', 'Unknown')}")
-                print(f"   URI: {resource.get('resource_uri', 'N/A')}")
-                print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+    # Display unsafe resources
+    if unsafe_resources:
+        print("\n=== Unsafe Resources ===\n")
+        for i, resource in enumerate(unsafe_resources, 1):
+            print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+            print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+            print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
 
-                findings = resource.get("findings", [])
-                print(f"   Findings: {len(findings)}")
+            findings = resource.get("findings", [])
+            print(f"   Findings: {len(findings)}")
 
-                if detailed and findings:
-                    for j, finding in enumerate(findings, 1):
-                        print(f"   {j}. {finding.get('summary', 'No summary')}")
-                        print(f"      Severity: {finding.get('severity', 'Unknown')}")
-                        print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
+            if detailed and findings:
+                for j, finding in enumerate(findings, 1):
+                    print(f"   {j}. {finding.get('summary', 'No summary')}")
+                    print(f"      Severity: {finding.get('severity', 'Unknown')}")
+                    print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
 
-                        details = finding.get("details", {})
-                        if details.get("primary_threats"):
-                            threats = ", ".join(
-                                [
-                                    t.replace("_", " ").title()
-                                    for t in details["primary_threats"]
-                                ]
+                    details = finding.get("details", {})
+                    if details.get("primary_threats"):
+                        threats = ", ".join(
+                            [
+                                t.replace("_", " ").title()
+                                for t in details["primary_threats"]
+                            ]
+                        )
+                        print(f"      Threats: {threats}")
+
+                    # Display MCP Taxonomy if available
+                    mcp_taxonomy = finding.get("mcp_taxonomy")
+                    if mcp_taxonomy:
+                        aitech = mcp_taxonomy.get("aitech")
+                        aitech_name = mcp_taxonomy.get("aitech_name")
+                        aisubtech = mcp_taxonomy.get("aisubtech")
+                        aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                        description = mcp_taxonomy.get("description")
+
+                        if aitech:
+                            print(f"      Technique: {aitech} - {aitech_name}")
+                        if aisubtech:
+                            print(
+                                f"      Sub-Technique: {aisubtech} - {aisubtech_name}"
                             )
-                            print(f"      Threats: {threats}")
+                        if description:
+                            print(f"      Description: {description}")
+                    print()
+            print()
 
-                        # Display MCP Taxonomy if available
-                        mcp_taxonomy = finding.get("mcp_taxonomy")
-                        if mcp_taxonomy:
-                            aitech = mcp_taxonomy.get("aitech")
-                            aitech_name = mcp_taxonomy.get("aitech_name")
-                            aisubtech = mcp_taxonomy.get("aisubtech")
-                            aisubtech_name = mcp_taxonomy.get("aisubtech_name")
-                            description = mcp_taxonomy.get("description")
+    if incomplete_resources:
+        print("\n=== Incomplete Resources ===\n")
+        for resource in incomplete_resources:
+            print(
+                f"{resource.get('resource_name', 'Unknown')}: {resource.get('status', 'unknown')}"
+            )
+            for error in resource.get("analyzer_errors", []):
+                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
 
-                            if aitech:
-                                print(f"      Technique: {aitech} - {aitech_name}")
-                            if aisubtech:
-                                print(
-                                    f"      Sub-Technique: {aisubtech} - {aisubtech_name}"
-                                )
-                            if description:
-                                print(f"      Description: {description}")
-                        print()
-                print()
-
-        # Display safe resources if detailed
-        if detailed and safe_resources:
-            print("\n=== Safe Resources ===\n")
-            for i, resource in enumerate(safe_resources, 1):
-                print(f"{i}. {resource.get('resource_name', 'Unknown')}")
-                print(f"   URI: {resource.get('resource_uri', 'N/A')}")
-                print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
-                print()
+    # Display safe resources if detailed
+    if detailed and safe_resources:
+        print("\n=== Safe Resources ===\n")
+        for i, resource in enumerate(safe_resources, 1):
+            print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+            print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+            print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+            print()
 
     # Display skipped resources if any
     if skipped and detailed:
@@ -894,7 +943,7 @@ def display_instructions_results_table(
     table_data = []
     for result in results:
         status = result.get("status", "unknown")
-        status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        status_icon = _safety_status_icon(result.get("is_safe"))
         server_name = result.get("server_name", "Unknown")
         protocol_version = result.get("protocol_version", "N/A")
         findings_count = len(result.get("findings", []))
@@ -926,9 +975,12 @@ def display_instructions_results_table(
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
     # Summary
-    safe = sum(1 for r in results if r.get("is_safe", False))
-    unsafe = sum(1 for r in results if not r.get("is_safe", False))
-    print(f"\n📊 Summary: {len(results)} scanned | {safe} safe | {unsafe} unsafe")
+    safe = sum(1 for r in results if r.get("is_safe") is True)
+    unsafe = sum(1 for r in results if r.get("is_safe") is False)
+    unknown = sum(1 for r in results if r.get("is_safe") is None)
+    print(
+        f"\n📊 Summary: {len(results)} scanned | {safe} safe | {unsafe} unsafe | {unknown} unknown"
+    )
 
 
 def display_instructions_results(
@@ -945,11 +997,22 @@ def display_instructions_results(
     print(f"Server URL: {server_url}")
     print(f"Instructions scanned: {len(results)}")
 
-    safe_instructions = [i for i in results if i.get("is_safe", False)]
-    unsafe_instructions = [i for i in results if not i.get("is_safe", False)]
+    safe_instructions = [i for i in results if i.get("is_safe") is True]
+    unsafe_instructions = [i for i in results if i.get("is_safe") is False]
+    incomplete_instructions = [i for i in results if i.get("is_safe") is None]
 
     print(f"Safe: {len(safe_instructions)}")
     print(f"Unsafe: {len(unsafe_instructions)}")
+    print(f"Incomplete: {len(incomplete_instructions)}")
+
+    if incomplete_instructions:
+        print("\n=== Incomplete Instructions ===\n")
+        for instr in incomplete_instructions:
+            print(
+                f"{instr.get('server_name', 'Unknown')}: {instr.get('status', 'unknown')}"
+            )
+            for error in instr.get("analyzer_errors", []):
+                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
 
     # Display unsafe instructions
     if unsafe_instructions:
@@ -1934,6 +1997,7 @@ async def main():
                         "prompt_description": result.prompt_description,
                         "status": result.status,
                         "is_safe": result.is_safe,
+                        "analyzer_errors": result.analyzer_errors,
                         "findings": [
                             {
                                 "severity": f.severity,
@@ -1963,6 +2027,7 @@ async def main():
                         "prompt_description": r.prompt_description,
                         "status": r.status,
                         "is_safe": r.is_safe,
+                        "analyzer_errors": r.analyzer_errors,
                         "findings": [
                             {
                                 "severity": f.severity,
@@ -2009,9 +2074,8 @@ async def main():
                         "resource_name": result.resource_name,
                         "resource_mime_type": result.resource_mime_type,
                         "status": result.status,
-                        "is_safe": (
-                            result.is_safe if result.status == "completed" else None
-                        ),
+                        "is_safe": result.is_safe,
+                        "analyzer_errors": result.analyzer_errors,
                         "findings": [
                             {
                                 "severity": f.severity,
@@ -2042,7 +2106,8 @@ async def main():
                         "resource_name": r.resource_name,
                         "resource_mime_type": r.resource_mime_type,
                         "status": r.status,
-                        "is_safe": r.is_safe if r.status == "completed" else None,
+                        "is_safe": r.is_safe,
+                        "analyzer_errors": r.analyzer_errors,
                         "findings": [
                             {
                                 "severity": f.severity,
@@ -2080,6 +2145,7 @@ async def main():
                     "protocol_version": result.protocol_version,
                     "status": result.status,
                     "is_safe": result.is_safe,
+                    "analyzer_errors": result.analyzer_errors,
                     "findings": [
                         {
                             "severity": f.severity,

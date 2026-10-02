@@ -207,7 +207,7 @@ class ApiAnalyzer(BaseAnalyzer):
                     )
 
         except httpx.HTTPError as e:
-            self.logger.error(f"API analysis failed for tool '{tool_name}': {e}")
+            self.logger.error("API analysis failed: %s", type(e).__name__)
             raise
 
         return findings

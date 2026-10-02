@@ -91,9 +91,9 @@ def test_report_generator_uses_shared_helper() -> None:
         "should use mcpscanner.core.result.get_highest_severity directly."
     )
 
-    # And the module should import the shared helper so call sites can use it.
+    # Check the imported function itself, independent of import formatting.
     src = inspect.getsource(rg)
-    assert "from .result import get_highest_severity" in src
+    assert rg.get_highest_severity is get_highest_severity
     assert "get_highest_severity(" in src
 
 

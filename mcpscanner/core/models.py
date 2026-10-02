@@ -508,7 +508,8 @@ class ToolScanResult(BaseModel):
     tool_name: str
     status: str
     findings: dict  # Dictionary with analyzer names as keys
-    is_safe: bool
+    is_safe: Optional[bool]
+    analyzer_errors: List[Dict[str, str]] = Field(default_factory=list)
     meta_analysis: Optional[MetaAnalysisAudit] = Field(
         default=None,
         description=(

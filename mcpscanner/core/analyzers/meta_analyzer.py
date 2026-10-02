@@ -267,7 +267,9 @@ class MetaAnalyzer:
             with open(str(prompt_file), encoding="utf-8") as f:
                 return f.read()
         except Exception as e:
-            self._logger.warning("Failed to load meta-analysis prompt: %s", e)
+            self._logger.warning(
+                "Failed to load meta-analysis prompt: %s", type(e).__name__
+            )
             return (
                 "You are a senior security analyst performing meta-analysis on MCP security findings. "
                 "Review findings from multiple analyzers, identify false positives, "
@@ -329,12 +331,16 @@ class MetaAnalyzer:
             # On failure we deliberately do nothing: no FP suggestions means
             # apply_meta_analysis will keep every analyzer finding as-is.
             self._logger.error(
-                "Meta-analysis failed (%s); keeping all original findings.", e
+                "Meta-analysis failed (%s); keeping all original findings.",
+                type(e).__name__,
             )
             return MetaAnalysisResult(
                 overall_risk_assessment={
                     "risk_level": "UNKNOWN",
-                    "summary": f"Meta-analysis failed: {e}. Original findings preserved.",
+                    "summary": (
+                        f"Meta-analysis failed: {type(e).__name__}. "
+                        "Original findings preserved."
+                    ),
                 },
             )
 
@@ -532,7 +538,7 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
                 "Meta-analysis LLM request failed (transient, attempt %d): %s; "
                 "retrying in %.1fs",
                 attempt,
-                exc,
+                type(exc).__name__,
                 delay,
             )
 
@@ -548,7 +554,8 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
             kind = classify_analyzer_error(e, context="llm", model=self._model)
             if kind is ErrorKind.FINAL:
                 self._logger.error(
-                    "Meta-analysis LLM request failed (final error): %s", e
+                    "Meta-analysis LLM request failed (final error): %s",
+                    type(e).__name__,
                 )
             raise
 
@@ -569,7 +576,7 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
             # On parse failure, return an empty result so no findings are filtered.
             self._logger.error(
                 "Failed to parse meta-analysis response (%s); keeping all findings.",
-                e,
+                type(e).__name__,
             )
             return MetaAnalysisResult(
                 overall_risk_assessment={
