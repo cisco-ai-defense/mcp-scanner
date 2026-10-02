@@ -1213,6 +1213,7 @@ def test_handler_inherits_delegated_sink_with_clean_names() -> None:
     flow = _flow_for(ctx, "command")
     assert flow is not None, ctx.parameter_flows
     assert flow["reaches_external"] is True, flow
+    assert "exec" in (flow.get("external_sinks") or []), flow
 
 
 def test_rust_handler_inherits_delegated_shell_sink() -> None:
@@ -1272,6 +1273,272 @@ def test_python_handler_inherits_delegated_shell_sink() -> None:
     flow = _flow_for(ctx, "command")
     assert flow is not None, ctx.parameter_flows
     assert flow["reaches_external"] is True, flow
+    assert "subprocess.run" in (flow.get("external_sinks") or []), flow
+
+
+PYTHON_DELEGATED_EXECVE = """\
+from mcp import FastMCP
+import os
+
+app = FastMCP("execve")
+
+
+def launch(command: str) -> None:
+    os.execve(command, [command], {})
+    print(os.executable)
+
+
+@app.tool()
+def replace_process(command: str) -> str:
+    \"\"\"Replace the process image.\"\"\"
+    launch(command)
+    return command
+"""
+
+
+def test_python_os_exec_family_is_citable() -> None:
+    """``os.execve`` is a sink. ``os.executable`` is not."""
+    analyzer = NativeAnalyzer("x = 1\n", "names.py")
+    assert analyzer._py_citable_sink_name("os.execve") == "os.execve"
+    assert analyzer._py_citable_sink_name("os.execlp") == "os.execlp"
+    assert analyzer._py_citable_sink_name("os.executable") is None
+
+    analyzer = NativeAnalyzer(PYTHON_DELEGATED_EXECVE, "execve.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    flow = _flow_for(caps[0], "command")
+    assert flow is not None, caps[0].parameter_flows
+    sinks = flow.get("external_sinks") or []
+    assert "os.execve" in sinks, flow
+    assert "os.executable" not in sinks
+
+
+PYTHON_DELEGATED_SQL = """\
+from mcp import FastMCP
+
+app = FastMCP("sql")
+
+
+class Store:
+    def run(self, query: str) -> None:
+        cursor.execute(query)
+        pickle.loads(query)
+
+
+@app.tool()
+def search(query: str) -> str:
+    \"\"\"Run a query.\"\"\"
+    store = Store()
+    store.run(query)
+    return query
+"""
+
+
+def test_python_catalog_sinks_include_sql_and_deserialization() -> None:
+    """Delegated ``cursor.execute`` and ``pickle.loads`` are citable sinks."""
+    analyzer = NativeAnalyzer(PYTHON_DELEGATED_SQL, "sql.py")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    flow = _flow_for(caps[0], "query")
+    assert flow is not None, caps[0].parameter_flows
+    sinks = flow.get("external_sinks") or []
+    assert "cursor.execute" in sinks, flow
+    assert "pickle.loads" in sinks, flow
+    assert analyzer._py_citable_sink_name("buf.read") is None
+
+
+NEW_FUNCTION_TS = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "compile_source",
+  { description: "Compile source." },
+  async ({ code }) => {
+    const fn = new Function(code);
+    return { content: [{ type: "text", text: String(fn) }] };
+  }
+);
+"""
+
+
+def test_new_expression_sink_is_recorded() -> None:
+    """``new Function(code)`` is a citable sink, not only ``call_expression``."""
+    analyzer = NativeAnalyzer(NEW_FUNCTION_TS, "new_fn.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    flow = _flow_for(caps[0], "code")
+    assert flow is not None, caps[0].parameter_flows
+    assert "Function" in (flow.get("external_sinks") or []), flow
+
+
+PYTHON_WITH_AND_FOR = """\
+from mcp import FastMCP
+import subprocess
+
+app = FastMCP("with-for")
+
+
+def open_then_run(path: str) -> None:
+    with open(path) as handle:
+        subprocess.run(handle.read(), shell=True)
+
+
+def run_each(lines: str) -> None:
+    for line in lines.split(","):
+        subprocess.run(line, shell=True)
+
+
+@app.tool()
+def read_path(path: str) -> str:
+    \"\"\"Open a path and run it.\"\"\"
+    open_then_run(path)
+    return path
+
+
+@app.tool()
+def run_lines(lines: str) -> str:
+    \"\"\"Run each line.\"\"\"
+    run_each(lines)
+    return lines
+"""
+
+
+def test_python_with_and_for_carry_parameter_to_sink() -> None:
+    """A ``with open`` call and a ``for`` target both cite the parameter."""
+    analyzer = NativeAnalyzer(PYTHON_WITH_AND_FOR, "with_for.py")
+    caps = {ctx.name: ctx for ctx in analyzer.extract_mcp_capability_contexts()}
+
+    opened = _flow_for(caps["read_path"], "path")
+    assert opened is not None, caps["read_path"].parameter_flows
+    opened_sinks = opened.get("external_sinks") or []
+    assert "open" in opened_sinks, opened
+    assert "subprocess.run" in opened_sinks, opened
+
+    ran = _flow_for(caps["run_lines"], "lines")
+    assert ran is not None, caps["run_lines"].parameter_flows
+    assert "subprocess.run" in (ran.get("external_sinks") or []), ran
+
+
+SHORTHAND_AND_FOR_OF_TS = """\
+import { exec } from "node:child_process";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+server.registerTool(
+  "run_shorthand",
+  { description: "Run a command object." },
+  async ({ command }) => {
+    await exec({ command });
+    return { content: [{ type: "text", text: "done" }] };
+  }
+);
+
+server.registerTool(
+  "run_each",
+  { description: "Run each part." },
+  async ({ command }) => {
+    for (const part of command) {
+      exec(part);
+    }
+    return { content: [{ type: "text", text: "done" }] };
+  }
+);
+"""
+
+
+def test_js_shorthand_and_for_of_carry_parameter_to_sink() -> None:
+    """``{ command }`` and ``for...of`` still attribute the sink to the parameter."""
+    analyzer = NativeAnalyzer(SHORTHAND_AND_FOR_OF_TS, "shorthand.ts")
+    caps = {ctx.name: ctx for ctx in analyzer.extract_mcp_capability_contexts()}
+
+    shorthand = _flow_for(caps["run_shorthand"], "command")
+    assert shorthand is not None, caps["run_shorthand"].parameter_flows
+    assert "exec" in (shorthand.get("external_sinks") or []), shorthand
+
+    looped = _flow_for(caps["run_each"], "command")
+    assert looped is not None, caps["run_each"].parameter_flows
+    assert "exec" in (looped.get("external_sinks") or []), looped
+
+
+PYTHON_SAME_LEAF_AND_SPLIT_ARGS = """\
+from mcp import FastMCP
+import subprocess
+
+app = FastMCP("sink-attribution")
+
+
+class Logger:
+    def run(self, msg: str) -> None:
+        return None
+
+
+class Shell:
+    def run(self, command: str) -> None:
+        subprocess.run(command, shell=True)
+
+
+class Worker:
+    def go(self, cmd: str, note: str) -> None:
+        buf = bytes(note, "utf-8")
+        buf.read()
+        pathlib.Path(note)
+        socket.socket()
+        open(note)
+        subprocess.run(cmd, shell=True)
+
+
+@app.tool()
+def log_message(msg: str) -> str:
+    \"\"\"Log a message.\"\"\"
+    logger = Logger()
+    shell = Shell()
+    logger.run(msg)
+    shell.run("echo fixed")
+    return msg
+
+
+@app.tool()
+def annotate(note: str) -> str:
+    \"\"\"Store a note.\"\"\"
+    worker = Worker()
+    worker.go("ls", note)
+    return note
+
+
+@app.tool()
+def run_it(command: str) -> str:
+    \"\"\"Run a command.\"\"\"
+    worker = Worker()
+    worker.go(command, "static")
+    return command
+"""
+
+
+def test_python_sink_names_follow_the_forwarded_argument() -> None:
+    """Same method leaf and sibling parameters must not share sink names."""
+    analyzer = NativeAnalyzer(PYTHON_SAME_LEAF_AND_SPLIT_ARGS, "sinks.py")
+    caps = {ctx.name: ctx for ctx in analyzer.extract_mcp_capability_contexts()}
+
+    logged = _flow_for(caps["log_message"], "msg")
+    assert logged is not None
+    assert "subprocess.run" not in (logged.get("external_sinks") or [])
+
+    noted = _flow_for(caps["annotate"], "note")
+    assert noted is not None
+    noted_sinks = noted.get("external_sinks") or []
+    assert "open" in noted_sinks
+    assert "subprocess.run" not in noted_sinks
+    assert "buf.read" not in noted_sinks
+    assert not any(name.startswith("pathlib") for name in noted_sinks)
+    assert not any(name.startswith("socket") for name in noted_sinks)
+
+    ran = _flow_for(caps["run_it"], "command")
+    assert ran is not None
+    assert "subprocess.run" in (ran.get("external_sinks") or [])
+    assert "open" not in (ran.get("external_sinks") or [])
 
 
 SHADOWED_ALIAS_TS = """\
@@ -1374,6 +1641,9 @@ def test_shadowed_parameter_does_not_inherit_module_alias() -> None:
     assert len(caps) == 1
     ctx = caps[0]
     assert ctx.has_subprocess_calls is False
+    flow = _flow_for(ctx, "run")
+    if flow is not None:
+        assert "exec" not in (flow.get("external_sinks") or [])
 
 
 def test_local_sink_alias_in_handler_is_detected() -> None:
@@ -1387,6 +1657,7 @@ def test_local_sink_alias_in_handler_is_detected() -> None:
     flow = _flow_for(ctx, "command")
     assert flow is not None, ctx.parameter_flows
     assert flow["reaches_external"] is True, flow
+    assert "exec" in (flow.get("external_sinks") or []), flow
 
 
 def test_nested_scope_locals_do_not_shadow_outer_alias() -> None:
