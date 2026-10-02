@@ -5147,17 +5147,23 @@ class NativeAnalyzer:
         return shadowed
 
     def _ts_visible_sink_aliases_at(self, use_node: "Node") -> Dict[str, str]:
-        """Sink aliases visible at ``use_node`` without nested-scope bleed."""
+        """Sink aliases visible at ``use_node`` without nested-scope bleed.
+
+        Source order applies only inside the function that contains the use.
+        A function body runs when the function is called, so an alias in the
+        module or in an enclosing function is visible even when its
+        declaration appears later in the file. Shadowing of those names is
+        still decided by ``_ts_shadowed_names_at``.
+        """
         fn = self._ts_enclosing_function(use_node)
         if fn is None:
             return {}
         index = self._ts_build_scope_index(self._ts_root(use_node))
         use_byte = use_node.start_byte
         visible: Dict[str, str] = {}
-        module_aliases = index["module"]["aliases"]
-        cutoff = self._ts_events_before(module_aliases, use_byte)
-        for _byte, name, category in module_aliases[:cutoff]:
+        for _byte, name, category in index["module"]["aliases"]:
             visible[name] = category
+        innermost = index["by_span"].get((fn.start_byte, fn.end_byte))
         ancestors: List[Dict[str, Any]] = []
         current: Optional["Node"] = use_node
         while current is not None:
@@ -5167,8 +5173,10 @@ class NativeAnalyzer:
             current = current.parent
         for facts in reversed(ancestors):
             aliases = facts["aliases"]
-            cutoff = self._ts_events_before(aliases, use_byte)
-            for _byte, name, category in aliases[:cutoff]:
+            if facts is innermost:
+                cutoff = self._ts_events_before(aliases, use_byte)
+                aliases = aliases[:cutoff]
+            for _byte, name, category in aliases:
                 visible[name] = category
         return visible
 

@@ -1438,6 +1438,18 @@ SCOPE_ORDER_TS = """\
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 
+function helperBeforeModuleAlias(command) {
+  run(command);
+}
+
+function outerAliasAfterNested(command) {
+  function nestedUsesLater(command) {
+    later(command);
+  }
+  const later = promisify(exec);
+  return nestedUsesLater(command);
+}
+
 const early = promisify(exec);
 
 function seesModule(command) {
@@ -1581,6 +1593,8 @@ function assignThenCall(command) {
   early = command;
   early(command);
 }
+
+const run = promisify(exec);
 """
 
 TYPED_UNINITIALIZED_LET_TS = """\
@@ -1597,12 +1611,14 @@ function typedUninitializedLet(command: string) {
 
 
 def test_scope_index_keeps_declaration_order_and_nested_scopes() -> None:
-    """Aliases apply only after their declaration, and sibling scopes do not leak."""
+    """Source order applies inside one function. Outer aliases stay visible."""
     analyzer = NativeAnalyzer(SCOPE_ORDER_TS, "scope_order.js")
     result = analyzer.analyze()
     assert result.success, result.errors
     flags = {func.name: func.has_subprocess_calls for func in result.functions}
     assert flags["seesModule"] is True
+    assert flags["helperBeforeModuleAlias"] is True
+    assert flags["nestedUsesLater"] is True
     assert flags["aliasAfterUse"] is False
     assert flags["siblingDoesNotLeak"] is False
     assert flags["helper"] is False
