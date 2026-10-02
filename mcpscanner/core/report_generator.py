@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from .analyzers.meta_analyzer import build_meta_audit_payload
 from .models import OutputFormat, SeverityFilter
-from .result import get_highest_severity
+from .result import analyzer_result_key, get_highest_severity
 
 
 async def results_to_json(scan_results) -> List[Dict[str, Any]]:
@@ -45,13 +45,10 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
         findings_by_analyzer: Dict[str, Dict[str, Any]] = {}
         summaries_by_analyzer: Dict[str, List[str]] = {}
 
-        # Initialize all requested analyzers as SAFE first
+        # Initialize analyzers that completed with no findings as SAFE.
         if hasattr(result, "analyzers"):
             for analyzer in result.analyzers:
-                analyzer_name = str(analyzer).lower()
-                if hasattr(analyzer, "value"):  # AnalyzerEnum objects
-                    analyzer_name = analyzer.value.lower()
-                analyzer_key = analyzer_name + "_analyzer"
+                analyzer_key = analyzer_result_key(analyzer) + "_analyzer"
                 findings_by_analyzer[analyzer_key] = {
                     "severity": "SAFE",
                     "threat_names": [],
@@ -62,7 +59,7 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
 
         # Process actual findings and update analyzer data
         for finding in result.findings:
-            analyzer = finding.analyzer.lower() + "_analyzer"
+            analyzer = analyzer_result_key(finding.analyzer) + "_analyzer"
             if analyzer not in findings_by_analyzer:
                 findings_by_analyzer[analyzer] = {
                     "severity": "SAFE",
@@ -119,6 +116,31 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                         finding.mcp_taxonomy
                     )
 
+        for error in result.analyzer_errors:
+            analyzer_key = (
+                analyzer_result_key(error.get("analyzer", "unknown")) + "_analyzer"
+            )
+            analyzer_result = findings_by_analyzer.get(analyzer_key)
+            if analyzer_result is None:
+                analyzer_result = {
+                    "severity": "UNKNOWN",
+                    "threat_names": [],
+                    "threat_summary": "Analysis failed",
+                    "total_findings": 0,
+                    "status": "error",
+                    "errors": [],
+                }
+                findings_by_analyzer[analyzer_key] = analyzer_result
+            elif analyzer_result["total_findings"]:
+                analyzer_result["status"] = "partial"
+                analyzer_result.setdefault("errors", [])
+            else:
+                analyzer_result.update(
+                    severity="UNKNOWN", threat_summary="Analysis failed", status="error"
+                )
+                analyzer_result.setdefault("errors", [])
+            analyzer_result["errors"].append(error)
+
         # Use analyzer-provided summaries for analyzers with findings
         for analyzer, data in findings_by_analyzer.items():
             if data["total_findings"] > 0:
@@ -144,6 +166,8 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
             "is_safe": result.is_safe,
             "findings": findings_by_analyzer,
         }
+        if result.analyzer_errors:
+            result_dict["analyzer_errors"] = result.analyzer_errors
 
         # Surface meta-analyzer audit trail. Without this, "0 findings"
         # cannot be distinguished between *clean tool* and *meta filtered
@@ -363,15 +387,19 @@ class ReportGenerator:
             return "\n".join(output)
 
         # Count by safety
-        safe_count = sum(1 for r in results if r.get("is_safe", True))
-        unsafe_count = len(results) - safe_count
+        safe_count = sum(1 for r in results if r.get("is_safe", True) is True)
+        unsafe_count = sum(1 for r in results if r.get("is_safe", True) is False)
+        incomplete_count = sum(1 for r in results if r.get("is_safe", True) is None)
 
         output.append(f"Items matching filters: {len(results)}")
         output.append(f"Safe items: {safe_count}")
         output.append(f"Unsafe items: {unsafe_count}")
+        if incomplete_count:
+            output.append(f"Incomplete items: {incomplete_count}")
 
-        unsafe_results = [r for r in results if not r.get("is_safe", True)]
-        safe_results = [r for r in results if r.get("is_safe", True)]
+        unsafe_results = [r for r in results if r.get("is_safe", True) is False]
+        safe_results = [r for r in results if r.get("is_safe", True) is True]
+        incomplete_results = [r for r in results if r.get("is_safe", True) is None]
 
         def _render_item(idx: int, result: Dict[str, Any]) -> str:
             item_type = result.get("item_type", "tool")
@@ -394,6 +422,8 @@ class ReportGenerator:
                 for analyzer_data in findings.values()
             ]
             highest_severity = get_highest_severity(severities)
+            if result.get("is_safe", True) is None:
+                highest_severity = "INCOMPLETE"
             total_findings = sum(
                 analyzer_data.get("total_findings", 0)
                 for analyzer_data in findings.values()
@@ -413,6 +443,11 @@ class ReportGenerator:
         if unsafe_results:
             output.append("\n=== Unsafe Items ===")
             for i, result in enumerate(unsafe_results, 1):
+                output.append(_render_item(i, result))
+
+        if incomplete_results:
+            output.append("\n=== Incomplete Items ===")
+            for i, result in enumerate(incomplete_results, 1):
                 output.append(_render_item(i, result))
 
         # Also enumerate safe items so the summary reflects ALL tools detected
@@ -477,7 +512,13 @@ class ReportGenerator:
                     output.append(f"MIME Type: {result['resource_mime_type']}")
 
             output.append(f"Status: {status}")
-            output.append(f"Safe: {'Yes' if is_safe else 'No'}")
+            safety = "Unknown" if is_safe is None else "Yes" if is_safe else "No"
+            output.append(f"Safe: {safety}")
+            for error in result.get("analyzer_errors", []):
+                output.append(
+                    f"Analyzer error: {error.get('analyzer', 'Unknown')} "
+                    f"on {error.get('content_type', 'content')}"
+                )
 
             if findings:
                 output.append("Analyzer Results:")
@@ -581,6 +622,8 @@ class ReportGenerator:
             total_findings = sum(f.get("total_findings", 0) for f in findings.values())
             severities = [f.get("severity", "UNKNOWN") for f in findings.values()]
             highest_severity = get_highest_severity(severities)
+            if is_safe is None:
+                highest_severity = "INCOMPLETE"
 
             # Use colored emojis based on severity
             severity_emojis = {
@@ -590,11 +633,14 @@ class ReportGenerator:
                 "LOW": "🟡",
                 "INFO": "🔵",
                 "SAFE": "🟢",
+                "INCOMPLETE": "⚠️",
             }
             severity_icon = severity_emojis.get(highest_severity, "🟣")
             output.append(f"{severity_icon} {tool_name} ({highest_severity})")
 
-            if total_findings > 0:
+            if is_safe is None:
+                output.append("   Scan incomplete; safety is unknown")
+            elif total_findings > 0:
                 output.append(f"   Total findings: {total_findings}")
                 for analyzer, data in findings.items():
                     if data.get("total_findings", 0) > 0:
@@ -806,7 +852,13 @@ class ReportGenerator:
             else:
                 # Direct server scan: no target server column
                 tool_name = result.get("tool_name", result.get("package_name", "Unknown"))[:18]
-            status = "SAFE" if result.get("is_safe", True) else "UNSAFE"
+            is_safe = result.get("is_safe", True)
+            if is_safe is None:
+                status = "UNKNOWN"
+            elif is_safe:
+                status = "SAFE"
+            else:
+                status = "UNSAFE"
             findings = result.get("findings", {})
 
             # Get severity for each analyzer
@@ -835,7 +887,9 @@ class ReportGenerator:
                 "SAFE": "🟢",
             }
 
-            if findings:
+            if is_safe is None:
+                overall_severity = "UNKNOWN"
+            elif findings:
                 severities = [
                     f.get("severity", "UNKNOWN") for f in findings.values()
                 ]
@@ -878,6 +932,7 @@ class ReportGenerator:
             "total_tools": len(self.scan_results),
             "safe_tools": 0,
             "unsafe_tools": 0,
+            "incomplete_tools": 0,
             "severity_counts": {
                 "HIGH": 0,
                 "UNKNOWN": 0,
@@ -895,10 +950,12 @@ class ReportGenerator:
         }
 
         for result in self.scan_results:
-            if result.get("is_safe", True):
+            if result.get("is_safe", True) is True:
                 stats["safe_tools"] += 1
-            else:
+            elif result.get("is_safe", True) is False:
                 stats["unsafe_tools"] += 1
+            else:
+                stats["incomplete_tools"] += 1
 
             findings = result.get("findings", {})
             for analyzer, data in findings.items():

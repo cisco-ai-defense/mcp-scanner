@@ -167,6 +167,25 @@ class MCPScannerConstants:
         os.getenv("MCP_SCANNER_MAX_FUNCTION_SIZE_BYTES", "51200")  # 50 KB default
     )
 
+    # Runtime prompt/resource body budgets. Enforced before any analyzer
+    # sees the text. Oversized responses are failed, not truncated into a
+    # result that looks complete.
+    MAX_PROMPT_BODY_CHARS: int = int(
+        os.getenv("MCP_SCANNER_MAX_PROMPT_BODY_CHARS", "100000")
+    )
+    MAX_RESOURCE_BODY_CHARS: int = int(
+        os.getenv("MCP_SCANNER_MAX_RESOURCE_BODY_CHARS", "100000")
+    )
+    MAX_PROMPTS_PER_SCAN: int = int(
+        os.getenv("MCP_SCANNER_MAX_PROMPTS_PER_SCAN", "100")
+    )
+    MAX_PROMPT_RESOURCE_AGGREGATE_CHARS: int = int(
+        os.getenv("MCP_SCANNER_MAX_PROMPT_RESOURCE_AGGREGATE_CHARS", "1000000")
+    )
+    MCP_CONTENT_READ_TIMEOUT_SECONDS: float = float(
+        os.getenv("MCP_SCANNER_MCP_CONTENT_READ_TIMEOUT_SECONDS", "30")
+    )
+
     # AWS Configuration Defaults
     DEFAULT_AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
 
