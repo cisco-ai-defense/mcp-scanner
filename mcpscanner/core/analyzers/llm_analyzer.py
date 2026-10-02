@@ -24,7 +24,8 @@ import asyncio
 import json
 import secrets
 from typing import Any, Dict, List, Optional
-from litellm import acompletion
+from mcpscanner.utils.apple_fm import is_apple_fm_model
+from mcpscanner.utils.llm_completion import acompletion
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
@@ -77,14 +78,18 @@ class LLMAnalyzer(BaseAnalyzer):
 
         # Detect Bedrock model
         is_bedrock = self._model and "bedrock/" in self._model
+        is_apple_fm = is_apple_fm_model(self._model)
 
         # Authentication strategy based on provider:
         # 1. Non-Bedrock providers (OpenAI, Anthropic, etc.): API key required
         # 2. Bedrock with API key: Use Bedrock API key (MCP_SCANNER_LLM_API_KEY)
         # 3. Bedrock with bearer token: Use AWS_BEARER_TOKEN_BEDROCK for API gateway auth
         # 4. Bedrock without API key: Use AWS credentials (profile/IAM/session token)
+        # 5. apple-fm/: on-device Foundation Model, no API key
 
-        if not is_bedrock:
+        if is_apple_fm:
+            self._api_key = None
+        elif not is_bedrock:
             # Non-Bedrock providers always require API key
             if (
                 not hasattr(config, "llm_provider_api_key")

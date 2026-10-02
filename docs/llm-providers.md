@@ -14,6 +14,7 @@ Thanks to LiteLLM integration, the MCP Scanner supports 100+ LLM providers inclu
 - **Cohere**
 - **Hugging Face**
 - **Ollama** (Local models)
+- **Apple Foundation Models** (`apple-fm/system`, on-device)
 - **Together AI**
 - **Replicate**
 - And many more...
@@ -175,6 +176,40 @@ export MCP_SCANNER_LLM_API_KEY="ollama"
 export MCP_SCANNER_LLM_MODEL="ollama/llama2"
 export MCP_SCANNER_LLM_BASE_URL="http://localhost:11434"
 ```
+
+### Apple Foundation Models (on-device)
+
+On macOS 26+ with Apple Intelligence enabled, the scanner can call the
+system foundation model. No API key is required. Install the optional SDK:
+
+```bash
+pip install apple-fm-sdk
+```
+
+```python
+config = Config(
+    llm_model="apple-fm/system",
+    llm_temperature=0.1,
+    llm_max_tokens=1000,
+)
+```
+
+**Environment setup:**
+```bash
+export MCP_SCANNER_LLM_MODEL="apple-fm/system"
+```
+
+The model prefix is `apple-fm/`. Inference stays on the Mac. The SDK is
+only used for that prefix.
+
+Or install the optional extra: `pip install 'cisco-ai-mcp-scanner[apple-fm]'`.
+
+`apple-fm/system` fits tool, prompt, resource, and instruction description
+scans. Do not use it for behavioral code scanning, or for PyPI and npm scans
+that run the behavioral analyzer. Alignment prompts include source and
+dataflow context and exceed the on-device context window. Those checks fail,
+and the summary can show no tools. Use a hosted model such as Bedrock Claude
+or GPT-4o for `mcp-scanner behavioral`.
 
 ### Hugging Face
 
@@ -380,6 +415,7 @@ logging.basicConfig(level=logging.DEBUG)
 - **GPT-3.5-turbo**: Good balance of speed, cost, and accuracy
 - **Claude-3**: Excellent for security analysis with good speed
 - **Local models (Ollama)**: Free but may have lower accuracy
+- **Apple Foundation Models (`apple-fm/system`)**: On-device, no API key. Suitable for description scans. Do not use it for behavioral code scanning; alignment prompts exceed the on-device context window
 
 ### Optimization Tips
 

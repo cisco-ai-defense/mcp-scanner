@@ -83,6 +83,9 @@ php = [
     "tree-sitter>=0.21.0",
     "tree-sitter-php>=0.21.0",
 ]
+apple-fm = [
+    "apple-fm-sdk",
+]
 all-languages = [
     "tree-sitter>=0.23,<0.26",
     "tree-sitter-javascript>=0.23,<0.26",
