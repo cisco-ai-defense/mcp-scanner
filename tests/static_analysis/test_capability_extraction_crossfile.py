@@ -139,4 +139,10 @@ def test_crossfile_endpoint_table_expands_imported_aliases(tmp_path: Path) -> No
         for c in caps
         if any("registration.table" in t for t in c.decorator_types)
     ]
-    assert len(table_caps) >= 2, [c.decorator_types for c in caps]
+    registration_caps = [
+        c
+        for c in caps
+        if any(t == "<registration>.tool" for t in c.decorator_types)
+    ]
+    assert len(table_caps) == 0, [c.decorator_types for c in caps]
+    assert len(registration_caps) >= 2, [c.decorator_types for c in caps]
