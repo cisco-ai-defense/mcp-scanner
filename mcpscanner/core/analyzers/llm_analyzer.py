@@ -24,7 +24,8 @@ import asyncio
 import json
 import secrets
 from typing import Any, Dict, List, Optional
-from litellm import acompletion
+
+from ...utils.lazy_litellm import acompletion
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
