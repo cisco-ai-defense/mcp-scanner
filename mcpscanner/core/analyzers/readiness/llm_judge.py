@@ -185,7 +185,9 @@ class ReadinessLLMJudge:
             self._prompt_template = prompt_path.read_text(encoding="utf-8")
             return self._prompt_template
         except Exception as e:
-            self.logger.error(f"Failed to load readiness judge prompt: {e}")
+            self.logger.error(
+                "Failed to load readiness judge prompt: %s", type(e).__name__
+            )
             # Return a minimal fallback prompt
             return (
                 "Analyze this MCP tool definition for production readiness issues. "
@@ -226,7 +228,7 @@ class ReadinessLLMJudge:
             result = await self._run_evaluation(tool_json)
             findings = self._results_to_findings(result, tool_name)
         except Exception as e:
-            self.logger.error(f"LLM readiness evaluation failed for {tool_name}: {e}")
+            self.logger.error("LLM readiness evaluation failed: %s", type(e).__name__)
             return [
                 build_infrastructure_error_finding(
                     analyzer_name="READINESS-LLM",
@@ -289,7 +291,9 @@ class ReadinessLLMJudge:
 
             return json.loads(content.strip())
         except json.JSONDecodeError as e:
-            self.logger.warning(f"Failed to parse LLM response as JSON: {e}")
+            self.logger.warning(
+                "Failed to parse LLM response as JSON: %s", type(e).__name__
+            )
             return {"error": "Failed to parse LLM response", "raw": content}
 
     def _results_to_findings(
@@ -399,4 +403,3 @@ class ReadinessLLMJudge:
             threat_category=threat_category,
             details=details,
         )
-
