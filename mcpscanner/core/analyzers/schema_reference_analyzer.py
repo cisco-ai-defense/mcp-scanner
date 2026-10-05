@@ -59,7 +59,10 @@ class SchemaReferenceAnalyzer(BaseAnalyzer):
                 ref = value.get("$ref")
                 if isinstance(ref, str):
                     classified = self._classify_ref(ref)
-                    if classified is not None:
+                    # INFO findings still make ScanResult.is_safe false.
+                    # Relative and other informational references are kept
+                    # classifiable, but are not security findings by themselves.
+                    if classified is not None and classified[0] != "INFO":
                         severity, category = classified
                         findings.append(
                             self.create_security_finding(

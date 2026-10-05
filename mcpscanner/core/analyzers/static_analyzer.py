@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .base import BaseAnalyzer, SecurityFinding
+from .schema_reference_analyzer import SchemaReferenceAnalyzer
 from ..models import AnalyzerEnum
 from ...utils.logging_config import get_logger
 
@@ -162,20 +163,24 @@ class StaticAnalyzer:
         return name_map.get(analyzer.name, analyzer.name)
 
     async def _analyze_content(
-        self, content: str, context: Optional[Dict[str, Any]] = None
+        self,
+        content: str,
+        context: Optional[Dict[str, Any]] = None,
+        analyzers: Optional[List[BaseAnalyzer]] = None,
     ) -> List[SecurityFinding]:
         """Run all configured analyzers on the content.
 
         Args:
             content: Content to analyze.
             context: Additional context for analysis.
+            analyzers: Optional subset of configured analyzers for this content.
 
         Returns:
             List[SecurityFinding]: Combined findings from all analyzers.
         """
         all_findings = []
 
-        for analyzer in self.analyzers:
+        for analyzer in self.analyzers if analyzers is None else analyzers:
             try:
                 findings = await analyzer.analyze(content, context)
                 all_findings.extend(findings)
@@ -245,15 +250,27 @@ class StaticAnalyzer:
                 )
                 all_findings.extend(desc_findings)
 
-            # Analyze parameters (if present)
+            # Keep the established YARA/LLM/API parameter scope for tools
+            # with inputSchema. Only the schema-reference analyzer inspects
+            # an outputSchema-only tool; expanding every analyzer here would
+            # change unrelated static scan results.
             if "inputSchema" in tool_data or "outputSchema" in tool_data:
                 # Remove description to avoid duplicate analysis
                 params_data = {k: v for k, v in tool_data.items() if k != "description"}
                 params_json = json.dumps(params_data)
 
                 params_context = {"tool_name": tool_name, "content_type": "parameters"}
+                params_analyzers = (
+                    None
+                    if "inputSchema" in tool_data
+                    else [
+                        analyzer
+                        for analyzer in self.analyzers
+                        if isinstance(analyzer, SchemaReferenceAnalyzer)
+                    ]
+                )
                 params_findings = await self._analyze_content(
-                    params_json, params_context
+                    params_json, params_context, analyzers=params_analyzers
                 )
                 all_findings.extend(params_findings)
 

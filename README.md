@@ -79,6 +79,11 @@ Live scans (remote HTTP/SSE and stdio) negotiate the MCP protocol version automa
 2. **Legacy fallback:** If `discover` is unavailable or the server only supports handshake-era versions, the scanner falls back to **`initialize()`** (for example `2024-11-05`, `2025-06-18`, `2025-11-25`).
 3. **Backward compatible:** Existing stdio and remote servers that predate mcp 2.0 continue to work without changes on the scanner side.
 
+The Python MCP 1.x stdio server reports an unknown `server/discover` request as
+a generic `-32602` invalid-parameters error. The scanner retries `initialize()`
+for that specific stdio error shape and logs a warning. Other `-32602` errors
+surface to the caller so malformed modern discovery is not silently downgraded.
+
 Example servers under `examples/` and eval fixtures use **`MCPServer`** from `mcp.server.mcpserver` (mcp 2.0). The static/behavioral analyzers still recognize **legacy `FastMCP` patterns** in third-party source code for capability extraction.
 
 Integration tests: `uv run pytest tests/test_stdio_modern_integration.py tests/test_scanner.py -k negotiate`

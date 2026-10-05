@@ -837,18 +837,28 @@ class Scanner:
         return any(token in combined_message for token in tokens)
 
     @staticmethod
-    def _should_fallback_to_initialize(error: Exception) -> bool:
+    def _should_fallback_to_initialize(
+        error: Exception, *, legacy_stdio: bool = False
+    ) -> bool:
         """Return True when ``discover()`` failed in a way that ``initialize()`` may still work."""
-        if Scanner._is_missing_capability_error(error):
-            return True
+        rpc_error = getattr(error, "error", None)
         code = getattr(error, "code", None)
         if code is None:
-            rpc_error = getattr(error, "error", None)
             code = getattr(rpc_error, "code", None)
-        # The 1.x Python stdio server rejects an unknown discover request as
-        # invalid parameters rather than method-not-found. Retrying the legacy
-        # handshake on the same streams succeeds.
-        return code in (UNSUPPORTED_PROTOCOL_VERSION, -32602)
+        # MCP 1.x Python stdio servers use this exact generic error for an
+        # unknown discover method. A modern server may use -32602 for a real
+        # payload defect, so do not infer legacy support from the code alone.
+        if code == -32602:
+            return (
+                legacy_stdio
+                and getattr(rpc_error, "message", str(error))
+                == "Invalid request parameters"
+                and getattr(rpc_error, "data", None) in (None, "")
+            )
+        return (
+            code == UNSUPPORTED_PROTOCOL_VERSION
+            or Scanner._is_missing_capability_error(error)
+        )
 
     @staticmethod
     def _server_supports_capability(
@@ -880,7 +890,9 @@ class Scanner:
         # server advertised the capability.
         return getattr(capabilities, capability, None) is not None
 
-    async def _negotiate_mcp_session(self, session: ClientSession) -> Any:
+    async def _negotiate_mcp_session(
+        self, session: ClientSession, *, legacy_stdio: bool = False
+    ) -> Any:
         """Negotiate protocol version with the server.
 
         On mcp ≥ 2.0, tries modern ``server/discover`` first (``2026-07-28``)
@@ -899,8 +911,16 @@ class Scanner:
                 )
                 return connect_result
             except McpError as e:
-                if not self._should_fallback_to_initialize(e):
+                if not self._should_fallback_to_initialize(
+                    e, legacy_stdio=legacy_stdio
+                ):
                     raise
+                if getattr(e, "code", None) == -32602:
+                    logger.warning(
+                        "Legacy-shaped server/discover rejection over stdio; "
+                        "trying initialize() after: %s",
+                        e,
+                    )
                 logger.debug(
                     "server/discover unavailable (%s), falling back to initialize()",
                     e,
@@ -1955,7 +1975,10 @@ class Scanner:
 
                 session = ClientSession(read, write)
                 await asyncio.wait_for(session.__aenter__(), timeout=10)
-                await asyncio.wait_for(self._negotiate_mcp_session(session), timeout=10)
+                await asyncio.wait_for(
+                    self._negotiate_mcp_session(session, legacy_stdio=True),
+                    timeout=10,
+                )
 
             except asyncio.TimeoutError:
                 # Clean up on timeout

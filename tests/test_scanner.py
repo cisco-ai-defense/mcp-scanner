@@ -1407,12 +1407,43 @@ def test_should_fallback_to_initialize_covers_legacy_shapes(config):
     assert scanner._should_fallback_to_initialize(
         _mcp_error(-32022, "Unsupported protocol version")
     )
+    generic_invalid = _mcp_error(-32602, "Invalid request parameters")
+    assert not scanner._should_fallback_to_initialize(generic_invalid)
     assert scanner._should_fallback_to_initialize(
-        _mcp_error(-32602, "Invalid request parameters")
+        generic_invalid, legacy_stdio=True
+    )
+    assert not scanner._should_fallback_to_initialize(
+        _mcp_error(-32602, "params._meta is invalid"), legacy_stdio=True
+    )
+    assert not scanner._should_fallback_to_initialize(
+        _mcp_error(-32602, "unsupported discover parameters"), legacy_stdio=True
+    )
+    detailed_invalid = SimpleNamespace(
+        code=-32602,
+        error=SimpleNamespace(
+            message="Invalid request parameters", data={"field": "_meta"}
+        ),
+    )
+    assert not scanner._should_fallback_to_initialize(
+        detailed_invalid, legacy_stdio=True
     )
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32603, "Internal error")
     )
+
+
+@pytest.mark.asyncio
+async def test_negotiate_preserves_modern_invalid_discover_error(config):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    error = _mcp_error(-32602, "params._meta is invalid")
+    session.discover = AsyncMock(side_effect=error)
+
+    with pytest.raises(McpError) as raised:
+        await scanner._negotiate_mcp_session(session, legacy_stdio=True)
+
+    assert raised.value is error
+    session.initialize.assert_not_called()
 
 
 def test_session_connect_metadata_supports_legacy_initialize_fields(config):

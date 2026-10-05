@@ -25,6 +25,7 @@ Active checks:
     MCPS-002: Tool definitions exposed without authentication (CWE-306)
     MCPS-008: Fail-open semantics (CWE-636)
     MCPS-010: Modern HTTP method header/body mismatch accepted (CWE-436)
+    MCPS-012: Modern tools/list probe incomplete (diagnostic)
 
 Signing, replay, tool-integrity, identity, and rate-limit helper methods remain
 for SDK compatibility but are not called by analyze: the existing probes do
@@ -97,11 +98,42 @@ class ProtocolAnalyzer(BaseAnalyzer):
                 tools_response = await self._rpc(
                     client, target, "tools/list", modern=True
                 )
-                if tools_response is None:
-                    raise ConnectionError(f"Could not list tools at {target}")
                 findings.extend(self._check_transport(target))
-                findings.extend(self._check_auth(tools_response))
-                findings.extend(await self._check_header_consistency(client, target))
+                tools_body = self._parse_body(tools_response)
+                tools_result = (
+                    tools_body.get("result") if isinstance(tools_body, dict) else None
+                )
+                tools_listed = (
+                    tools_response is not None
+                    and tools_response.status_code == 200
+                    and isinstance(tools_result, dict)
+                    and isinstance(tools_result.get("tools"), list)
+                )
+                if tools_listed:
+                    findings.extend(self._check_auth(tools_response))
+                    findings.extend(
+                        await self._check_header_consistency(client, target)
+                    )
+                else:
+                    findings.append(
+                        self.create_security_finding(
+                            severity="UNKNOWN",
+                            summary="MCP 2.0 discovery succeeded, but tools/list "
+                            "could not be assessed; header and tool access "
+                            "checks are incomplete.",
+                            threat_category="Protocol Probe Incomplete",
+                            details={
+                                "check_id": "MCPS-012",
+                                "target": target,
+                                "status_code": (
+                                    tools_response.status_code
+                                    if tools_response is not None
+                                    else None
+                                ),
+                            },
+                        )
+                    )
+                findings.extend(await self._check_fail_open(client, target))
                 return findings
 
             # Legacy checks use the initialize-era wire format. Only run
