@@ -19,6 +19,11 @@ from mcpscanner.core.models import AnalyzerEnum
 from tests.test_scanner import _mcp_error
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "stdio_echo_server.py"
+LEGACY_INVALID_PARAMS_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "stdio_legacy_invalid_params_server.py"
+)
 
 
 @pytest.fixture
@@ -27,7 +32,10 @@ def config():
 
 
 pytestmark = pytest.mark.skipif(
-    not hasattr(__import__("mcp.client.session", fromlist=["ClientSession"]).ClientSession, "discover"),
+    not hasattr(
+        __import__("mcp.client.session", fromlist=["ClientSession"]).ClientSession,
+        "discover",
+    ),
     reason="mcp>=2.0 required for server/discover over stdio",
 )
 
@@ -84,3 +92,20 @@ async def test_stdio_legacy_initialize_fallback(config):
             assert [tool.name for tool in tools.tools] == ["echo_tool"]
         finally:
             await scanner._close_mcp_session(ctx, session)
+
+
+@pytest.mark.asyncio
+async def test_stdio_legacy_invalid_params_falls_back_on_real_transport(config):
+    scanner = Scanner(config)
+    server = StdioServer(
+        command=sys.executable, args=[str(LEGACY_INVALID_PARAMS_FIXTURE)]
+    )
+
+    ctx, session = await scanner._get_stdio_session(server, timeout=30)
+    try:
+        assert session.protocol_version == "2025-11-25"
+        assert session.initialize_result is not None
+        tools = await session.list_tools()
+        assert [tool.name for tool in tools.tools] == ["echo_tool"]
+    finally:
+        await scanner._close_mcp_session(ctx, session)

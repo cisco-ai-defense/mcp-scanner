@@ -843,7 +843,10 @@ class Scanner:
         if code is None:
             rpc_error = getattr(error, "error", None)
             code = getattr(rpc_error, "code", None)
-        return code == UNSUPPORTED_PROTOCOL_VERSION
+        # The 1.x Python stdio server rejects an unknown discover request as
+        # invalid parameters rather than method-not-found. Retrying the legacy
+        # handshake on the same streams succeeds.
+        return code in (UNSUPPORTED_PROTOCOL_VERSION, -32602)
 
     @staticmethod
     def _server_supports_capability(
@@ -920,14 +923,20 @@ class Scanner:
         init_result = getattr(session, "_init_result", None)
         if init_result is not None:
             instructions = getattr(init_result, "instructions", None)
-            server_info = getattr(
-                init_result, "server_info", getattr(init_result, "serverInfo", None)
-            )
-            protocol_version = getattr(
-                init_result,
-                "protocol_version",
-                getattr(init_result, "protocolVersion", None),
-            )
+            server_info = getattr(init_result, "serverInfo", None)
+            if server_info is None:
+                server_info = getattr(init_result, "server_info", None)
+            protocol_version = getattr(init_result, "protocolVersion", None)
+            if protocol_version is None:
+                protocol_version = getattr(init_result, "protocol_version", None)
+            # DiscoverResult keeps identity and the negotiated version on the
+            # session, while instructions are present on the result.
+            if not hasattr(init_result, "instructions"):
+                instructions = getattr(session, "instructions", None)
+            if server_info is None:
+                server_info = getattr(session, "server_info", None)
+            if protocol_version is None:
+                protocol_version = getattr(session, "protocol_version", None)
             return instructions, server_info, protocol_version
 
         return (

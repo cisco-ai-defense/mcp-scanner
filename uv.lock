@@ -490,7 +490,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.125.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "litellm", specifier = "==1.93.0" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.25.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=2.0.0" },
     { name = "pip-audit", specifier = ">=2.7.0" },
     { name = "puremagic", specifier = ">=1.28" },
     { name = "pydantic", specifier = ">=2.6.0" },

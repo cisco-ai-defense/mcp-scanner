@@ -45,7 +45,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - Python 3.11+
 - uv (Python package manager)
-- **MCP Python SDK** (`mcp>=1.25.0`, bundled with this package; development installs resolve to mcp 2.x). Live scans negotiate `2026-07-28` when the server supports it and fall back to legacy handshake versions automatically.
+- **MCP Python SDK** (`mcp>=2.0.0`, bundled with this package). Live scans negotiate `2026-07-28` when the server supports it and fall back to legacy handshake versions automatically.
 - A valid Cisco AI Defense API Key (optional)
 - LLM Provider API Key (optional)
 - VirusTotal API Key (optional, for binary file malware scanning)

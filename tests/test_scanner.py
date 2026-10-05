@@ -1407,6 +1407,9 @@ def test_should_fallback_to_initialize_covers_legacy_shapes(config):
     assert scanner._should_fallback_to_initialize(
         _mcp_error(-32022, "Unsupported protocol version")
     )
+    assert scanner._should_fallback_to_initialize(
+        _mcp_error(-32602, "Invalid request parameters")
+    )
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32603, "Internal error")
     )
@@ -1429,3 +1432,20 @@ def test_session_connect_metadata_supports_legacy_initialize_fields(config):
     assert instructions == "legacy instructions"
     assert server_info.name == "legacy-server"
     assert protocol_version == "2025-06-18"
+
+
+def test_session_connect_metadata_reads_modern_session_fields(config):
+    scanner = Scanner(config)
+    session = SimpleNamespace(
+        _init_result=SimpleNamespace(instructions="modern instructions"),
+        server_info=SimpleNamespace(name="modern-server"),
+        protocol_version="2026-07-28",
+    )
+
+    instructions, server_info, protocol_version = scanner._session_connect_metadata(
+        session
+    )
+
+    assert instructions == "modern instructions"
+    assert server_info.name == "modern-server"
+    assert protocol_version == "2026-07-28"
