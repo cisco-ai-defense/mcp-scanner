@@ -83,6 +83,13 @@ Example servers under `examples/` and eval fixtures use **`MCPServer`** from `mc
 
 Integration tests: `uv run pytest tests/test_stdio_modern_integration.py tests/test_scanner.py -k negotiate`
 
+For an unauthenticated HTTP endpoint, run read-only wire-protocol probes with
+`mcp-scanner protocol --server-url https://your-server.example/mcp`. This checks
+modern request envelope headers on servers advertising `2026-07-28` and retains
+the existing legacy checks for older endpoints. It does not call tools or prove
+that unauthenticated callers can invoke them. A protected endpoint may require
+separate authorized testing to assess its behavior after authentication.
+
 ### Install as a dependency in other projects
 
 Add MCP Scanner as a dependency using uv. From your project root (initialize with uv if needed):
