@@ -246,7 +246,7 @@ class StaticAnalyzer:
                 all_findings.extend(desc_findings)
 
             # Analyze parameters (if present)
-            if "inputSchema" in tool_data:
+            if "inputSchema" in tool_data or "outputSchema" in tool_data:
                 # Remove description to avoid duplicate analysis
                 params_data = {k: v for k, v in tool_data.items() if k != "description"}
                 params_json = json.dumps(params_data)

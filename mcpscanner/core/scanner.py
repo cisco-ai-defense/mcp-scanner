@@ -70,6 +70,7 @@ from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .analyzers.virustotal_analyzer import VirusTotalAnalyzer
 from .analyzers.prompt_defense_analyzer import PromptDefenseAnalyzer
 from .analyzers.readiness import ReadinessAnalyzer
+from .analyzers.schema_reference_analyzer import SchemaReferenceAnalyzer
 from .auth import (
     Auth,
     AuthType,
@@ -162,6 +163,7 @@ class Scanner:
         self._readiness_analyzer = ReadinessAnalyzer()
         # Prompt defense analyzer always available (pure regex, no API keys needed)
         self._prompt_defense_analyzer = PromptDefenseAnalyzer()
+        self._schema_analyzer = SchemaReferenceAnalyzer()
         # P1-3 fix: construct MetaAnalyzer once at __init__ under the same gate
         # used by LLM/Behavioral. The previous lazy-init path
         # (_validate_analyzer_requirements) was a method named "validate" that
@@ -963,8 +965,14 @@ class Scanner:
         all_findings = []
         name = tool.name
         description = tool.description
-        tool_json = tool.model_dump_json()
+        tool_json = tool.model_dump_json(by_alias=True)
         tool_data = json.loads(tool_json)
+
+        if AnalyzerEnum.SCHEMA in analyzers:
+            schema_findings = await self._schema_analyzer.analyze(
+                tool_json, {"tool_name": name, "content_type": "parameters"}
+            )
+            all_findings.extend(schema_findings)
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the description

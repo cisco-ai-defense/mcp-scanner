@@ -195,6 +195,8 @@ def _group_findings_for_api(
         "yara_analyzer": "YARA",
         "llm_analyzer": "LLM",
     }
+    if AnalyzerEnum.SCHEMA in scanner_result.analyzers:
+        default_analyzers["schema_analyzer"] = "SCHEMA"
 
     # Discover custom analyzers from the scanner instance.
     custom_analyzers = {a.name: a.name for a in scanner.get_custom_analyzers()}

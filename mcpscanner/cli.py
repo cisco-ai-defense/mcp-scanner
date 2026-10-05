@@ -53,6 +53,7 @@ from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
 from mcpscanner.core.analyzers.protocol_analyzer import ProtocolAnalyzer
+from mcpscanner.core.analyzers.schema_reference_analyzer import SchemaReferenceAnalyzer
 
 logger = get_logger(__name__)
 
@@ -1480,7 +1481,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package, meta (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package, meta, schema (default: %(default)s)",
     )
 
     parser.add_argument(
@@ -1600,6 +1601,7 @@ async def main():
             "behavioral_analyzer",
             "virustotal_analyzer",
             "vulnerable_package_analyzer",
+            "schema_analyzer",
         ],
         help="Filter results by specific analyzer",
     )
@@ -1741,6 +1743,9 @@ async def main():
                         "Warning: API analyzer requested but MCP_SCANNER_API_KEY not set",
                         file=sys.stderr,
                     )
+
+            if AnalyzerEnum.SCHEMA in selected_analyzers:
+                analyzers.append(SchemaReferenceAnalyzer())
 
             if not analyzers:
                 print(

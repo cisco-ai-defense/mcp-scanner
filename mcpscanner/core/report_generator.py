@@ -221,6 +221,7 @@ class ReportGenerator:
             "BEHAVIORAL": "behavioral_analyzer",
             "VULNERABLE_PACKAGE": "vulnerable_package_analyzer",
             "VIRUSTOTAL": "virustotal_analyzer",
+            "SCHEMA": "schema_analyzer",
         }
         self.requested_analyzer_keys = set()
         for analyzer in self.requested_analyzers:

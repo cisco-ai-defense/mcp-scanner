@@ -85,10 +85,16 @@ Integration tests: `uv run pytest tests/test_stdio_modern_integration.py tests/t
 
 For an unauthenticated HTTP endpoint, run read-only wire-protocol probes with
 `mcp-scanner protocol --server-url https://your-server.example/mcp`. This checks
-modern request envelope headers on servers advertising `2026-07-28` and retains
-the existing legacy checks for older endpoints. It does not call tools or prove
+modern request envelope headers on servers advertising `2026-07-28` and runs
+safe legacy checks for older endpoints. It does not call tools or prove
 that unauthenticated callers can invoke them. A protected endpoint may require
 separate authorized testing to assess its behavior after authentication.
+
+The opt-in `schema` analyzer classifies nested `$ref` values in advertised
+tool input and output schemas. Use `--analyzers schema` to run this check,
+including with the `static --tools` mode. See
+[MCP 2.0 threat coverage](docs/mcp-2-threat-coverage.md)
+for the scan-time and runtime boundary.
 
 ### Install as a dependency in other projects
 
