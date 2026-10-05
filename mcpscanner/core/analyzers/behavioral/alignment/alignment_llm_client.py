@@ -334,7 +334,10 @@ class AlignmentLLMClient:
             # (observed on Claude Haiku 4.5 cross-region profiles); Azure
             # older API versions also reject it. Rely on the prompt + validator
             # markdown fallbacks instead.
-            if not self._model.startswith(("azure/", "bedrock/", "apple-fm/")):
+            if not (
+                self._model.startswith(("azure/", "bedrock/"))
+                or is_apple_fm_model(self._model)
+            ):
                 request_params["response_format"] = {"type": "json_object"}
 
             # Add optional parameters if configured

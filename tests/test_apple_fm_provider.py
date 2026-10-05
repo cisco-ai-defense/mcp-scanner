@@ -5,6 +5,7 @@
 import asyncio
 import sys
 import types
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -24,6 +25,24 @@ def test_apple_fm_prefix() -> None:
     assert is_apple_fm_model("APPLE-FM/system") is True
     assert is_apple_fm_model("gpt-4o") is False
     assert is_apple_fm_model(None) is False
+
+
+@pytest.mark.asyncio
+async def test_alignment_omits_json_mode_for_mixed_case_apple_fm() -> None:
+    config = Config(llm_model="Apple-FM/system", llm_provider_api_key=None)
+    client = AlignmentLLMClient(config)
+    message = type("Msg", (), {"content": '{"is_malicious": false}'})()
+    choice = type("Choice", (), {"message": message})()
+    response = type("Resp", (), {"choices": [choice]})()
+
+    with patch(
+        "mcpscanner.core.analyzers.behavioral.alignment."
+        "alignment_llm_client.acompletion",
+        new=AsyncMock(return_value=response),
+    ) as mocked:
+        await client._make_llm_request("hello")
+
+    assert "response_format" not in mocked.await_args.kwargs
 
 
 def test_apple_fm_analyzers_do_not_require_an_api_key() -> None:

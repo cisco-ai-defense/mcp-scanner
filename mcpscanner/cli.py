@@ -1754,7 +1754,7 @@ async def main():
             if AnalyzerEnum.YARA in selected_analyzers:
                 analyzers.append(YaraAnalyzer(rules_dir=args.rules_path))
             if AnalyzerEnum.LLM in selected_analyzers:
-                if cfg.llm_provider_api_key:
+                if cfg.llm_provider_api_key or is_apple_fm_model(cfg.llm_model):
                     analyzers.append(LLMAnalyzer(cfg))
                 else:
                     print(
