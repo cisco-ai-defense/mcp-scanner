@@ -95,6 +95,7 @@ _TRANSIENT_KEYWORDS = (
     "throttl",
     "quota",
     "too many requests",
+    "concurrent request",
     "service unavailable",
     "bad gateway",
     "gateway timeout",
@@ -223,6 +224,10 @@ def classify_analyzer_error(
     """
     if context == "local":
         return ErrorKind.FINAL
+
+    # asyncio.wait_for raises TimeoutError with an empty message.
+    if isinstance(exc, TimeoutError):
+        return ErrorKind.TRANSIENT
 
     status_code = _exception_status_code(exc)
     if status_code in _FINAL_STATUS_CODES:

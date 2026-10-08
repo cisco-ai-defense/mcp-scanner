@@ -591,6 +591,43 @@ class TestStaticSubcommandCLI:
         return str(file_path)
 
     @pytest.mark.asyncio
+    async def test_static_llm_accepts_apple_fm_without_api_key(
+        self, tools_json_file, monkeypatch, capsys
+    ):
+        """Keyless apple-fm/ models still run the static LLM analyzer."""
+        from mcpscanner.cli import main
+
+        monkeypatch.setenv("MCP_SCANNER_LLM_MODEL", "Apple-FM/system")
+        monkeypatch.delenv("MCP_SCANNER_LLM_API_KEY", raising=False)
+        constructed = []
+
+        class _RecordingLLM:
+            def __init__(self, cfg):
+                constructed.append(cfg.llm_model)
+
+        async def _scan_tools(self, path):
+            return []
+
+        monkeypatch.setattr("mcpscanner.cli.LLMAnalyzer", _RecordingLLM)
+        monkeypatch.setattr(
+            "mcpscanner.cli.StaticAnalyzer.scan_tools_file", _scan_tools
+        )
+        test_args = [
+            "mcp-scanner",
+            "--analyzers",
+            "llm",
+            "static",
+            "--tools",
+            tools_json_file,
+        ]
+        with patch("sys.argv", test_args):
+            await main()
+
+        assert constructed == ["Apple-FM/system"]
+        captured = capsys.readouterr()
+        assert "MCP_SCANNER_LLM_API_KEY not set" not in captured.err
+
+    @pytest.mark.asyncio
     async def test_static_tools_scan_success(self, tools_json_file, capsys):
         """Test static subcommand with tools file."""
         from mcpscanner.cli import main
