@@ -1402,6 +1402,316 @@ def test_nested_scope_locals_do_not_shadow_outer_alias() -> None:
     assert flow["reaches_external"] is True, flow
 
 
+def _alias_stress_source(count: int) -> str:
+    aliases = "\n".join(
+        f"const alias{i} = promisify(exec);" for i in range(count)
+    )
+    calls = "\n".join(f"  alias{i}(command);" for i in range(count))
+    return (
+        'import { exec } from "node:child_process";\n'
+        'import { promisify } from "node:util";\n'
+        f"{aliases}\n"
+        "function tool(command) {\n"
+        f"{calls}\n"
+        "}\n"
+    )
+
+
+def test_scope_index_visits_grow_linearly_with_call_sites() -> None:
+    """Doubling call sites must not rescan the whole scope for each call."""
+
+    def visits(count: int) -> int:
+        analyzer = NativeAnalyzer(_alias_stress_source(count), "stress.js")
+        result = analyzer.analyze()
+        assert result.success, result.errors
+        tool = next(func for func in result.functions if func.name == "tool")
+        assert tool.has_subprocess_calls is True
+        return analyzer._ts_scope_nodes_visited
+
+    smaller = visits(40)
+    larger = visits(80)
+    assert smaller > 0
+    assert larger < smaller * 3, (smaller, larger)
+
+
+SCOPE_ORDER_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+
+function helperBeforeModuleAlias(command) {
+  run(command);
+}
+
+function outerAliasAfterNested(command) {
+  function nestedUsesLater(command) {
+    later(command);
+  }
+  const later = promisify(exec);
+  return nestedUsesLater(command);
+}
+
+function innerMissesBlockAlias(command) {
+  function missesBlockAlias(command) {
+    blocked(command);
+  }
+  if (command) {
+    const blocked = promisify(exec);
+    blocked(command);
+  }
+  return missesBlockAlias(command);
+}
+
+function innerSeesBlockAlias(command) {
+  if (command) {
+    function seesBlockAlias(command) {
+      blocked(command);
+    }
+    const blocked = promisify(exec);
+    return seesBlockAlias(command);
+  }
+}
+
+function callOutsideBlock(command) {
+  if (command) {
+    const blocked = promisify(exec);
+  }
+  blocked(command);
+}
+
+const early = promisify(exec);
+
+function seesModule(command) {
+  early(command);
+}
+
+function aliasAfterUse(command) {
+  early2(command);
+  const early2 = promisify(exec);
+}
+
+function siblingDoesNotLeak(command) {
+  function helper() {
+    const hidden = promisify(exec);
+    return hidden;
+  }
+  hidden(command);
+}
+
+function blockShadows(command) {
+  if (command) {
+    const early = command;
+  }
+  early(command);
+}
+
+function blockLocalShadowThenCall(command) {
+  if (flag) {
+    const run = "local";
+  }
+  run(command);
+}
+
+function blockLocalShadowInside(command) {
+  if (flag) {
+    const run = "local";
+    run(command);
+  }
+}
+
+function blockDestructureThenCall(command) {
+  if (flag) {
+    const { run } = command;
+  }
+  run(command);
+}
+
+function uninitializedLet(command) {
+  let early;
+  early(command);
+}
+
+function bareLetThenAlias(command) {
+  let early;
+  early = promisify(exec);
+  early(command);
+}
+
+function forOfShadows(command) {
+  for (const early of command) {
+    early(command);
+  }
+}
+
+function forInShadows(command) {
+  for (const early in command) {
+    early(command);
+  }
+}
+
+function forOfAssignsOuter(command) {
+  for (early of command) {
+    early(command);
+  }
+}
+
+function forOfPattern(command) {
+  for (const { early } of command) {
+    early(command);
+  }
+}
+
+function afterForOf(command) {
+  for (const early of command) {
+    noop(early);
+  }
+  early(command);
+}
+
+async function afterForAwait(command) {
+  for await (const early of command) {
+    noop(early);
+  }
+  early(command);
+}
+
+function forVarAfter(command) {
+  for (var early of command) {
+    noop(early);
+  }
+  early(command);
+}
+
+function catchShadows(command) {
+  try {
+    noop(command);
+  } catch (early) {
+    early(command);
+  }
+}
+
+function afterCatch(command) {
+  try {
+    noop(command);
+  } catch (early) {
+    noop(early);
+  }
+  early(command);
+}
+
+function destructureShadows(command) {
+  const { early } = command;
+  early(command);
+}
+
+function arrayShadows(command) {
+  const [early] = command;
+  early(command);
+}
+
+function destructureInit(command) {
+  const { early } = early(command);
+  return early;
+}
+
+function destructureDefault(command) {
+  const { early = early(command) } = {};
+  return early;
+}
+
+function defaultAfterAssign(command) {
+  const { early = (other = 1, early(command)) } = {};
+  return early;
+}
+
+function forOfIterableAssign(command) {
+  for (const early of (other = 1, early(command))) {
+    noop(early);
+  }
+}
+
+function identInit(command) {
+  const early = early(command);
+  return early;
+}
+
+function assignInit(command) {
+  early = early(command);
+}
+
+function assignThenCall(command) {
+  early = command;
+  early(command);
+}
+
+const run = promisify(exec);
+"""
+
+TYPED_UNINITIALIZED_LET_TS = """\
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+
+const early = promisify(exec);
+
+function typedUninitializedLet(command: string) {
+  let early: string;
+  early(command);
+}
+"""
+
+
+def test_scope_index_keeps_declaration_order_and_nested_scopes() -> None:
+    """Source order applies inside one function. Outer aliases stay visible.
+
+    A const or let inside a nested block is visible only inside that block.
+    """
+    analyzer = NativeAnalyzer(SCOPE_ORDER_TS, "scope_order.js")
+    result = analyzer.analyze()
+    assert result.success, result.errors
+    flags = {func.name: func.has_subprocess_calls for func in result.functions}
+    assert flags["seesModule"] is True
+    assert flags["helperBeforeModuleAlias"] is True
+    assert flags["nestedUsesLater"] is True
+    assert flags["missesBlockAlias"] is False
+    assert flags["innerMissesBlockAlias"] is True
+    assert flags["seesBlockAlias"] is True
+    assert flags["callOutsideBlock"] is False
+    assert flags["aliasAfterUse"] is False
+    assert flags["siblingDoesNotLeak"] is False
+    assert flags["helper"] is False
+    assert flags["blockShadows"] is True
+    assert flags["blockLocalShadowThenCall"] is True
+    assert flags["blockLocalShadowInside"] is False
+    assert flags["blockDestructureThenCall"] is True
+    assert flags["uninitializedLet"] is False
+    assert flags["bareLetThenAlias"] is False
+    assert flags["forOfShadows"] is False
+    assert flags["forInShadows"] is False
+    assert flags["forOfPattern"] is False
+    assert flags["forOfAssignsOuter"] is True
+    assert flags["afterForOf"] is True
+    assert flags["afterForAwait"] is True
+    assert flags["forVarAfter"] is False
+    assert flags["catchShadows"] is False
+    assert flags["afterCatch"] is True
+    assert flags["destructureShadows"] is False
+    assert flags["arrayShadows"] is False
+    assert flags["destructureInit"] is True
+    assert flags["destructureDefault"] is True
+    assert flags["defaultAfterAssign"] is True
+    assert flags["forOfIterableAssign"] is True
+    assert flags["identInit"] is False
+    assert flags["assignInit"] is True
+    assert flags["assignThenCall"] is False
+
+    typed = NativeAnalyzer(TYPED_UNINITIALIZED_LET_TS, "typed_let.ts")
+    typed_result = typed.analyze()
+    assert typed_result.success, typed_result.errors
+    typed_flags = {
+        func.name: func.has_subprocess_calls for func in typed_result.functions
+    }
+    assert typed_flags["typedUninitializedLet"] is False
+
+
 def test_qualified_delegate_resolves_correct_class_method() -> None:
     """When two classes share a method name, delegation must resolve the
     qualified ``Class.method`` target, not the first bare leaf match."""
