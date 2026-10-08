@@ -99,6 +99,129 @@ def normalize_finding_class(value: Any) -> str:
     return FINDING_CLASS_UNSPECIFIED
 
 
+def _flow_parameter_name(flow: Dict[str, Any]) -> str:
+    """Parameter name recorded by either dataflow backend."""
+    raw = flow.get("parameter_name")
+    if not isinstance(raw, str) or not raw.strip():
+        raw = flow.get("parameter")
+    if not isinstance(raw, str):
+        return ""
+    return raw.strip()
+
+
+def _flow_reached_calls(flow: Dict[str, Any]) -> set:
+    """Call names a parameter flow actually reaches.
+
+    Direct calls, tree-sitter ``call`` operations, and sinks recorded
+    on a callee (``external_sinks``) all count. ``reaches_external``
+    alone does not name a sink and is not accepted by itself.
+    """
+    calls = set()
+    for key in ("reaches_calls", "external_sinks"):
+        for name in flow.get(key) or []:
+            if isinstance(name, str) and name.strip():
+                calls.add(name.strip())
+    for op in flow.get("operations") or []:
+        if not isinstance(op, dict):
+            continue
+        if op.get("type") not in ("function_call", "call"):
+            continue
+        function = op.get("function")
+        if isinstance(function, str) and function.strip():
+            calls.add(function.strip())
+    return calls
+
+
+def _sink_names_match(claimed: str, fact: str) -> bool:
+    """True when two call names are the same path or a dotted suffix.
+
+    ``subprocess.run`` matches ``run``. ``exec`` does not match
+    ``executeQuery``, and ``Command.new`` does not match ``CString.new``.
+    """
+    claimed = claimed.strip()
+    fact = fact.strip()
+    if not claimed or not fact:
+        return False
+    if claimed == fact:
+        return True
+    return claimed.endswith("." + fact) or fact.endswith("." + claimed)
+
+
+def _reachability_claims(analysis: Dict[str, Any]) -> Optional[List[Dict[str, str]]]:
+    """Parse structured parameter-to-sink claims.
+
+    A prose ``dataflow_evidence`` string is not a claim. Returns
+    ``None`` when the payload is missing or not a list/object of
+    ``parameter`` and ``sink`` strings. An empty list means the model
+    sent a structured payload with no paths.
+    """
+    raw = analysis.get("reachability_evidence")
+    if raw is None and isinstance(analysis.get("dataflow_evidence"), (dict, list)):
+        raw = analysis.get("dataflow_evidence")
+    if isinstance(raw, dict):
+        items: List[Any] = [raw]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        return None
+
+    claims: List[Dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            return None
+        parameter = item.get("parameter")
+        sink = item.get("sink")
+        if not isinstance(parameter, str) or not isinstance(sink, str):
+            return None
+        parameter = parameter.strip()
+        sink = sink.strip()
+        if not parameter or not sink:
+            return None
+        claims.append({"parameter": parameter, "sink": sink})
+    return claims
+
+
+def apply_capability_risk_contract(
+    analysis: Dict[str, Any], func_context: Any
+) -> bool:
+    """Accept this mismatch, or reject an unsupported CAPABILITY_RISK.
+
+    Other finding classes are unchanged. CAPABILITY_RISK is accepted
+    only when every claimed parameter reaches the claimed sink in
+    ``parameter_flows``. On acceptance the validated claims replace
+    ``reachability_evidence`` so later findings cite source facts, not
+    the model's prose.
+    """
+    if (
+        normalize_finding_class(analysis.get("finding_class"))
+        != FINDING_CLASS_CAPABILITY
+    ):
+        return True
+
+    claims = _reachability_claims(analysis)
+    if not claims:
+        return False
+
+    reached_by_parameter: Dict[str, set] = {}
+    for flow in getattr(func_context, "parameter_flows", None) or []:
+        if not isinstance(flow, dict):
+            continue
+        name = _flow_parameter_name(flow)
+        if not name:
+            continue
+        reached_by_parameter.setdefault(name, set()).update(_flow_reached_calls(flow))
+
+    for claim in claims:
+        reached = reached_by_parameter.get(claim["parameter"])
+        if not reached or not any(
+            _sink_names_match(claim["sink"], fact) for fact in reached
+        ):
+            return False
+
+    analysis["reachability_evidence"] = claims
+    return True
+
+
 class AlignmentResponseValidator:
     """Validates alignment verification responses from LLM.
 
@@ -300,6 +423,9 @@ class AlignmentResponseValidator:
                 "parameter_flows": func_context.parameter_flows,
             },
         )
+        evidence = analysis.get("reachability_evidence")
+        if evidence:
+            finding.details["reachability_evidence"] = evidence
 
         return finding
 
