@@ -89,7 +89,7 @@ rule credential_harvesting{
         $credential_file_extensions = /\.(keystore|passwd|shadow|config|env|credential|secret|token|private|pub|rsa|dsa|ecdsa|ed25519|pem|crt|cer|key|p12|pfx|jks)\b/
 
         // Pattern for exfiltration action words
-        $leak_param  = /\b(leak|exfiltrate|export|dump) [^\n]{0,40}(parameter|context|files?|credentials?|keys?|tokens?|secrets?)\b/i
+        $leak_param  = /\b(leak|exfiltrate|export|dump) [^\n]{0,40}?(parameter|context|files??|credentials??|keys??|tokens??|secrets??)\b/i
 
         // Base64 credential encoding patterns
         $base64_credential_encoding = /\b(base64\s+encode [^\n]*credentials?|concatenate [^\n]*conversation\s+history)\b/i
@@ -133,12 +133,15 @@ rule credential_harvesting{
 
         // Exfiltration attempts — at least one $leak_param occurrence must
         // have no $negated_disclosure inside its own span (offset within
-        // [match start, match start + 51]); occurrences whose object phrase
-        // itself is a negation ("dump no secrets") stay suppressed.
+        // [match start, match start + match length]); occurrences whose
+        // object phrase itself is a negation ("dump no secrets") stay
+        // suppressed. The lazy gap keeps each occurrence to its nearest
+        // object word so a negation in an adjacent clause cannot suppress
+        // an unrelated real disclosure.
         ($leak_param and not $generic_config_ops and
           (for any i in (1..#leak_param) :
             (not (for any j in (1..#negated_disclosure) :
-              ((@negated_disclosure[j] >= @leak_param[i]) and (@negated_disclosure[j] <= @leak_param[i] + 51)))))) or
+              ((@negated_disclosure[j] >= @leak_param[i]) and (@negated_disclosure[j] < @leak_param[i] + !leak_param[i])))))) or
 
         // Base64 credential encoding
         $base64_credential_encoding or
