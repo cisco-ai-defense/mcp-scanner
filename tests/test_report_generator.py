@@ -543,6 +543,97 @@ class TestResultsToJson:
         assert json_results[0]["status"] == "failed"
 
     @pytest.mark.asyncio
+    async def test_results_to_json_preserves_all_findings_per_analyzer(self):
+        """Multiple findings from one analyzer must all be preserved.
+
+        Regression for the readiness analyzer (and any analyzer emitting many
+        findings per tool): the aggregated fields only keep the first summary,
+        so ``detailed_findings`` must carry every individual finding.
+        """
+        findings = [
+            SecurityFinding(
+                SeverityLevel.HIGH,
+                "Tool does not specify a timeout",
+                "READINESS",
+                "MISSING_TIMEOUT_GUARD",
+                {"rule_id": "HEUR-001", "recommendation": "Add a timeout field"},
+            ),
+            SecurityFinding(
+                SeverityLevel.MEDIUM,
+                "Unsafe retry loop detected",
+                "READINESS",
+                "UNSAFE_RETRY_LOOP",
+                {"rule_id": "HEUR-003", "recommendation": "Cap the retries"},
+            ),
+            SecurityFinding(
+                SeverityLevel.LOW,
+                "Missing error schema",
+                "READINESS",
+                "MISSING_ERROR_SCHEMA",
+                {"rule_id": "HEUR-006"},
+            ),
+        ]
+        result = ToolScanResult(
+            "appscan_get_apps", "desc", "completed", ["READINESS"], findings
+        )
+
+        json_results = await results_to_json([result])
+
+        data = json_results[0]["findings"]["readiness_analyzer"]
+        assert data["total_findings"] == 3
+        detailed = data["detailed_findings"]
+        assert len(detailed) == 3
+
+        rule_ids = {df["details"].get("rule_id") for df in detailed}
+        assert rule_ids == {"HEUR-001", "HEUR-003", "HEUR-006"}
+
+        summaries = {df["summary"] for df in detailed}
+        assert "Unsafe retry loop detected" in summaries
+        assert "Missing error schema" in summaries
+
+        # Aggregated severity must reflect the highest individual finding.
+        assert data["severity"] == "HIGH"
+
+    @pytest.mark.asyncio
+    async def test_detailed_format_renders_all_individual_findings(self):
+        """--format detailed must surface every finding, not just the first."""
+        findings = [
+            SecurityFinding(
+                SeverityLevel.HIGH,
+                "Tool does not specify a timeout",
+                "READINESS",
+                "MISSING_TIMEOUT_GUARD",
+                {"rule_id": "HEUR-001", "recommendation": "Add a timeout field"},
+            ),
+            SecurityFinding(
+                SeverityLevel.MEDIUM,
+                "Unsafe retry loop detected",
+                "READINESS",
+                "UNSAFE_RETRY_LOOP",
+                {"rule_id": "HEUR-003"},
+            ),
+        ]
+        result = ToolScanResult(
+            "appscan_get_apps", "desc", "completed", ["READINESS"], findings
+        )
+
+        json_results = await results_to_json([result])
+        scan_data = {
+            "server_url": "http://test-server.com",
+            "scan_results": json_results,
+            "requested_analyzers": ["readiness"],
+        }
+        output = ReportGenerator(scan_data).format_output(OutputFormat.DETAILED)
+
+        assert "Individual Findings (2):" in output
+        # Both rule ids and the second finding's summary (previously hidden)
+        # must now be visible.
+        assert "HEUR-001" in output
+        assert "HEUR-003" in output
+        assert "Unsafe retry loop detected" in output
+        assert "Add a timeout field" in output
+
+    @pytest.mark.asyncio
     async def test_results_to_json_finding_serialization(self):
         """Test that findings are properly serialized."""
         finding = SecurityFinding(
