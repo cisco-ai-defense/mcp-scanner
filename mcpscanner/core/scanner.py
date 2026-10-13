@@ -3531,12 +3531,14 @@ class Scanner:
         """Templates from ``resources/templates/list``, following cursors.
 
         The second element is set when discovery was incomplete: a
-        ``CoverageLimitExceeded`` when the page cap stopped pagination, or the
-        listing error. Templates collected before either are still returned.
+        ``CoverageLimitExceeded`` when the page cap stopped pagination, a
+        ``ValueError`` when the server repeated a cursor, or the listing
+        error. Templates collected before any of these are still returned.
         A server without the templates capability is not an error.
         """
         templates: List[Any] = []
         cursor: Optional[str] = None
+        seen_cursors: set = set()
         try:
             for _ in range(self._MAX_TEMPLATE_PAGES):
                 page = await session.list_resource_templates(cursor)
@@ -3546,16 +3548,32 @@ class Scanner:
                 cursor = getattr(page, "nextCursor", None)
                 if not isinstance(cursor, str) or not cursor:
                     return templates, None
+                if cursor in seen_cursors:
+                    logger.warning(
+                        f"Server '{server_url}' repeated a resource template "
+                        "cursor; stopping template discovery"
+                    )
+                    return templates, ValueError(
+                        "resource template cursor repeated"
+                    )
+                seen_cursors.add(cursor)
         except McpError as e:
+            # Server error text may carry tokens or scanned content; log only the type.
             if self._is_missing_capability_error(e):
                 logger.info(
-                    f"Server '{server_url}' does not expose resource templates: {e}"
+                    f"Server '{server_url}' does not expose resource templates"
                 )
                 return templates, None
-            logger.warning(f"Could not list resource templates on '{server_url}': {e}")
+            logger.warning(
+                f"Could not list resource templates on '{server_url}': "
+                f"{type(e).__name__}"
+            )
             return templates, e
         except Exception as e:
-            logger.warning(f"Could not list resource templates on '{server_url}': {e}")
+            logger.warning(
+                f"Could not list resource templates on '{server_url}': "
+                f"{type(e).__name__}"
+            )
             return templates, e
         logger.warning(
             f"Stopped listing resource templates on '{server_url}' after "

@@ -621,8 +621,14 @@ async def test_template_page_limit_reports_incomplete_discovery(config, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_template_listing_error_mid_pagination_reports_failure(config):
+async def test_template_listing_error_mid_pagination_reports_failure(config, monkeypatch):
+    from unittest.mock import MagicMock
+
+    import mcpscanner.core.scanner as scanner_module
     from mcpscanner.core.scanner import McpError
+
+    fake_logger = MagicMock()
+    monkeypatch.setattr(scanner_module, "logger", fake_logger)
 
     scanner = Scanner(config)
     scanner._analyze_resource = AsyncMock(
@@ -644,6 +650,37 @@ async def test_template_listing_error_mid_pagination_reports_failure(config):
     assert discovery.status == "failed"
     assert discovery.findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
     assert "secret-token-123" not in discovery.findings[0].summary
+    logged = " ".join(str(c) for c in fake_logger.mock_calls)
+    assert "secret-token-123" not in logged
+    assert "McpError" in logged
+
+
+@pytest.mark.asyncio
+async def test_repeated_template_cursor_stops_discovery(config):
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.side_effect = [
+        SimpleNamespace(resourceTemplates=[_listed_template("a://{x}", "a", "first")], nextCursor="p2"),
+        SimpleNamespace(resourceTemplates=[_listed_template("b://{y}", "b", "second")], nextCursor="p2"),
+        SimpleNamespace(resourceTemplates=[_listed_template("b://{y}", "b", "second")], nextCursor="p2"),
+    ]
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert [r.resource_uri for r in results] == [
+        "a://{x}",
+        "b://{y}",
+        "resources/templates/list",
+    ]
+    assert results[-1].status == "failed"
+    assert results[-1].findings[0].details["error_type"] == "ValueError"
+    assert session.list_resource_templates.await_count == 2
 
 
 @pytest.mark.asyncio
