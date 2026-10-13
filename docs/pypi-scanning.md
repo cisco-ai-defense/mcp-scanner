@@ -166,7 +166,26 @@ Docker is still the recommended path for untrusted packages. Local mode exists f
       "severity": "HIGH",
       "threat_category": "DATA EXFILTRATION",
       "summary": "Tool sends data to external server",
-      "details": {}
+      "details": {},
+      "evidence": {
+        "summary": "DATA EXFILTRATION in send_data",
+        "status": "observed",
+        "sources": [
+          {
+            "location": {
+              "type": "file",
+              "locator": "src/server.py",
+              "line": 14
+            },
+            "matched_text": "requests.post",
+            "facts": [
+              {"name": "code.symbol", "value": "send_data"},
+              {"name": "code.role", "value": "sink"}
+            ]
+          }
+        ],
+        "omitted_count": 0
+      }
     }
   ]
 }

@@ -134,10 +134,11 @@ class MCPScannerConstants:
     PROMPT_LENGTH_THRESHOLD: int = int(
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
     )
-    # Hard cap for alignment prompts sent to the LLM. Keep below
-    # PROMPT_LENGTH_THRESHOLD so Bedrock/Haiku is not fed truncated input.
+    # Hard cap for one alignment prompt, including the instruction template
+    # and the function source. The template alone is larger than 68,000
+    # characters, so a smaller cap drops the source before the model sees it.
     ALIGNMENT_MAX_PROMPT_CHARS: int = int(
-        os.getenv("MCP_SCANNER_ALIGNMENT_MAX_PROMPT_CHARS", "68000")
+        os.getenv("MCP_SCANNER_ALIGNMENT_MAX_PROMPT_CHARS", "200000")
     )
     LLM_MAX_RETRIES: int = int(os.getenv("MCP_SCANNER_LLM_MAX_RETRIES", "3"))
     LLM_RETRY_BASE_DELAY: float = float(

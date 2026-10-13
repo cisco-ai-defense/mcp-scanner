@@ -45,6 +45,7 @@ from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnal
 from ...static_analysis.interprocedural.treesitter_call_graph import (
     TreeSitterCallGraphAnalyzer,
 )
+from ...evidence import incomplete_location_evidence, prepare_behavioral_evidence
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 from .alignment.alignment_response_validator import normalize_finding_class
@@ -1030,6 +1031,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                                 "no_findings": False,
                                 "analysis_status": "errored",
                             },
+                            evidence=incomplete_location_evidence(
+                                "Alignment check did not complete; finding is inconclusive",
+                                file_path,
+                                getattr(fc, "line_number", None),
+                            ),
                         )
                     )
                     continue
@@ -1118,15 +1124,15 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
                     return None
 
-            # Build threat summary from analysis
             description_claims = analysis.get("description_claims", "")
             actual_behavior = analysis.get("actual_behavior", "")
-            line_info = f"Line {func_context.line_number}: "
-
-            if description_claims and actual_behavior:
-                threat_summary = f"{line_info}{threat_name} - Description claims: '{description_claims}' | Actual behavior: {actual_behavior}"
-            else:
-                threat_summary = f"{line_info}{threat_name} in {func_context.name}"
+            threat_summary, evidence = prepare_behavioral_evidence(
+                threat_name,
+                analysis,
+                func_context,
+                file_path,
+                allow_flow_roles=file_path.endswith(".py"),
+            )
 
             # Create SecurityFinding with complete threat taxonomy
             # SecurityFinding will auto-generate mcp_taxonomy from threat_type
@@ -1169,6 +1175,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     "aisubtech_name": threat_info["aisubtech_name"],
                     "taxonomy_description": threat_info["description"],
                 },
+                evidence=evidence,
             )
 
             return finding

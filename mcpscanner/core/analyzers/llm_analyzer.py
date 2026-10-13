@@ -22,8 +22,9 @@ via LiteLLM to detect malicious content and data exfiltration risks.
 
 import asyncio
 import json
+import re
 import secrets
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from litellm import acompletion
 
 from ...config.config import Config
@@ -35,7 +36,365 @@ from ...utils.analyzer_errors import (
     classify_analyzer_error,
     retry_transient_async,
 )
+from ..evidence import llm_threat_evidence
 from .base import BaseAnalyzer, SecurityFinding
+
+_DELIMITER_RE = re.compile(r"<!---UNTRUSTED_INPUT_(?:START|END)_[0-9a-f]+--->")
+
+
+def _threat_items(
+    threat_analysis: Dict[str, Any],
+) -> List[Tuple[str, str, List[Any]]]:
+    """One row per threat: name, reason, and the citations that name it."""
+    if "findings" in threat_analysis:
+        rows: List[Tuple[str, str, List[Any]]] = []
+        raw_findings = threat_analysis.get("findings")
+        if not isinstance(raw_findings, list):
+            return rows
+        for item in raw_findings:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("threat_name") or item.get("threat") or ""
+            if not isinstance(name, str) or not name:
+                continue
+            reason = item.get("reason") if isinstance(item.get("reason"), str) else ""
+            citations = item.get("citations")
+            if not isinstance(citations, list):
+                citations = []
+            rows.append((name, reason, citations))
+        return rows
+
+    names = threat_analysis.get("primary_threats") or []
+    if not isinstance(names, list):
+        return []
+    citations = threat_analysis.get("citations") or []
+    if not isinstance(citations, list):
+        citations = []
+    rows = []
+    for name in names:
+        if not isinstance(name, str) or not name:
+            continue
+        matched = [
+            citation
+            for citation in citations
+            if isinstance(citation, dict) and citation.get("threat") == name
+        ]
+        rows.append((name, "", matched))
+    return rows
+
+
+def _strip_trailing_newline(value: str) -> str:
+    return value[:-1] if value.endswith("\n") else value
+
+
+def _is_json_text(text: str) -> bool:
+    try:
+        json.loads(text.strip())
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
+def _consume_line(text: str) -> Tuple[str, str]:
+    """Return the first line and the remainder after it."""
+    newline = text.find("\n")
+    if newline == -1:
+        return text, ""
+    return text[:newline], text[newline + 1 :]
+
+
+def _after_header(text: str, label: str) -> Optional[str]:
+    header = label + ":"
+    if not text.startswith(header):
+        return None
+    rest = text[len(header) :]
+    if rest.startswith(" "):
+        rest = rest[1:]
+    return rest
+
+
+def _last_json_marker(text: str, marker: str, end_marker: Optional[str]) -> Optional[int]:
+    """Last ``marker`` whose following text, up to ``end_marker``, is JSON.
+
+    An earlier copy of the marker inside the untrusted field stays in that
+    field. The scanner's own suffix is the last one that parses.
+    """
+    pos = text.rfind(marker)
+    while pos != -1:
+        suffix = text[pos + len(marker) :]
+        if suffix.startswith(" "):
+            suffix = suffix[1:]
+        if end_marker:
+            end = suffix.find(end_marker)
+            candidate = suffix if end == -1 else suffix[:end]
+        else:
+            candidate = suffix
+        if _is_json_text(candidate):
+            return pos
+        pos = text.rfind(marker, 0, pos)
+    return None
+
+
+def _labeled_sections(content: str) -> Dict[str, str]:
+    """Split a scanner wrapper without cutting on labels inside the text.
+
+    Each wrapper has a fixed header order. A repeated or colliding label
+    stays in the field that contains it. ``Messages``, ``Content``, and
+    ``Instructions`` keep every character after their real header.
+    """
+    if not isinstance(content, str) or not content:
+        return {}
+    if content.startswith("Tool Name:"):
+        return _split_tool_sections(content)
+    if content.startswith("Prompt Name:"):
+        return _split_prompt_sections(content)
+    if content.startswith("Resource URI:"):
+        return _split_resource_sections(content)
+    if content.startswith("Server Name:"):
+        return _split_instruction_sections(content)
+    return {}
+
+
+def _split_tool_sections(content: str) -> Dict[str, str]:
+    rest = _after_header(content, "Tool Name")
+    if rest is None:
+        return {}
+    name, rest = _consume_line(rest)
+    sections = {"Tool Name": name}
+    described = _after_header(rest, "Description")
+    if described is None:
+        sections["Description"] = _strip_trailing_newline(rest)
+        return sections
+    marker = "\nParameters Schema:"
+    pos = _last_json_marker(described, marker, None)
+    if pos is None:
+        sections["Description"] = _strip_trailing_newline(described)
+        return sections
+    sections["Description"] = described[:pos]
+    schema = described[pos + len(marker) :]
+    if schema.startswith(" "):
+        schema = schema[1:]
+    sections["Parameters Schema"] = _strip_trailing_newline(schema)
+    return sections
+
+
+def _split_prompt_sections(content: str) -> Dict[str, str]:
+    rest = _after_header(content, "Prompt Name")
+    if rest is None:
+        return {}
+    name, rest = _consume_line(rest)
+    sections = {"Prompt Name": name}
+    described = _after_header(rest, "Description")
+    if described is None:
+        described = rest
+    marker = "\nArguments:"
+    pos = _last_json_marker(described, marker, "\nMessages:\n")
+    if pos is None:
+        sections["Description"] = _strip_trailing_newline(described)
+        return sections
+    sections["Description"] = described[:pos]
+    suffix = described[pos + len(marker) :]
+    if suffix.startswith(" "):
+        suffix = suffix[1:]
+    messages = suffix.find("\nMessages:\n")
+    if messages == -1:
+        sections["Arguments"] = _strip_trailing_newline(suffix)
+        return sections
+    sections["Arguments"] = suffix[:messages]
+    sections["Messages"] = _strip_trailing_newline(suffix[messages + len("\nMessages:\n") :])
+    return sections
+
+
+def _split_resource_sections(content: str) -> Dict[str, str]:
+    rest = _after_header(content, "Resource URI")
+    if rest is None:
+        return {}
+    uri, rest = _consume_line(rest)
+    sections = {"Resource URI": uri}
+    for label in ("Resource Name", "Name"):
+        named = _after_header(rest, label)
+        if named is None:
+            continue
+        name, rest = _consume_line(named)
+        sections[label] = name
+        break
+    described = _after_header(rest, "Description")
+    if described is None:
+        described = rest
+    marker = "\nMIME Type:"
+    pos = described.rfind(marker)
+    chosen = None
+    while pos != -1:
+        suffix = described[pos + len(marker) :]
+        if suffix.startswith(" "):
+            suffix = suffix[1:]
+        line_end = suffix.find("\n")
+        if line_end != -1 and suffix[line_end + 1 :].startswith("Content:\n"):
+            chosen = pos
+            break
+        pos = described.rfind(marker, 0, pos)
+    if chosen is None:
+        sections["Description"] = _strip_trailing_newline(described)
+        return sections
+    sections["Description"] = described[:chosen]
+    suffix = described[chosen + len(marker) :]
+    if suffix.startswith(" "):
+        suffix = suffix[1:]
+    line_end = suffix.find("\n")
+    sections["MIME Type"] = suffix if line_end == -1 else suffix[:line_end]
+    if line_end != -1 and suffix[line_end + 1 :].startswith("Content:\n"):
+        body = suffix[line_end + 1 + len("Content:\n") :]
+        sections["Content"] = _strip_trailing_newline(body)
+    return sections
+
+
+def _split_instruction_sections(content: str) -> Dict[str, str]:
+    rest = content
+    sections: Dict[str, str] = {}
+    for label in ("Server Name", "Protocol Version"):
+        nxt = _after_header(rest, label)
+        if nxt is None:
+            break
+        value, rest = _consume_line(nxt)
+        sections[label] = value
+    instructed = _after_header(rest, "Instructions")
+    if instructed is None:
+        sections["Instructions"] = _strip_trailing_newline(rest)
+        return sections
+    sections["Instructions"] = _strip_trailing_newline(instructed)
+    return sections
+
+
+def _mcp_fields(context: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Original MCP fields supplied by the caller, when it still has them."""
+    if not isinstance(context, dict) or not isinstance(context.get("mcp_fields"), dict):
+        return None
+    raw = context["mcp_fields"]
+    fields: Dict[str, Any] = {}
+    for key in ("name", "description", "body", "instructions"):
+        value = raw.get(key)
+        if isinstance(value, str) and value:
+            fields[key] = value
+    for key in ("parameters", "arguments"):
+        value = raw.get(key)
+        if isinstance(value, (dict, list)) and value:
+            fields[key] = value
+    return fields
+
+
+def _json_value(text: Optional[str]) -> Any:
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def _analyzed_fields(
+    entity_kind: str,
+    entity_name: str,
+    content: str,
+    context: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Original MCP fields. The labeled wrapper is not a verified field."""
+    supplied = _mcp_fields(context)
+    if supplied is not None:
+        if (
+            "name" not in supplied
+            and "instructions" not in supplied
+            and isinstance(entity_name, str)
+            and entity_name
+            and entity_name != "Unknown Tool"
+        ):
+            supplied["name"] = entity_name
+        return supplied
+    fields: Dict[str, Any] = {}
+    if (
+        isinstance(entity_name, str)
+        and entity_name
+        and entity_name != "Unknown Tool"
+    ):
+        fields["name"] = entity_name
+    sections = _labeled_sections(content or "")
+    content_type = ""
+    if isinstance(context, dict) and isinstance(context.get("content_type"), str):
+        content_type = context["content_type"]
+
+    if content_type == "instructions" or (
+        "Instructions" in sections and "Description" not in sections
+    ):
+        text = sections.get("Instructions")
+        if isinstance(text, str) and text:
+            fields["instructions"] = text
+        elif not sections and isinstance(content, str) and content.strip():
+            fields["instructions"] = content.strip()
+        fields.pop("name", None)
+        return fields
+
+    if (
+        entity_kind == "prompt"
+        or "Messages" in sections
+        or "Arguments" in sections
+    ):
+        description = sections.get("Description", "")
+        if description:
+            fields["description"] = description
+        arguments = _json_value(sections.get("Arguments"))
+        if arguments is not None:
+            fields["arguments"] = arguments
+        body = sections.get("Messages", "")
+        if body:
+            fields["body"] = body
+        return fields
+
+    if entity_kind == "resource" or "Content" in sections:
+        description = sections.get("Description", "")
+        if description:
+            fields["description"] = description
+        body = sections.get("Content", "")
+        if body:
+            fields["body"] = body
+        return fields
+
+    parsed: Any = None
+    if not sections and isinstance(content, str) and content.strip():
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            parsed = None
+    if isinstance(parsed, dict):
+        description = parsed.get("description")
+        if isinstance(description, str) and description:
+            fields["description"] = description
+        schema = parsed.get("inputSchema")
+        if not isinstance(schema, dict):
+            schema = parsed.get("parameters")
+        if isinstance(schema, dict):
+            fields["parameters"] = schema
+        return fields
+
+    description = sections.get("Description", "")
+    if description:
+        fields["description"] = description
+    elif not sections and isinstance(content, str) and content.strip():
+        fields["description"] = content
+    schema = _json_value(sections.get("Parameters Schema"))
+    if isinstance(schema, dict):
+        fields["parameters"] = schema
+    return fields
+
+
+def _delimiter_citation(fields: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Quote a delimiter tag when the scanned text contains one."""
+    for key in ("description", "body", "name", "instructions"):
+        text = fields.get(key)
+        if not isinstance(text, str):
+            continue
+        match = _DELIMITER_RE.search(text)
+        if match:
+            return [{"field_hint": key, "quote": match.group(0)}]
+    return []
 
 
 class SecurityError(Exception):
@@ -193,16 +552,9 @@ class LLMAnalyzer(BaseAnalyzer):
             analysis_content += f"Body:\n{(body_text or '').strip()}\n"
             analysis_content += "Parameters:\n  Not applicable\n"
         else:
-            # Format parameters for display
+            # The whole schema, including enum, const, default, examples, and pattern.
             if parameters:
-                param_list = []
-                for param_name, param_info in parameters.items():
-                    param_type = param_info.get("type", "unknown")
-                    param_desc = param_info.get("description", "No description")
-                    param_list.append(
-                        f"  - {param_name} ({param_type}): {param_desc}"
-                    )
-                params_text = "\n".join(param_list)
+                params_text = json.dumps(parameters, indent=2, default=str)
             else:
                 params_text = "  No parameters"
 
@@ -340,63 +692,69 @@ class LLMAnalyzer(BaseAnalyzer):
             raise ValueError("Failed to parse LLM response") from e
 
     def _create_findings_from_threat_analysis(
-        self, analysis_result: Dict[str, Any], tool_name: str
+        self,
+        analysis_result: Dict[str, Any],
+        tool_name: str,
+        analyzed_fields: Optional[Dict[str, str]] = None,
+        entity_kind: str = "tool",
     ) -> List[SecurityFinding]:
         """Create security findings from threat analysis."""
         findings = []
 
         threat_analysis = analysis_result.get("threat_analysis", {})
-        primary_threats = threat_analysis.get("primary_threats", [])
 
         # Only create findings if malicious content is detected AND primary threats are specified
-        if primary_threats and threat_analysis.get(
-            "malicious_content_detected", False
+        if not isinstance(threat_analysis, dict):
+            threat_analysis = {}
+        if threat_analysis.get("malicious_content_detected") is False:
+            return findings
+        threat_items = _threat_items(threat_analysis)
+        if not threat_items:
+            return findings
+        if (
+            "findings" not in threat_analysis
+            and not threat_analysis.get("malicious_content_detected")
         ):
-            # Generate threat summary for all findings
-            display_names = []
-            for threat_name in primary_threats:
-                threat_info = LLM_THREAT_MAPPING.get(threat_name)
-                if threat_info:
-                    display_names.append(threat_info["threat_type"])
+            return findings
 
-            if len(display_names) == 1:
-                threat_summary = f"Detected 1 threat: {display_names[0]}"
+        consumed_quotes: set = set()
+        threat_names = [item[0] for item in threat_items]
+        for threat_name, reason, citations in threat_items:
+            threat_info = LLM_THREAT_MAPPING.get(threat_name)
+            if threat_info:
+                category = threat_info["threat_category"]
+                display_name = threat_info["threat_type"]
+                severity = threat_info["severity"]
             else:
-                threat_summary = f"Detected {len(display_names)} threats: {', '.join(display_names)}"
-
-            # Create specific findings for each detected threat
-            for threat_name in primary_threats:
-                threat_info = LLM_THREAT_MAPPING.get(threat_name)
-
-                if threat_info:
-                    category = threat_info["threat_category"]
-                    display_name = threat_info["threat_type"]
-                    # Use severity from centralized threat mapping
-                    severity = threat_info["severity"]
-                else:
-                    # Handle unknown threats by using the threat name itself
-                    category = threat_name
-                    display_name = threat_name.lower().replace("_", " ")
-                    severity = "UNKNOWN"
-
-                # Skip creating findings only for explicitly SAFE classifications
-                if category == "SAFE":
-                    continue
-
-                finding = SecurityFinding(
-                    severity=severity,
-                    summary=threat_summary,
-                    analyzer="LLM",
-                    threat_category=category,
-                    details={
-                        "tool_name": tool_name,
-                        "threat_type": threat_name,  # Original name for taxonomy lookup
-                        "evidence": f"{display_name} detected in tool content",
-                        "raw_response": analysis_result,
-                        "primary_threats": primary_threats,
-                    },
-                )
-                findings.append(finding)
+                category = threat_name
+                display_name = threat_name.lower().replace("_", " ")
+                severity = "UNKNOWN"
+            if category == "SAFE":
+                continue
+            summary = reason.strip() if isinstance(reason, str) and reason.strip() else (
+                f"{display_name} detected in tool content"
+            )
+            finding = SecurityFinding(
+                severity=severity,
+                summary=summary,
+                analyzer="LLM",
+                threat_category=category,
+                details={
+                    "tool_name": tool_name,
+                    "threat_type": threat_name,
+                    "evidence": f"{display_name} detected in tool content",
+                    "raw_response": analysis_result,
+                    "primary_threats": threat_names,
+                },
+                evidence=llm_threat_evidence(
+                    summary,
+                    citations,
+                    analyzed_fields,
+                    entity_kind,
+                    consumed_quotes,
+                ),
+            )
+            findings.append(finding)
         return findings
 
     async def analyze(
@@ -437,30 +795,45 @@ class LLMAnalyzer(BaseAnalyzer):
             # Parse the content to extract tool information
             tool_info = self._parse_tool_content(content, context)
             findings = []
-
-            body_text = ""
-            metadata_text = ""
+            analyzed_fields = _analyzed_fields(
+                entity_kind, entity_name, content, context
+            )
+            body_text = analyzed_fields.get("body") or ""
+            if not isinstance(body_text, str):
+                body_text = ""
+            description_text = analyzed_fields.get("description") or ""
+            if not isinstance(description_text, str):
+                description_text = ""
             if entity_kind in ("resource", "prompt"):
-                body_text = self._extract_mcp_entity_body(content, entity_kind)
-                metadata_text = content.split("Content:\n")[0].split("Messages:\n")[0].strip()
-            has_tool_fields = tool_info.get("description") or tool_info.get("parameters")
+                prompt_description = description_text
+                arguments = analyzed_fields.get("arguments")
+                if arguments is not None:
+                    rendered = (
+                        arguments
+                        if isinstance(arguments, str)
+                        else json.dumps(arguments, indent=2)
+                    )
+                    prompt_description = f"{description_text}\nArguments:\n{rendered}".strip()
+            elif analyzed_fields.get("instructions") and not description_text:
+                prompt_description = analyzed_fields["instructions"]
+            else:
+                prompt_description = tool_info.get("description") or description_text
+
+            has_tool_fields = bool(prompt_description) or bool(
+                tool_info.get("parameters")
+            )
             has_body = bool(body_text.strip())
             if has_tool_fields or has_body:
                 threat_prompt, prompt_injection_detected = (
                     self._create_threat_analysis_prompt(
                         entity_name,
-                        description=(
-                            metadata_text
-                            if entity_kind in ("resource", "prompt")
-                            else tool_info.get("description")
-                        ),
+                        description=prompt_description,
                         parameters=tool_info.get("parameters"),
                         entity_kind=entity_kind,
                         body_text=body_text if entity_kind in ("resource", "prompt") else None,
                         _context=context,
                     )
                 )
-
                 # If prompt injection is detected, create a PROMPT INJECTION finding
                 if prompt_injection_detected:
                     finding = SecurityFinding(
@@ -474,6 +847,13 @@ class LLMAnalyzer(BaseAnalyzer):
                             "evidence": "prompt injection detected in tool content",
                             "primary_threats": ["PROMPT INJECTION"],
                         },
+                        evidence=llm_threat_evidence(
+                            "Detected 1 threat: prompt injection",
+                            _delimiter_citation(analyzed_fields),
+                            analyzed_fields,
+                            entity_kind,
+                            set(),
+                        ),
                     )
                     findings.append(finding)
                 else:
@@ -537,10 +917,11 @@ class LLMAnalyzer(BaseAnalyzer):
                         )
                     else:
                         threat_analysis = self._parse_response(threat_content)
-                        threat_findings = (
-                            self._create_findings_from_threat_analysis(
-                                threat_analysis, entity_name
-                            )
+                        threat_findings = self._create_findings_from_threat_analysis(
+                            threat_analysis,
+                            entity_name,
+                            analyzed_fields,
+                            entity_kind,
                         )
                         findings.extend(threat_findings)
 
@@ -570,6 +951,15 @@ class LLMAnalyzer(BaseAnalyzer):
             Dict[str, Any]: Parsed tool information with description and parameters.
         """
         tool_info = {"description": "", "parameters": {}}
+        supplied = _mcp_fields(context)
+        if supplied is not None:
+            description = supplied.get("description")
+            if isinstance(description, str):
+                tool_info["description"] = description
+            parameters = supplied.get("parameters")
+            if isinstance(parameters, (dict, list)):
+                tool_info["parameters"] = parameters
+            return tool_info
 
         # Handle None or empty content
         if not content:
@@ -588,15 +978,22 @@ class LLMAnalyzer(BaseAnalyzer):
                 elif "inputSchema" in parsed_content:
                     properties = parsed_content["inputSchema"].get("properties", {})
                     tool_info["parameters"] = properties
-
+            return tool_info
         except json.JSONDecodeError:
-            # If not JSON, treat as plain text (likely a docstring or description)
-            tool_info["description"] = content
+            pass
 
-            # Try to extract parameter information from context if available
-            if context and "parameters" in context:
-                tool_info["parameters"] = context["parameters"]
+        sections = _labeled_sections(content)
+        if sections:
+            tool_info["description"] = sections.get("Description", "")
+            schema = _json_value(sections.get("Parameters Schema"))
+            if isinstance(schema, (dict, list)):
+                tool_info["parameters"] = schema
+            return tool_info
 
+        # Plain text (a docstring or description), not a labeled wrapper.
+        tool_info["description"] = content
+        if context and "parameters" in context:
+            tool_info["parameters"] = context["parameters"]
         return tool_info
 
     async def _make_llm_request(

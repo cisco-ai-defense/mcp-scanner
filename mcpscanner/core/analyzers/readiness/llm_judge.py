@@ -36,6 +36,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ....config.constants import MCPScannerConstants
+from ....core.evidence import facts_record
 from ....utils.analyzer_errors import build_infrastructure_error_finding
 from ....utils.logging_config import get_logger
 from ..base import SecurityFinding
@@ -388,10 +389,18 @@ class ReadinessLLMJudge:
             "raw_response": full_result,
         }
 
+        rule_id = details["rule_id"]
+        locator = rule_id if "://" not in rule_id and len(rule_id) <= 120 else "readiness-llm"
         return SecurityFinding(
             severity=severity,
             summary=summary,
             analyzer="READINESS-LLM",
             threat_category=threat_category,
             details=details,
+            evidence=facts_record(
+                summary,
+                "probe",
+                locator,
+                [("probe.completed", True)],
+            ),
         )

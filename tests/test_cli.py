@@ -591,6 +591,30 @@ class TestStaticSubcommandCLI:
         return str(file_path)
 
     @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    async def test_static_table_names_the_local_file(self, tools_json_file, capsys):
+        """A static scan's table names the file, not the default server URL."""
+        from mcpscanner.cli import main
+
+        test_args = [
+            "mcp-scanner",
+            "--analyzers",
+            "yara",
+            "--format",
+            "table",
+            "static",
+            "--tools",
+            tools_json_file,
+        ]
+
+        with patch("sys.argv", test_args):
+            await main()
+
+        captured = capsys.readouterr()
+        assert "tools.json" in captured.out
+        assert "https://mcp.deepwiki.com/mcp" not in captured.out
+
+    @pytest.mark.asyncio
     async def test_static_tools_scan_success(self, tools_json_file, capsys):
         """Test static subcommand with tools file."""
         from mcpscanner.cli import main

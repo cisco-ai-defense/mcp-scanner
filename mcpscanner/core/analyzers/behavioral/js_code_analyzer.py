@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
+from ...evidence import prepare_behavioral_evidence
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 from .alignment.alignment_response_validator import normalize_finding_class
@@ -287,16 +288,13 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
             severity = threat_info["severity"]
             description_claims = analysis.get("description_claims", "")
             actual_behavior = analysis.get("actual_behavior", "")
-            line_info = f"Line {func_context.line_number}: "
-
-            if description_claims and actual_behavior:
-                summary = (
-                    f"{line_info}{threat_name} - "
-                    f"Description claims: '{description_claims}' | "
-                    f"Actual behavior: {actual_behavior}"
-                )
-            else:
-                summary = f"{line_info}{threat_name} in {func_context.name}"
+            summary, evidence = prepare_behavioral_evidence(
+                threat_name,
+                analysis,
+                func_context,
+                file_path,
+                allow_flow_roles=False,
+            )
 
             return SecurityFinding(
                 severity=severity,
@@ -333,6 +331,7 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                     "taxonomy_description": threat_info["description"],
                     "language": "javascript",
                 },
+                evidence=evidence,
             )
         except Exception as e:  # noqa: BLE001
             self.logger.error(

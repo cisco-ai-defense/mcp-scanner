@@ -416,6 +416,7 @@ class TestRunAndParse:
             a = VulnerablePackageAnalyzer(enabled=True)
         findings = a._run_and_parse([], source="test")
         assert findings == []
+        assert a.last_error == "pip-audit is not available"
 
     @patch("subprocess.run")
     def test_uvx_command_structure(self, mock_run):
@@ -447,18 +448,21 @@ class TestRunAndParse:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="pip-audit", timeout=120)
         findings = analyzer._run_and_parse(["-r", "req.txt"], source="req.txt")
         assert findings == []
+        assert analyzer.last_error == "pip-audit timed out after 120s"
 
     @patch("subprocess.run")
     def test_file_not_found_returns_empty(self, mock_run, analyzer):
         mock_run.side_effect = FileNotFoundError("pip-audit not found")
         findings = analyzer._run_and_parse(["-r", "req.txt"], source="req.txt")
         assert findings == []
+        assert analyzer.last_error == "pip-audit binary was not found"
 
     @patch("subprocess.run")
     def test_empty_stdout_returns_empty(self, mock_run, analyzer):
         mock_run.return_value = _make_completed_process(stdout="", returncode=0)
         findings = analyzer._run_and_parse([], source="test")
         assert findings == []
+        assert analyzer.last_error == "pip-audit returned no JSON"
 
     @patch("subprocess.run")
     def test_empty_stdout_nonzero_exit_returns_empty(self, mock_run, analyzer):
@@ -502,6 +506,7 @@ class TestRunAndParse:
         mock_run.return_value = _make_completed_process(stdout="NOT JSON {{{")
         findings = analyzer._run_and_parse([], source="test")
         assert findings == []
+        assert analyzer.last_error == "pip-audit did not return JSON"
 
     @patch("subprocess.run")
     def test_fix_mode_flag(self, mock_run):

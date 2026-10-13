@@ -1003,6 +1003,15 @@ def test_count_source_files_parity_docker_vs_sdk(tmp_path: Path):
     assert sdk_count == docker_count == 2
 
 
+def test_published_package_with_only_dist_is_scanned(tmp_path: Path):
+    """A tarball that ships only compiled output is still scanned."""
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.js").write_text("export {}")
+    root = NPMPackageScanner._published_scan_root(tmp_path)
+    assert root == tmp_path / "dist"
+    assert NPMPackageScanner._count_js_files(root) == 1
+
+
 # ---------------------------------------------------------------------------
 # Atomic partial-write semantics (L6)
 # ---------------------------------------------------------------------------

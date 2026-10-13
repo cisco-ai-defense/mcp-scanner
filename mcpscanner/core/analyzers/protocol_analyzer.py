@@ -45,7 +45,13 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ..evidence import facts_record
 from .base import BaseAnalyzer, SecurityFinding
+
+
+def _probe_locator(value: str) -> bool:
+    """True when ``value`` can be published as a probe locator."""
+    return bool(value) and "://" not in value and len(value) <= 120
 
 
 
@@ -65,6 +71,42 @@ class ProtocolAnalyzer(BaseAnalyzer):
         """
         super().__init__("PROTOCOL")
         self.timeout = timeout
+
+    def create_security_finding(
+        self,
+        severity: str,
+        summary: str,
+        threat_category: str,
+        confidence: str = "MEDIUM",
+        details: Optional[Dict[str, Any]] = None,
+        evidence: Optional[Any] = None,
+    ) -> SecurityFinding:
+        """Attach the completed probe result to the finding."""
+        if evidence is None:
+            evidence = self._probe_evidence(summary, details or {})
+        return super().create_security_finding(
+            severity,
+            summary,
+            threat_category,
+            confidence,
+            details,
+            evidence,
+        )
+
+    @staticmethod
+    def _probe_evidence(summary: str, details: Dict[str, Any]):
+        """Cite the check that finished. Signing checks record the absent headers."""
+        check_id = str(details.get("check_id") or "protocol")
+        locator = check_id if _probe_locator(check_id) else "protocol"
+        if check_id == "MCPS-003":
+            facts = [
+                ("integrity.signature_header_present", False),
+                ("integrity.signing_capability_present", False),
+                ("probe.completed", True),
+            ]
+        else:
+            facts = [("probe.completed", True)]
+        return facts_record(summary, "probe", locator, facts)
 
     async def analyze(
         self, content: str, context: Optional[Dict[str, Any]] = None

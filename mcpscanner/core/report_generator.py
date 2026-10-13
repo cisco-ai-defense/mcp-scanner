@@ -25,6 +25,7 @@ import os
 from typing import Any, Dict, List, Optional, Union
 
 from .analyzers.meta_analyzer import build_meta_audit_payload
+from .evidence import public_evidence_for_findings
 from .models import OutputFormat, SeverityFilter
 from .result import analyzer_result_key, get_highest_severity
 
@@ -44,6 +45,7 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
     for result in scan_results:
         findings_by_analyzer: Dict[str, Dict[str, Any]] = {}
         summaries_by_analyzer: Dict[str, List[str]] = {}
+        findings_for_evidence: Dict[str, List[Any]] = {}
 
         # Initialize analyzers that completed with no findings as SAFE.
         if hasattr(result, "analyzers"):
@@ -54,8 +56,10 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                     "threat_names": [],
                     "threat_summary": "No threats detected",
                     "total_findings": 0,
+                    "evidence": [],
                 }
                 summaries_by_analyzer[analyzer_key] = []
+                findings_for_evidence[analyzer_key] = []
 
         # Process actual findings and update analyzer data
         for finding in result.findings:
@@ -66,10 +70,13 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                     "threat_names": [],
                     "threat_summary": "N/A",
                     "total_findings": 0,
+                    "evidence": [],
                 }
                 summaries_by_analyzer[analyzer] = []
+                findings_for_evidence[analyzer] = []
 
             findings_by_analyzer[analyzer]["total_findings"] += 1
+            findings_for_evidence.setdefault(analyzer, []).append(finding)
 
             # Collect summary from finding
             if hasattr(finding, "summary") and finding.summary:
@@ -129,6 +136,7 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                     "total_findings": 0,
                     "status": "error",
                     "errors": [],
+                    "evidence": [],
                 }
                 findings_by_analyzer[analyzer_key] = analyzer_result
             elif analyzer_result["total_findings"]:
@@ -140,6 +148,11 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                 )
                 analyzer_result.setdefault("errors", [])
             analyzer_result["errors"].append(error)
+
+        for analyzer, data in findings_by_analyzer.items():
+            data["evidence"] = public_evidence_for_findings(
+                findings_for_evidence.get(analyzer, [])
+            )
 
         # Use analyzer-provided summaries for analyzers with findings
         for analyzer, data in findings_by_analyzer.items():
@@ -834,6 +847,14 @@ class ReportGenerator:
             elif is_virustotal and "virustotal:" in scan_target_source:
                 full_path = scan_target_source.replace("virustotal:", "")
                 scan_target_source = os.path.basename(full_path) or full_path[:28]
+            elif scan_target_source.startswith("static:"):
+                paths = [
+                    part
+                    for part in scan_target_source[len("static:") :].split(",")
+                    if part
+                ]
+                names = [os.path.basename(part) or part for part in paths]
+                scan_target_source = ",".join(names)[:28]
             else:
                 # Truncate for non-behavioral scans
                 scan_target_source = (

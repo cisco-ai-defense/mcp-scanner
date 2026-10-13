@@ -1399,7 +1399,18 @@ class Scanner:
                 if "inputSchema" in tool_data:
                     analysis_content += f"Parameters Schema: {json.dumps(tool_data['inputSchema'], indent=2)}\n"
 
-                llm_context = {"tool_name": name, "content_type": "comprehensive"}
+                mcp_fields: Dict[str, Any] = {
+                    "name": name,
+                    "description": description or "",
+                }
+                schema = tool_data.get("inputSchema")
+                if isinstance(schema, dict) and schema:
+                    mcp_fields["parameters"] = schema
+                llm_context = {
+                    "tool_name": name,
+                    "content_type": "comprehensive",
+                    "mcp_fields": mcp_fields,
+                }
                 llm_findings = await self._llm_analyzer.analyze(
                     analysis_content, llm_context
                 )
@@ -1603,10 +1614,18 @@ class Scanner:
                 if prompt_messages_text:
                     analysis_content += f"Messages:\n{prompt_messages_text}\n"
 
+                prompt_fields: Dict[str, Any] = {"name": name}
+                if description:
+                    prompt_fields["description"] = description
+                if prompt_data.get("arguments"):
+                    prompt_fields["arguments"] = prompt_data["arguments"]
+                if prompt_messages_text:
+                    prompt_fields["body"] = prompt_messages_text
                 llm_context = {
                     "prompt_name": name,
                     "content_type": "comprehensive",
                     "entity_type": "prompt",
+                    "mcp_fields": prompt_fields,
                 }
                 llm_findings = await self._llm_analyzer.analyze(
                     analysis_content, llm_context
@@ -1749,6 +1768,7 @@ class Scanner:
                 llm_context = {
                     "server_name": server_name,
                     "content_type": "instructions",
+                    "mcp_fields": {"instructions": instructions or ""},
                 }
                 llm_findings = await self._llm_analyzer.analyze(
                     analysis_content, llm_context
@@ -3403,12 +3423,18 @@ class Scanner:
                     f"Content:\n{analysis_content[:2000]}\n"  # Limit content size
                 )
 
+                resource_fields: Dict[str, Any] = {"name": resource_name}
+                if resource_description:
+                    resource_fields["description"] = resource_description
+                if analysis_content:
+                    resource_fields["body"] = analysis_content[:2000]
                 llm_context = {
                     "resource_uri": resource_uri,
                     "resource_name": resource_name,
                     "resource_description": resource_description,
                     "mime_type": resource_mime_type,
                     "entity_type": "resource",
+                    "mcp_fields": resource_fields,
                 }
                 llm_findings = await self._llm_analyzer.analyze(
                     llm_content, llm_context

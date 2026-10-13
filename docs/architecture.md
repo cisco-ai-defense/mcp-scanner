@@ -30,7 +30,7 @@ All utility methods support Union types (v2.0.0+), accepting `ToolScanResult`, `
 
 The scanner uses an inheritance hierarchy for scan results:
 
-- **SecurityFinding**: Represents a single security finding from an analyzer.
+- **SecurityFinding**: Represents a single security finding from an analyzer. Each finding carries one evidence record. The published shape is in [Finding evidence](finding-evidence-spec.md).
 - **ScanResult**: Base class that aggregates common scan information (status, analyzers, findings, server info).
 - **ToolScanResult**: Extends `ScanResult` for tool scans, adding `tool_name` and `tool_description`.
 - **PromptScanResult**: Extends `ScanResult` for prompt scans, adding `prompt_name` and `prompt_description`.

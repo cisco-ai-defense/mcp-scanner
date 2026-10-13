@@ -539,13 +539,13 @@ Example response format for 3 functions:
 {
   "results": [
     {"function_index": 0, "function_name": "func1", "mismatch_detected": false},
-    {"function_index": 1, "function_name": "func2", "mismatch_detected": true, "threat_name": "DATA EXFILTRATION", "severity": "HIGH", "description_claims": "...", "actual_behavior": "...", "security_implications": "..."},
+    {"function_index": 1, "function_name": "func2", "mismatch_detected": true, "threat_name": "DATA EXFILTRATION", "severity": "HIGH", "description_claims": "...", "actual_behavior": "...", "security_implications": "...", "operations": [{"role": "input", "quote": "exact source substring", "line_hint": 12}, {"role": "sink", "quote": "exact sink substring", "line_hint": 16}]},
     {"function_index": 2, "function_name": "func3", "mismatch_detected": false}
   ]
 }
 ```
 
-For each function with mismatch_detected=true, include all required fields (threat_name, severity, description_claims, actual_behavior, security_implications).
+For each function with mismatch_detected=true, include all required fields (threat_name, severity, description_claims, actual_behavior, security_implications, operations). Each operation quote must be an exact substring of that function's source.
 For functions with no issues, just include function_index, function_name, and mismatch_detected=false.
 
 """
@@ -581,9 +581,9 @@ For functions with no issues, just include function_index, function_name, and mi
         prefix: str = "",
     ) -> str:
         """Build the final prompt and enforce the alignment context budget."""
-        # Budget the *total* prompt against ALIGNMENT_MAX_PROMPT_CHARS (hard cap
-        # for Bedrock/Haiku), not the softer PROMPT_LENGTH_THRESHOLD warning.
-        # The markdown template alone is ~72 KiB, so it may need truncation too.
+        # Budget the total prompt against ALIGNMENT_MAX_PROMPT_CHARS.
+        # The markdown template alone is larger than the old 68,000 cap, so
+        # the default leaves room for the function source as well.
         max_total = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
         frame_overhead = (
             len(prefix) + len(start_tag) + len(end_tag) + _PROMPT_FRAME_CHARS

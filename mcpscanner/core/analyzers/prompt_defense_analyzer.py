@@ -27,6 +27,12 @@ when the corresponding defense is absent from the scanned content.
 import re
 from typing import Any, Dict, List, Optional
 
+from ..evidence import (
+    compile_record,
+    facts_record,
+    locator_for_content_type,
+    _source_or_none,
+)
 from .base import BaseAnalyzer, SecurityFinding
 
 
@@ -302,6 +308,61 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
                 return str(name)
         return "unknown"
 
+    @staticmethod
+    def _pattern_hits(content: str, patterns: List[str]) -> List[tuple]:
+        """First exact substring each pattern finds, with its start offset."""
+        hits = []
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if match and match.group(0):
+                hits.append((match.group(0), match.start()))
+        return hits
+
+    @staticmethod
+    def _line_number(content: str, start: int, content_type: Optional[str]) -> Optional[int]:
+        """1-based line for original description or instruction text."""
+        if content_type not in {"description", "instructions"}:
+            return None
+        if start < 0:
+            return None
+        return content.count("\n", 0, start) + 1
+
+    def _check_evidence(
+        self,
+        content: str,
+        content_type: Optional[str],
+        summary: str,
+        rule: Dict[str, Any],
+        hits: List[tuple],
+    ):
+        """Evidence for one defense check.
+
+        A miss still cites the field that was scanned, with the pattern
+        counts. A partial hit also cites the defensive phrase that matched.
+        """
+        locator = locator_for_content_type(content_type)
+        facts = [
+            ("check.patterns_checked", len(rule["patterns"])),
+            ("check.patterns_matched", len(hits)),
+            ("check.minimum_matches", int(rule["min_matches"])),
+        ]
+        if not hits:
+            return facts_record(summary, "mcp_field", locator, facts)
+        sources = []
+        for text, start in hits:
+            source = _source_or_none(
+                "mcp_field",
+                locator,
+                text,
+                self._line_number(content, start, content_type),
+                facts,
+            )
+            if source is not None:
+                sources.append(source)
+        if not sources:
+            return facts_record(summary, "mcp_field", locator, facts)
+        return compile_record(summary, sources)
+
     async def analyze(
         self, content: str, context: Optional[Dict[str, Any]] = None
     ) -> List[SecurityFinding]:
@@ -328,16 +389,12 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
         self.validate_content(content)
 
         entity_name = self._entity_name_from_context(context)
+        content_type = (context or {}).get("content_type")
         findings: List[SecurityFinding] = []
 
         for rule in self._rules:
-            match_count = 0
-            matched_patterns: List[str] = []
-
-            for pattern in rule["patterns"]:
-                if re.search(pattern, content):
-                    match_count += 1
-                    matched_patterns.append(pattern)
+            hits = self._pattern_hits(content, rule["patterns"])
+            match_count = len(hits)
 
             if match_count < rule["min_matches"]:
                 # Defense is missing or insufficient
@@ -366,14 +423,21 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
                             f"defensive patterns."
                         ),
                     },
+                    evidence=self._check_evidence(
+                        content, content_type, summary, rule, hits
+                    ),
                 )
                 findings.append(finding)
 
         if not findings:
+            summary = (
+                "All prompt defenses present. Content includes safeguards "
+                "for all 12 checked attack vectors."
+            )
             findings.append(
                 self.create_security_finding(
                     severity="INFO",
-                    summary="All prompt defenses present. Content includes safeguards for all 12 checked attack vectors.",
+                    summary=summary,
                     threat_category="NONE",
                     details={
                         "tool_name": entity_name,
@@ -383,6 +447,15 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
                         "defenses_checked": len(self._rules),
                         "defenses_present": len(self._rules),
                     },
+                    evidence=facts_record(
+                        summary,
+                        "mcp_field",
+                        locator_for_content_type(content_type),
+                        [
+                            ("check.defenses_checked", len(self._rules)),
+                            ("check.defenses_present", len(self._rules)),
+                        ],
+                    ),
                 )
             )
 

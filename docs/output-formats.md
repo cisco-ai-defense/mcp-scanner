@@ -107,7 +107,7 @@ The `findings` object is keyed by analyzer name in the format `{analyzer}_analyz
 }
 ```
 
-Possible keys: `api_analyzer`, `yara_analyzer`, `llm_analyzer`, `virustotal_analyzer`, `behavioral_analyzer`, `readiness_analyzer`, `prompt_defense_analyzer`.
+Possible keys: `api_analyzer`, `yara_analyzer`, `llm_analyzer`, `virustotal_analyzer`, `behavioral_analyzer`, `readiness_analyzer`, `prompt_defense_analyzer`, `vulnerable_package_analyzer`, `protocol_analyzer`.
 Only analyzers that ran, produced findings, or failed appear. An analyzer that was not requested does not get a `SAFE` entry.
 
 Each analyzer entry has this structure:
@@ -131,6 +131,9 @@ Each analyzer entry has this structure:
 | `mcp_taxonomies` | `array<object>` | List of unique MCP taxonomy entries (see below). Only present when findings have taxonomy mappings. |
 | `status` | `string` | `"error"` when an analyzer failed without findings; `"partial"` when it produced findings before an invocation failed. Present only for these failure cases. |
 | `errors` | `array<object>` | Sanitized invocation errors for this analyzer. Present when it failed. |
+| `evidence` | `array<object>` | One evidence record per retained finding. Empty when `total_findings` is 0. See [Finding evidence](finding-evidence-spec.md). |
+
+`evidence.length` equals `total_findings`. Each record has `summary`, `status` (`observed`, `scope_only`, or `unavailable`), `sources`, and `omitted_count`. The HTTP API includes `evidence` and omits `threat_names` and `threat_summary`. CLI and SDK JSON keep the rollup fields and add `evidence`.
 
 #### Severity Rollup Logic
 

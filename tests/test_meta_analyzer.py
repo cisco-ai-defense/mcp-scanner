@@ -808,6 +808,33 @@ class TestApplyMetaAnalysis:
         assert "meta_reason" not in (drop.details or {})
         assert "meta_confidence" not in (drop.details or {})
 
+    def test_dropped_finding_keeps_original_evidence(self):
+        """Meta keeps the finding's evidence and does not write its own."""
+        from mcpscanner.core.evidence import facts_record, public_evidence_for_finding
+
+        evidence = facts_record(
+            "missing field",
+            "mcp_field",
+            "/description",
+            [("check.field_present", False)],
+        )
+        drop = SecurityFinding(
+            severity="HIGH",
+            summary="missing field",
+            analyzer="YARA",
+            threat_category="SECURITY VIOLATION",
+            details={},
+            evidence=evidence,
+        )
+        meta_result = MetaAnalysisResult(
+            false_positives=[{"_index": 0, "reason": "not a threat", "confidence": "HIGH"}]
+        )
+        kept, dropped = apply_meta_analysis([drop], meta_result)
+        assert kept == []
+        rendered = public_evidence_for_finding(dropped[0])
+        assert rendered["status"] == "observed"
+        assert rendered["sources"][0]["location"]["locator"] == "/description"
+
     @staticmethod
     def _capture_meta_warnings():
         """Attach an in-memory handler to the apply_meta_analysis logger.

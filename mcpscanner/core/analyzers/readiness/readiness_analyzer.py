@@ -80,7 +80,13 @@ Optional LLM-based Semantic Analysis:
 import json
 from typing import Any, Dict, List, Optional
 
+from ...evidence import facts_record
 from ..base import BaseAnalyzer, SecurityFinding
+
+
+def _probe_locator(value: str) -> bool:
+    """True when ``value`` can be published as a probe locator."""
+    return bool(value) and "://" not in value and len(value) <= 120
 from .opa_provider import OpaProvider
 
 
@@ -176,6 +182,54 @@ class ReadinessAnalyzer(BaseAnalyzer):
         self._llm_judge = None
         if enable_llm_judge:
             self._init_llm_judge(llm_model, llm_api_key)
+
+    def create_security_finding(
+        self,
+        severity: str,
+        summary: str,
+        threat_category: str,
+        confidence: str = "MEDIUM",
+        details: Optional[Dict[str, Any]] = None,
+        evidence: Optional[Any] = None,
+    ) -> SecurityFinding:
+        """Attach the heuristic or policy check that produced the finding."""
+        if evidence is None:
+            evidence = self._check_evidence(summary, details or {})
+        return super().create_security_finding(
+            severity,
+            summary,
+            threat_category,
+            confidence,
+            details,
+            evidence,
+        )
+
+    @staticmethod
+    def _check_evidence(summary: str, details: Dict[str, Any]):
+        """Cite the rule. Timeout and missing-field checks record that fact."""
+        rule_id = str(details.get("rule_id") or "readiness")
+        locator = rule_id if _probe_locator(rule_id) else "readiness"
+        absent_field = {
+            "HEUR-003",
+            "HEUR-005",
+            "HEUR-006",
+            "HEUR-007",
+            "HEUR-008",
+            "HEUR-019",
+        }
+        if rule_id == "HEUR-001":
+            facts = [("check.timeout_present", False)]
+        elif rule_id == "HEUR-002":
+            facts = [("check.timeout_present", True)]
+        elif rule_id in absent_field:
+            facts = [("check.field_present", False)]
+        elif rule_id == "HEUR-004":
+            facts = [("check.field_present", True)]
+        elif rule_id == "HEUR-009" and "length" in details:
+            facts = [("check.field_present", True)]
+        else:
+            facts = [("probe.completed", True)]
+        return facts_record(summary, "probe", locator, facts)
 
     def _init_llm_judge(
         self,

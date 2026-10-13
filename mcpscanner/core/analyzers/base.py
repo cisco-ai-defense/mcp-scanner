@@ -36,6 +36,8 @@ class SecurityFinding:
         analyzer (str): The name of the analyzer that found the security finding.
         details (Optional[Dict[str, Any]]): Additional details about the security finding.
         mcp_taxonomy (Optional[Dict[str, Any]]): MCP Taxonomy classification information.
+        evidence (Optional[Any]): Verified evidence captured while the match existed.
+            Missing evidence stays unavailable at serialization time.
     """
 
     def __init__(
@@ -45,6 +47,7 @@ class SecurityFinding:
         analyzer: str,
         threat_category: str,
         details: Optional[Dict[str, Any]] = None,
+        evidence: Optional[Any] = None,
     ):
         """Initialize a new SecurityFinding instance.
 
@@ -54,6 +57,7 @@ class SecurityFinding:
             analyzer (str): The name of the analyzer that found the security finding.
             threat_category (str): Standardized threat category.
             details (Optional[Dict[str, Any]]): Additional details about the security finding.
+            evidence (Optional[Any]): Evidence record captured by the producer.
         """
         # Validate and normalize inputs
         self.severity = self._normalize_level(
@@ -63,6 +67,7 @@ class SecurityFinding:
         self.threat_category = threat_category
         self.analyzer = analyzer
         self.details = details or {}
+        self.evidence = evidence
 
         # Enrich with MCP Taxonomy information
         self.mcp_taxonomy = self._get_mcp_taxonomy()
@@ -199,6 +204,7 @@ class BaseAnalyzer(ABC):
         threat_category: str,
         confidence: str = "MEDIUM",
         details: Optional[Dict[str, Any]] = None,
+        evidence: Optional[Any] = None,
     ) -> SecurityFinding:
         """Create a security finding with this analyzer's name and standardized format.
 
@@ -208,6 +214,7 @@ class BaseAnalyzer(ABC):
             threat_category: Standardized threat category.
             confidence: The confidence level ("HIGH", "MEDIUM", "LOW").
             details: Additional details about the security finding.
+            evidence: Evidence captured while the match or probe result existed.
 
         Returns:
             SecurityFinding: The created security finding instance.
@@ -218,6 +225,7 @@ class BaseAnalyzer(ABC):
             analyzer=self.name,
             threat_category=threat_category,
             details=details,
+            evidence=evidence,
         )
 
     async def safe_analyze(
