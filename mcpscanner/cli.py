@@ -695,6 +695,8 @@ def display_resource_results_table(
             status_icon = "❌"
 
         resource_name = result.get("resource_name", "Unknown")
+        if result.get("is_template"):
+            resource_name = f"{resource_name} (template)"
         uri = result.get("resource_uri", "N/A")
         uri_short = uri[:40] + "..." if len(uri) > 40 else uri
         mime_type = result.get("resource_mime_type", "unknown")
@@ -2105,6 +2107,7 @@ async def main():
                         "resource_uri": str(r.resource_uri),
                         "resource_name": r.resource_name,
                         "resource_mime_type": r.resource_mime_type,
+                        "is_template": getattr(r, "is_template", False),
                         "status": r.status,
                         "is_safe": r.is_safe,
                         "analyzer_errors": r.analyzer_errors,

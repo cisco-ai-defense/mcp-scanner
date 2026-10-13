@@ -925,6 +925,7 @@ class Scanner:
                     # the evidence the analyzers saw.
                     resource_description=getattr(result, "resource_description", "") or "",
                     resource_text=getattr(result, "resource_text", "") or "",
+                    is_template=getattr(result, "is_template", False),
                 )
                 enriched.meta_filtered_findings = dropped
                 return enriched
@@ -3519,6 +3520,102 @@ class Scanner:
             resource_text=error.excerpt,
         )
 
+    _MAX_TEMPLATE_PAGES = 50
+
+    async def _list_resource_templates(self, session, server_url: str) -> List[Any]:
+        """Every template from ``resources/templates/list``, following cursors."""
+        templates: List[Any] = []
+        cursor: Optional[str] = None
+        try:
+            for _ in range(self._MAX_TEMPLATE_PAGES):
+                page = await session.list_resource_templates(cursor)
+                listed = getattr(page, "resourceTemplates", None)
+                if isinstance(listed, list):
+                    templates.extend(listed)
+                cursor = getattr(page, "nextCursor", None)
+                if not isinstance(cursor, str) or not cursor:
+                    break
+        except McpError as e:
+            if self._is_missing_capability_error(e):
+                logger.info(
+                    f"Server '{server_url}' does not expose resource templates: {e}"
+                )
+            else:
+                logger.warning(
+                    f"Could not list resource templates on '{server_url}': {e}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Could not list resource templates on '{server_url}': {e}"
+            )
+        return templates
+
+    async def _scan_resource_templates(
+        self,
+        session,
+        server_url: str,
+        analyzers: List[AnalyzerEnum],
+        http_headers: Optional[dict] = None,
+    ) -> List[ResourceScanResult]:
+        """Scan the advertised metadata of each resource template.
+
+        A template URI has unfilled parameters, so there is no body to read.
+        The name and description are what an agent sees, so the description
+        is analyzed as the template's content.
+        """
+        results: List[ResourceScanResult] = []
+        for template in await self._list_resource_templates(session, server_url):
+            uri_template = str(getattr(template, "uriTemplate", "") or "")
+            if not uri_template:
+                continue
+            name = getattr(template, "name", None) or ""
+            description = getattr(template, "description", None) or ""
+            mime = (
+                self._normalize_mime_type(getattr(template, "mimeType", None))
+                or "unknown"
+            )
+            if not description.strip():
+                results.append(
+                    ResourceScanResult(
+                        resource_uri=uri_template,
+                        resource_name=name,
+                        resource_mime_type=mime,
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                        is_template=True,
+                    )
+                )
+                continue
+            try:
+                result = await self._analyze_resource(
+                    description,
+                    uri_template,
+                    name,
+                    description,
+                    "text/plain",
+                    analyzers,
+                    http_headers,
+                )
+                result.resource_mime_type = mime
+                result.is_template = True
+            except Exception as e:
+                logger.error(
+                    f"Error analyzing resource template '{uri_template}': {e}"
+                )
+                result = ResourceScanResult(
+                    resource_uri=uri_template,
+                    resource_name=name,
+                    resource_mime_type=mime,
+                    status="failed",
+                    analyzers=[],
+                    findings=[],
+                    resource_description=description,
+                    is_template=True,
+                )
+            results.append(result)
+        return results
+
     async def scan_remote_server_resources(
         self,
         server_url: str,
@@ -3794,6 +3891,12 @@ class Scanner:
                             findings=[],
                         )
                     )
+
+            results.extend(
+                await self._scan_resource_templates(
+                    session, server_url, analyzers, http_headers
+                )
+            )
 
             # Run meta-analysis if enabled (post-pass on all resource results)
             results = await self._run_meta_analysis_on_resource_results(

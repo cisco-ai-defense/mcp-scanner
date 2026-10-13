@@ -447,3 +447,128 @@ async def test_aggregate_budget_stops_later_resource_reads(config, monkeypatch):
     assert results[0].status == "failed"
     assert results[1].status == "failed"
     assert "budget" in results[1].findings[0].summary
+
+
+def _listed_template(uri_template, name, description, mime="application/json"):
+    return SimpleNamespace(
+        uriTemplate=uri_template, name=name, description=description, mimeType=mime
+    )
+
+
+@pytest.mark.asyncio
+async def test_resource_templates_are_listed_after_static_resources(config):
+    """Static resources and templates both appear in the resource results."""
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(
+        resources=[_listed_resource("config://server-info", "text/plain", name="server_info")]
+    )
+    session.read_resource.return_value = _read_body("helpdesk", "text/plain")
+    session.list_resource_templates.return_value = SimpleNamespace(
+        resourceTemplates=[
+            _listed_template("employee://{employee_id}", "employee_detail", "One employee record."),
+            _listed_template("ticket://{ticket_id}", "ticket_detail", "Full ticket detail."),
+            _listed_template("policy://{name}", "policy_text", "", mime="text/plain"),
+        ],
+        nextCursor=None,
+    )
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+            allowed_mime_types=["text/plain"],
+        )
+
+    assert [(r.resource_uri, r.is_template) for r in results] == [
+        ("config://server-info", False),
+        ("employee://{employee_id}", True),
+        ("ticket://{ticket_id}", True),
+        ("policy://{name}", True),
+    ]
+    employee = results[1]
+    assert employee.status == "completed"
+    assert employee.resource_name == "employee_detail"
+    assert employee.resource_mime_type == "application/json"
+    assert recorders["yara"].seen == ["helpdesk", "One employee record.", "Full ticket detail."]
+    assert results[3].status == "skipped"
+    session.read_resource.assert_awaited_once_with("config://server-info")
+
+
+@pytest.mark.asyncio
+async def test_resource_templates_follow_pagination(config):
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.side_effect = [
+        SimpleNamespace(resourceTemplates=[_listed_template("a://{x}", "a", "first")], nextCursor="p2"),
+        SimpleNamespace(resourceTemplates=[_listed_template("b://{y}", "b", "second")], nextCursor=None),
+    ]
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert [r.resource_uri for r in results] == ["a://{x}", "b://{y}"]
+    assert session.list_resource_templates.await_args_list[1].args == ("p2",)
+
+
+def _template_result(uri, name):
+    from mcpscanner.core.result import ResourceScanResult
+
+    return ResourceScanResult(
+        resource_uri=uri,
+        resource_name=name,
+        resource_mime_type="text/plain",
+        status="completed",
+        analyzers=["YARA"],
+        findings=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_template_listing_failure_keeps_static_resources(config):
+    from mcpscanner.core.scanner import McpError
+
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(
+        resources=[_listed_resource("config://server-info", "text/plain")]
+    )
+    session.read_resource.return_value = _read_body("helpdesk", "text/plain")
+    session.list_resource_templates.side_effect = McpError(
+        SimpleNamespace(code=-32601, message="Method not found", data=None)
+    )
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+            allowed_mime_types=["text/plain"],
+        )
+    assert [r.resource_uri for r in results] == ["config://server-info"]
+
+
+def test_resource_json_marks_templates():
+    import json
+
+    from mcpscanner.core.result import ResourceScanResult, format_results_as_json
+
+    template = ResourceScanResult(
+        resource_uri="ticket://{ticket_id}",
+        resource_name="ticket_detail",
+        resource_mime_type="application/json",
+        status="completed",
+        analyzers=["YARA"],
+        findings=[],
+        is_template=True,
+    )
+    payload = json.loads(format_results_as_json([template]))
+    assert payload["scan_results"][0]["is_template"] is True
