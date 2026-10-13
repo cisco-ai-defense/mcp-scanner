@@ -519,15 +519,55 @@ class NPMPackageScanner:
 
         Source checkouts keep ``src`` and skip ``dist``. A published npm
         tarball often contains only ``dist``, and skipping that directory
-        would report the package safe without reading it.
+        would report the package safe without reading it. When
+        ``package.json`` points its entry points into one of those
+        directories, that directory is scanned even if a stray config file
+        such as ``.eslintrc.js`` sits at the package root.
         """
+        build_dirs = ("dist", "build", "out")
+        for name in NPMPackageScanner._entry_point_dirs(source_root):
+            if name not in build_dirs:
+                continue
+            candidate = source_root / name
+            if candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0:
+                return candidate
         if NPMPackageScanner._count_js_files(source_root) > 0:
             return source_root
-        for name in ("dist", "build", "out"):
+        for name in build_dirs:
             candidate = source_root / name
             if candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0:
                 return candidate
         return source_root
+
+    @staticmethod
+    def _entry_point_dirs(source_root: Path) -> list:
+        """Top-level directories named by ``main``, ``module``, ``bin``, and ``exports``."""
+        try:
+            manifest = json.loads((source_root / "package.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        if not isinstance(manifest, dict):
+            return []
+        targets: list = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, str):
+                targets.append(value)
+            elif isinstance(value, dict):
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        for key in ("main", "module", "bin", "exports"):
+            collect(manifest.get(key))
+        dirs: list = []
+        for target in targets:
+            parts = [part for part in target.replace("\\", "/").split("/") if part not in ("", ".")]
+            if len(parts) > 1 and parts[0] not in dirs:
+                dirs.append(parts[0])
+        return dirs
 
     @staticmethod
     def _count_js_files(source_root) -> int:

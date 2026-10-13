@@ -82,12 +82,12 @@ from typing import Any, Dict, List, Optional
 
 from ...evidence import facts_record
 from ..base import BaseAnalyzer, SecurityFinding
+from .opa_provider import OpaProvider
 
 
 def _probe_locator(value: str) -> bool:
     """True when ``value`` can be published as a probe locator."""
     return bool(value) and "://" not in value and len(value) <= 120
-from .opa_provider import OpaProvider
 
 
 class ReadinessAnalyzer(BaseAnalyzer):

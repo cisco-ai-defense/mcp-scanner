@@ -266,6 +266,35 @@ class TestSdkSerializerMetaAudit:
         assert "Meta-analyzer dropped 1 additional finding" in out
         assert "fp_finding" in out
 
+    def test_format_results_by_analyzer_shows_errors_without_meta_drops(self):
+        result = ToolScanResult(
+            tool_name="t",
+            tool_description="d",
+            status="completed",
+            analyzers=["yara"],
+            findings=[_finding("HIGH", "real_finding")],
+        )
+        result.analyzer_errors = [
+            {"analyzer": "LLM", "content_type": "description", "message": "timed out"}
+        ]
+        out = format_results_by_analyzer(result)
+        assert "Analyzer errors:" in out
+        assert "LLM failed on description: timed out" in out
+
+    def test_format_results_by_analyzer_meta_drops_without_errors_has_no_error_header(self):
+        dropped = _finding("MEDIUM", "fp_finding")
+        dropped.details = {"meta_reason": "noise"}
+        result = ToolScanResult(
+            tool_name="t",
+            tool_description="d",
+            status="completed",
+            analyzers=["yara"],
+            findings=[_finding("HIGH", "real_finding")],
+        )
+        result.meta_filtered_findings = [dropped]
+        out = format_results_by_analyzer(result)
+        assert "Analyzer errors:" not in out
+
 
 # ---------------------------------------------------------------------------
 # H5: Static path strips HTML on text/html resources (parity with remote).

@@ -31,7 +31,7 @@ from ..evidence import (
     compile_record,
     facts_record,
     locator_for_content_type,
-    _source_or_none,
+    source_or_none,
 )
 from .base import BaseAnalyzer, SecurityFinding
 
@@ -350,7 +350,7 @@ class PromptDefenseAnalyzer(BaseAnalyzer):
             return facts_record(summary, "mcp_field", locator, facts)
         sources = []
         for text, start in hits:
-            source = _source_or_none(
+            source = source_or_none(
                 "mcp_field",
                 locator,
                 text,

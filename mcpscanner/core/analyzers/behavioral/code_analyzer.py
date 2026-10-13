@@ -372,6 +372,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # Check if content is a directory
             if os.path.isdir(content):
                 self.logger.debug(f"Scanning directory: {content}")
+                context = {**context, "scan_root": os.path.realpath(content)}
 
                 source_files = self._find_source_files(content)
                 self.logger.debug(
@@ -961,7 +962,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     func_contexts, batch_size=batch_size
                 )
                 for analysis, ctx in batch_results:
-                    finding = self._create_security_finding(analysis, ctx, file_path)
+                    finding = self._create_security_finding(
+                        analysis, ctx, file_path, context.get("scan_root")
+                    )
                     if finding:
                         findings.append(finding)
             else:
@@ -989,7 +992,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                     if result:
                         analysis, ctx = result
-                        finding = self._create_security_finding(analysis, ctx, file_path)
+                        finding = self._create_security_finding(
+                            analysis, ctx, file_path, context.get("scan_root")
+                        )
                         if finding:
                             findings.append(finding)
 
@@ -1035,6 +1040,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                                 "Alignment check did not complete; finding is inconclusive",
                                 file_path,
                                 getattr(fc, "line_number", None),
+                                context.get("scan_root"),
                             ),
                         )
                     )
@@ -1078,7 +1084,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         return findings
 
     def _create_security_finding(
-        self, analysis: Dict[str, Any], func_context, file_path: str
+        self,
+        analysis: Dict[str, Any],
+        func_context,
+        file_path: str,
+        scan_root: Optional[str] = None,
     ) -> Optional[SecurityFinding]:
         """Create SecurityFinding from alignment analysis using threat mappings.
 
@@ -1086,6 +1096,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             analysis: Analysis dict from LLM with threat_name, severity, etc.
             func_context: FunctionContext with code details
             file_path: Path to the source file
+            scan_root: Directory being scanned, when this is a directory scan
 
         Returns:
             SecurityFinding with threat taxonomy mappings or None if invalid
@@ -1132,6 +1143,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 func_context,
                 file_path,
                 allow_flow_roles=file_path.endswith(".py"),
+                scan_root=scan_root,
             )
 
             # Create SecurityFinding with complete threat taxonomy

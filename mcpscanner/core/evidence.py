@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from ..config.constants import MCPScannerConstants
+
 MAX_MATCHED_TEXT = 240
 MAX_SOURCES = 8
 MAX_FACTS = 16
@@ -273,10 +275,22 @@ def _is_absolute_file_path(path: str) -> bool:
     return normalized.startswith("/") or _WINDOWS_DRIVE_RE.match(normalized) is not None
 
 
-def relative_file_locator(path: str) -> Optional[str]:
-    """Relative file locator, or the file name when the path is absolute."""
+def relative_file_locator(path: str, scan_root: Optional[str] = None) -> Optional[str]:
+    """Relative file locator.
+
+    An absolute path under ``scan_root`` is published relative to that root,
+    so files with the same name in different directories stay distinct.
+    Other absolute paths publish only the file name.
+    """
     if not isinstance(path, str) or not path:
         return None
+    if scan_root and _is_absolute_file_path(path):
+        try:
+            relative = Path(path).resolve().relative_to(Path(scan_root).resolve())
+        except (OSError, ValueError):
+            relative = None
+        if relative is not None and _valid_locator("file", relative.as_posix()):
+            return relative.as_posix()
     if _is_absolute_file_path(path):
         name = path.replace("\\", "/").rstrip("/").split("/")[-1]
         if _valid_locator("file", name):
@@ -295,7 +309,7 @@ def facts_record(
     line: Optional[int] = None,
 ) -> EvidenceRecord:
     """One source supported by registered facts and no invented quote."""
-    source = _source_or_none(location_type, locator, None, line, facts)
+    source = source_or_none(location_type, locator, None, line, facts)
     if source is None or not source.is_supported():
         return unavailable_record(summary)
     return compile_record(summary, [source])
@@ -308,7 +322,7 @@ def scope_only_record(
     line: Optional[int] = None,
 ) -> EvidenceRecord:
     """A known location with no verified substring and no facts."""
-    source = _source_or_none(location_type, locator, None, line, [])
+    source = source_or_none(location_type, locator, None, line, [])
     if source is None:
         return unavailable_record(summary)
     return EvidenceRecord(
@@ -319,7 +333,7 @@ def scope_only_record(
     )
 
 
-def _source_or_none(
+def source_or_none(
     location_type: str,
     locator: str,
     matched_text: Optional[str],
@@ -450,7 +464,7 @@ def _render_mapping(payload: Dict[str, Any], summary: str) -> Dict[str, Any]:
             for fact in raw_facts:
                 if isinstance(fact, dict) and "name" in fact:
                     fact_pairs.append((fact.get("name"), fact.get("value")))
-        source = _source_or_none(
+        source = source_or_none(
             location.get("type"),
             location.get("locator"),
             item.get("matched_text"),
@@ -518,13 +532,16 @@ def prepare_behavioral_evidence(
     file_path: Optional[str],
     *,
     allow_flow_roles: bool,
+    scan_root: Optional[str] = None,
 ) -> Tuple[str, EvidenceRecord]:
     """Summary and evidence for one behavioral finding.
 
-    A source-to-sink sentence is kept only when parameter-flow data already
-    computed by the scanner links a verified input quote to a verified sink.
-    JavaScript and TypeScript pass ``allow_flow_roles=False`` so a cited
-    operation can be located without claiming that flow.
+    The model's reason replaces the summary only when parameter-flow data
+    already computed by the scanner links a verified input quote to a
+    verified sink. Otherwise the summary keeps the line number and the
+    description-versus-behavior comparison. JavaScript and TypeScript pass
+    ``allow_flow_roles=False`` so a cited operation can be located without
+    claiming that flow.
     """
     analysis = analysis if isinstance(analysis, dict) else {}
     function_name = getattr(func_context, "name", None)
@@ -532,18 +549,25 @@ def prepare_behavioral_evidence(
         function_name = "function"
     else:
         function_name = function_name.strip()
-    operations = _verified_operations(
-        analysis, func_context, file_path if isinstance(file_path, str) else None
-    )
+    file_path = file_path if isinstance(file_path, str) else None
+    scan_root = scan_root if isinstance(scan_root, str) and scan_root else None
+    operations = _verified_operations(analysis, func_context, file_path, scan_root)
     flow_ok = allow_flow_roles and _flow_links_input_to_sink(func_context, operations)
-    summary = _behavioral_summary(threat_name, function_name, analysis, flow_ok)
+    summary = _behavioral_summary(
+        threat_name,
+        function_name,
+        analysis,
+        flow_ok,
+        _valid_line(getattr(func_context, "line_number", None)),
+    )
     record = _behavioral_record(
         summary,
         function_name,
         func_context,
-        file_path if isinstance(file_path, str) else None,
+        file_path,
         operations,
         allow_flow_roles,
+        scan_root,
     )
     return summary, record
 
@@ -567,10 +591,13 @@ def behavioral_evidence_from_context(
 
 
 def incomplete_location_evidence(
-    summary: str, file_path: Optional[str], line_number: Any
+    summary: str,
+    file_path: Optional[str],
+    line_number: Any,
+    scan_root: Optional[str] = None,
 ) -> EvidenceRecord:
     """The function was located, and the check did not finish."""
-    locator = relative_file_locator(file_path or "")
+    locator = relative_file_locator(file_path or "", scan_root)
     if locator is None:
         return unavailable_record(summary)
     return scope_only_record(summary, "file", locator, _valid_line(line_number))
@@ -581,12 +608,26 @@ def _behavioral_summary(
     function_name: str,
     analysis: Dict[str, Any],
     flow_ok: bool,
+    line: Optional[int],
 ) -> str:
     reason = analysis.get("reason") or analysis.get("summary")
     if flow_ok and isinstance(reason, str) and reason.strip():
         return reason.strip()
     label = threat_name.strip() if isinstance(threat_name, str) and threat_name.strip() else "mismatch"
-    return f"{label} in {function_name}"
+    line_info = f"Line {line}: " if line is not None else ""
+    claims = analysis.get("description_claims")
+    behavior = analysis.get("actual_behavior")
+    if (
+        isinstance(claims, str)
+        and claims.strip()
+        and isinstance(behavior, str)
+        and behavior.strip()
+    ):
+        return _limit_text(
+            f"{line_info}{label} - Description claims: '{claims.strip()}' | "
+            f"Actual behavior: {behavior.strip()}"
+        )
+    return f"{line_info}{label} in {function_name}"
 
 
 def _behavioral_record(
@@ -596,13 +637,14 @@ def _behavioral_record(
     file_path: Optional[str],
     operations: List[Dict[str, Any]],
     allow_flow_roles: bool,
+    scan_root: Optional[str] = None,
 ) -> EvidenceRecord:
     if not operations:
-        locator = _scanner_file_locator(file_path or "")
+        locator = relative_file_locator(file_path or "", scan_root)
         if locator is None:
             return unavailable_record(summary)
         line = _valid_line(getattr(func_context, "line_number", None))
-        source = _source_or_none(
+        source = source_or_none(
             "file", locator, None, line, [("code.symbol", function_name)]
         )
         if source is None:
@@ -620,7 +662,7 @@ def _behavioral_record(
         facts: List[Tuple[str, Any]] = [("code.symbol", function_name)]
         if role:
             facts.append(("code.role", role))
-        source = _source_or_none(
+        source = source_or_none(
             "file",
             operation["locator"],
             operation.get("quote"),
@@ -635,7 +677,10 @@ def _behavioral_record(
 
 
 def _verified_operations(
-    analysis: Dict[str, Any], func_context: Any, file_path: Optional[str]
+    analysis: Dict[str, Any],
+    func_context: Any,
+    file_path: Optional[str],
+    scan_root: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     raw_ops = analysis.get("operations")
     candidates: List[Dict[str, Any]] = []
@@ -651,15 +696,17 @@ def _verified_operations(
         if not isinstance(quote, str) or not quote.strip():
             continue
         hint = operation.get("line_hint")
-        hinted_path = operation.get("file")
         paths = []
-        if isinstance(hinted_path, str):
+        hinted_path = _allowed_hinted_path(
+            operation.get("file"), file_path, extra_paths, scan_root
+        )
+        if hinted_path:
             paths.append(hinted_path)
         if file_path:
             paths.append(file_path)
         paths.extend(extra_paths)
         for path in paths:
-            located = _locate_quote_in_file(path, quote, hint)
+            located = _locate_quote_in_file(path, quote, hint, scan_root)
             if located is None:
                 continue
             key = (located["locator"], located["line"], quote)
@@ -677,13 +724,44 @@ def _verified_operations(
     return verified
 
 
+def _allowed_hinted_path(
+    hinted: Any,
+    file_path: Optional[str],
+    extra_paths: List[str],
+    scan_root: Optional[str],
+) -> Optional[str]:
+    """A model-supplied file path, kept only inside the scanned code.
+
+    With a scan root, the path must resolve under it. Without one, it must
+    be the scanned file or a cross-file path the call graph already found.
+    """
+    if not isinstance(hinted, str) or not hinted.strip():
+        return None
+    try:
+        if scan_root:
+            root = Path(scan_root).resolve()
+            candidate = Path(hinted)
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            resolved = candidate.resolve()
+            resolved.relative_to(root)
+            return str(resolved)
+        resolved = Path(hinted).resolve()
+        for known in [file_path, *extra_paths]:
+            if known and Path(known).resolve() == resolved:
+                return known
+    except (OSError, ValueError):
+        return None
+    return None
+
+
 def _locate_quote_in_file(
-    path: str, quote: str, line_hint: Any
+    path: str, quote: str, line_hint: Any, scan_root: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     text = _read_original_source(path)
     if text is None or quote not in text:
         return None
-    locator = _scanner_file_locator(path)
+    locator = relative_file_locator(path, scan_root)
     if locator is None:
         return None
     lines = _quote_line_numbers(text, quote)
@@ -714,6 +792,8 @@ def _read_original_source(path: str) -> Optional[str]:
     try:
         candidate = Path(path)
         if candidate.is_symlink() or not candidate.is_file():
+            return None
+        if candidate.stat().st_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
             return None
         return candidate.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
@@ -853,7 +933,7 @@ def llm_threat_evidence(
             continue
         consumed_quotes.add(quote)
         for locator, line in located:
-            source = _source_or_none("mcp_field", locator, quote, line, [])
+            source = source_or_none("mcp_field", locator, quote, line, [])
             if source is not None and source.is_supported():
                 sources.append(source)
     if sources:
@@ -1045,7 +1125,7 @@ def yara_evidence_record(
         if key in seen:
             continue
         seen.add(key)
-        source = _source_or_none("mcp_field", locator, published, line, [])
+        source = source_or_none("mcp_field", locator, published, line, [])
         if source is not None:
             sources.append(source)
 

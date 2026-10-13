@@ -868,6 +868,8 @@ def format_results_by_analyzer(
             output.append(
                 f"  • [{f.analyzer}/{f.severity}] {f.summary} — {reason}"
             )
+
+    if scan_result.analyzer_errors:
         output.append("⚠️ Analyzer errors:")
         for error in scan_result.analyzer_errors:
             output.append(

@@ -129,6 +129,7 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         self.logger.debug(
             "js behavioural scan root=%s files=%d", directory, len(files)
         )
+        context = {**context, "scan_root": os.path.realpath(directory)}
         findings: List[SecurityFinding] = []
         for path in files:
             file_findings = await self._analyze_file(path, context)
@@ -252,7 +253,9 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                 if result is not None:
                     pairs.append(result)
         for analysis, returned_ctx in pairs:
-            finding = self._create_security_finding(analysis, returned_ctx, file_path)
+            finding = self._create_security_finding(
+                analysis, returned_ctx, file_path, context.get("scan_root")
+            )
             if finding is not None:
                 findings.append(finding)
         return findings
@@ -262,7 +265,11 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
     # ------------------------------------------------------------------
 
     def _create_security_finding(
-        self, analysis: Dict[str, Any], func_context, file_path: str
+        self,
+        analysis: Dict[str, Any],
+        func_context,
+        file_path: str,
+        scan_root: Optional[str] = None,
     ) -> Optional[SecurityFinding]:
         """Translate one ``(analysis, ctx)`` orchestrator result into a
         ``SecurityFinding``. Mirrors the Python analyzer so the downstream
@@ -294,6 +301,7 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                 func_context,
                 file_path,
                 allow_flow_roles=False,
+                scan_root=scan_root,
             )
 
             return SecurityFinding(
