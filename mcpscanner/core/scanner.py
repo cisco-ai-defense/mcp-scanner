@@ -3523,8 +3523,18 @@ class Scanner:
     _MAX_TEMPLATE_PAGES = 50
     _MAX_ANALYZED_TEMPLATES = 100
 
-    async def _list_resource_templates(self, session, server_url: str) -> List[Any]:
-        """Every template from ``resources/templates/list``, following cursors."""
+    _TEMPLATE_DISCOVERY_URI = "resources/templates/list"
+
+    async def _list_resource_templates(
+        self, session, server_url: str
+    ) -> Tuple[List[Any], Optional[BaseException]]:
+        """Templates from ``resources/templates/list``, following cursors.
+
+        The second element is set when discovery was incomplete: a
+        ``CoverageLimitExceeded`` when the page cap stopped pagination, or the
+        listing error. Templates collected before either are still returned.
+        A server without the templates capability is not an error.
+        """
         templates: List[Any] = []
         cursor: Optional[str] = None
         try:
@@ -3535,21 +3545,54 @@ class Scanner:
                     templates.extend(listed)
                 cursor = getattr(page, "nextCursor", None)
                 if not isinstance(cursor, str) or not cursor:
-                    break
+                    return templates, None
         except McpError as e:
             if self._is_missing_capability_error(e):
                 logger.info(
                     f"Server '{server_url}' does not expose resource templates: {e}"
                 )
-            else:
-                logger.warning(
-                    f"Could not list resource templates on '{server_url}': {e}"
-                )
+                return templates, None
+            logger.warning(f"Could not list resource templates on '{server_url}': {e}")
+            return templates, e
         except Exception as e:
-            logger.warning(
-                f"Could not list resource templates on '{server_url}': {e}"
+            logger.warning(f"Could not list resource templates on '{server_url}': {e}")
+            return templates, e
+        logger.warning(
+            f"Stopped listing resource templates on '{server_url}' after "
+            f"{self._MAX_TEMPLATE_PAGES} pages"
+        )
+        return templates, CoverageLimitExceeded(
+            "resource template page limit reached",
+            observed=self._MAX_TEMPLATE_PAGES + 1,
+            limit=self._MAX_TEMPLATE_PAGES,
+        )
+
+    def _template_discovery_failure_result(
+        self, error: BaseException
+    ) -> ResourceScanResult:
+        """Failed entry marking template discovery as incomplete."""
+        name = "resource template discovery"
+        if isinstance(error, CoverageLimitExceeded):
+            result = self._resource_coverage_limit_result(
+                self._TEMPLATE_DISCOVERY_URI, name, "unknown", error
             )
-        return templates
+        else:
+            finding = build_infrastructure_error_finding(
+                analyzer_name="MCP",
+                subject=name,
+                error=error,
+                context="local",
+            )
+            result = ResourceScanResult(
+                resource_uri=self._TEMPLATE_DISCOVERY_URI,
+                resource_name=name,
+                resource_mime_type="unknown",
+                status="failed",
+                analyzers=[],
+                findings=[finding],
+            )
+        result.is_template = True
+        return result
 
     async def _scan_resource_templates(
         self,
@@ -3575,7 +3618,10 @@ class Scanner:
             remaining = aggregate_limit
         analyzed = 0
         results: List[ResourceScanResult] = []
-        for template in await self._list_resource_templates(session, server_url):
+        templates, discovery_error = await self._list_resource_templates(
+            session, server_url
+        )
+        for template in templates:
             uri_template = str(getattr(template, "uriTemplate", "") or "")
             if not uri_template:
                 continue
@@ -3658,6 +3704,8 @@ class Scanner:
                 )
             analyzed += 1
             results.append(result)
+        if discovery_error is not None:
+            results.append(self._template_discovery_failure_result(discovery_error))
         return results
 
     async def scan_remote_server_resources(

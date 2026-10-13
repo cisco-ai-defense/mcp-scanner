@@ -591,6 +591,62 @@ async def test_template_listing_failure_keeps_static_resources(config):
 
 
 @pytest.mark.asyncio
+async def test_template_page_limit_reports_incomplete_discovery(config, monkeypatch):
+    monkeypatch.setattr(Scanner, "_MAX_TEMPLATE_PAGES", 2)
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.side_effect = [
+        SimpleNamespace(resourceTemplates=[_listed_template("a://{x}", "a", "first")], nextCursor="p2"),
+        SimpleNamespace(resourceTemplates=[_listed_template("b://{y}", "b", "second")], nextCursor="p3"),
+    ]
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert [r.resource_uri for r in results] == [
+        "a://{x}",
+        "b://{y}",
+        "resources/templates/list",
+    ]
+    discovery = results[-1]
+    assert discovery.status == "failed"
+    assert discovery.is_template is True
+    assert "limit 2" in discovery.findings[0].summary
+    assert session.list_resource_templates.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_template_listing_error_mid_pagination_reports_failure(config):
+    from mcpscanner.core.scanner import McpError
+
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.side_effect = [
+        SimpleNamespace(resourceTemplates=[_listed_template("a://{x}", "a", "first")], nextCursor="p2"),
+        McpError(SimpleNamespace(code=-32603, message="secret-token-123 leaked", data=None)),
+    ]
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert [r.resource_uri for r in results] == ["a://{x}", "resources/templates/list"]
+    discovery = results[-1]
+    assert discovery.status == "failed"
+    assert discovery.findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+    assert "secret-token-123" not in discovery.findings[0].summary
+
+
+@pytest.mark.asyncio
 async def test_templates_share_the_aggregate_budget(config, monkeypatch):
     """Once resource bodies use the budget, templates are listed but not analyzed."""
     monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPT_RESOURCE_AGGREGATE_CHARS", 5)
