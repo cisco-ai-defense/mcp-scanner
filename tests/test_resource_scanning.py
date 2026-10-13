@@ -556,6 +556,60 @@ async def test_template_listing_failure_keeps_static_resources(config):
     assert [r.resource_uri for r in results] == ["config://server-info"]
 
 
+@pytest.mark.asyncio
+async def test_templates_share_the_aggregate_budget(config, monkeypatch):
+    """Once resource bodies use the budget, templates are listed but not analyzed."""
+    monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPT_RESOURCE_AGGREGATE_CHARS", 5)
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(
+        resources=[_listed_resource("config://server-info", "text/plain")]
+    )
+    session.read_resource.return_value = _read_body("hello", "text/plain")
+    session.list_resource_templates.return_value = SimpleNamespace(
+        resourceTemplates=[_listed_template("ticket://{ticket_id}", "ticket_detail", "Full ticket detail.")],
+        nextCursor=None,
+    )
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+            allowed_mime_types=["text/plain"],
+        )
+    assert recorders["yara"].seen == ["hello"]
+    template = results[1]
+    assert template.is_template is True
+    assert template.resource_uri == "ticket://{ticket_id}"
+    assert template.status == "failed"
+    assert "budget" in template.findings[0].summary
+
+
+@pytest.mark.asyncio
+async def test_template_analysis_count_is_capped(config, monkeypatch):
+    monkeypatch.setattr(Scanner, "_MAX_ANALYZED_TEMPLATES", 2)
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.return_value = SimpleNamespace(
+        resourceTemplates=[
+            _listed_template(f"t{i}://{{id}}", f"t{i}", f"description {i}") for i in range(4)
+        ],
+        nextCursor=None,
+    )
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert recorders["yara"].seen == ["description 0", "description 1"]
+    assert [r.status for r in results] == ["completed", "completed", "failed", "failed"]
+    assert all(r.is_template for r in results)
+    assert "limit 2" in results[2].findings[0].summary
+
+
 def test_resource_json_marks_templates():
     import json
 

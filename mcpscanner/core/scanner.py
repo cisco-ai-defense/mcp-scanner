@@ -3521,6 +3521,7 @@ class Scanner:
         )
 
     _MAX_TEMPLATE_PAGES = 50
+    _MAX_ANALYZED_TEMPLATES = 100
 
     async def _list_resource_templates(self, session, server_url: str) -> List[Any]:
         """Every template from ``resources/templates/list``, following cursors."""
@@ -3556,13 +3557,23 @@ class Scanner:
         server_url: str,
         analyzers: List[AnalyzerEnum],
         http_headers: Optional[dict] = None,
+        remaining: Optional[int] = None,
     ) -> List[ResourceScanResult]:
         """Scan the advertised metadata of each resource template.
 
         A template URI has unfilled parameters, so there is no body to read.
         The name and description are what an agent sees, so the description
         is analyzed as the template's content.
+
+        Descriptions draw on the same aggregate budget as resource bodies
+        (``remaining``), and at most ``_MAX_ANALYZED_TEMPLATES`` are
+        analyzed. Templates past either limit are still listed, with a
+        coverage-limit result and no analyzer calls.
         """
+        aggregate_limit = MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS
+        if remaining is None:
+            remaining = aggregate_limit
+        analyzed = 0
         results: List[ResourceScanResult] = []
         for template in await self._list_resource_templates(session, server_url):
             uri_template = str(getattr(template, "uriTemplate", "") or "")
@@ -3574,6 +3585,38 @@ class Scanner:
                 self._normalize_mime_type(getattr(template, "mimeType", None))
                 or "unknown"
             )
+            limit_error: Optional[CoverageLimitExceeded] = None
+            if description.strip():
+                if remaining <= 0:
+                    limit_error = CoverageLimitExceeded(
+                        "resource scan aggregate budget exhausted",
+                        limit=aggregate_limit,
+                    )
+                elif analyzed >= self._MAX_ANALYZED_TEMPLATES:
+                    limit_error = CoverageLimitExceeded(
+                        "resource template count limit reached",
+                        observed=analyzed + 1,
+                        limit=self._MAX_ANALYZED_TEMPLATES,
+                    )
+                else:
+                    bounded, limit_error = self._apply_body_budget(
+                        description,
+                        MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
+                        remaining,
+                    )
+                    if limit_error is not None:
+                        remaining = self._consume_rejected_budget(
+                            len(description), bounded, remaining
+                        )
+                    else:
+                        remaining -= len(bounded)
+            if limit_error is not None:
+                result = self._resource_coverage_limit_result(
+                    uri_template, name, mime, limit_error
+                )
+                result.is_template = True
+                results.append(result)
+                continue
             if not description.strip():
                 results.append(
                     ResourceScanResult(
@@ -3613,6 +3656,7 @@ class Scanner:
                     resource_description=description,
                     is_template=True,
                 )
+            analyzed += 1
             results.append(result)
         return results
 
@@ -3894,7 +3938,7 @@ class Scanner:
 
             results.extend(
                 await self._scan_resource_templates(
-                    session, server_url, analyzers, http_headers
+                    session, server_url, analyzers, http_headers, remaining
                 )
             )
 
