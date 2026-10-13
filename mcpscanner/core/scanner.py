@@ -3677,7 +3677,7 @@ class Scanner:
             auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
-            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain and text/html.
+            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain, text/html, and application/json.
 
         Returns:
             List[ResourceScanResult]: The results of the scan for each resource.
@@ -3699,7 +3699,7 @@ class Scanner:
 
         # Default allowed MIME types
         if allowed_mime_types is None:
-            allowed_mime_types = ["text/plain", "text/html"]
+            allowed_mime_types = list(MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES)
 
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
@@ -3974,7 +3974,7 @@ class Scanner:
             auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
-            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain and text/html.
+            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain, text/html, and application/json.
 
         Returns:
             ResourceScanResult: The result of the scan.
@@ -4001,7 +4001,7 @@ class Scanner:
 
         # Default allowed MIME types
         if allowed_mime_types is None:
-            allowed_mime_types = ["text/plain", "text/html"]
+            allowed_mime_types = list(MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES)
 
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)

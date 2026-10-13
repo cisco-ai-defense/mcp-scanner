@@ -27,6 +27,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ..config.constants import MCPScannerConstants
 from ..utils.logging_config import get_logger
 from .auth import APIAuthConfig, AuthType
 
@@ -460,7 +461,9 @@ class SpecificResourceScanRequest(APIScanRequest):
     """Request for scanning a single, specific resource via API."""
 
     resource_uri: str
-    allowed_mime_types: Optional[List[str]] = ["text/plain", "text/html"]
+    allowed_mime_types: Optional[List[str]] = Field(
+        default_factory=lambda: list(MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES)
+    )
 
 
 class SpecificInstructionsScanRequest(APIScanRequest):

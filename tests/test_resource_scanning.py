@@ -449,6 +449,40 @@ async def test_aggregate_budget_stops_later_resource_reads(config, monkeypatch):
     assert "budget" in results[1].findings[0].summary
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan_one", [False, True])
+async def test_json_resources_are_analyzed_by_default(config, scan_one):
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    resource = _listed_resource("stats://tickets", "application/json", name="ticket_stats")
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.read_resource.return_value = _read_body('{"total": 6}', "application/json")
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        if scan_one:
+            results = [
+                await scanner.scan_remote_server_resource(
+                    "https://example.com/mcp", "stats://tickets", analyzers=[AnalyzerEnum.YARA]
+                )
+            ]
+        else:
+            results = await scanner.scan_remote_server_resources(
+                "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+            )
+    assert results[0].status == "completed"
+    assert results[0].resource_mime_type == "application/json"
+    assert recorders["yara"].seen == ['{"total": 6}']
+
+
+def test_default_resource_mime_types_include_json():
+    from mcpscanner.core.models import SpecificResourceScanRequest
+
+    request = SpecificResourceScanRequest(server_url="https://example.com/mcp", resource_uri="r://x")
+    assert request.allowed_mime_types == ["text/plain", "text/html", "application/json"]
+    assert "application/json" in MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES
+
+
 def _listed_template(uri_template, name, description, mime="application/json"):
     return SimpleNamespace(
         uriTemplate=uri_template, name=name, description=description, mimeType=mime
