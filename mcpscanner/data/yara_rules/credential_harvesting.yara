@@ -88,8 +88,11 @@ rule credential_harvesting{
         // File extensions for credentials
         $credential_file_extensions = /\.(keystore|passwd|shadow|config|env|credential|secret|token|private|pub|rsa|dsa|ecdsa|ed25519|pem|crt|cer|key|p12|pfx|jks)\b/
 
-        // Pattern for exfiltration action words
-        $leak_param  = /\b(leak|exfiltrate|export|dump) [^\n]{0,40}?(parameter|context|files??|credentials??|keys??|tokens??|secrets??)\b/i
+        // Pattern for exfiltration action words. A bare file(s) target is not
+        // credential-specific on its own ("Export a file" is ordinary admin
+        // language), so the file branch requires a credential indicator
+        // within the same clause.
+        $leak_param  = /\b(leak|exfiltrate|export|dump) [^\n]{0,40}?(parameter|context|credentials??|keys??|tokens??|secrets??|files?? [^.\n;]{0,40}?(credentials??|keys??|tokens??|secrets??|passwords??))\b/i
 
         // Base64 credential encoding patterns
         $base64_credential_encoding = /\b(base64\s+encode [^\n]*credentials?|concatenate [^\n]*conversation\s+history)\b/i
