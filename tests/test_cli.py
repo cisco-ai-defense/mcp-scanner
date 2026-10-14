@@ -23,6 +23,9 @@ from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 from typing import List, Dict, Any
 
+from rich.panel import Panel
+from rich.table import Table
+
 from mcpscanner.cli import (
     _get_endpoint_from_env,
     _build_config,
@@ -58,9 +61,7 @@ class TestCliHelperFunctions:
         analyzer = MagicMock()
         analyzer.analyzed_functions = []
 
-        results = _build_behavioral_results(
-            analyzer, [finding], source_path="/repo"
-        )
+        results = _build_behavioral_results(analyzer, [finding], source_path="/repo")
 
         assert len(results) == 1
         assert results[0]["tool_name"] == "leaky_tool"
@@ -373,6 +374,31 @@ class TestScanMcpServerDirect:
                 assert "Error scanning server" in captured.out
 
     @pytest.mark.asyncio
+    async def test_scan_mcp_server_direct_connection_error_uses_rich_panel(self):
+        """Connection errors render as a real rich.panel.Panel."""
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
+                "Connection failed"
+            )
+            mock_scanner_class.return_value = mock_scanner
+
+            with (
+                patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}),
+                patch("mcpscanner.cli.console.print") as mock_print,
+            ):
+                await scan_mcp_server_direct(
+                    "https://test.com", [AnalyzerEnum.API], verbose=True
+                )
+
+                panels = [
+                    call.args[0]
+                    for call in mock_print.call_args_list
+                    if call.args and isinstance(call.args[0], Panel)
+                ]
+                assert len(panels) == 1
+
+    @pytest.mark.asyncio
     async def test_scan_mcp_server_direct_with_endpoint_url(self, mock_scan_results):
         """Test scan_mcp_server_direct with custom endpoint URL."""
         with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
@@ -536,6 +562,40 @@ class TestDisplayResults:
         assert "Valid finding" in captured.out
         assert "Severity: LOW" in captured.out
         # Should handle invalid analyzer gracefully
+
+    def test_display_results_unsafe_tools_use_rich_table(self, sample_results):
+        """The unsafe-tools summary must be a real rich.table.Table, not a
+        styled string -- this is what distinguishes the Rich UX from just
+        adding ANSI color codes to the old print() calls."""
+        with patch("mcpscanner.cli.console.print") as mock_print:
+            display_results(sample_results)
+
+            tables = [
+                call.args[0]
+                for call in mock_print.call_args_list
+                if call.args and isinstance(call.args[0], Table)
+            ]
+            assert len(tables) == 1
+            columns = [col.header for col in tables[0].columns]
+            assert columns == ["#", "Tool", "Findings"]
+
+    def test_display_results_no_table_when_no_unsafe_tools(self):
+        """No unsafe tools means nothing to summarize in a table."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {"tool_name": "safe_tool", "is_safe": True, "findings": {}}
+            ],
+        }
+        with patch("mcpscanner.cli.console.print") as mock_print:
+            display_results(results)
+
+            tables = [
+                call.args[0]
+                for call in mock_print.call_args_list
+                if call.args and isinstance(call.args[0], Table)
+            ]
+            assert tables == []
 
 
 class TestStaticSubcommandCLI:

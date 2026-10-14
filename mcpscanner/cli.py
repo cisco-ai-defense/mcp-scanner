@@ -34,6 +34,11 @@ import sys
 import time
 import traceback
 from typing import Any, Dict, List, Optional
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
 from mcpscanner.utils.logging_config import get_logger
 
 from mcpscanner import Config, Scanner
@@ -52,11 +57,17 @@ from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
+
 logger = get_logger(__name__)
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Shared console for all CLI output. A single instance (rather than one per
+# function) keeps terminal-width detection and color/markup behavior
+# consistent across the whole run.
+console = Console()
 
 
 def _get_endpoint_from_env() -> str:
@@ -513,18 +524,45 @@ async def scan_mcp_server_direct(
             "MCPAuthenticationError",
             "MCPServerNotFoundError",
         ):
-            print(f"❌ Connection Error: {e}")
+            tips = ""
             if verbose:
-                print("💡 Troubleshooting tips:")
-                print(f"   • Make sure an MCP server is running at {server_url}")
-                print("   • Verify the URL is correct (including protocol and port)")
-                print("   • Check if the server is accessible from your network")
+                tips = (
+                    "\n\n[bold]Troubleshooting tips:[/bold]\n"
+                    f"  - Make sure an MCP server is running at {server_url}\n"
+                    "  - Verify the URL is correct (including protocol and port)\n"
+                    "  - Check if the server is accessible from your network"
+                )
+            console.print(
+                Panel(
+                    f"{e}{tips}",
+                    title="[bold red]Connection Error[/bold red]",
+                    border_style="red",
+                )
+            )
             return []
         # All other exceptions
-        print(f"❌ Error scanning server: {e}")
+        console.print(
+            Panel(
+                str(e),
+                title="[bold red]Error scanning server[/bold red]",
+                border_style="red",
+            )
+        )
         if verbose:
             traceback.print_exc()
         return []
+
+
+_SEVERITY_STYLES = {
+    "CRITICAL": "bold white on red",
+    "HIGH": "bold red",
+    "MEDIUM": "bold yellow",
+    "LOW": "bold cyan",
+}
+
+
+def _severity_style(severity: str) -> str:
+    return _SEVERITY_STYLES.get(str(severity).upper(), "bold")
 
 
 def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
@@ -535,36 +573,64 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
         results: Scan results from the MCP Scanner API
         detailed: Whether to show detailed results
     """
-    print("\n=== MCP Scanner Results ===\n")
+    console.print()
+    console.rule("[bold]MCP Scanner Results[/bold]")
+    console.print()
 
-    print(f"Server URL: {results.get('server_url', 'N/A')}")
+    console.print(f"Server URL: {results.get('server_url', 'N/A')}")
 
     # Display scan results
     scan_results = results.get("scan_results", [])
-    print(f"Tools scanned: {len(scan_results)}")
+    console.print(f"Tools scanned: {len(scan_results)}")
 
     safe_tools = [tool for tool in scan_results if tool.get("is_safe") is True]
     unsafe_tools = [tool for tool in scan_results if tool.get("is_safe") is False]
     incomplete_tools = [tool for tool in scan_results if tool.get("is_safe") is None]
 
-    print(f"Safe tools: {len(safe_tools)}")
-    print(f"Unsafe tools: {len(unsafe_tools)}")
-    print(f"Incomplete tools: {len(incomplete_tools)}")
+    console.print(f"[green]Safe tools: {len(safe_tools)}[/green]")
+    console.print(
+        f"[red]Unsafe tools: {len(unsafe_tools)}[/red]"
+        if unsafe_tools
+        else f"Unsafe tools: {len(unsafe_tools)}"
+    )
+    console.print(f"Incomplete tools: {len(incomplete_tools)}")
 
     if incomplete_tools:
-        print("\n=== Incomplete Tools ===\n")
+        console.print()
+        console.rule("[bold yellow]Incomplete Tools[/bold yellow]")
+        console.print()
         for tool in incomplete_tools:
-            print(
+            console.print(
                 f"{tool.get('tool_name', 'Unknown')}: {tool.get('status', 'unknown')}"
             )
             for error in tool.get("analyzer_errors", []):
-                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
+                console.print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
 
     # Display unsafe tools
     if unsafe_tools:
-        print("\n=== Unsafe Tools ===\n")
+        console.print()
+        console.rule("[bold red]Unsafe Tools[/bold red]")
+        console.print()
+
+        summary_table = Table(show_header=True, header_style="bold")
+        summary_table.add_column("#", justify="right")
+        summary_table.add_column("Tool")
+        summary_table.add_column("Findings", justify="right")
         for i, tool in enumerate(unsafe_tools, 1):
-            print(f"{i}. {tool.get('tool_name', 'Unknown')}")
+            findings = tool.get("findings", {})
+            total_findings = sum(
+                analyzer_data.get("total_findings", 0)
+                for analyzer_data in findings.values()
+                if isinstance(analyzer_data, dict)
+            )
+            summary_table.add_row(
+                str(i), tool.get("tool_name", "Unknown"), str(total_findings)
+            )
+        console.print(summary_table)
+        console.print()
+
+        for i, tool in enumerate(unsafe_tools, 1):
+            console.print(f"{i}. {tool.get('tool_name', 'Unknown')}")
             findings = tool.get("findings", {})
 
             # Count total findings across all analyzers
@@ -573,7 +639,7 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                 for analyzer_data in findings.values()
                 if isinstance(analyzer_data, dict)
             )
-            print(f"   Findings: {total_findings}")
+            console.print(f"   Findings: {total_findings}")
 
             if detailed and findings:
                 finding_num = 1
@@ -587,13 +653,14 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                             "_analyzer", ""
                         ).upper()
 
-                        print(
+                        console.print(
                             f"   {finding_num}. {analyzer_data.get('threat_summary', 'No summary')}"
                         )
-                        print(
-                            f"      Severity: {analyzer_data.get('severity', 'Unknown')}"
+                        severity = analyzer_data.get("severity", "Unknown")
+                        console.print(
+                            f"      Severity: [{_severity_style(severity)}]{severity}[/{_severity_style(severity)}]"
                         )
-                        print(f"      Analyzer: {clean_analyzer_name}")
+                        console.print(f"      Analyzer: {clean_analyzer_name}")
 
                         # Display threat types if available
                         threat_names = analyzer_data.get("threat_names", [])
@@ -601,7 +668,7 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                             threat_display = ", ".join(
                                 [t.replace("_", " ").title() for t in threat_names]
                             )
-                            print(f"      Threats: {threat_display}")
+                            console.print(f"      Threats: {threat_display}")
 
                         # Display MCP Taxonomy if available
                         mcp_taxonomy = analyzer_data.get("mcp_taxonomy")
@@ -613,17 +680,19 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                             description = mcp_taxonomy.get("description")
 
                             if aitech:
-                                print(f"      Technique: {aitech} - {aitech_name}")
+                                console.print(
+                                    f"      Technique: {aitech} - {aitech_name}"
+                                )
                             if aisubtech:
-                                print(
+                                console.print(
                                     f"      Sub-Technique: {aisubtech} - {aisubtech_name}"
                                 )
                             if description:
-                                print(f"      Description: {description}")
+                                console.print(f"      Description: {description}")
 
-                        print()
+                        console.print()
                         finding_num += 1
-            print()
+            console.print()
 
 
 def display_prompt_results_table(
@@ -1234,9 +1303,7 @@ async def main():
         "scan_path",
         help="Path to a file or directory to scan with VirusTotal",
     )
-    p_virustotal.add_argument(
-        "--output", "-o", help="Save scan results to a file"
-    )
+    p_virustotal.add_argument("--output", "-o", help="Save scan results to a file")
     p_virustotal.add_argument(
         "--verbose", "-v", action="store_true", help="Print verbose output"
     )
@@ -1249,8 +1316,13 @@ async def main():
     p_virustotal.add_argument(
         "--format",
         choices=[
-            "raw", "summary", "detailed", "by_tool",
-            "by_analyzer", "by_severity", "table",
+            "raw",
+            "summary",
+            "detailed",
+            "by_tool",
+            "by_analyzer",
+            "by_severity",
+            "table",
         ],
         default="summary",
         help="Output format (default: %(default)s)",
@@ -1300,12 +1372,8 @@ async def main():
         help="Download and scan a PyPI package in a Docker sandbox",
     )
     p_pypi.add_argument("package", help="PyPI package name (e.g., flask)")
-    p_pypi.add_argument(
-        "--version", help="Specific package version (default: latest)"
-    )
-    p_pypi.add_argument(
-        "--output", "-o", help="Save scan results to a file"
-    )
+    p_pypi.add_argument("--version", help="Specific package version (default: latest)")
+    p_pypi.add_argument("--output", "-o", help="Save scan results to a file")
     p_pypi.add_argument(
         "--verbose", "-v", action="store_true", help="Print verbose output"
     )
@@ -1318,8 +1386,13 @@ async def main():
     p_pypi.add_argument(
         "--format",
         choices=[
-            "raw", "summary", "detailed", "by_tool",
-            "by_analyzer", "by_severity", "table",
+            "raw",
+            "summary",
+            "detailed",
+            "by_tool",
+            "by_analyzer",
+            "by_severity",
+            "table",
         ],
         default="summary",
         help="Output format (default: %(default)s)",
@@ -1350,26 +1423,25 @@ async def main():
         "package",
         help="npm package name (supports @scope/name, e.g. @modelcontextprotocol/server-everything)",
     )
-    p_npm.add_argument(
-        "--version", help="Specific package version (default: latest)"
-    )
-    p_npm.add_argument(
-        "--output", "-o", help="Save scan results to a file"
-    )
+    p_npm.add_argument("--version", help="Specific package version (default: latest)")
+    p_npm.add_argument("--output", "-o", help="Save scan results to a file")
     p_npm.add_argument(
         "--verbose", "-v", action="store_true", help="Print verbose output"
     )
-    p_npm.add_argument(
-        "--raw", "-r", action="store_true", help="Print raw JSON output"
-    )
+    p_npm.add_argument("--raw", "-r", action="store_true", help="Print raw JSON output")
     p_npm.add_argument(
         "--detailed", "-d", action="store_true", help="Show detailed results"
     )
     p_npm.add_argument(
         "--format",
         choices=[
-            "raw", "summary", "detailed", "by_tool",
-            "by_analyzer", "by_severity", "table",
+            "raw",
+            "summary",
+            "detailed",
+            "by_tool",
+            "by_analyzer",
+            "by_severity",
+            "table",
         ],
         default="summary",
         help="Output format (default: %(default)s)",
@@ -1420,9 +1492,7 @@ async def main():
         dest="disable_pip",
         help="Disable pip for dependency resolution (use with --no-deps for pinned inputs)",
     )
-    p_vuln_pkgs.add_argument(
-        "--output", "-o", help="Save scan results to a file"
-    )
+    p_vuln_pkgs.add_argument("--output", "-o", help="Save scan results to a file")
     p_vuln_pkgs.add_argument(
         "--verbose", "-v", action="store_true", help="Print verbose output"
     )
@@ -1694,7 +1764,10 @@ async def main():
     selected_analyzers = [AnalyzerEnum(name) for name in analyzer_names]
 
     # Add META analyzer if --enable-meta flag is set
-    if getattr(args, "enable_meta", False) and AnalyzerEnum.META not in selected_analyzers:
+    if (
+        getattr(args, "enable_meta", False)
+        and AnalyzerEnum.META not in selected_analyzers
+    ):
         selected_analyzers.append(AnalyzerEnum.META)
 
     # Validate behavioral analyzer requirements
@@ -1859,9 +1932,7 @@ async def main():
             # Mirror Scanner.__init__'s ``(api_key or is_bedrock)`` rule so
             # ``--enable-meta`` with ``MCP_SCANNER_LLM_MODEL=bedrock/...`` and
             # an AWS profile works end-to-end.
-            _meta_is_bedrock = bool(
-                cfg.llm_model and "bedrock/" in cfg.llm_model
-            )
+            _meta_is_bedrock = bool(cfg.llm_model and "bedrock/" in cfg.llm_model)
             if AnalyzerEnum.META in selected_analyzers and (
                 cfg.llm_provider_api_key or _meta_is_bedrock
             ):
@@ -1913,13 +1984,13 @@ async def main():
                 stdio_args.extend([a for a in args.stdio_args.split(",") if a])
             if getattr(args, "stdio_arg", None):
                 stdio_args.extend(args.stdio_arg)
-            
+
             # Handle stderr redirection
             stderr_file = getattr(args, "stderr_file", None)
             errlog = None
             if stderr_file:
                 errlog = open(stderr_file, "w")
-            
+
             stdio = StdioServer(
                 command=args.stdio_command,
                 args=stdio_args,
@@ -1929,7 +2000,10 @@ async def main():
             try:
                 if args.stdio_tool:
                     scan_result = await scanner.scan_stdio_server_tool(
-                        stdio, args.stdio_tool, analyzers=selected_analyzers, errlog=errlog
+                        stdio,
+                        args.stdio_tool,
+                        analyzers=selected_analyzers,
+                        errlog=errlog,
                     )
                     results = await results_to_json([scan_result])
                 else:
@@ -2176,9 +2250,14 @@ async def main():
                 )
                 sys.exit(1)
 
-            vt_enabled_env = os.environ.get("MCP_SCANNER_VIRUSTOTAL_ENABLED", "true").lower()
+            vt_enabled_env = os.environ.get(
+                "MCP_SCANNER_VIRUSTOTAL_ENABLED", "true"
+            ).lower()
             vt_enabled = vt_enabled_env != "false"
-            vt_upload = os.environ.get("MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false").lower() == "true"
+            vt_upload = (
+                os.environ.get("MCP_SCANNER_VIRUSTOTAL_UPLOAD_FILES", "false").lower()
+                == "true"
+            )
 
             analyzer = VirusTotalAnalyzer(
                 api_key=vt_api_key,
@@ -2202,7 +2281,11 @@ async def main():
             results = []
             if findings:
                 for finding in findings:
-                    file_path = finding.details.get("file_path", scan_path) if finding.details else scan_path
+                    file_path = (
+                        finding.details.get("file_path", scan_path)
+                        if finding.details
+                        else scan_path
+                    )
                     analyzer_finding = {
                         "severity": finding.severity,
                         "threat_summary": finding.summary,
@@ -2213,35 +2296,47 @@ async def main():
                     # Add MCP taxonomy if available
                     if finding.details:
                         taxonomy = {}
-                        for key in ("aitech", "aitech_name", "aisubtech", "aisubtech_name", "taxonomy_description"):
+                        for key in (
+                            "aitech",
+                            "aitech_name",
+                            "aisubtech",
+                            "aisubtech_name",
+                            "taxonomy_description",
+                        ):
                             if key in finding.details:
-                                taxonomy[key.replace("taxonomy_description", "description")] = finding.details[key]
+                                taxonomy[
+                                    key.replace("taxonomy_description", "description")
+                                ] = finding.details[key]
                         if taxonomy:
                             analyzer_finding["mcp_taxonomies"].append(taxonomy)
 
-                    results.append({
-                        "tool_name": file_path,
-                        "tool_description": f"VirusTotal scan of {os.path.basename(file_path)}",
-                        "status": "completed",
-                        "is_safe": False,
-                        "findings": {"virustotal_analyzer": analyzer_finding},
-                    })
-            else:
-                results.append({
-                    "tool_name": scan_path,
-                    "tool_description": f"VirusTotal scan of {os.path.basename(scan_path)}",
-                    "status": "completed",
-                    "is_safe": True,
-                    "findings": {
-                        "virustotal_analyzer": {
-                            "severity": "SAFE",
-                            "threat_summary": "No threats detected",
-                            "threat_names": [],
-                            "total_findings": 0,
-                            "mcp_taxonomies": [],
+                    results.append(
+                        {
+                            "tool_name": file_path,
+                            "tool_description": f"VirusTotal scan of {os.path.basename(file_path)}",
+                            "status": "completed",
+                            "is_safe": False,
+                            "findings": {"virustotal_analyzer": analyzer_finding},
                         }
-                    },
-                })
+                    )
+            else:
+                results.append(
+                    {
+                        "tool_name": scan_path,
+                        "tool_description": f"VirusTotal scan of {os.path.basename(scan_path)}",
+                        "status": "completed",
+                        "is_safe": True,
+                        "findings": {
+                            "virustotal_analyzer": {
+                                "severity": "SAFE",
+                                "threat_summary": "No threats detected",
+                                "threat_names": [],
+                                "total_findings": 0,
+                                "mcp_taxonomies": [],
+                            }
+                        },
+                    }
+                )
 
             # Add scan summary if directory scan
             if os.path.isdir(scan_path) and analyzer.last_scan_summary:
@@ -2441,7 +2536,9 @@ async def main():
 
         elif args.cmd == "vulnerable-package":
             import os
-            from mcpscanner.core.analyzers.vulnerable_package_analyzer import VulnerablePackageAnalyzer
+            from mcpscanner.core.analyzers.vulnerable_package_analyzer import (
+                VulnerablePackageAnalyzer,
+            )
             from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
 
             scan_path = args.scan_path
@@ -2469,9 +2566,21 @@ async def main():
             results = []
             if findings:
                 for finding in findings:
-                    pkg = finding.details.get("package_name", "unknown") if finding.details else "unknown"
-                    ver = finding.details.get("installed_version", "?") if finding.details else "?"
-                    vuln_id = finding.details.get("vulnerability_id", "") if finding.details else ""
+                    pkg = (
+                        finding.details.get("package_name", "unknown")
+                        if finding.details
+                        else "unknown"
+                    )
+                    ver = (
+                        finding.details.get("installed_version", "?")
+                        if finding.details
+                        else "?"
+                    )
+                    vuln_id = (
+                        finding.details.get("vulnerability_id", "")
+                        if finding.details
+                        else ""
+                    )
 
                     analyzer_finding = {
                         "severity": finding.severity,
@@ -2482,14 +2591,28 @@ async def main():
                     }
                     if finding.details:
                         taxonomy = {}
-                        for key in ("aitech", "aitech_name", "aisubtech", "aisubtech_name", "taxonomy_description"):
+                        for key in (
+                            "aitech",
+                            "aitech_name",
+                            "aisubtech",
+                            "aisubtech_name",
+                            "taxonomy_description",
+                        ):
                             if key in finding.details:
-                                taxonomy[key.replace("taxonomy_description", "description")] = finding.details[key]
+                                taxonomy[
+                                    key.replace("taxonomy_description", "description")
+                                ] = finding.details[key]
                         if taxonomy:
                             analyzer_finding["mcp_taxonomies"].append(taxonomy)
 
-                    aliases = finding.details.get("aliases", []) if finding.details else []
-                    desc = finding.details.get("description", "") if finding.details else ""
+                    aliases = (
+                        finding.details.get("aliases", []) if finding.details else []
+                    )
+                    desc = (
+                        finding.details.get("description", "")
+                        if finding.details
+                        else ""
+                    )
                     alias_str = ", ".join(aliases) if aliases else ""
 
                     tool_desc_parts = [f"{vuln_id}: {pkg}=={ver}"]
@@ -2498,29 +2621,35 @@ async def main():
                     if desc:
                         tool_desc_parts.append(desc)
 
-                    results.append({
-                        "package_name": f"{pkg}=={ver}",
-                        "vulnerability_description": " | ".join(tool_desc_parts),
-                        "status": "completed",
-                        "is_safe": False,
-                        "findings": {"vulnerable_package_analyzer": analyzer_finding},
-                    })
-            else:
-                results.append({
-                    "package_name": scan_path,
-                    "vulnerability_description": f"Vulnerable package scan of {os.path.basename(scan_path)}",
-                    "status": "completed",
-                    "is_safe": True,
-                    "findings": {
-                        "vulnerable_package_analyzer": {
-                            "severity": "SAFE",
-                            "threat_summary": "No known vulnerabilities found",
-                            "threat_names": [],
-                            "total_findings": 0,
-                            "mcp_taxonomies": [],
+                    results.append(
+                        {
+                            "package_name": f"{pkg}=={ver}",
+                            "vulnerability_description": " | ".join(tool_desc_parts),
+                            "status": "completed",
+                            "is_safe": False,
+                            "findings": {
+                                "vulnerable_package_analyzer": analyzer_finding
+                            },
                         }
-                    },
-                })
+                    )
+            else:
+                results.append(
+                    {
+                        "package_name": scan_path,
+                        "vulnerability_description": f"Vulnerable package scan of {os.path.basename(scan_path)}",
+                        "status": "completed",
+                        "is_safe": True,
+                        "findings": {
+                            "vulnerable_package_analyzer": {
+                                "severity": "SAFE",
+                                "threat_summary": "No known vulnerabilities found",
+                                "threat_names": [],
+                                "total_findings": 0,
+                                "mcp_taxonomies": [],
+                            }
+                        },
+                    }
+                )
 
             if analyzer.last_scan_summary:
                 summary = analyzer.last_scan_summary
@@ -2554,13 +2683,13 @@ async def main():
                 stdio_args.extend([a for a in args.stdio_args.split(",") if a])
             if args.stdio_arg:
                 stdio_args.extend(args.stdio_arg)
-            
+
             # Handle stderr redirection
             stderr_file = getattr(args, "stderr_file", None)
             errlog = None
             if stderr_file:
                 errlog = open(stderr_file, "w")
-            
+
             stdio = StdioServer(
                 command=args.stdio_command,
                 args=stdio_args,
@@ -2570,7 +2699,10 @@ async def main():
             try:
                 if args.stdio_tool:
                     scan_result = await scanner.scan_stdio_server_tool(
-                        stdio, args.stdio_tool, analyzers=selected_analyzers, errlog=errlog
+                        stdio,
+                        args.stdio_tool,
+                        analyzers=selected_analyzers,
+                        errlog=errlog,
                     )
                     results = await results_to_json([scan_result])
                 else:
