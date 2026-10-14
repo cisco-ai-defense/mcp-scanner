@@ -49,6 +49,18 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from .context_extractor import FunctionContext
+from .runtime_description_flow import (
+    CallSite,
+    DescriptionWrite,
+    FileFacts,
+    add_runtime_description_override,
+    computed_expr,
+    scan_bound_names,
+    scan_classes,
+    scan_imports,
+    strip_self_prefix,
+    summarize,
+)
 from .parser.python_parser import PythonParser
 from .dataflow.forward_analysis import ForwardDataflowAnalysis
 from .dataflow.treesitter_analysis import TreeSitterDataflowAnalysis
@@ -769,6 +781,24 @@ def _parse_name_from_annotations(annotations: List[str]) -> Optional[str]:
     return None
 
 
+_MCP_DESCRIPTION_ARG_RES = (
+    _re.compile(r'\bdescription\s*[=:]\s*"((?:\\.|[^"\\])*)"'),
+    _re.compile(r"\bdescription\s*[=:]\s*'((?:\\.|[^'\\])*)'"),
+    _re.compile(r'\bDescription\s*\(\s*"((?:\\.|[^"\\])*)"\s*\)'),
+    _re.compile(r"\bDescription\s*\(\s*'((?:\\.|[^'\\])*)'\s*\)"),
+)
+
+
+def _parse_description_from_annotation_texts(annotations: List[str]) -> Optional[str]:
+    """Pull the registered description out of annotation/attribute texts."""
+    for ann in annotations or []:
+        for pattern in _MCP_DESCRIPTION_ARG_RES:
+            m = pattern.search(ann or "")
+            if m and m.group(1).strip():
+                return m.group(1).strip()
+    return None
+
+
 @dataclass
 class NativeAnalysisResult:
     """Result of native analysis for a single unit."""
@@ -1040,6 +1070,9 @@ class NativeAnalyzer:
                         capability=cap_kind,
                         registered_name=_parse_name_from_annotations(annotations),
                         source_kind="annotation",
+                        registered_description=_parse_description_from_annotation_texts(
+                            annotations
+                        ),
                     )
             for child in node.children:
                 visit_funcs(child)
@@ -1059,6 +1092,8 @@ class NativeAnalyzer:
         registrations = self._ts_find_mcp_registrations(
             tree.root_node, trusted_receivers=mcp_instances
         )
+        if self.language == "java":
+            registrations.extend(self._java_find_spec_registrations(tree.root_node))
 
         # Build an import-target map once per extract call: cross-file
         # resolution prefers entries whose defining file path matches
@@ -1067,6 +1102,32 @@ class NativeAnalyzer:
         import_target_map = self._build_import_target_map(
             imports, current_file=str(self.file_path) if self.file_path else None
         )
+
+        ctx_by_key: Dict[Any, FunctionContext] = {}
+        handler_spans: Dict[int, "tuple[int, int]"] = {}
+        reg_contexts: List["tuple[Dict[str, Any], FunctionContext]"] = []
+
+        first_by_name: Dict["tuple[Any, str]", FunctionContext] = {}
+
+        def remember(reg, key, span=None):
+            ctx = contexts[-1]
+            ctx_by_key[key] = ctx
+            reg_contexts.append((reg, ctx))
+            if span is not None:
+                handler_spans[id(ctx)] = span
+            name_key = (reg.get("capability"), ctx.name)
+            first = first_by_name.setdefault(name_key, ctx)
+            new_desc = reg.get("description")
+            if first is not ctx and new_desc and new_desc not in (first.docstring or ""):
+                call_node = reg.get("call_node")
+                add_runtime_description_override(
+                    first,
+                    new_desc,
+                    line_number=(call_node.start_point[0] + 1) if call_node else 0,
+                    condition=self._ts_enclosing_condition(call_node) if call_node else None,
+                    mode="replace",
+                    via="re-registration with description",
+                )
 
         for reg in registrations:
             handler_node = reg.get("handler_node")
@@ -1125,7 +1186,9 @@ class NativeAnalyzer:
                     registered_name=reg.get("name") or handler_name,
                     source_kind=source_kind,
                     handler_name_hint=handler_name,
+                    registered_description=reg.get("description"),
                 )
+                remember(reg, stub_key)
                 continue
 
             if handler_node is None and cross_file_match is not None:
@@ -1152,11 +1215,29 @@ class NativeAnalyzer:
                     source_kind=source_kind,
                     handler_name_hint=handler_name,
                     source_file=cross_file_path,
+                    registered_description=reg.get("description"),
                 )
+                remember(reg, stub_key)
                 continue
 
             cap_key = (handler_node.start_byte, cap_kind)
             if cap_key in seen_handlers:
+                existing = ctx_by_key.get(cap_key)
+                new_desc = reg.get("description")
+                if (
+                    existing is not None
+                    and new_desc
+                    and new_desc not in (existing.docstring or "")
+                ):
+                    call_node = reg.get("call_node")
+                    add_runtime_description_override(
+                        existing,
+                        new_desc,
+                        line_number=(call_node.start_point[0] + 1) if call_node else 0,
+                        condition=self._ts_enclosing_condition(call_node) if call_node else None,
+                        mode="replace",
+                        via="re-registration with description",
+                    )
                 continue
             seen_handlers.add(cap_key)
 
@@ -1169,6 +1250,7 @@ class NativeAnalyzer:
                 else "registration"
             )
 
+            before = len(contexts)
             self._append_capability_context(
                 contexts,
                 handler_node,
@@ -1176,7 +1258,20 @@ class NativeAnalyzer:
                 capability=cap_kind,
                 registered_name=reg.get("name"),
                 source_kind=source_kind,
+                registered_description=reg.get("description"),
             )
+            if len(contexts) > before:
+                remember(
+                    reg, cap_key, (handler_node.start_byte, handler_node.end_byte)
+                )
+
+        self._last_reg_contexts = reg_contexts
+        try:
+            self._ts_apply_runtime_description_overrides(
+                tree.root_node, contexts, reg_contexts, handler_spans
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            self.logger.debug(f"Runtime description override pass failed: {e}")
 
         # Gap 8 extension: static endpoint tables (literal ``name`` /
         # ``alias`` fields) including arrays reached via ``for (const tool
@@ -1439,6 +1534,7 @@ class NativeAnalyzer:
         source_kind: str,
         handler_name_hint: Optional[str] = None,
         source_file: Optional[str] = None,
+        registered_description: Optional[str] = None,
     ) -> None:
         """Emit a stub ``FunctionContext`` for an unresolved handler.
 
@@ -1470,7 +1566,7 @@ class NativeAnalyzer:
         )
         # Optional fields. Set them via attribute assignment because the
         # dataclass declares defaults — direct setattr is safe.
-        ctx.docstring = None
+        ctx.docstring = registered_description or None
         ctx.parameters = []
         ctx.return_type = None
         ctx.line_number = 0
@@ -2211,6 +2307,7 @@ class NativeAnalyzer:
         capability: str,
         registered_name: Optional[str],
         source_kind: str,
+        registered_description: Optional[str] = None,
     ) -> None:
         """Extract a FunctionContext for ``handler_node`` and tag it.
 
@@ -2235,6 +2332,7 @@ class NativeAnalyzer:
         if ctx is None:
             return
 
+        ctx.definition_name = ctx.name.rsplit(".", 1)[-1]
         ctx.name = _effective_capability_name(
             registered_name, ctx.name, capability
         )
@@ -2250,6 +2348,14 @@ class NativeAnalyzer:
         except Exception as e:  # pragma: no cover - defensive
             self.logger.debug(f"Callee enrichment failed for MCP handler: {e}")
 
+        if registered_description and registered_description not in (ctx.docstring or ""):
+            # The registration description is what clients advertise; keep
+            # any handler doc comment after it.
+            ctx.docstring = (
+                f"{registered_description}\n\n{ctx.docstring}"
+                if ctx.docstring
+                else registered_description
+            )
         if not ctx.docstring:
             anno_desc = self._parse_description_from_annotations(handler_node)
             if anno_desc:
@@ -2524,6 +2630,7 @@ class NativeAnalyzer:
                         reg.get("handler_node") is not None
                         or reg.get("handler_name") is not None
                     ):
+                        reg["call_node"] = node
                         registrations.append(reg)
             for child in node.children:
                 visit(child, node)
@@ -3030,10 +3137,25 @@ class NativeAnalyzer:
         positional: List[tuple[str, Any]] = []
         direct_inline_handlers: List["Node"] = []
         object_inline_handlers: List["Node"] = []
+        description: Optional[str] = None
+        string_args: List[str] = []
 
         for child in args_node.children:
             if child.type in ("(", ")", ",", "comment"):
                 continue
+
+            named_desc = self._ts_named_description_argument(child)
+            if named_desc is not None:
+                description = description or named_desc
+                continue
+            if child.type in string_node_types:
+                string_args.append(_strip_string_quotes(self._ts_get_node_text(child)))
+            elif child.type == "value_argument":
+                lit = self._ts_extract_string_literal_text(child)
+                if lit is not None:
+                    string_args.append(lit)
+            if description is None:
+                description = self._ts_object_description(child)
 
             if child.type in func_types:
                 positional.append(("inline", child))
@@ -3112,15 +3234,696 @@ class NativeAnalyzer:
         ):
             name = refs[0]
 
-        if handler_node is None and handler_name is None:
-            return None
-
+        if description is None and len(string_args) >= 2:
+            description = string_args[1]
         return {
             "capability": override_capability or _normalize_capability(capability_method),
             "name": name,
             "handler_node": handler_node,
             "handler_name": handler_name,
+            "description": description,
+            "arg_refs": refs,
         }
+
+    _TS_DESCRIPTION_CALL_RE = _re.compile(
+        r"""(?:WithDescription|withDescription|description)\s*\(\s*(["'`])((?:\\.|(?!\1).)*)\1""",
+        _re.DOTALL,
+    )
+
+    def _ts_named_description_argument(self, node: "Node") -> Optional[str]:
+        """Description from a named argument (``description = "..."``).
+
+        Covers Kotlin ``value_argument``, C# ``argument`` and PHP named
+        arguments; returns ``None`` for any other node.
+        """
+        if "argument" not in node.type:
+            return None
+        text = self._ts_get_node_text(node)
+        if not _re.match(r"\s*\$?description\s*[:=]", text, _re.IGNORECASE):
+            return None
+        return self._ts_first_string_in_subtree(node) or ""
+
+    def _ts_first_string_in_subtree(self, node: "Node") -> Optional[str]:
+        stack = [node]
+        while stack:
+            cur = stack.pop()
+            lit = self._ts_extract_string_literal_text(cur)
+            if lit is not None:
+                return lit
+            stack.extend(reversed(cur.children))
+        return None
+
+    def _ts_object_description(self, node: "Node") -> Optional[str]:
+        """Description from a registration argument that is not a plain string.
+
+        Handles object/composite literals with a ``description`` field
+        (TS v2 config, Go ``&mcp.Tool{Description: ...}``) and builder calls
+        such as mcp-go's ``mcp.NewTool("x", mcp.WithDescription("..."))``.
+        """
+        candidates = [node]
+        if node.type == "unary_expression":
+            candidates.extend(node.children)
+        for cand in candidates:
+            if cand.type in (
+                "object",
+                "object_expression",
+                "literal_value",
+                "composite_literal",
+            ):
+                obj = cand
+                if cand.type == "composite_literal":
+                    obj = cand.child_by_field_name("body") or cand
+                for key, value_node in self._ts_iter_direct_object_entries(obj):
+                    if key and key.lower() == "description" and value_node is not None:
+                        lit = self._ts_string_value_from_object_field(value_node)
+                        if lit is not None:
+                            return lit
+        if node.type == "call_expression":
+            match = self._TS_DESCRIPTION_CALL_RE.search(self._ts_get_node_text(node))
+            if match:
+                return match.group(2)
+        return None
+
+    # ------------------------------------------------------------------
+    # Runtime description changes (rug pulls) for tree-sitter languages
+    # ------------------------------------------------------------------
+
+    _TS_CALL_NODE_TYPES: ClassVar[Set[str]] = {
+        "call_expression",
+        "method_invocation",
+        "invocation_expression",
+        "call",
+        "member_call_expression",
+        "method_call_expression",
+    }
+    _TS_IF_NODE_TYPES: ClassVar[Set[str]] = {
+        "if_statement",
+        "if_expression",
+        "if",
+        "unless",
+        "if_modifier",
+        "unless_modifier",
+    }
+    _TS_RECEIVER = r"(?P<recv>[\$\w][\w$]*(?:(?:\.|->|\?\.)[\$\w]+)*?)\s*(?:\.|->|\?\.)\s*"
+    _TS_DESC_FIELD_RE = _re.compile("^" + _TS_RECEIVER + r"(?i:description)$")
+    _TS_DESC_METHOD_RE = _re.compile(
+        r"^\s*" + _TS_RECEIVER
+        + r"(?P<method>update|setDescription|set_description|SetDescription)\s*\("
+    )
+    _TS_TOOL_BINDING_RE = _re.compile(
+        r"registerTool|\.tool\s*\(|addTool|AddTool|NewTool"
+        r"|\bTool\s*(?:\(|\{|::new|::builder|\.builder)|new\s+[\w.\\]*Tool\b"
+    )
+    _TS_NAME_FIELD_RE = _re.compile(
+        r"""\b[Nn]ame\s*[:=]\s*(["'`])((?:\\.|(?!\1).)*)\1""", _re.DOTALL
+    )
+    _TS_ANY_STRING_RE = _re.compile(r"""(["'`])((?:\\.|(?!\1).)*)\1""", _re.DOTALL)
+    _TS_DESC_IN_TEXT_RE = _re.compile(
+        r"""(?:WithDescription\s*\(|\b[Dd]escription\s*[:=]|setDescription\s*\()\s*"""
+        r"""(["'`])((?:\\.|(?!\1).)*)\1""",
+        _re.DOTALL,
+    )
+
+    def _ts_apply_runtime_description_overrides(
+        self,
+        root: "Node",
+        contexts: List[FunctionContext],
+        reg_contexts: List["tuple[Dict[str, Any], FunctionContext]"],
+        handler_spans: Dict[int, "tuple[int, int]"],
+    ) -> None:
+        """Fold description changes made after registration into tool docstrings.
+
+        Covers field writes (``tool.description = ...``, Go/C#
+        ``tool.Description = ...``, PHP ``$tool->description = ...``),
+        ``tool.update({description: ...})`` (TS SDK ``RegisteredTool``) and
+        ``setDescription(...)``. A write only counts when its receiver
+        resolves to a registered tool, so ``issue.description = ...`` inside a
+        handler is not mistaken for a rug pull.
+        """
+        if not contexts:
+            return
+        self._ts_binding_cache: Dict[str, Optional[str]] = {}
+        # Tools registered through a variable (``s.AddTool(tool, handler)``)
+        # carry their description on the variable's initializer.
+        for reg, ctx in reg_contexts:
+            if ctx.docstring:
+                continue
+            for ref in reg.get("arg_refs") or []:
+                binding = self._ts_binding_value_text(ref)
+                match = self._TS_DESC_IN_TEXT_RE.search(binding or "")
+                if match:
+                    ctx.docstring = match.group(2)
+                    break
+
+        facts = self._ts_description_facts(root)
+        for name, write in facts.redefinitions:
+            ctx = self._ts_context_named(name, contexts)
+            if ctx is not None and write.text not in (ctx.docstring or ""):
+                add_runtime_description_override(
+                    ctx,
+                    write.text,
+                    line_number=write.line,
+                    condition=write.condition,
+                    mode="replace",
+                    via="tool redefinition",
+                )
+        _, changes = summarize(facts)
+        for change in changes:
+            ctx = self._ts_tool_for_receiver(change.target, contexts, reg_contexts)
+            if ctx is None:
+                continue
+            span = handler_spans.get(id(ctx))
+            if span and span[0] <= change.start_byte < span[1]:
+                continue
+            add_runtime_description_override(
+                ctx,
+                change.text,
+                line_number=change.line,
+                condition=change.condition,
+                mode=change.mode,
+                via=change.via,
+            )
+
+    _TS_EXTRA_CALL_NODE_TYPES: ClassVar[Set[str]] = {
+        "function_call_expression",
+        "scoped_call_expression",
+        "nullsafe_member_call_expression",
+    }
+
+    def _ts_parse_root(self) -> Optional["Node"]:
+        """Parse the file with its tree-sitter grammar; ``None`` if unsupported."""
+        if self.language not in self.FUNCTION_NODE_TYPES:
+            return None
+        lang_mod = _get_language_module(self.language)
+        if lang_mod is None:
+            return None
+        if self.language == "typescript":
+            lang = Language(lang_mod.language_typescript())
+        elif self.language == "php":
+            lang = Language(lang_mod.language_php())
+        else:
+            lang = Language(lang_mod.language())
+        return Parser(lang).parse(self.source_bytes).root_node
+
+    def _ts_description_facts(self, root: "Node") -> FileFacts:
+        """Description writes, tool redefinitions, calls and scopes in this file."""
+        facts = FileFacts(path=str(self.file_path), language=self.language)
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        call_types = self._TS_CALL_NODE_TYPES | self._TS_EXTRA_CALL_NODE_TYPES
+        stack: List["tuple[Node, Optional[str], tuple[str, ...]]"] = [(root, None, ())]
+        while stack:
+            node, fn_name, fn_params = stack.pop()
+            if node.type in func_types and node.type not in _TS_NON_FUNCTION_NODE_TYPES:
+                fn_name = self._ts_get_function_name(node) or "<anonymous>"
+                if fn_name == "<anonymous>" and self._ts_is_default_export(node):
+                    fn_name = "default"
+                fn_params = self._ts_param_names(node)
+                facts.functions.setdefault(fn_name, fn_params)
+            line = node.start_point[0] + 1
+            redefined = self._ts_tool_constructor(node)
+            if redefined is not None:
+                name, text = redefined
+                facts.redefinitions.append(
+                    (
+                        name,
+                        DescriptionWrite(
+                            target=name,
+                            text=text,
+                            mode="replace",
+                            via="tool redefinition",
+                            line=line,
+                            condition=self._ts_enclosing_condition(node),
+                            enclosing=fn_name,
+                            enclosing_params=fn_params,
+                            start_byte=node.start_byte,
+                        ),
+                    )
+                )
+            else:
+                found = self._ts_description_write(node)
+                if found is not None:
+                    recv, text, mode, via = found
+                    facts.writes.append(
+                        DescriptionWrite(
+                            target=recv,
+                            text=text,
+                            mode=mode,
+                            via=via,
+                            line=line,
+                            condition=self._ts_enclosing_condition(node),
+                            enclosing=fn_name,
+                            enclosing_params=fn_params,
+                            start_byte=node.start_byte,
+                            text_expr=computed_expr(text),
+                        )
+                    )
+                elif node.type in call_types:
+                    call = self._ts_call_site(node, fn_name, fn_params)
+                    if call is not None:
+                        facts.calls.append(call)
+            for child in reversed(node.children):
+                stack.append((child, fn_name, fn_params))
+        facts.imports = scan_imports(self.language, self.source_code)
+        facts.bound_names = scan_bound_names(self.language, self.source_code) | set(
+            facts.functions
+        )
+        facts.classes = scan_classes(self.source_code)
+        return facts
+
+    def _ts_is_default_export(self, node: "Node") -> bool:
+        """``export default function (t) {...}`` / ``module.exports = (t) => ...``."""
+        parent = node.parent
+        while parent is not None and parent.type == "parenthesized_expression":
+            parent = parent.parent
+        if parent is None:
+            return False
+        if parent.type == "export_statement":
+            return any(child.type == "default" for child in parent.children)
+        if parent.type == "assignment_expression":
+            left = parent.child_by_field_name("left")
+            return left is not None and self._ts_get_node_text(left).strip() == "module.exports"
+        return False
+
+    def _ts_param_names(self, node: "Node") -> "tuple[str, ...]":
+        names = []
+        for param in self._ts_extract_parameters(node):
+            match = _re.search(r"[\$\w]+$", (param.get("name") or "").strip())
+            if match:
+                names.append(match.group(0))
+        return tuple(names)
+
+    # Java MCP SDK: every capability is a ``Sync/Async…Specification`` pairing
+    # a definition (``new Tool(...)`` / ``Tool.builder()...``) with a handler.
+    _JAVA_SPEC_RE = _re.compile(
+        r"\b(?:Sync|Async)(Tool|Prompt|ResourceTemplate|Resource)Specification\b"
+    )
+    _JAVA_SPEC_CAPABILITY: ClassVar[Dict[str, str]] = {
+        "Tool": "tool",
+        "Prompt": "prompt",
+        "Resource": "resource",
+        "ResourceTemplate": "resource",
+    }
+    _JAVA_BUILDER_HANDLER_METHODS: ClassVar[Set[str]] = {
+        "callHandler",
+        "call",
+        "promptHandler",
+        "readHandler",
+    }
+    _JAVA_BUILDER_DEFINITION_METHODS: ClassVar[Set[str]] = {
+        "tool",
+        "prompt",
+        "resource",
+        "resourceTemplate",
+    }
+
+    def _java_find_spec_registrations(self, root: "Node") -> List[Dict[str, Any]]:
+        """Registrations built as Java SDK capability specifications.
+
+        Covers ``new McpServerFeatures.SyncToolSpecification(tool, handler)``
+        and ``SyncToolSpecification.builder().tool(tool).callHandler(h).build()``
+        (plus the prompt/resource equivalents), however the specification is
+        later handed to the server (``addTool``, ``.tools(...)``, a list).
+        """
+        regs: List[Dict[str, Any]] = []
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            stack.extend(reversed(node.children))
+            definition: Optional["Node"] = None
+            handler: Optional["Node"] = None
+            if node.type == "object_creation_expression":
+                type_node = node.child_by_field_name("type")
+                match = self._JAVA_SPEC_RE.search(
+                    self._ts_get_node_text(type_node) if type_node is not None else ""
+                )
+                args = node.child_by_field_name("arguments")
+                items = (
+                    [c for c in args.named_children if c.type != "comment"]
+                    if args is not None
+                    else []
+                )
+                if match is None or len(items) < 2:
+                    continue
+                definition, handler = items[0], items[-1]
+            elif node.type == "method_invocation":
+                name_node = node.child_by_field_name("name")
+                obj = node.child_by_field_name("object")
+                if (
+                    name_node is None
+                    or obj is None
+                    or self._ts_get_node_text(name_node) not in self._JAVA_BUILDER_HANDLER_METHODS
+                ):
+                    continue
+                match = self._JAVA_SPEC_RE.search(self._ts_get_node_text(obj))
+                args = node.child_by_field_name("arguments")
+                if match is None or args is None or not args.named_children:
+                    continue
+                handler = args.named_children[0]
+                definition = self._java_builder_definition(node)
+            else:
+                continue
+
+            kind = match.group(1)
+            name, description = self._java_definition_info(definition, kind)
+            reg: Dict[str, Any] = {
+                "capability": self._JAVA_SPEC_CAPABILITY[kind],
+                "name": name,
+                "handler_node": None,
+                "handler_name": None,
+                "description": description,
+                "arg_refs": [],
+                "call_node": node,
+                "template_subtype": "template" if kind == "ResourceTemplate" else None,
+            }
+            if definition is not None and definition.type == "identifier":
+                reg["arg_refs"].append(self._ts_get_node_text(definition))
+            if handler.type == "lambda_expression":
+                reg["handler_node"] = handler
+            elif handler.type == "method_reference":
+                reg["handler_name"] = self._ts_get_node_text(handler).rsplit("::", 1)[-1].strip()
+            elif handler.type == "identifier":
+                reg["handler_name"] = self._ts_get_node_text(handler)
+            else:
+                continue
+            regs.append(reg)
+        return regs
+
+    def _java_builder_definition(self, node: "Node") -> Optional["Node"]:
+        """The ``.tool(X)`` / ``.prompt(X)`` argument in a specification builder chain."""
+        cur: Optional["Node"] = node
+        while cur is not None and cur.type == "method_invocation":
+            name_node = cur.child_by_field_name("name")
+            if (
+                name_node is not None
+                and self._ts_get_node_text(name_node) in self._JAVA_BUILDER_DEFINITION_METHODS
+            ):
+                args = cur.child_by_field_name("arguments")
+                if args is not None and args.named_children:
+                    return args.named_children[0]
+            cur = cur.child_by_field_name("object")
+        return None
+
+    def _java_definition_info(
+        self, definition: Optional["Node"], kind: str
+    ) -> "tuple[Optional[str], Optional[str]]":
+        """``(name, description)`` of a Java SDK capability definition."""
+        if definition is None:
+            return None, None
+        text = self._ts_get_node_text(definition)
+        if definition.type == "identifier":
+            text = self._ts_binding_value_text(text) or ""
+        name = _re.search(r"""\.name\(\s*"((?:\\.|[^"\\])*)"\s*\)""", text)
+        desc = _re.search(r"""\.description\(\s*"((?:\\.|[^"\\])*)"\s*\)""", text)
+        if name or desc:
+            return (name.group(1) if name else None), (desc.group(1) if desc else None)
+        strings = [m.group(2) for m in self._TS_ANY_STRING_RE.finditer(text)]
+        # Resource records lead with the URI: ``new Resource(uri, name, description, ...)``.
+        offset = 1 if kind.startswith("Resource") else 0
+        name_value = strings[offset] if len(strings) > offset else None
+        desc_value = strings[offset + 1] if len(strings) > offset + 1 else None
+        return name_value, desc_value
+
+    _TS_LABELED_ARGUMENT_TYPES: ClassVar[Set[str]] = {
+        "value_argument",
+        "argument",
+        "keyword_argument",
+        "pair",
+    }
+
+    def _ts_call_site(
+        self, node: "Node", fn_name: Optional[str], fn_params: "tuple[str, ...]"
+    ) -> Optional[CallSite]:
+        args_node = self._ts_call_arguments_node(node)
+        if args_node is None:
+            return None
+        callee = self.source_bytes[node.start_byte : args_node.start_byte].decode(
+            "utf-8", "replace"
+        )
+        callee = _re.sub(r"^\s*new\s+", "", callee).strip().rstrip("?.!").strip()
+        if not callee or not _re.fullmatch(r"[\$@\w.:\\>\-?]+", callee):
+            return None
+        args: List[str] = []
+        values: List[Optional[str]] = []
+        kwargs: List["tuple[str, str, Optional[str]]"] = []
+        for child in args_node.named_children:
+            if child.type == "comment":
+                continue
+            label: Optional[str] = None
+            value_node = child
+            if child.type in self._TS_LABELED_ARGUMENT_TYPES:
+                named = [c for c in child.named_children if c.type != "comment"]
+                if len(named) >= 2 and named[0].type in (
+                    "identifier",
+                    "simple_identifier",
+                    "name",
+                    "property_identifier",
+                    "hash_key_symbol",
+                    "name_colon",
+                ):
+                    label = self._ts_get_node_text(named[0]).rstrip(":").strip()
+                    value_node = named[-1]
+                elif len(named) == 1:
+                    value_node = named[0]
+            text = self._ts_get_node_text(value_node).strip()
+            literal = self._ts_extract_string_literal_text(value_node)
+            if label:
+                kwargs.append((label, text, literal))
+            else:
+                args.append(text)
+                values.append(literal)
+        return CallSite(
+            callee=callee,
+            args=tuple(args),
+            values=tuple(values),
+            kwargs=tuple(kwargs),
+            line=node.start_point[0] + 1,
+            condition=self._ts_enclosing_condition(node),
+            enclosing=fn_name,
+            enclosing_params=fn_params,
+            start_byte=node.start_byte,
+        )
+
+    def _ts_description_write(
+        self, node: "Node"
+    ) -> Optional["tuple[str, str, str, str]"]:
+        """Return ``(receiver, text, mode, via)`` for a description write."""
+        if "assignment" in node.type and "pattern" not in node.type:
+            named = node.named_children
+            left = node.child_by_field_name("left") or (named[0] if named else None)
+            right = node.child_by_field_name("right") or (
+                named[-1] if len(named) >= 2 else None
+            )
+            if left is None or right is None or _is_same_ts_node(left, right):
+                return None
+            match = self._TS_DESC_FIELD_RE.match(self._ts_get_node_text(left).strip())
+            if not match:
+                return None
+            between = self.source_bytes[left.end_byte : right.start_byte].decode(
+                "utf-8", "replace"
+            )
+            mode = "append" if ("+=" in between or ".=" in between) else "replace"
+            return (
+                match.group("recv"),
+                self._ts_description_value_text(right),
+                mode,
+                "description field write",
+            )
+        if node.type in self._TS_CALL_NODE_TYPES:
+            text = self._ts_get_node_text(node)
+            match = self._TS_DESC_METHOD_RE.match(text)
+            if not match:
+                return None
+            args = text[match.end() :]
+            method = match.group("method")
+            if method == "update":
+                key = _re.search(r"\bdescription\s*:\s*", args)
+                if not key:
+                    return None
+                args = args[key.end() :]
+            literal = self._TS_ANY_STRING_RE.match(args.lstrip())
+            if literal:
+                value = literal.group(2)
+            else:
+                expr = _re.split(r"[,})]", args, maxsplit=1)[0].strip()
+                value = f"<computed at runtime: {expr[:300]}>"
+            via = "update({description})" if method == "update" else f"{method}()"
+            return match.group("recv"), value, "replace", via
+        return None
+
+    _TS_TOOL_CTOR_RE = _re.compile(
+        r"^(?:new\s+)?(?:[\w\\]+(?:\.|::|\\))*Tool\s*(?:::new\s*|\.define\s*)?[\(\{]"
+    )
+    _TS_TOOL_BUILDER_RE = _re.compile(r"^(?:[\w]+\.)*Tool\s*\.\s*builder\s*\(\s*\)")
+    _TS_TOOL_CTOR_NODE_TYPES: ClassVar[Set[str]] = {
+        "method_invocation",
+        "object_creation_expression",
+        "new_expression",
+        "call_expression",
+        "call",
+        "struct_expression",
+        "composite_literal",
+    }
+
+    def _ts_tool_constructor(self, node: "Node") -> Optional["tuple[str, str]"]:
+        """``(name, description)`` for a tool object built in code.
+
+        Matches ``new McpSchema.Tool("x", "desc", ...)`` (Java),
+        ``Tool::new("x", "desc")`` / ``Tool { name, description }`` (Rust),
+        ``&mcp.Tool{Name: ..., Description: ...}`` (Go),
+        ``new Tool { Name = ..., Description = ... }`` (C#) and
+        ``Tool(name = ..., description = ...)`` (Kotlin, Swift, PHP).
+        """
+        if node.type not in self._TS_TOOL_CTOR_NODE_TYPES:
+            return None
+        text = self._ts_get_node_text(node)
+        builder = self._TS_TOOL_BUILDER_RE.match(text)
+        if builder:
+            parent = node.parent
+            if parent is not None and parent.type == "field_access":
+                parent = parent.parent
+            if parent is not None and parent.type == node.type and self._TS_TOOL_BUILDER_RE.match(
+                self._ts_get_node_text(parent)
+            ):
+                return None
+            name = _re.search(r"""\.name\(\s*"((?:\\.|[^"\\])*)"\s*\)""", text)
+            desc = _re.search(r"""\.description\(\s*"((?:\\.|[^"\\])*)"\s*\)""", text)
+            if name and desc:
+                return name.group(1), desc.group(1)
+            return None
+        if not self._TS_TOOL_CTOR_RE.match(text):
+            return None
+        name_match = self._TS_NAME_FIELD_RE.search(text)
+        desc_match = _re.search(
+            r"""\b[Dd]escription\s*[:=]\s*[^"'`,;]{0,40}?(["'`])((?:\\.|(?!\1).)*)\1""",
+            text,
+            _re.DOTALL,
+        )
+        strings = [m.group(2) for m in self._TS_ANY_STRING_RE.finditer(text)]
+        name = name_match.group(2) if name_match else (strings[0] if strings else None)
+        if desc_match:
+            desc = desc_match.group(2)
+        elif not name_match and len(strings) >= 2:
+            desc = strings[1]
+        else:
+            desc = None
+        if not name or not desc:
+            return None
+        return name, desc
+
+    def _ts_description_value_text(self, node: "Node") -> str:
+        lit = self._ts_extract_string_literal_text(node)
+        if lit is not None:
+            return lit
+        text = self._ts_get_node_text(node).strip()
+        literal = self._TS_ANY_STRING_RE.search(text)
+        # ``Some("...".into())`` / ``String::from("...")``: a literal in a thin wrapper.
+        if literal and len(text) - len(literal.group(0)) <= 40:
+            return literal.group(2)
+        return f"<computed at runtime: {text[:300]}>"
+
+    def _ts_tool_for_receiver(
+        self,
+        recv: str,
+        contexts: List[FunctionContext],
+        reg_contexts: List["tuple[Dict[str, Any], FunctionContext]"],
+    ) -> Optional[FunctionContext]:
+        recv = strip_self_prefix(recv)
+        candidates = [recv]
+        head = _re.split(r"\.|->|\?\.|::", recv, maxsplit=1)[0]
+        if head != recv:
+            candidates.append(head)
+        for cand in candidates:
+            for reg, ctx in reg_contexts:
+                if cand in (reg.get("arg_refs") or []) or reg.get("handler_name") == cand:
+                    return ctx
+            binding = self._ts_binding_value_text(cand)
+            if binding and self._TS_TOOL_BINDING_RE.search(binding):
+                match = self._TS_NAME_FIELD_RE.search(
+                    binding
+                ) or self._TS_ANY_STRING_RE.search(binding)
+                if match:
+                    ctx = self._ts_context_named(match.group(2), contexts)
+                    if ctx is not None:
+                        return ctx
+            ctx = self._ts_context_named(cand.lstrip("$"), contexts)
+            if ctx is not None:
+                return ctx
+        return None
+
+    @staticmethod
+    def _ts_context_named(
+        name: str, contexts: List[FunctionContext]
+    ) -> Optional[FunctionContext]:
+        for ctx in contexts:
+            if ctx.name == name or ctx.name.endswith("." + name):
+                return ctx
+        return None
+
+    def _ts_binding_value_text(self, name: str) -> Optional[str]:
+        """Initializer text of the first ``name = ...`` / ``name := ...`` binding."""
+        cache = getattr(self, "_ts_binding_cache", None)
+        if cache is None:
+            cache = self._ts_binding_cache = {}
+        if name in cache:
+            return cache[name]
+        pattern = _re.compile(
+            r"(?<![\w$.])" + _re.escape(name)
+            + r"\s*(?::\s*[^=\n;]{1,80}?)?\s*(?::=|=)(?![=>~])\s*"
+        )
+        match = pattern.search(self.source_code)
+        value: Optional[str] = None
+        if match:
+            src, i, depth, quote = self.source_code, match.end(), 0, None
+            out: List[str] = []
+            while i < len(src) and len(out) < 2000:
+                c = src[i]
+                if quote:
+                    if c == "\\":
+                        out.append(src[i : i + 2])
+                        i += 2
+                        continue
+                    if c == quote:
+                        quote = None
+                elif c in "\"'`":
+                    quote = c
+                elif c in "([{":
+                    depth += 1
+                elif c in ")]}":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif c in ";\n" and depth == 0:
+                    break
+                out.append(c)
+                i += 1
+            value = "".join(out)
+        cache[name] = value
+        return value
+
+    def _ts_enclosing_condition(self, node: Optional["Node"]) -> Optional[str]:
+        """Condition of the nearest enclosing ``if`` within the same function."""
+        if node is None:
+            return None
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        cur = node.parent
+        while cur is not None:
+            if cur.type in func_types:
+                return None
+            if cur.type in self._TS_IF_NODE_TYPES:
+                cond = cur.child_by_field_name("condition")
+                if cond is None:
+                    named = [c for c in cur.named_children if c.start_byte < node.start_byte]
+                    cond = named[0] if named else None
+                text = self._ts_get_node_text(cond).strip() if cond is not None else "<condition>"
+                if text.startswith("(") and text.endswith(")"):
+                    text = text[1:-1].strip()
+                alt = cur.child_by_field_name("alternative")
+                in_else = alt is not None and alt.start_byte <= node.start_byte < alt.end_byte
+                if cur.type.startswith("unless"):
+                    in_else = not in_else
+                return f"not ({text})" if in_else else text
+            cur = cur.parent
+        return None
 
     _TS_ENDPOINT_NAME_FIELDS: tuple[str, ...] = (
         "name",

@@ -224,3 +224,46 @@ class TestAlignmentPromptBuilderContent:
         assert "SECURITY FLAGS" in prompt
         assert "SUBPROCESS" in prompt
         assert "execute_shell_command(command: String)" in prompt
+
+
+class TestAlignmentPromptBudget:
+    """The JSON response contract must survive the default prompt cap."""
+
+    @staticmethod
+    def _ctx(name: str):
+        from mcpscanner.core.static_analysis.context_extractor import FunctionContext
+
+        return FunctionContext(
+            name=name,
+            decorator_types=["mcp.tool"],
+            imports=[],
+            function_calls=[],
+            assignments=[],
+            control_flow={},
+            parameter_flows=[],
+            constants={},
+            variable_dependencies={},
+            has_file_operations=False,
+            has_network_operations=False,
+            has_subprocess_calls=False,
+            has_eval_exec=False,
+            has_dangerous_imports=False,
+            docstring="Add two numbers.",
+            source=f"def {name}(a, b):\n    return a + b",
+        )
+
+    def test_default_cap_keeps_response_contract(self, caplog) -> None:
+        from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
+            AlignmentPromptBuilder,
+        )
+
+        builder = AlignmentPromptBuilder()
+        prompts = [
+            builder.build_prompt(self._ctx("add")),
+            builder.build_batch_prompt([self._ctx("add"), self._ctx("sub")]),
+        ]
+        for prompt in prompts:
+            assert '"mismatch_detected": true|false' in prompt
+            assert '"summary": "Brief one-sentence description' in prompt
+            assert "**threat_name**: REQUIRED" in prompt
+            assert "alignment instructions truncated" not in prompt

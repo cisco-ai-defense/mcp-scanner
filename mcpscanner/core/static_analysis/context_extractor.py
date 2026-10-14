@@ -39,6 +39,13 @@ from typing import Any, Dict, List, Optional
 from .parser.python_parser import PythonParser
 from .dataflow.constant_propagation import ConstantPropagationAnalysis
 from .dataflow.forward_analysis import ForwardDataflowAnalysis
+from .runtime_description_flow import (
+    MAX_RUNTIME_DESCRIPTION_CHARS,
+    add_runtime_description_override,
+    python_description_facts,
+    split_target,
+    summarize,
+)
 
 
 @dataclass
@@ -105,6 +112,16 @@ class FunctionContext:
 
     # Optional handler source snippet for LLM / size checks
     source: Optional[str] = None
+
+    # Description changes made after the tool is defined (``fn.__doc__ = ...``,
+    # ``tool.description = ...``, re-registration). An agent sees the
+    # replacement, not the static docstring.
+    runtime_docstring_overrides: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Source-level symbol of the handler when ``name`` is the registered MCP
+    # name (``@mcp.tool(name="facts") def get_fact``), so code that mutates
+    # ``get_fact`` can still be tied to the tool.
+    definition_name: Optional[str] = None
 
 
 class ContextExtractor:
@@ -192,6 +209,7 @@ class ContextExtractor:
             List of function contexts
         """
         contexts = []
+        by_def_name: Dict[str, FunctionContext] = {}
 
         for node in ast.walk(self.ast):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -204,8 +222,42 @@ class ContextExtractor:
 
             context = self._extract_function_context(node, mcp_decorator)
             contexts.append(context)
+            by_def_name.setdefault(node.name, context)
 
+        self._apply_runtime_docstring_overrides(by_def_name)
         return contexts
+
+    _MAX_RUNTIME_DOCSTRING_CHARS = MAX_RUNTIME_DESCRIPTION_CHARS
+    def _apply_runtime_docstring_overrides(
+        self, by_def_name: Dict[str, FunctionContext]
+    ) -> None:
+        """Fold runtime description changes into the tool's docstring.
+
+        A tool can ship a benign docstring and swap in hidden instructions at
+        import time (``fn.__doc__ = "..."``, re-registering with
+        ``description=``, or a helper such as ``arm(fn)`` that does either),
+        often behind a condition. Analyzing only the static docstring misses
+        that, so each change is appended to the docstring the alignment check
+        reads.
+        """
+        if not by_def_name:
+            return
+        facts = python_description_facts(self.ast, str(self.file_path))
+        _, changes = summarize(facts)
+        for change in changes:
+            parts = split_target(change.target)
+            if len(parts) != 1 or parts[0] not in by_def_name:
+                continue
+            if change.enclosing == parts[0]:
+                continue
+            add_runtime_description_override(
+                by_def_name[parts[0]],
+                change.text,
+                line_number=change.line,
+                condition=change.condition,
+                mode=change.mode,
+                via=change.via,
+            )
 
     def _get_mcp_decorator(self, node: ast.FunctionDef) -> Optional[str]:
         """Get MCP decorator type if present.
@@ -422,6 +474,7 @@ class ContextExtractor:
             env_var_access=env_var_access,
             global_writes=global_writes,
             attribute_access=attribute_access,
+            definition_name=node.name,
         )
 
     def _extract_parameters(self, node: ast.FunctionDef) -> List[Dict[str, Any]]:
