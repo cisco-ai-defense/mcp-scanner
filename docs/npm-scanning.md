@@ -101,6 +101,8 @@ for finding in results["findings"]:
 | `MCP_SCANNER_PACKAGE_EXTRACTED_MAX_FILES` | `10000` | Local-mode max number of members per tarball |
 | `MCP_SCANNER_PACKAGE_DOWNLOAD_TIMEOUT` | `60` | Local-mode HTTP timeout in seconds |
 
+Do not set `MCP_SCANNER_LLM_MODEL=apple-fm/system` for npm scans. Package scanning runs the behavioral analyzer, and those alignment prompts exceed the on-device context window. Use a hosted model.
+
 ## Security
 
 ### Docker mode (default)

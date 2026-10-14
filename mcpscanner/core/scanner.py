@@ -51,6 +51,7 @@ except (
 
 
 from ..config.config import Config
+from ..utils.apple_fm import is_apple_fm_model
 from ..config.constants import MCPScannerConstants
 from ..utils.analyzer_errors import build_infrastructure_error_finding
 from ..utils.logging_config import get_logger
@@ -162,13 +163,11 @@ class Scanner:
         # Behavioral analyzer follows the same gate now that AlignmentLLMClient
         # supports Bedrock auth via bearer token / AWS provider chain.
         is_bedrock = config.llm_model and "bedrock/" in config.llm_model
-        self._llm_analyzer = (
-            LLMAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
-        )
+        is_apple_fm = is_apple_fm_model(config.llm_model)
+        llm_ready = config.llm_provider_api_key or is_bedrock or is_apple_fm
+        self._llm_analyzer = LLMAnalyzer(config) if llm_ready else None
         self._behavioral_analyzer = (
-            BehavioralCodeAnalyzer(config)
-            if (config.llm_provider_api_key or is_bedrock)
-            else None
+            BehavioralCodeAnalyzer(config) if llm_ready else None
         )
         self._vt_analyzer = (
             VirusTotalAnalyzer(
@@ -195,9 +194,7 @@ class Scanner:
         # second write wins. Constructing here at __init__ removes both issues
         # because Scanner instances themselves are not concurrently constructed
         # within a single request lifecycle.
-        self._meta_analyzer = (
-            MetaAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
-        )
+        self._meta_analyzer = MetaAnalyzer(config) if llm_ready else None
         self._custom_analyzers = custom_analyzers or []
 
         # Debug logging for analyzer initialization
@@ -290,7 +287,12 @@ class Scanner:
         # only verify the construction succeeded — no mutation, no lazy init.
         if AnalyzerEnum.META in requested_analyzers and self._meta_analyzer is None:
             is_bedrock = self._config.llm_model and "bedrock/" in self._config.llm_model
-            if not self._config.llm_provider_api_key and not is_bedrock:
+            is_apple_fm = is_apple_fm_model(self._config.llm_model)
+            if (
+                not self._config.llm_provider_api_key
+                and not is_bedrock
+                and not is_apple_fm
+            ):
                 missing_requirements.append(
                     "Meta analyzer requested but MCP_SCANNER_LLM_API_KEY (or Bedrock model + AWS credentials) not configured"
                 )
@@ -958,9 +960,10 @@ class Scanner:
         instance = cls.__new__(cls)
         instance._config = config
         is_bedrock = bool(config.llm_model and "bedrock/" in config.llm_model)
+        is_apple_fm = is_apple_fm_model(config.llm_model)
         instance._meta_analyzer = (
             MetaAnalyzer(config)
-            if (config.llm_provider_api_key or is_bedrock)
+            if (config.llm_provider_api_key or is_bedrock or is_apple_fm)
             else None
         )
         # Attributes apply_meta_to_results / dispatch helpers consult.

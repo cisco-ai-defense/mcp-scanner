@@ -174,6 +174,23 @@ export MCP_SCANNER_STDIO_TIMEOUT=180  # 3 minutes — useful for servers with he
 mcp-scanner --stdio-timeout 180 stdio --stdio-command uvx --stdio-arg mcp-clickhouse
 ```
 
+#### Apple Foundation Models (on-device, no API key)
+
+On macOS 26+ with Apple Intelligence enabled, tool, prompt, resource, and
+instruction scans can use the on-device system model. Install the optional SDK
+and set the model. No API key is required.
+
+```bash
+pip install apple-fm-sdk
+export MCP_SCANNER_LLM_MODEL="apple-fm/system"
+```
+
+Do not use `apple-fm/system` for behavioral code scanning, or for PyPI and npm
+scans that run the behavioral analyzer. Those alignment prompts include source
+and dataflow context and exceed the on-device context window, so the check
+fails and the summary can show no tools. Use a hosted model such as Bedrock
+Claude or GPT-4o for `mcp-scanner behavioral`.
+
 #### Using a Local LLM (No API Key Required)
 
 If you are using a local LLM endpoint such as Ollama, vLLM, or LocalAI,
@@ -453,6 +470,8 @@ mcp-scanner virustotal /path/to/file.bin --output vt_results.json --format raw
 #### Behavioral Code Scanning (Multi-Language)
 
 The Behavioral Analyzer performs advanced static analysis of MCP server source code to detect behavioral mismatches between docstring claims and actual implementation. It uses LLM-powered alignment checking combined with cross-file dataflow tracking.
+
+Do not use the on-device Apple Foundation Model (`apple-fm/system`) for this scan. Alignment prompts exceed its context window. Use a hosted model such as Bedrock Claude or GPT-4o.
 
 **Supported Languages:** Python, TypeScript, JavaScript, Go, Java, Kotlin, C#, Rust, Ruby, PHP
 

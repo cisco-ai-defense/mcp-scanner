@@ -34,6 +34,7 @@ import sys
 import time
 import traceback
 from typing import Any, Dict, List, Optional
+from mcpscanner.utils.apple_fm import is_apple_fm_model
 from mcpscanner.utils.logging_config import get_logger
 
 from mcpscanner import Config, Scanner
@@ -1753,7 +1754,7 @@ async def main():
             if AnalyzerEnum.YARA in selected_analyzers:
                 analyzers.append(YaraAnalyzer(rules_dir=args.rules_path))
             if AnalyzerEnum.LLM in selected_analyzers:
-                if cfg.llm_provider_api_key:
+                if cfg.llm_provider_api_key or is_apple_fm_model(cfg.llm_model):
                     analyzers.append(LLMAnalyzer(cfg))
                 else:
                     print(
@@ -1862,8 +1863,9 @@ async def main():
             _meta_is_bedrock = bool(
                 cfg.llm_model and "bedrock/" in cfg.llm_model
             )
+            _meta_is_apple_fm = is_apple_fm_model(cfg.llm_model)
             if AnalyzerEnum.META in selected_analyzers and (
-                cfg.llm_provider_api_key or _meta_is_bedrock
+                cfg.llm_provider_api_key or _meta_is_bedrock or _meta_is_apple_fm
             ):
                 # P1-6 fix: route through Scanner.apply_meta_to_results
                 # rather than reimplementing per-result meta-analysis here.

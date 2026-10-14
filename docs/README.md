@@ -8,7 +8,7 @@ This directory contains detailed documentation for the MCP Scanner SDK.
 - **[Behavioral Scanning](behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
 - **[Vulnerable Package Scanning](vulnerable-package-scanning.md)** - Python dependency vulnerability scanning with pip-audit
 - **[Readiness Scanning](readiness-scanning.md)** - Zero-dependency production readiness analysis with 20 heuristic rules
-- **[LLM Providers](llm-providers.md)** - Configuration guide for all LLM providers (OpenAI, Azure, AWS Bedrock, etc.)
+- **[LLM Providers](llm-providers.md)** - Configuration guide for hosted providers and the on-device Apple Foundation Model. Do not use `apple-fm/system` for behavioral code scanning
 - **[MCP Threats Taxonomy](mcp-threats-taxonomy.md)** - Complete AITech/AISubtech threat taxonomy
 - **[Authentication](authentication.md)** - OAuth setup, explicit auth control, and security configuration
 - **[Programmatic Usage](programmatic-usage.md)** - Examples and advanced programmatic usage
