@@ -3363,7 +3363,7 @@ class NativeAnalyzer:
         }
 
     _TS_DESCRIPTION_CALL_RE = _re.compile(
-        r"""(?:WithDescription|withDescription|description)\s*\(\s*(["'`])((?:\\.|(?!\1).)*)\1""",
+        r"""(?:WithDescription|withDescription|description)\s*\(\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1""",
         _re.DOTALL,
     )
 
@@ -3467,12 +3467,12 @@ class NativeAnalyzer:
         r"|\bTool\s*(?:\(|\{|::new|::builder|\.builder)|new\s+[\w.\\]*Tool\b"
     )
     _TS_NAME_FIELD_RE = _re.compile(
-        r"""\b[Nn]ame\s*[:=]\s*(["'`])((?:\\.|(?!\1).)*)\1""", _re.DOTALL
+        r"""\b[Nn]ame\s*[:=]\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1""", _re.DOTALL
     )
-    _TS_ANY_STRING_RE = _re.compile(r"""(["'`])((?:\\.|(?!\1).)*)\1""", _re.DOTALL)
+    _TS_ANY_STRING_RE = _re.compile(r"""(["'`])((?:\\.|(?!\1)[^\\])*)\1""", _re.DOTALL)
     _TS_DESC_IN_TEXT_RE = _re.compile(
         r"""(?:WithDescription\s*\(|\b[Dd]escription\s*[:=]|setDescription\s*\()\s*"""
-        r"""(["'`])((?:\\.|(?!\1).)*)\1""",
+        r"""(["'`])((?:\\.|(?!\1)[^\\])*)\1""",
         _re.DOTALL,
     )
 
@@ -4931,7 +4931,7 @@ class NativeAnalyzer:
         return (before[-1] if before else entries[0])[2]
 
     _TS_TOOL_CTOR_RE = _re.compile(
-        r"^(?:new\s+)?(?:[\w\\]+(?:\.|::|\\))*Tool\s*(?:::new\s*|\.define\s*)?[\(\{]"
+        r"^(?:new\s+)?\\?(?:\w+(?:\.|::|\\))*Tool\s*(?:::new\s*|\.define\s*)?[\(\{]"
     )
     _TS_TOOL_BUILDER_RE = _re.compile(r"^(?:[\w]+\.)*Tool\s*\.\s*builder\s*\(\s*\)")
     _TS_TOOL_CTOR_NODE_TYPES: ClassVar[Set[str]] = {
@@ -4974,7 +4974,7 @@ class NativeAnalyzer:
             return None
         name_match = self._TS_NAME_FIELD_RE.search(text)
         desc_match = _re.search(
-            r"""\b[Dd]escription\s*[:=]\s*[^"'`,;]{0,40}?(["'`])((?:\\.|(?!\1).)*)\1""",
+            r"""\b[Dd]escription\s*[:=]\s*[^"'`,;]{0,40}?(["'`])((?:\\.|(?!\1)[^\\])*)\1""",
             text,
             _re.DOTALL,
         )

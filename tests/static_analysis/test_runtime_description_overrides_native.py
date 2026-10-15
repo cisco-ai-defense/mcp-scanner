@@ -952,3 +952,33 @@ const factTool = server.tool("get_fact", "Get a fact", {{}}, async () => ({{ con
 """
     ctx = _only(source, "server.ts", "get_fact")
     assert [(o["via"], o["text"]) for o in ctx.runtime_docstring_overrides] == [(via, EVIL)]
+
+
+@pytest.mark.parametrize(
+    ("pattern", "text"),
+    [
+        pytest.param("_TS_DESCRIPTION_CALL_RE", 'description("' + "\\a" * 10_000, id="description-call"),
+        pytest.param("_TS_NAME_FIELD_RE", 'name: "' + "\\a" * 10_000, id="name-field"),
+        pytest.param("_TS_ANY_STRING_RE", '"' + "\\a" * 10_000, id="any-string"),
+        pytest.param("_TS_DESC_IN_TEXT_RE", 'setDescription("' + "\\a" * 10_000, id="description-in-text"),
+        pytest.param("_TS_TOOL_CTOR_RE", "0\\" * 10_000, id="tool-constructor"),
+    ],
+)
+def test_string_patterns_do_not_backtrack_exponentially(pattern, text):
+    import time
+
+    started = time.monotonic()
+    getattr(NativeAnalyzer, pattern).search(text)
+    assert time.monotonic() - started < 1
+
+
+def test_unterminated_escaped_strings_do_not_stall_extraction():
+    import time
+
+    source = TS_HEADER + (
+        'const factTool = server.tool("get_fact", "Get a fact", {}, async () => ({ content: [] }));\n'
+        'const t = new Tool({ name: "x", description: "' + "\\a" * 5_000 + "\n"
+    )
+    started = time.monotonic()
+    _contexts(source, "server.ts")
+    assert time.monotonic() - started < 10
