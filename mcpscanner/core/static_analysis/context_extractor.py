@@ -228,6 +228,7 @@ class ContextExtractor:
         return contexts
 
     _MAX_RUNTIME_DOCSTRING_CHARS = MAX_RUNTIME_DESCRIPTION_CHARS
+
     def _apply_runtime_docstring_overrides(
         self, by_def_name: Dict[str, FunctionContext]
     ) -> None:
@@ -248,15 +249,14 @@ class ContextExtractor:
             parts = split_target(change.target)
             if len(parts) != 1 or parts[0] not in by_def_name:
                 continue
-            if change.enclosing == parts[0]:
-                continue
+            suffix = " inside the tool's own handler" if change.enclosing == parts[0] else ""
             add_runtime_description_override(
                 by_def_name[parts[0]],
                 change.text,
                 line_number=change.line,
                 condition=change.condition,
                 mode=change.mode,
-                via=change.via,
+                via=change.via + suffix,
             )
 
     def _get_mcp_decorator(self, node: ast.FunctionDef) -> Optional[str]:

@@ -38,8 +38,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MAX_RUNTIME_DESCRIPTION_CHARS = 4000
+# Budget for override text shown to the alignment check per tool. The prompt
+# is truncated from the end and the description precedes the code, so
+# unbounded override text could push the handler out of the prompt. Every
+# override gets a share (head and tail) rather than later ones being
+# dropped, so padding cannot hide a payload behind benign variants.
+# The budget covers the whole block, headers included; only when every shown
+# override is already at the minimum share can it be exceeded, by at most
+# MAX_RUNTIME_OVERRIDES_SHOWN * (_MIN_OVERRIDE_SHARE + header) characters.
+MAX_RUNTIME_OVERRIDE_TOTAL_CHARS = 12000
+MAX_RUNTIME_OVERRIDES_SHOWN = 20
+_MIN_OVERRIDE_SHARE = 200
+_MAX_HEADER_DETAIL_CHARS = 200
+_OVERRIDE_BLOCK_ATTR = "_runtime_override_block"
+_SCHEMA_PATH_RE = re.compile(
+    r"(?i)(?:^|[.\[])(?:input_?schema|output_?schema|schema|properties|parameters|params"
+    r"|args|arguments|fields|items)\b"
+)
 
 _PROPAGATION_ROUNDS = 6
+_HELPER_SEARCH_ROUNDS = 4
 _MAX_IMPORT_HOPS = 5
 _SELF_PREFIX_RE = re.compile(r"^(?:this|self|cls|\$this|@)(?:\.|->|::)?(?=[\$\w])")
 _TARGET_SEP_RE = re.compile(r"\?\.|->|::|\.")
@@ -58,11 +76,14 @@ def add_runtime_description_override(
 ) -> None:
     """Record a runtime description change and show it to the alignment check.
 
-    ``mode`` is ``"replace"`` or ``"append"``; ``via`` names the mechanism
+    ``mode`` is ``"replace"``, ``"append"`` or ``"parameter"`` (a description
+    inside the tool's input schema); ``via`` names the mechanism
     (``"__doc__ assignment"``, ``"description field write"``, ...).
-    ``source_file`` is set when the change is made in another file.
+    ``source_file`` is set when the change is made in another file. Every
+    override is recorded and the docstring's override block is re-rendered
+    within the display budget.
     """
-    text = (text or "")[:MAX_RUNTIME_DESCRIPTION_CHARS]
+    text = _clip(text or "", MAX_RUNTIME_DESCRIPTION_CHARS)
     if not text.strip():
         return
     for existing in ctx.runtime_docstring_overrides:
@@ -79,20 +100,83 @@ def add_runtime_description_override(
         "via": via,
         "text": text,
     }
-    where = f"line {line_number}, {via}"
     if source_file:
         override["source_file"] = source_file
-        where = f"{os.path.basename(source_file)} {where}"
     ctx.runtime_docstring_overrides.append(override)
-    if condition:
-        where += f", when `{condition}`"
-    verb = "extended" if mode == "append" else "replaced"
-    ctx.docstring = (
-        f"{ctx.docstring or ''}\n\n"
-        f"[Runtime description override ({where}): the tool description "
-        f"an agent receives is {verb} at runtime with the text below]\n"
-        f"{text}"
-    ).lstrip()
+
+    previous = getattr(ctx, _OVERRIDE_BLOCK_ATTR, "")
+    base = ctx.docstring or ""
+    if previous and base.endswith(previous):
+        base = base[: -len(previous)]
+    elif previous and previous in base:
+        base = base.replace(previous, "", 1)
+    block = _render_overrides(ctx.runtime_docstring_overrides)
+    docstring = f"{base}{block}".lstrip()
+    # Stored as it appears in the docstring: with an empty base the leading
+    # blank lines are stripped.
+    setattr(ctx, _OVERRIDE_BLOCK_ATTR, block if docstring.endswith(block) else docstring)
+    ctx.docstring = docstring
+
+
+def _render_overrides(overrides: List[Dict[str, Any]]) -> str:
+    """Docstring block describing ``overrides`` within the display budget.
+
+    Past :data:`MAX_RUNTIME_OVERRIDES_SHOWN`, the first and last halves are
+    kept (the last write is the one in effect) and the rest counted.
+    """
+    shown = overrides
+    omitted = 0
+    if len(overrides) > MAX_RUNTIME_OVERRIDES_SHOWN:
+        half = MAX_RUNTIME_OVERRIDES_SHOWN // 2
+        shown = overrides[:half] + overrides[-half:]
+        omitted = len(overrides) - len(shown)
+    headers = [_override_header(o) for o in shown]
+    room = MAX_RUNTIME_OVERRIDE_TOTAL_CHARS - sum(len(h) + 3 for h in headers)
+    share = max(_MIN_OVERRIDE_SHARE, room // len(shown))
+    parts = []
+    for index, (header, override) in enumerate(zip(headers, shown)):
+        if omitted and index == len(shown) // 2:
+            parts.append(f"[{omitted} more runtime description overrides omitted]")
+        parts.append(f"{header}\n{_clip(override['text'], share)}")
+    return "".join(f"\n\n{part}" for part in parts)
+
+
+def _override_header(override: Dict[str, Any]) -> str:
+    where = f"line {override['line_number']}, {_clip(override['via'], _MAX_HEADER_DETAIL_CHARS)}"
+    if override.get("source_file"):
+        where = f"{_clip(os.path.basename(override['source_file']), _MAX_HEADER_DETAIL_CHARS)} {where}"
+    if override.get("condition"):
+        where += f", when `{_clip(override['condition'], _MAX_HEADER_DETAIL_CHARS)}`"
+    if override["mode"] == "parameter":
+        summary = "a parameter description the agent receives is set at runtime"
+    else:
+        verb = "extended" if override["mode"] == "append" else "replaced"
+        summary = f"the tool description an agent receives is {verb} at runtime"
+    return f"[Runtime description override ({where}): {summary} with the text below]"
+
+
+def _clip(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` characters keeping its head and tail."""
+    if len(text) <= limit:
+        return text
+    marker = f" [...{len(text) - limit} chars omitted...] "
+    room = max(0, limit - len(marker))
+    head = room * 2 // 3
+    return f"{text[:head]}{marker}{text[len(text) - (room - head):]}"
+
+
+def describe_nested_write(nested: Optional[str]) -> Optional[Tuple[Optional[str], str]]:
+    """``(mode override, via suffix)`` for a write on a field inside a tool.
+
+    ``None`` nested path is the tool's own description. A path into the
+    input schema is a parameter description; any other nested object's
+    ``description`` is not the tool's and yields ``None``.
+    """
+    if nested is None:
+        return None, ""
+    if _SCHEMA_PATH_RE.search(nested):
+        return "parameter", f" on {nested}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +198,20 @@ class DescriptionWrite:
     enclosing_params: Tuple[str, ...] = ()
     start_byte: int = -1
     text_expr: Optional[str] = None
+    enclosing_class: Optional[str] = None
+    # The receiver's head is declared in the write's own scope (a local or
+    # parameter), so it cannot name another file's variable.
+    local_head: bool = False
+    # ``target`` with aliases resolved (``const a = factTool`` -> ``factTool``).
+    alias: Optional[str] = None
+    alias_local_head: bool = False
+    # Tool object built as an argument of a registration call on a server
+    # constructed in its own file: that file's tool, analyzed there, not a
+    # redefinition elsewhere.
+    registered: bool = False
+    # Tool object passed straight to a registration call (on any server):
+    # another registration of the tool rather than a bare redefinition.
+    in_registration: bool = False
 
 
 @dataclass(frozen=True)
@@ -127,6 +225,7 @@ class CallSite:
     enclosing: Optional[str] = None
     enclosing_params: Tuple[str, ...] = ()
     start_byte: int = -1
+    enclosing_class: Optional[str] = None
 
 
 @dataclass
@@ -140,6 +239,14 @@ class FileFacts:
     imports: Dict[str, Tuple[str, Optional[str]]] = field(default_factory=dict)
     bound_names: Set[str] = field(default_factory=set)
     classes: Set[str] = field(default_factory=set)
+    # Class name -> names of the methods it defines.
+    methods: Dict[str, Set[str]] = field(default_factory=dict)
+    # Variable -> class it is an instance of (``armer = Armer()``).
+    instances: Dict[str, str] = field(default_factory=dict)
+    # Function -> classes of the objects it may return (``func NewArmer() *Armer``).
+    factories: Dict[str, List[str]] = field(default_factory=dict)
+    # Class -> the classes it extends or embeds, as written in this file.
+    bases: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -156,6 +263,12 @@ class ParamWrite:
     condition: Optional[str]
     origin: str
     helpers: Tuple[str, ...] = ()
+    # Field path from the parameter to the written object
+    # (``inputSchema.properties.q`` for ``t.inputSchema.properties.q.description``).
+    path: str = ""
+    # ``file:summary key`` of every function this write was summarized in;
+    # stops recursive helpers without confusing same-named methods.
+    chain: Tuple[str, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -172,6 +285,9 @@ class DescriptionChange:
     enclosing: Optional[str] = None
     start_byte: int = -1
     cross_file: bool = False
+    local_head: bool = False
+    alias: Optional[str] = None
+    alias_local_head: bool = False
 
 
 def split_target(expr: str) -> List[str]:
@@ -215,7 +331,48 @@ def _last_segment(callee: str) -> Tuple[str, str]:
     return (parts[-1] if parts else callee), callee[: max(0, len(callee) - len(parts[-1]))]
 
 
-_LOCAL_QUALIFIERS = {"", "this.", "self.", "cls.", "$this->", "self::", "static::", "Self::", "@"}
+_SELF_QUALIFIERS = {"this.", "self.", "cls.", "$this->", "self::", "static::", "Self::", "@"}
+# ``super().``, ``super(Child, self).``, ``super.``, ``parent::`` (C# ``base.``
+# only in C#, where it is a keyword)
+_SUPER_QUALIFIER_RE = re.compile(r"^(?:super\s*\([^()]*\)\s*\.|super\.|parent::)$")
+# Languages where an unqualified call inside a class can be one of its
+# methods. Elsewhere (Python, JavaScript, PHP, Go, Rust) it is a free function.
+_BARE_CALL_METHOD_LANGUAGES = frozenset({"java", "kotlin", "c_sharp", "swift", "ruby", "scala"})
+
+
+def summary_key(function: Optional[str], cls: Optional[str]) -> str:
+    """Summaries of methods are keyed ``Class.method`` so same-named methods
+    of different classes stay apart."""
+    return f"{cls}.{function}" if cls else (function or "")
+
+
+def _with_path(expr: str, path: str) -> str:
+    return f"{expr}.{path}" if path else expr
+
+
+_CONSTRUCTED_RE = re.compile(r"^(?:new\s+)?([A-Za-z_$][\w$]*)\s*\(.*\)$", re.DOTALL)
+_INSTANCE_RE = re.compile(
+    r"(?<![\w$.])([\w$]+)\s*(?::\s*[\w$.<>?\[\]]+\s*)?(?::=|=)(?!=)\s*(?:new\s+)?([A-Z][\w$]*)\s*\("
+)
+
+
+def instance_class(facts: "FileFacts", qualifier: str) -> Optional[str]:
+    """Class whose method ``qualifier.method(...)`` calls, when the qualifier
+    is an instance (``armer.``) or a construction (``Armer().``)."""
+    q = qualifier.strip()
+    for sep in ("?.", "->", "::", "."):
+        if q.endswith(sep):
+            q = q[: -len(sep)]
+            break
+    constructed = _CONSTRUCTED_RE.match(q)
+    if constructed:
+        return constructed.group(1)
+    return facts.instances.get(q)
+
+
+def scan_instances(source: str) -> Dict[str, str]:
+    """``x = Class(...)`` / ``x = new Class(...)`` / ``x := Class(...)``."""
+    return {m.group(1): m.group(2) for m in _INSTANCE_RE.finditer(source)}
 
 SummaryLookup = Callable[[FileFacts, CallSite], List[ParamWrite]]
 
@@ -235,7 +392,8 @@ def summarize(
     changes: List[DescriptionChange] = []
 
     for write in facts.writes:
-        head = (split_target(write.target) or [""])[0]
+        target_parts = split_target(write.target) or [""]
+        head = target_parts[0]
         params = write.enclosing_params
         if write.enclosing and head in params:
             text_param = (
@@ -243,7 +401,8 @@ def summarize(
                 if write.text_expr and write.text_expr in params
                 else None
             )
-            summaries.setdefault(write.enclosing, set()).add(
+            key = summary_key(write.enclosing, write.enclosing_class)
+            summaries.setdefault(key, set()).add(
                 ParamWrite(
                     param=params.index(head),
                     param_name=head,
@@ -254,6 +413,8 @@ def summarize(
                     via=write.via,
                     condition=write.condition,
                     origin=facts.path,
+                    path=".".join(target_parts[1:]),
+                    chain=(f"{facts.path}:{key}",),
                 )
             )
         else:
@@ -268,14 +429,84 @@ def summarize(
                     file=facts.path,
                     enclosing=write.enclosing,
                     start_byte=write.start_byte,
+                    local_head=write.local_head,
+                    alias=write.alias,
+                    alias_local_head=write.alias_local_head,
                 )
             )
 
+    def inherited(cls: str, name: str, call: CallSite) -> Tuple[List[ParamWrite], bool]:
+        """Summaries of ``name`` as ``cls`` inherits it (from the nearest base
+        defining it in this file, or from bases in other files) and whether
+        a base defining it was found."""
+        found: List[ParamWrite] = []
+        defined = False
+        queue, seen = list(facts.bases.get(cls, ())), {cls}
+        while queue:
+            base = queue.pop(0)
+            if base in seen:
+                continue
+            seen.add(base)
+            if base in facts.classes:
+                if name in facts.methods.get(base, ()):
+                    found.extend(summaries.get(summary_key(name, base), ()))
+                    defined = True
+                else:
+                    queue.extend(facts.bases.get(base, ()))
+            else:
+                # A base in another file most likely provides the method
+                # (whether or not it writes descriptions); never guess a
+                # same-named method of an unrelated class instead.
+                defined = True
+                if external is not None:
+                    found.extend(external(facts, replace(call, callee=f"{base}.{name}")))
+        return found, defined
+
     def lookup(call: CallSite) -> List[ParamWrite]:
         name, qualifier = _last_segment(call.callee)
+        if _SUPER_QUALIFIER_RE.match(qualifier) or (
+            qualifier == "base." and facts.language == "c_sharp"
+        ):
+            # ``super().arm(t)`` / ``super.arm(t)``: the base class's method.
+            if not call.enclosing_class:
+                return []
+            return list(dict.fromkeys(inherited(call.enclosing_class, name, call)[0]))
+        instance_of = instance_class(facts, qualifier)
+        if instance_of:
+            # ``armer.arm(t)`` / ``Armer().arm(t)``: a method of ``Armer``.
+            qualifier = instance_of + "."
+            call = replace(call, callee=f"{instance_of}.{name}")
+        produced = factory_classes(facts, qualifier.rstrip(".:->"))
+        if produced:
+            # ``newArmer().arm(t)``: a method of each class the factory may return.
+            found: List[ParamWrite] = []
+            for cls in produced:
+                found.extend(lookup_on(replace(call, callee=f"{cls}.{name}"), name, cls + "."))
+            return list(dict.fromkeys(found))
+        return list(dict.fromkeys(lookup_on(call, name, qualifier)))
+
+    def lookup_on(call: CallSite, name: str, qualifier: str) -> List[ParamWrite]:
         found: List[ParamWrite] = []
-        if qualifier in _LOCAL_QUALIFIERS or qualifier.rstrip(".:->") in facts.classes:
-            found.extend(summaries.get(name, ()))
+        named_class = qualifier.rstrip(".:->")
+        bare_method = qualifier == "" and facts.language in _BARE_CALL_METHOD_LANGUAGES
+        if qualifier in _SELF_QUALIFIERS or qualifier == "" or named_class in facts.classes:
+            if qualifier in _SELF_QUALIFIERS or bare_method:
+                cls = call.enclosing_class
+            else:
+                cls = named_class if qualifier else None
+            if cls and name in facts.methods.get(cls, ()):
+                found.extend(summaries.get(summary_key(name, cls), ()))
+            else:
+                from_bases, defined = inherited(cls, name, call) if cls else ([], False)
+                found.extend(from_bases)
+                if qualifier == "":
+                    found.extend(summaries.get(name, ()))
+                elif not defined:
+                    # Method not defined on that class or its known bases:
+                    # any same-named method in this file.
+                    for key, writes in summaries.items():
+                        if key == name or key.endswith("." + name):
+                            found.extend(writes)
         if external is not None:
             found.extend(external(facts, call))
         return found
@@ -292,8 +523,6 @@ def summarize(
         else:
             text_expr, text_value = None, pw.text
         name, _ = _last_segment(call.callee)
-        if name in pw.helpers:
-            return None
         return arg[0], text_expr, text_value, (name, *pw.helpers)
 
     for _ in range(_PROPAGATION_ROUNDS):
@@ -301,12 +530,16 @@ def summarize(
         for call in facts.calls:
             if not call.enclosing:
                 continue
+            here = summary_key(call.enclosing, call.enclosing_class)
             for pw in lookup(call):
+                if f"{facts.path}:{here}" in pw.chain:
+                    continue
                 resolved = resolve(call, pw)
                 if resolved is None:
                     continue
                 arg_text, text_expr, text_value, helpers = resolved
-                head = (split_target(arg_text) or [""])[0]
+                arg_parts = split_target(arg_text) or [""]
+                head = arg_parts[0]
                 if head not in call.enclosing_params:
                     continue
                 params = call.enclosing_params
@@ -328,8 +561,10 @@ def summarize(
                     condition=_join_conditions(call.condition, pw.condition),
                     origin=pw.origin,
                     helpers=helpers,
+                    path=".".join(p for p in (*arg_parts[1:], pw.path) if p),
+                    chain=(*pw.chain, f"{facts.path}:{here}"),
                 )
-                bucket = summaries.setdefault(call.enclosing, set())
+                bucket = summaries.setdefault(here, set())
                 if new not in bucket:
                     bucket.add(new)
                     grew = True
@@ -348,7 +583,7 @@ def summarize(
             via = f"{pw.via} via " + " -> ".join(f"{h}()" for h in helpers)
             changes.append(
                 DescriptionChange(
-                    target=arg_text,
+                    target=_with_path(arg_text, pw.path),
                     text=text_value if text_value is not None else computed_text(text_expr or ""),
                     mode=pw.mode,
                     via=via,
@@ -403,6 +638,22 @@ def _py_docstring_assignment(node: ast.AST):
     def doc_target(target: ast.expr) -> Optional[str]:
         if isinstance(target, ast.Attribute) and target.attr == "__doc__":
             return _py_target_expr(target.value)
+        # ``vars(fn)["__doc__"]`` / ``fn.__dict__["__doc__"]``
+        if (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "__doc__"
+        ):
+            holder = target.value
+            if (
+                isinstance(holder, ast.Call)
+                and isinstance(holder.func, ast.Name)
+                and holder.func.id == "vars"
+                and len(holder.args) == 1
+            ):
+                return _py_target_expr(holder.args[0])
+            if isinstance(holder, ast.Attribute) and holder.attr == "__dict__":
+                return _py_target_expr(holder.value)
         return None
 
     if isinstance(node, ast.Assign):
@@ -420,8 +671,11 @@ def _py_docstring_assignment(node: ast.AST):
             return name, node.value, "append"
     elif (
         isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "setattr"
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "setattr")
+            # ``object.__setattr__(fn, "__doc__", v)``
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "__setattr__")
+        )
         and len(node.args) == 3
         and isinstance(node.args[1], ast.Constant)
         and node.args[1].value == "__doc__"
@@ -429,6 +683,32 @@ def _py_docstring_assignment(node: ast.AST):
         name = _py_target_expr(node.args[0])
         if name:
             return name, node.args[2], "replace"
+    elif (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "update"
+    ):
+        # ``fn.__dict__.update(__doc__=v)`` / ``vars(fn).update({"__doc__": v})``
+        holder = node.func.value
+        name = None
+        if isinstance(holder, ast.Attribute) and holder.attr == "__dict__":
+            name = _py_target_expr(holder.value)
+        elif (
+            isinstance(holder, ast.Call)
+            and isinstance(holder.func, ast.Name)
+            and holder.func.id == "vars"
+            and len(holder.args) == 1
+        ):
+            name = _py_target_expr(holder.args[0])
+        if name:
+            for keyword in node.keywords:
+                if keyword.arg == "__doc__":
+                    return name, keyword.value, "replace"
+            for arg in node.args:
+                if isinstance(arg, ast.Dict):
+                    for key, value in zip(arg.keys, arg.values):
+                        if isinstance(key, ast.Constant) and key.value == "__doc__":
+                            return name, value, "replace"
     return None, None, None
 
 
@@ -467,15 +747,16 @@ def _py_enclosing_function(node: ast.AST, parents: Dict[ast.AST, ast.AST]):
 def _py_enclosing_condition(
     node: ast.AST, parents: Dict[ast.AST, ast.AST]
 ) -> Optional[str]:
+    conditions: List[str] = []
     child, cur = node, parents.get(node)
     while cur is not None:
-        if isinstance(cur, (ast.If, ast.While)):
+        if isinstance(cur, (ast.If, ast.While)) and child is not cur.test:
             test = _py_unparse(cur.test)
-            return f"not ({test})" if child in cur.orelse else test
+            conditions.append(f"not ({test})" if child in cur.orelse else test)
         if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.Module)):
-            return None
+            break
         child, cur = cur, parents.get(cur)
-    return None
+    return " and ".join(reversed(conditions)) or None
 
 
 def _py_params(fn: ast.AST) -> Tuple[str, ...]:
@@ -485,6 +766,52 @@ def _py_params(fn: ast.AST) -> Tuple[str, ...]:
         names = names[1:]
     names.extend(a.arg for a in args.kwonlyargs)
     return tuple(names)
+
+
+def _py_returned_classes(fn: ast.AST) -> List[str]:
+    """Classes (or factories, resolved later) a function may return: what
+    each ``return X(...)`` in its own body calls. The ``-> Armer``
+    annotation only counts when the body returns something else, since
+    annotations are not enforced and must not hide what the body returns."""
+    returned: List[str] = []
+    opaque = False
+    stack = list(ast.iter_child_nodes(fn))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(node, ast.Return) and node.value is not None:
+            value = node.value
+            if isinstance(value, ast.Call) and isinstance(value.func, (ast.Name, ast.Attribute)):
+                name = _py_unparse(value.func)
+                if name not in returned:
+                    returned.append(name)
+            elif not (isinstance(value, ast.Constant) and value.value is None):
+                opaque = True
+        stack.extend(ast.iter_child_nodes(node))
+    if returned and not opaque:
+        return returned
+    returns = getattr(fn, "returns", None)
+    if isinstance(returns, ast.Constant) and isinstance(returns.value, str):
+        name = returns.value
+    elif isinstance(returns, (ast.Name, ast.Attribute)):
+        name = _py_unparse(returns)
+    else:
+        name = ""
+    name = name.rsplit(".", 1)[-1]
+    return returned + ([name] if name[:1].isupper() and name not in returned else [])
+
+
+def factory_classes(facts: "FileFacts", name: str, _depth: int = 0) -> List[str]:
+    """Classes ``name`` (a factory of this file) may return, following
+    factories that return other factories."""
+    out: List[str] = []
+    for produced in facts.factories.get(name, ()):
+        if produced in facts.factories and produced != name and _depth < 4:
+            out.extend(factory_classes(facts, produced, _depth + 1))
+        elif produced not in out:
+            out.append(produced)
+    return out
 
 
 def _py_literal(node: ast.AST) -> Optional[str]:
@@ -517,15 +844,134 @@ def python_description_facts(tree: ast.AST, path: str) -> FileFacts:
         for child in ast.iter_child_nodes(parent):
             parents[child] = parent
 
+    def method_class(fn: Optional[ast.AST]) -> Optional[str]:
+        parent = parents.get(fn) if fn is not None else None
+        return parent.name if isinstance(parent, ast.ClassDef) else None
+
     def scope(node: ast.AST) -> Tuple[Optional[str], Tuple[str, ...]]:
         fn = _py_enclosing_function(node, parents)
         if fn is None:
             return None, ()
         return getattr(fn, "name", "<lambda>"), _py_params(fn)
 
+    def scope_class(node: ast.AST) -> Optional[str]:
+        return method_class(_py_enclosing_function(node, parents))
+
+    # Scopes are function nodes (not names: same-named methods of different
+    # classes are different scopes); ``None`` is the module.
+    def fn_scope(node: ast.AST) -> Optional[ast.AST]:
+        return _py_enclosing_function(node, parents)
+
+    # Names bound in each function (parameters and assignments): there a
+    # module-level alias or instance of the same name is shadowed.
+    local_names: Set[Tuple[Any, str]] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            enclosing_fn = fn_scope(node)
+            if enclosing_fn is not None:
+                local_names.add((enclosing_fn, node.id))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = node.args
+            for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg]:
+                if arg is not None:
+                    local_names.add((node, arg.arg))
+
+    def scoped(table: Dict[Tuple[Any, str], Set[str]], enclosing_fn: Any, name: str) -> Set[str]:
+        """Values of ``name`` in the innermost enclosing function binding
+        it (closures see their outer functions), else at module level."""
+        fn = enclosing_fn
+        while fn is not None:
+            found = table.get((fn, name))
+            if found:
+                return found
+            if (fn, name) in local_names:
+                return set()
+            fn = fn_scope(fn)
+        return table.get((None, name)) or set()
+
+    # ``alias = fn``, ``alias: T = fn`` and ``for fn in (a, b):`` bind a name
+    # to other names in one scope; writes and helper arguments through it
+    # reach the originals. ``h = Helper()`` / ``self.h = Helper()`` make
+    # ``h.arm(...)`` a call of ``Helper.arm``.
+    aliases: Dict[Tuple[Any, str], Set[str]] = {}
+    instances: Dict[Tuple[Any, str], Set[str]] = {}
+    for node in ast.walk(tree):
+        sources: List[ast.expr] = []
+        target: Optional[ast.expr] = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, sources = node.targets[0], [node.value]
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target, sources = node.target, [node.value]
+        elif isinstance(node, (ast.For, ast.AsyncFor)) and isinstance(
+            node.iter, (ast.List, ast.Tuple, ast.Set)
+        ):
+            target, sources = node.target, list(node.iter.elts)
+        if isinstance(target, ast.Name):
+            names = {s.id for s in sources if isinstance(s, ast.Name) and s.id != target.id}
+            if names:
+                aliases.setdefault((fn_scope(node), target.id), set()).update(names)
+        value = sources[0] if len(sources) == 1 and not isinstance(node, (ast.For, ast.AsyncFor)) else None
+        # ``Armer()`` or a factory (``make_armer()`` / ``lib.make_armer()``,
+        # resolved through ``facts.factories`` here or in the file defining it).
+        if isinstance(value, ast.Call) and isinstance(value.func, (ast.Name, ast.Attribute)):
+            built_by = _py_unparse(value.func)
+            if isinstance(target, ast.Name):
+                key = (fn_scope(node), target.id)
+            elif (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id in ("self", "cls")
+            ):
+                key = (f"class {scope_class(node)}", f"self.{target.attr}")
+            else:
+                continue
+            instances.setdefault(key, set()).add(built_by)
+            if key[0] is None:
+                facts.instances[key[1]] = built_by
+
+    def resolve_alias(expr: str, enclosing: Any) -> List[str]:
+        parts = expr.split(".", 1)
+        heads, seen = [parts[0]], set()
+        resolved: List[str] = []
+        while heads:
+            head = heads.pop()
+            if head in seen or len(seen) > 20:
+                continue
+            seen.add(head)
+            originals = scoped(aliases, enclosing, head)
+            if originals:
+                heads.extend(sorted(originals))
+            else:
+                resolved.append(head)
+        return [".".join([h, *parts[1:]]) for h in resolved] or [expr]
+
+    def resolve_callee(func: ast.expr, node: ast.AST) -> List[str]:
+        """``h.arm`` as ``Helper.arm`` when ``h`` is a ``Helper`` here."""
+        callee = _py_unparse(func)
+        if not isinstance(func, ast.Attribute):
+            return [callee]
+        holder = func.value
+        classes: Set[str] = set()
+        if isinstance(holder, ast.Name):
+            classes = scoped(instances, fn_scope(node), holder.id)
+        elif (
+            isinstance(holder, ast.Attribute)
+            and isinstance(holder.value, ast.Name)
+            and holder.value.id in ("self", "cls")
+        ):
+            classes = instances.get((f"class {scope_class(node)}", f"self.{holder.attr}"), set())
+        return [f"{cls}.{func.attr}" for cls in sorted(classes)] or [callee]
+
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             facts.functions.setdefault(node.name, _py_params(node))
+            cls = method_class(node)
+            if cls:
+                facts.methods.setdefault(cls, set()).add(node.name)
+            elif not isinstance(parents.get(node), (ast.FunctionDef, ast.AsyncFunctionDef)):
+                produced = _py_returned_classes(node)
+                if produced:
+                    facts.factories[node.name] = produced
             enclosing, params = scope(node)
             for dec in node.decorator_list:
                 if isinstance(dec, (ast.Name, ast.Attribute)):
@@ -539,10 +985,16 @@ def python_description_facts(tree: ast.AST, path: str) -> FileFacts:
                             condition=_py_enclosing_condition(node, parents),
                             enclosing=enclosing,
                             enclosing_params=params,
+                            enclosing_class=scope_class(node),
                         )
                     )
         elif isinstance(node, ast.ClassDef):
             facts.classes.add(node.name)
+            bases = [
+                _py_unparse(base) for base in node.bases if isinstance(base, (ast.Name, ast.Attribute))
+            ]
+            if bases:
+                facts.bases[node.name] = bases
 
         target, value, mode = _py_docstring_assignment(node)
         via = "__doc__ assignment"
@@ -552,40 +1004,64 @@ def python_description_facts(tree: ast.AST, path: str) -> FileFacts:
         if target is not None:
             enclosing, params = scope(node)
             text = py_docstring_value_text(value)
-            facts.writes.append(
-                DescriptionWrite(
-                    target=target,
-                    text=text,
-                    mode=mode,
-                    via=via,
-                    line=getattr(node, "lineno", 0),
-                    condition=_py_enclosing_condition(node, parents),
-                    enclosing=enclosing,
-                    enclosing_params=params,
-                    text_expr=computed_expr(text),
+            for resolved_target in resolve_alias(target, fn_scope(node)):
+                facts.writes.append(
+                    DescriptionWrite(
+                        target=resolved_target,
+                        text=text,
+                        mode=mode,
+                        via=via,
+                        line=getattr(node, "lineno", 0),
+                        condition=_py_enclosing_condition(node, parents),
+                        enclosing=enclosing,
+                        enclosing_params=params,
+                        text_expr=computed_expr(text),
+                        enclosing_class=scope_class(node),
+                    )
                 )
-            )
             continue
 
         if isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute)):
             enclosing, params = scope(node)
-            facts.calls.append(
-                CallSite(
-                    callee=_py_unparse(node.func),
-                    args=tuple(_py_unparse(a) for a in node.args),
-                    values=tuple(_py_literal(a) for a in node.args),
-                    kwargs=tuple(
-                        (k.arg, _py_unparse(k.value), _py_literal(k.value))
-                        for k in node.keywords
-                        if k.arg
-                    ),
-                    line=node.lineno,
-                    condition=_py_enclosing_condition(node, parents),
-                    enclosing=enclosing,
-                    enclosing_params=params,
-                )
-            )
+            # ``for fn in (a, b): poison(fn)`` calls ``poison`` with each.
+            choices = [
+                resolve_alias(arg.id, fn_scope(node)) if isinstance(arg, ast.Name) else [_py_unparse(arg)]
+                for arg in node.args
+            ]
+            for callee in resolve_callee(node.func, node):
+                for arg_texts in bounded_product(choices):
+                    facts.calls.append(
+                        CallSite(
+                            callee=callee,
+                            args=arg_texts,
+                            values=tuple(_py_literal(a) for a in node.args),
+                            kwargs=tuple(
+                                (k.arg, _py_unparse(k.value), _py_literal(k.value))
+                                for k in node.keywords
+                                if k.arg
+                            ),
+                            line=node.lineno,
+                            condition=_py_enclosing_condition(node, parents),
+                            enclosing=enclosing,
+                            enclosing_params=params,
+                            enclosing_class=scope_class(node),
+                        )
+                    )
     return facts
+
+
+_MAX_ALIAS_COMBINATIONS = 8
+
+
+def bounded_product(choices: List[List[str]]) -> List[Tuple[str, ...]]:
+    """Argument tuples for each combination of alternatives, at most
+    ``_MAX_ALIAS_COMBINATIONS`` (the first alternative of each beyond that)."""
+    combos: List[Tuple[str, ...]] = [()]
+    for options in choices:
+        combos = [(*combo, option) for combo in combos for option in options][
+            :_MAX_ALIAS_COMBINATIONS
+        ]
+    return combos
 
 
 # ---------------------------------------------------------------------------
@@ -603,7 +1079,7 @@ _JS_REQUIRE_RE = re.compile(
 _GO_IMPORT_RE = re.compile(r"""^\s*(?:import\s+)?(?P<alias>[\w.]+\s+)?"(?P<spec>[^"]+)"\s*$""", re.MULTILINE)
 _CLASS_RE = re.compile(r"\b(?:class|object|interface|struct|module|enum|record|trait)\s+([A-Z]\w*)")
 _BOUND_RE = {
-    "go": re.compile(r"(?:\bvar\s+(\w+)|(\w+)(?:\s*,\s*\w+)*\s*:=|\bfunc\s+(\w+))"),
+    "go": re.compile(r"(?:\bvar\s+(\w+(?:\s*,\s*\w+)*)|(\w+(?:\s*,\s*\w+)*)\s*:=|\bfunc\s+(\w+))"),
     "javascript": re.compile(r"\b(?:const|let|var|function|class)\s+([\w$]+)"),
     "typescript": re.compile(r"\b(?:const|let|var|function|class)\s+([\w$]+)"),
 }
@@ -712,11 +1188,46 @@ def scan_bound_names(language: str, source: str) -> Set[str]:
     pattern = _BOUND_RE.get(language)
     if pattern is None:
         return set()
-    return {name for m in pattern.finditer(source) for name in m.groups() if name}
+    return {
+        name.strip()
+        for m in pattern.finditer(source)
+        for group in m.groups()
+        if group
+        for name in group.split(",")
+        if name.strip()
+    }
 
 
 def scan_classes(source: str) -> Set[str]:
     return set(_CLASS_RE.findall(source))
+
+
+_EXTENDS_RE = re.compile(
+    # ``class A extends B`` (JS/TS/Java/PHP), ``class A<T>(x: T) : B()``
+    # (Kotlin), ``class A : B`` (C#/Swift/Scala)
+    r"\bclass\s+([A-Za-z_]\w*)\s*(?:<[^>{]*>)?\s*(?:\([^)]*\))?\s*"
+    r"(?:extends\s+|:\s*)([A-Za-z_][\w.:\\]*)"
+)
+# ``class A < B``; only Ruby, where ``<`` cannot open generic parameters.
+_RUBY_EXTENDS_RE = re.compile(r"\bclass\s+([A-Za-z_]\w*)\s*<\s*([A-Za-z_][\w:]*)")
+_GO_STRUCT_RE = re.compile(r"\btype\s+([A-Za-z_]\w*)\s+struct\s*\{([^{}]*)\}")
+_GO_EMBEDDED_RE = re.compile(r"^\s*\*?([A-Za-z_][\w.]*)\s*(?:`[^`]*`)?\s*(?://.*)?$", re.MULTILINE)
+
+
+def scan_bases(language: str, source: str) -> Dict[str, List[str]]:
+    """Class -> the classes it extends (or, in Go, the structs it embeds)."""
+    bases: Dict[str, List[str]] = {}
+    if language == "go":
+        for match in _GO_STRUCT_RE.finditer(source):
+            embedded = _GO_EMBEDDED_RE.findall(match.group(2))
+            if embedded:
+                bases[match.group(1)] = embedded
+        return bases
+    pattern = _RUBY_EXTENDS_RE if language == "ruby" else _EXTENDS_RE
+    for match in pattern.finditer(source):
+        base = re.sub(r"::|\\", ".", match.group(2)).strip(".")
+        bases.setdefault(match.group(1), []).append(base)
+    return bases
 
 
 # ---------------------------------------------------------------------------
@@ -778,47 +1289,86 @@ class RuntimeDescriptionIndex:
         paths: Iterable[str],
         *,
         max_file_bytes: int = 5 * 1024 * 1024,
+        max_total_bytes: int = 256 * 1024 * 1024,
         read: Optional[Callable[[str], bytes]] = None,
     ) -> "RuntimeDescriptionIndex":
         index = cls()
         reader = read or _read_bytes
         sources: Dict[str, bytes] = {}
+        total = 0
+        over_budget = 0
         for path in paths:
             norm = _norm(path)
             index._files.add(norm)
             try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            if size > max_file_bytes:
+                continue
+            if total + size > max_total_bytes:
+                over_budget += 1
+                continue
+            try:
                 data = reader(path)
             except OSError:
                 continue
-            if data is not None and len(data) <= max_file_bytes:
-                sources[norm] = data
+            if data is None or len(data) > max_file_bytes:
+                continue
+            if total + len(data) > max_total_bytes:
+                over_budget += 1
+                continue
+            total += len(data)
+            sources[norm] = data
+        if over_budget:
+            logger.warning(
+                "runtime description index reached %d bytes; %d files skipped",
+                total,
+                over_budget,
+            )
 
         for path, data in sources.items():
             if _DESCRIPTION_MARKER_RE.search(data):
                 index._add_facts(path, data)
 
-        helper_names: Set[str] = set()
+        # Files calling a helper (by name, or the class defining it, or a
+        # subclass of that class found in an earlier round).
+        names: Set[str] = set()
         default_helper_stems: Set[str] = set()
-        for path in list(index._facts):
-            for name in summarize(index._facts[path])[0]:
-                if name == "default":
-                    default_helper_stems.add(_strip_js_ext(os.path.basename(path)))
-                elif name != "<anonymous>":
-                    helper_names.add(name)
-        patterns = [
-            rb"(?<![\w$])(?:" + b"|".join(re.escape(n.encode()) for n in sorted(helper_names)) + rb")\b"
-        ] if helper_names else []
-        if default_helper_stems:
-            patterns.append(
-                rb"""["'][^"'\n]*\b(?:"""
-                + b"|".join(re.escape(s.encode()) for s in sorted(default_helper_stems))
-                + rb""")(?:\.[cm]?[jt]sx?)?["']"""
-            )
-        if patterns:
+        new_paths = list(index._facts)
+        for _ in range(_HELPER_SEARCH_ROUNDS):
+            for path in new_paths:
+                facts = index._facts[path]
+                for name in summarize(facts)[0]:
+                    if name == "default":
+                        default_helper_stems.add(_strip_js_ext(os.path.basename(path)))
+                    elif name != "<anonymous>":
+                        # ``Class.method`` keys: callers name the method on
+                        # an instance (``armer.arm(...)``) or the class.
+                        names.update(name.split(".")[-2:])
+                for subclass, bases in facts.bases.items():
+                    if any(base.split(".")[-1] in names for base in bases):
+                        names.add(subclass)
+            patterns = [
+                rb"(?<![\w$])(?:" + b"|".join(re.escape(n.encode()) for n in sorted(names)) + rb")\b"
+            ] if names else []
+            if default_helper_stems:
+                patterns.append(
+                    rb"""["'][^"'\n]*\b(?:"""
+                    + b"|".join(re.escape(s.encode()) for s in sorted(default_helper_stems))
+                    + rb""")(?:\.[cm]?[jt]sx?)?["']"""
+                )
+            if not patterns:
+                break
             call_re = re.compile(b"|".join(patterns))
+            new_paths = []
             for path, data in sources.items():
                 if path not in index._facts and call_re.search(data):
                     index._add_facts(path, data)
+                    if path in index._facts:
+                        new_paths.append(path)
+            if not new_paths:
+                break
 
         index._sources = sources
         index._propagate()
@@ -828,7 +1378,11 @@ class RuntimeDescriptionIndex:
 
     def _add_facts(self, path: str, data: bytes) -> None:
         text = data.decode("utf-8", errors="replace")
-        facts = file_description_facts(path, text)
+        try:
+            facts = file_description_facts(path, text)
+        except Exception as e:  # noqa: BLE001 - one unparsable file must not drop the index
+            logger.debug("runtime description facts failed for %s: %s", path, type(e).__name__)
+            return
         if facts is not None:
             self._facts[path] = facts
             if facts.redefinitions:
@@ -849,31 +1403,91 @@ class RuntimeDescriptionIndex:
         for path, facts in self._facts.items():
             _, changes = summarize(facts, self._summaries[path], self._external_summaries)
             for change in changes:
-                for target_file, target in self._retarget(facts, change.target):
+                targets = self._retarget(facts, change.target, local=change.local_head)
+                if change.alias:
+                    targets += [
+                        t
+                        for t in self._retarget(facts, change.alias, local=change.alias_local_head)
+                        if t not in targets
+                    ]
+                for target_file, target in targets:
                     if target_file == path and not change.cross_file:
                         continue
                     self._by_target_file.setdefault(target_file, []).append(
                         replace(change, target=target)
                     )
             for name, write in facts.redefinitions:
-                self._redefinitions.append((path, name, write))
+                if not write.registered:
+                    self._redefinitions.append((path, name, write))
             if facts.redefinitions:
                 self._redefinition_sources[path] = self._source_text.get(path, "")
         self._source_text.clear()
 
     # -- resolution -------------------------------------------------------
 
-    def _external_summaries(self, facts: FileFacts, call: CallSite) -> List[ParamWrite]:
+    def _external_summaries(
+        self, facts: FileFacts, call: CallSite, _depth: int = 0
+    ) -> List[ParamWrite]:
         found: List[ParamWrite] = []
         for target_file, target in self._retarget(facts, call.callee):
             if target_file == facts.path:
                 continue
-            name = (split_target(target) or [""])[-1]
-            found.extend(self._summaries.get(target_file, {}).get(name, ()))
+            parts = split_target(target) or [""]
+            summaries = self._summaries.get(target_file, {})
+            target_facts = self._facts.get(target_file)
+            owner_is_object = False
+            if len(parts) >= 2 and target_facts is not None:
+                owner, method = parts[-2], parts[-1]
+                produced = factory_classes(target_facts, owner)
+                owner_is_object = bool(
+                    produced or owner in target_facts.classes or owner in target_facts.instances
+                )
+                for cls in dict.fromkeys([owner, target_facts.instances.get(owner), *produced]):
+                    if not cls:
+                        continue
+                    if cls in target_facts.classes or cls == owner:
+                        found.extend(self._class_method(target_facts, cls, method))
+                    elif _depth < 3:
+                        # A factory returning another module's class or factory.
+                        found.extend(
+                            self._external_summaries(
+                                target_facts, replace(call, callee=f"{cls}.{method}"), _depth + 1
+                            )
+                        )
+            if not owner_is_object:
+                # ``lib.arm(t)`` / ``util.arm(t)`` on a module or plain object.
+                found.extend(summaries.get(parts[-1], ()))
         return found
 
-    def _retarget(self, facts: FileFacts, expr: str) -> List[Tuple[str, str]]:
-        """Files (and the expression in their scope) that ``expr`` refers to."""
+
+    def _class_method(
+        self, facts: FileFacts, cls: str, method: str, depth: int = 0
+    ) -> List[ParamWrite]:
+        """Summaries of ``cls.method`` in ``facts``' file, following the
+        class's bases (in that file or the files they are imported from)."""
+        found = list(self._summaries.get(facts.path, {}).get(f"{cls}.{method}", ()))
+        if found or method in facts.methods.get(cls, ()) or depth >= 4:
+            return found
+        for base in facts.bases.get(cls, ()):
+            if base in facts.classes:
+                found.extend(self._class_method(facts, base, method, depth + 1))
+                continue
+            for target_file, target in self._retarget(facts, base):
+                base_facts = self._facts.get(target_file)
+                if target_file == facts.path or base_facts is None:
+                    continue
+                name = (split_target(target) or [""])[-1]
+                found.extend(self._class_method(base_facts, name, method, depth + 1))
+        return found
+
+    def _retarget(
+        self, facts: FileFacts, expr: str, *, local: bool = False
+    ) -> List[Tuple[str, str]]:
+        """Files (and the expression in their scope) that ``expr`` refers to.
+
+        ``local``: ``expr``'s head is declared in its own scope, so it names
+        nothing in another file.
+        """
         parts = split_target(expr)
         if not parts:
             return []
@@ -886,7 +1500,7 @@ class RuntimeDescriptionIndex:
                     if hop not in found:
                         found.append(hop)
             return found
-        if facts.language == "go" and head not in facts.bound_names:
+        if facts.language == "go" and not local and head not in facts.bound_names:
             directory = os.path.dirname(facts.path)
             return [
                 (f, expr)
@@ -1024,28 +1638,35 @@ class RuntimeDescriptionIndex:
         norm = _norm(path)
         applied = 0
         for change in self._by_target_file.get(norm, []):
-            ctx = resolve_tool_target(change.target, contexts, native)
-            if ctx is None:
+            local = change.file == norm
+            ctx, nested = resolve_tool_target(
+                change.target,
+                contexts,
+                native,
+                change.start_byte if local else -1,
+                module_only=not local,
+            )
+            placement = describe_nested_write(nested) if ctx is not None else None
+            if placement is None:
                 continue
+            mode, suffix = placement
             before = len(ctx.runtime_docstring_overrides)
             add_runtime_description_override(
                 ctx,
                 change.text,
                 line_number=change.line,
                 condition=change.condition,
-                mode=change.mode,
-                via=change.via,
-                source_file=None if change.file == norm else change.file,
+                mode=mode or change.mode,
+                via=change.via + suffix,
+                source_file=None if local else change.file,
             )
             applied += len(ctx.runtime_docstring_overrides) - before
         family = _language_family(norm)
-        stem_re = re.compile(
-            r"(?<![\w$])" + re.escape(os.path.splitext(os.path.basename(norm))[0]) + r"(?![\w$])"
-        )
+        reference_re = _module_reference_re(norm)
         for origin, name, write in self._redefinitions:
             if origin == norm or _language_family(origin) != family:
                 continue
-            if os.path.dirname(origin) != os.path.dirname(norm) and not stem_re.search(
+            if os.path.dirname(origin) != os.path.dirname(norm) and not reference_re.search(
                 self._redefinition_sources.get(origin, "")
             ):
                 continue
@@ -1060,11 +1681,41 @@ class RuntimeDescriptionIndex:
                         line_number=write.line,
                         condition=write.condition,
                         mode="replace",
-                        via="tool redefinition",
+                        via=(
+                            "registration of the same tool in another file"
+                            if write.in_registration
+                            else "tool redefinition"
+                        ),
                         source_file=origin,
                     )
                     applied += len(ctx.runtime_docstring_overrides) - before
         return applied
+
+
+def _module_reference_re(path: str) -> "re.Pattern[str]":
+    """Matches an import of ``path``'s module from another file.
+
+    Go imports packages by directory; other languages name the file (or the
+    class it declares) in an import / require / use line.
+    """
+    if path.endswith(".go"):
+        directory = os.path.basename(os.path.dirname(path))
+        return re.compile(r'"[^"\n]*/' + re.escape(directory) + r'"')
+    if _language_family(path) == "js":
+        stem = os.path.basename(_strip_js_ext(path))
+        if stem == "index":
+            stem = os.path.basename(os.path.dirname(path))
+        return re.compile(
+            r"""["']\.{1,2}/(?:[^"'\n]*/)?"""
+            + re.escape(stem)
+            + r"""(?:/index)?(?:\.[cm]?[jt]sx?)?["']"""
+        )
+    word = r"(?<![\w$])" + re.escape(os.path.splitext(os.path.basename(path))[0]) + r"(?![\w$])"
+    return re.compile(
+        r"(?m)(?:^\s*(?:import|from|use|using|include|require(?:_once)?|mod)\b[^\n]*"
+        r"""|\bfrom\s*["'][^"'\n]*|\brequire(?:_relative)?\s*\(?\s*["'][^"'\n]*)"""
+        + word
+    )
 
 
 def _module_join(language: str, spec: str, parts: List[str]) -> str:
@@ -1094,7 +1745,7 @@ def file_description_facts(path: str, source: str) -> Optional[FileFacts]:
         if root is None:
             return None
         return analyzer._ts_description_facts(root)
-    except (SyntaxError, ValueError, RecursionError) as e:
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as e:
         logger.debug("runtime description facts skipped for %s: %s", path, type(e).__name__)
         return None
 
@@ -1103,28 +1754,45 @@ def resolve_tool_target(
     target: str,
     contexts: List["FunctionContext"],
     native: Any = None,
-) -> Optional["FunctionContext"]:
-    """The tool context ``target`` (an expression in the file's scope) names."""
+    start_byte: int = -1,
+    *,
+    module_only: bool = False,
+) -> Tuple[Optional["FunctionContext"], Optional[str]]:
+    """``(tool, nested path)`` for ``target``, an expression in the file's scope.
+
+    ``nested path`` is set when ``target`` is a field inside the tool
+    (``tool.inputSchema.properties.q``) rather than the tool itself.
+    ``module_only`` (a change made in another file) resolves only names
+    visible to other files, not locals of this file's functions.
+    """
     reg_contexts = getattr(native, "_last_reg_contexts", None)
     if target.startswith(DEFAULT_EXPORT_MARKER):
         line = int(target[len(DEFAULT_EXPORT_MARKER) : -1])
         for reg, ctx in reg_contexts or ():
             call_node = reg.get("call_node")
             if call_node is not None and call_node.start_point[0] + 1 == line:
-                return ctx
-        return None
-    if native is not None and reg_contexts is not None:
-        ctx = native._ts_tool_for_receiver(target, contexts, reg_contexts)
-        if ctx is not None:
-            return ctx
+                return ctx, None
+        return None, None
     parts = split_target(target)
+    if native is not None and reg_contexts is not None:
+        ctx, nested = native._ts_resolve_receiver(
+            target, contexts, reg_contexts, start_byte, module_only=module_only
+        )
+        if ctx is None and len(parts) == 1:
+            # The handler's source symbol when the tool is registered under
+            # another name (annotation tools, ``definition_name``).
+            ctx = next(
+                (c for c in contexts if getattr(c, "definition_name", None) == parts[0]), None
+            )
+        return ctx, nested
     if not parts:
-        return None
+        return None, None
     head = parts[0].lstrip("$")
+    nested = ".".join(parts[1:]) or None
     for ctx in contexts:
         if head in (ctx.name, getattr(ctx, "definition_name", None)):
-            return ctx
+            return ctx, nested
     for ctx in contexts:
         if ctx.name.endswith("." + head):
-            return ctx
-    return None
+            return ctx, nested
+    return None, None

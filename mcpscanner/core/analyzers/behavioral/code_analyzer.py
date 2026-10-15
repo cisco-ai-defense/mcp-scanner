@@ -217,6 +217,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         >>> findings = await analyzer.analyze("/path/to/mcp_server.py", {})
     """
 
+    # Rejected-file bytes the prefilter keeps for the description index;
+    # files past the budget are re-read on demand instead.
+    _PREFILTER_REJECTED_BYTES_BUDGET = 128 * 1024 * 1024
+
     def __init__(self, config: Config):
         """Initialize the BehavioralCodeAnalyzer.
 
@@ -379,12 +383,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
 
                 capability_files = self._prefilter_capability_files(source_files)
+                rejected_bytes = getattr(self, "_prefilter_rejected_bytes", {})
+                self._prefilter_rejected_bytes = {}
                 if capability_files:
                     cached_bytes = {a.path: a.source_bytes for a in capability_files}
 
                     def _read_cached(path: str) -> bytes:
                         if path in cached_bytes:
                             return cached_bytes[path]
+                        if path in rejected_bytes:
+                            return rejected_bytes[path]
                         with open(path, "rb") as handle:
                             return handle.read()
 
@@ -401,6 +409,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                             "behavioral runtime description index failed error_type=%s",
                             type(e).__name__,
                         )
+                del rejected_bytes
                 self.logger.info(
                     "behavioral prefilter scanned=%d kept=%d",
                     len(source_files),
@@ -689,10 +698,19 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     def _prefilter_capability_files(
         self, source_files: List[str]
     ) -> List[_AcceptedFile]:
-        """Return the subset of ``source_files`` that contain MCP markers."""
+        """Return the subset of ``source_files`` that contain MCP markers.
+
+        Bytes of the files read but rejected are kept in
+        ``self._prefilter_rejected_bytes``, up to
+        ``_PREFILTER_REJECTED_BYTES_BUDGET``, so the repository-wide
+        description index does not read them a second time.
+        """
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
         accepted: List[_AcceptedFile] = []
+        rejected: Dict[str, bytes] = {}
+        rejected_total = 0
+        self._prefilter_rejected_bytes = rejected
         for src_file in source_files:
             try:
                 file_size = os.path.getsize(src_file)
@@ -723,6 +741,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         source_text=source_code,
                     )
                 )
+            elif rejected_total + len(source_bytes) <= self._PREFILTER_REJECTED_BYTES_BUDGET:
+                rejected[src_file] = source_bytes
+                rejected_total += len(source_bytes)
         return accepted
 
     def _find_python_files(self, directory: str) -> List[str]:
