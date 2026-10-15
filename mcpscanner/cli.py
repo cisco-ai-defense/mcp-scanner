@@ -36,6 +36,7 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -528,13 +529,13 @@ async def scan_mcp_server_direct(
             if verbose:
                 tips = (
                     "\n\n[bold]Troubleshooting tips:[/bold]\n"
-                    f"  - Make sure an MCP server is running at {server_url}\n"
+                    f"  - Make sure an MCP server is running at {escape(server_url)}\n"
                     "  - Verify the URL is correct (including protocol and port)\n"
                     "  - Check if the server is accessible from your network"
                 )
             console.print(
                 Panel(
-                    f"{e}{tips}",
+                    f"{escape(str(e))}{tips}",
                     title="[bold red]Connection Error[/bold red]",
                     border_style="red",
                 )
@@ -543,7 +544,7 @@ async def scan_mcp_server_direct(
         # All other exceptions
         console.print(
             Panel(
-                str(e),
+                escape(str(e)),
                 title="[bold red]Error scanning server[/bold red]",
                 border_style="red",
             )
@@ -577,7 +578,7 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
     console.rule("[bold]MCP Scanner Results[/bold]")
     console.print()
 
-    console.print(f"Server URL: {results.get('server_url', 'N/A')}")
+    console.print(f"Server URL: {escape(str(results.get('server_url', 'N/A')))}")
 
     # Display scan results
     scan_results = results.get("scan_results", [])
@@ -601,10 +602,13 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
         console.print()
         for tool in incomplete_tools:
             console.print(
-                f"{tool.get('tool_name', 'Unknown')}: {tool.get('status', 'unknown')}"
+                f"{escape(str(tool.get('tool_name', 'Unknown')))}: "
+                f"{escape(str(tool.get('status', 'unknown')))}"
             )
             for error in tool.get("analyzer_errors", []):
-                console.print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
+                console.print(
+                    f"   {escape(str(error.get('analyzer', 'Unknown')))} analyzer failed"
+                )
 
     # Display unsafe tools
     if unsafe_tools:
@@ -624,13 +628,15 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                 if isinstance(analyzer_data, dict)
             )
             summary_table.add_row(
-                str(i), tool.get("tool_name", "Unknown"), str(total_findings)
+                str(i),
+                escape(str(tool.get("tool_name", "Unknown"))),
+                str(total_findings),
             )
         console.print(summary_table)
         console.print()
 
         for i, tool in enumerate(unsafe_tools, 1):
-            console.print(f"{i}. {tool.get('tool_name', 'Unknown')}")
+            console.print(f"{i}. {escape(str(tool.get('tool_name', 'Unknown')))}")
             findings = tool.get("findings", {})
 
             # Count total findings across all analyzers
@@ -653,20 +659,24 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                             "_analyzer", ""
                         ).upper()
 
-                        console.print(
-                            f"   {finding_num}. {analyzer_data.get('threat_summary', 'No summary')}"
+                        threat_summary = escape(
+                            str(analyzer_data.get("threat_summary", "No summary"))
                         )
+                        console.print(f"   {finding_num}. {threat_summary}")
                         severity = analyzer_data.get("severity", "Unknown")
                         console.print(
-                            f"      Severity: [{_severity_style(severity)}]{severity}[/{_severity_style(severity)}]"
+                            f"      Severity: [{_severity_style(severity)}]"
+                            f"{escape(str(severity))}[/]"
                         )
-                        console.print(f"      Analyzer: {clean_analyzer_name}")
+                        console.print(f"      Analyzer: {escape(clean_analyzer_name)}")
 
                         # Display threat types if available
                         threat_names = analyzer_data.get("threat_names", [])
                         if threat_names:
-                            threat_display = ", ".join(
-                                [t.replace("_", " ").title() for t in threat_names]
+                            threat_display = escape(
+                                ", ".join(
+                                    t.replace("_", " ").title() for t in threat_names
+                                )
                             )
                             console.print(f"      Threats: {threat_display}")
 
@@ -681,14 +691,18 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
 
                             if aitech:
                                 console.print(
-                                    f"      Technique: {aitech} - {aitech_name}"
+                                    f"      Technique: {escape(str(aitech))} - "
+                                    f"{escape(str(aitech_name))}"
                                 )
                             if aisubtech:
                                 console.print(
-                                    f"      Sub-Technique: {aisubtech} - {aisubtech_name}"
+                                    f"      Sub-Technique: {escape(str(aisubtech))} - "
+                                    f"{escape(str(aisubtech_name))}"
                                 )
                             if description:
-                                console.print(f"      Description: {description}")
+                                console.print(
+                                    f"      Description: {escape(str(description))}"
+                                )
 
                         console.print()
                         finding_num += 1

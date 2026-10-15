@@ -578,6 +578,38 @@ class TestDisplayResults:
             assert len(tables) == 1
             columns = [col.header for col in tables[0].columns]
             assert columns == ["#", "Tool", "Findings"]
+            # Table.rows holds Row objects with no .cells attribute in Rich
+            # 13.7.0; cell values live on each column instead. The fixture
+            # has two API findings and one YARA finding -> 3 total.
+            assert [list(column.cells) for column in tables[0].columns] == [
+                ["1"],
+                ["unsafe_tool"],
+                ["3"],
+            ]
+
+    def test_display_results_escapes_rich_markup_in_tool_name(self, capsys):
+        """A server-controlled tool name containing Rich markup syntax must
+        not be interpreted as formatting -- an unmatched closing tag like
+        `[/red]` would otherwise raise MarkupError and cut the report short
+        before later findings are rendered, and valid markup could forge
+        styling in the terminal output."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "tool_name": "evil[/red][bold]tool",
+                    "is_safe": False,
+                    "findings": {},
+                }
+            ],
+        }
+
+        # Must not raise MarkupError, and the literal brackets must survive
+        # into the rendered output rather than being swallowed as markup.
+        display_results(results)
+
+        captured = capsys.readouterr()
+        assert "evil[/red][bold]tool" in captured.out
 
     def test_display_results_no_table_when_no_unsafe_tools(self):
         """No unsafe tools means nothing to summarize in a table."""
