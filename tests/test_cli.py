@@ -61,7 +61,9 @@ class TestCliHelperFunctions:
         analyzer = MagicMock()
         analyzer.analyzed_functions = []
 
-        results = _build_behavioral_results(analyzer, [finding], source_path="/repo")
+        results = _build_behavioral_results(
+            analyzer, [finding], source_path="/repo"
+        )
 
         assert len(results) == 1
         assert results[0]["tool_name"] == "leaky_tool"
