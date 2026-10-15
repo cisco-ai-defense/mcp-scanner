@@ -267,3 +267,42 @@ class TestAlignmentPromptBudget:
             assert '"summary": "Brief one-sentence description' in prompt
             assert "**threat_name**: REQUIRED" in prompt
             assert "alignment instructions truncated" not in prompt
+
+    @pytest.mark.parametrize("configured", [0, 1_000, 50_000])
+    def test_cap_below_the_template_is_raised_to_fit_it(
+        self, monkeypatch: pytest.MonkeyPatch, caplog, configured: int
+    ) -> None:
+        from mcpscanner.config.constants import MCPScannerConstants
+        from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
+            AlignmentPromptBuilder,
+            alignment_prompt_cap,
+            alignment_template_chars,
+        )
+
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", configured)
+        builder = AlignmentPromptBuilder()
+        template = builder._template
+        cap = alignment_prompt_cap(len(template))
+        assert alignment_template_chars() == len(template)
+        assert cap > len(template) > configured
+
+        big = self._ctx("add")
+        big.source = "x = 1\n" * 50_000
+        prompts = [
+            builder.build_prompt(big),
+            builder.build_batch_prompt([big, self._ctx("sub")]),
+        ]
+        for prompt in prompts:
+            assert prompt.startswith(template.strip())
+            assert "**threat_name**: REQUIRED" in prompt
+            assert len(prompt) <= cap
+        assert "alignment prompt cap raised" in caplog.text
+
+    def test_cap_above_the_template_is_kept(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcpscanner.config.constants import MCPScannerConstants
+        from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
+            alignment_prompt_cap,
+        )
+
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000)
+        assert alignment_prompt_cap(80_000) == 500_000

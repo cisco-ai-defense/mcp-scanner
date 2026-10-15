@@ -135,9 +135,10 @@ class MCPScannerConstants:
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")
     )
     # Hard cap for alignment prompts sent to the LLM; the prompt builder
-    # truncates to fit. 100K characters (~25-30K tokens) stays well inside
-    # the Bedrock/Haiku context window while leaving room for the ~72 KiB
-    # template plus tool source.
+    # truncates the analysis evidence to fit. 100K characters (~25-30K
+    # tokens) stays well inside the Bedrock/Haiku context window while
+    # leaving room for the ~78 KB template plus tool source. A lower value
+    # is raised to fit the whole template (see ``alignment_prompt_cap``).
     ALIGNMENT_MAX_PROMPT_CHARS: int = int(
         os.getenv("MCP_SCANNER_ALIGNMENT_MAX_PROMPT_CHARS", "100000")
     )
