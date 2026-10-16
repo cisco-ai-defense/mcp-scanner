@@ -202,6 +202,10 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         through the alignment orchestrator."""
         from ...static_analysis.native_analyzer import NativeAnalyzer
 
+        # Errored coverage is per file. A previous file's failed function
+        # must not mark a later file's same-named function inconclusive.
+        self.alignment_orchestrator.errored_function_names.clear()
+
         try:
             analyzer = NativeAnalyzer(source_code, file_path)
         except Exception as e:  # noqa: BLE001
@@ -254,7 +258,57 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
             finding = self._create_security_finding(analysis, returned_ctx, file_path)
             if finding is not None:
                 findings.append(finding)
+        findings.extend(
+            self._errored_coverage_findings(contexts, findings, file_path)
+        )
         return findings
+
+    def _errored_coverage_findings(
+        self,
+        contexts: List,
+        findings: List[SecurityFinding],
+        file_path: str,
+    ) -> List[SecurityFinding]:
+        """Surface functions the orchestrator could not accept.
+
+        A rejected CAPABILITY_RISK or a failed alignment check is
+        inconclusive. Leaving it out of the result looks like a clean
+        scan.
+        """
+        errored = set(
+            getattr(self.alignment_orchestrator, "errored_function_names", set())
+        )
+        already = {
+            (finding.details or {}).get("function_name") for finding in findings
+        }
+        covered: List[SecurityFinding] = []
+        for ctx in contexts:
+            name = getattr(ctx, "name", None)
+            if not name or name not in errored or name in already:
+                continue
+            decorator_types = getattr(ctx, "decorator_types", None) or []
+            covered.append(
+                SecurityFinding(
+                    severity="UNKNOWN",
+                    summary=(
+                        "Alignment check did not complete; finding is inconclusive"
+                    ),
+                    threat_category="",
+                    analyzer="Behavioral",
+                    details={
+                        "function_name": name,
+                        "decorator_type": (
+                            decorator_types[0] if decorator_types else "unknown"
+                        ),
+                        "line_number": getattr(ctx, "line_number", 0),
+                        "source_file": file_path,
+                        "no_findings": False,
+                        "analysis_status": "errored",
+                        "language": "javascript",
+                    },
+                )
+            )
+        return covered
 
     # ------------------------------------------------------------------
     # Finding construction (parity with Python BehavioralCodeAnalyzer)
@@ -320,6 +374,7 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                     "security_implications": analysis.get("security_implications"),
                     "confidence": analysis.get("confidence"),
                     "dataflow_evidence": analysis.get("dataflow_evidence"),
+                    "reachability_evidence": analysis.get("reachability_evidence"),
                     "finding_class": normalize_finding_class(
                         analysis.get("finding_class")
                     ),
