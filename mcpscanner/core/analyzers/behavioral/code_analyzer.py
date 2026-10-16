@@ -41,6 +41,7 @@ from ....utils.log_format import sanitize_log_value, truncate
 from ....utils.path_safety import filter_safe_paths, safe_resolve_root
 from ...static_analysis.context_extractor import ContextExtractor, FunctionContext
 from ...static_analysis.native_analyzer import NativeAnalyzer
+from ...static_analysis.runtime_description_flow import RuntimeDescriptionIndex
 from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnalyzer
 from ...static_analysis.interprocedural.treesitter_call_graph import (
     TreeSitterCallGraphAnalyzer,
@@ -216,6 +217,10 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         >>> findings = await analyzer.analyze("/path/to/mcp_server.py", {})
     """
 
+    # Rejected-file bytes the prefilter keeps for the description index;
+    # files past the budget are re-read on demand instead.
+    _PREFILTER_REJECTED_BYTES_BUDGET = 128 * 1024 * 1024
+
     def __init__(self, config: Config):
         """Initialize the BehavioralCodeAnalyzer.
 
@@ -378,6 +383,33 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 )
 
                 capability_files = self._prefilter_capability_files(source_files)
+                rejected_bytes = getattr(self, "_prefilter_rejected_bytes", {})
+                self._prefilter_rejected_bytes = {}
+                if capability_files:
+                    cached_bytes = {a.path: a.source_bytes for a in capability_files}
+
+                    def _read_cached(path: str) -> bytes:
+                        if path in cached_bytes:
+                            return cached_bytes[path]
+                        if path in rejected_bytes:
+                            return rejected_bytes[path]
+                        with open(path, "rb") as handle:
+                            return handle.read()
+
+                    try:
+                        context["runtime_description_index"] = (
+                            RuntimeDescriptionIndex.build(
+                                source_files,
+                                max_file_bytes=MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5,
+                                read=_read_cached,
+                            )
+                        )
+                    except Exception as e:  # pragma: no cover - defensive
+                        self.logger.warning(
+                            "behavioral runtime description index failed error_type=%s",
+                            type(e).__name__,
+                        )
+                del rejected_bytes
                 self.logger.info(
                     "behavioral prefilter scanned=%d kept=%d",
                     len(source_files),
@@ -666,10 +698,19 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
     def _prefilter_capability_files(
         self, source_files: List[str]
     ) -> List[_AcceptedFile]:
-        """Return the subset of ``source_files`` that contain MCP markers."""
+        """Return the subset of ``source_files`` that contain MCP markers.
+
+        Bytes of the files read but rejected are kept in
+        ``self._prefilter_rejected_bytes``, up to
+        ``_PREFILTER_REJECTED_BYTES_BUDGET``, so the repository-wide
+        description index does not read them a second time.
+        """
         from mcpscanner.core.static_analysis import NativeAnalyzer
 
         accepted: List[_AcceptedFile] = []
+        rejected: Dict[str, bytes] = {}
+        rejected_total = 0
+        self._prefilter_rejected_bytes = rejected
         for src_file in source_files:
             try:
                 file_size = os.path.getsize(src_file)
@@ -700,6 +741,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                         source_text=source_code,
                     )
                 )
+            elif rejected_total + len(source_bytes) <= self._PREFILTER_REJECTED_BYTES_BUDGET:
+                rejected[src_file] = source_bytes
+                rejected_total += len(source_bytes)
         return accepted
 
     def _find_python_files(self, directory: str) -> List[str]:
@@ -919,6 +963,27 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             if not func_contexts:
                 self.logger.debug(f"No functions found in {file_path}")
                 return findings
+
+            description_index = context.get("runtime_description_index")
+            if description_index is not None:
+                try:
+                    applied = description_index.apply(
+                        file_path,
+                        func_contexts,
+                        native=None if is_python else native_analyzer,
+                    )
+                    if applied:
+                        self.logger.debug(
+                            "behavioral cross-file description overrides path=%s count=%d",
+                            sanitize_log_value(file_path),
+                            applied,
+                        )
+                except Exception as e:  # pragma: no cover - defensive
+                    self.logger.debug(
+                        "Cross-file description overrides failed for %s: %s",
+                        sanitize_log_value(file_path),
+                        type(e).__name__,
+                    )
 
             # Record every function we are about to analyze so that callers
             # can enumerate all tools detected during the scan (including

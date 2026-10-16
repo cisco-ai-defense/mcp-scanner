@@ -43,12 +43,28 @@ Key features:
 
 import ast
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from .context_extractor import FunctionContext
+from .runtime_description_flow import (
+    CallSite,
+    DescriptionWrite,
+    FileFacts,
+    add_runtime_description_override,
+    bounded_product,
+    computed_expr,
+    describe_nested_write,
+    scan_bases,
+    scan_bound_names,
+    scan_instances,
+    scan_classes,
+    scan_imports,
+    strip_self_prefix,
+    summarize,
+)
 from .parser.python_parser import PythonParser
 from .dataflow.forward_analysis import ForwardDataflowAnalysis
 from .dataflow.treesitter_analysis import TreeSitterDataflowAnalysis
@@ -769,6 +785,70 @@ def _parse_name_from_annotations(annotations: List[str]) -> Optional[str]:
     return None
 
 
+_MCP_DESCRIPTION_ARG_RES = (
+    _re.compile(r'\bdescription\s*[=:]\s*"((?:\\.|[^"\\])*)"'),
+    _re.compile(r"\bdescription\s*[=:]\s*'((?:\\.|[^'\\])*)'"),
+    _re.compile(r'\bDescription\s*\(\s*"((?:\\.|[^"\\])*)"\s*\)'),
+    _re.compile(r"\bDescription\s*\(\s*'((?:\\.|[^'\\])*)'\s*\)"),
+)
+
+
+def _parse_description_from_annotation_texts(annotations: List[str]) -> Optional[str]:
+    """Pull the registered description out of annotation/attribute texts."""
+    for ann in annotations or []:
+        for pattern in _MCP_DESCRIPTION_ARG_RES:
+            m = pattern.search(ann or "")
+            if m and m.group(1).strip():
+                return m.group(1).strip()
+    return None
+
+
+def _scan_initializer(src: str, start: int, limit: int = 2000) -> str:
+    """Text of the expression starting at ``start``, up to the statement end."""
+    i, depth, quote = start, 0, None
+    out: List[str] = []
+    while i < len(src) and len(out) < limit:
+        c = src[i]
+        if quote:
+            if c == "\\":
+                out.append(src[i : i + 2])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c in "\"'`":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        elif c in ";\n" and depth == 0:
+            break
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _balanced_prefix(text: str) -> str:
+    """``text`` up to the bracket closing its opening one (``""`` if unclosed)."""
+    depth, quote = 0, None
+    for i, c in enumerate(text):
+        if quote:
+            if c == quote and text[i - 1] != "\\":
+                quote = None
+        elif c in "\"'`":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                return text[: i + 1]
+    return ""
+
+
 @dataclass
 class NativeAnalysisResult:
     """Result of native analysis for a single unit."""
@@ -1040,6 +1120,9 @@ class NativeAnalyzer:
                         capability=cap_kind,
                         registered_name=_parse_name_from_annotations(annotations),
                         source_kind="annotation",
+                        registered_description=_parse_description_from_annotation_texts(
+                            annotations
+                        ),
                     )
             for child in node.children:
                 visit_funcs(child)
@@ -1059,6 +1142,8 @@ class NativeAnalyzer:
         registrations = self._ts_find_mcp_registrations(
             tree.root_node, trusted_receivers=mcp_instances
         )
+        if self.language == "java":
+            registrations.extend(self._java_find_spec_registrations(tree.root_node))
 
         # Build an import-target map once per extract call: cross-file
         # resolution prefers entries whose defining file path matches
@@ -1067,6 +1152,26 @@ class NativeAnalyzer:
         import_target_map = self._build_import_target_map(
             imports, current_file=str(self.file_path) if self.file_path else None
         )
+
+        ctx_by_key: Dict[Any, FunctionContext] = {}
+        handler_spans: Dict[int, "tuple[int, int]"] = {}
+        reg_contexts: List["tuple[Dict[str, Any], FunctionContext]"] = []
+
+        first_by_name: Dict["tuple[Any, str]", "tuple[Dict[str, Any], FunctionContext]"] = {}
+        reg_by_key: Dict[Any, Dict[str, Any]] = {}
+
+        def remember(reg, key, span=None):
+            ctx = contexts[-1]
+            ctx_by_key[key] = ctx
+            reg_by_key[key] = reg
+            reg_contexts.append((reg, ctx))
+            if span is not None:
+                handler_spans[id(ctx)] = span
+            first_reg, first = first_by_name.setdefault(
+                (reg.get("capability"), ctx.name), (reg, ctx)
+            )
+            if first is not ctx:
+                self._ts_note_reregistration(first, first_reg, reg, own_context=True)
 
         for reg in registrations:
             handler_node = reg.get("handler_node")
@@ -1125,7 +1230,9 @@ class NativeAnalyzer:
                     registered_name=reg.get("name") or handler_name,
                     source_kind=source_kind,
                     handler_name_hint=handler_name,
+                    registered_description=reg.get("description"),
                 )
+                remember(reg, stub_key)
                 continue
 
             if handler_node is None and cross_file_match is not None:
@@ -1152,11 +1259,18 @@ class NativeAnalyzer:
                     source_kind=source_kind,
                     handler_name_hint=handler_name,
                     source_file=cross_file_path,
+                    registered_description=reg.get("description"),
                 )
+                remember(reg, stub_key)
                 continue
 
             cap_key = (handler_node.start_byte, cap_kind)
             if cap_key in seen_handlers:
+                existing = ctx_by_key.get(cap_key)
+                if existing is not None:
+                    self._ts_note_reregistration(
+                        existing, reg_by_key.get(cap_key), reg, own_context=False
+                    )
                 continue
             seen_handlers.add(cap_key)
 
@@ -1169,6 +1283,7 @@ class NativeAnalyzer:
                 else "registration"
             )
 
+            before = len(contexts)
             self._append_capability_context(
                 contexts,
                 handler_node,
@@ -1176,7 +1291,20 @@ class NativeAnalyzer:
                 capability=cap_kind,
                 registered_name=reg.get("name"),
                 source_kind=source_kind,
+                registered_description=reg.get("description"),
             )
+            if len(contexts) > before:
+                remember(
+                    reg, cap_key, (handler_node.start_byte, handler_node.end_byte)
+                )
+
+        self._last_reg_contexts = reg_contexts
+        try:
+            self._ts_apply_runtime_description_overrides(
+                tree.root_node, contexts, reg_contexts, handler_spans
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            self.logger.debug(f"Runtime description override pass failed: {e}")
 
         # Gap 8 extension: static endpoint tables (literal ``name`` /
         # ``alias`` fields) including arrays reached via ``for (const tool
@@ -1439,6 +1567,7 @@ class NativeAnalyzer:
         source_kind: str,
         handler_name_hint: Optional[str] = None,
         source_file: Optional[str] = None,
+        registered_description: Optional[str] = None,
     ) -> None:
         """Emit a stub ``FunctionContext`` for an unresolved handler.
 
@@ -1470,7 +1599,7 @@ class NativeAnalyzer:
         )
         # Optional fields. Set them via attribute assignment because the
         # dataclass declares defaults — direct setattr is safe.
-        ctx.docstring = None
+        ctx.docstring = registered_description or None
         ctx.parameters = []
         ctx.return_type = None
         ctx.line_number = 0
@@ -2211,6 +2340,7 @@ class NativeAnalyzer:
         capability: str,
         registered_name: Optional[str],
         source_kind: str,
+        registered_description: Optional[str] = None,
     ) -> None:
         """Extract a FunctionContext for ``handler_node`` and tag it.
 
@@ -2235,6 +2365,7 @@ class NativeAnalyzer:
         if ctx is None:
             return
 
+        ctx.definition_name = ctx.name.rsplit(".", 1)[-1]
         ctx.name = _effective_capability_name(
             registered_name, ctx.name, capability
         )
@@ -2250,6 +2381,14 @@ class NativeAnalyzer:
         except Exception as e:  # pragma: no cover - defensive
             self.logger.debug(f"Callee enrichment failed for MCP handler: {e}")
 
+        if registered_description and registered_description not in (ctx.docstring or ""):
+            # The registration description is what clients advertise; keep
+            # any handler doc comment after it.
+            ctx.docstring = (
+                f"{registered_description}\n\n{ctx.docstring}"
+                if ctx.docstring
+                else registered_description
+            )
         if not ctx.docstring:
             anno_desc = self._parse_description_from_annotations(handler_node)
             if anno_desc:
@@ -2524,6 +2663,7 @@ class NativeAnalyzer:
                         reg.get("handler_node") is not None
                         or reg.get("handler_name") is not None
                     ):
+                        reg["call_node"] = node
                         registrations.append(reg)
             for child in node.children:
                 visit(child, node)
@@ -2564,7 +2704,27 @@ class NativeAnalyzer:
             # trusted because they can only have come from a direct
             # import of the SDK function.
             return True
-        return receiver in trusted_receivers
+        return (
+            receiver in trusted_receivers
+            or self._ts_scoped_alias_root(receiver, call_node) is not None
+        )
+
+    def _ts_function_span(self, node: "Node") -> Optional["tuple[int, int]"]:
+        """Byte span of the function enclosing ``node``; ``None`` at module level."""
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        cur = node.parent
+        while cur is not None:
+            if cur.type in func_types and cur.type not in _TS_NON_FUNCTION_NODE_TYPES:
+                return cur.start_byte, cur.end_byte
+            cur = cur.parent
+        return None
+
+    def _ts_scoped_alias_root(self, name: str, node: "Node") -> Optional[str]:
+        """Server a function-local alias ``name`` stands for at ``node``."""
+        for alias, root, (start, end) in getattr(self, "_mcp_scoped_aliases", ()):
+            if alias == name and start <= node.start_byte < end:
+                return root
+        return None
 
     def _ts_call_receiver_name(self, call_node: "Node") -> Optional[str]:
         """Return the receiver expression of a ``X.method(...)`` call.
@@ -2709,7 +2869,37 @@ class NativeAnalyzer:
         trusted.update(sdk_aliases)
 
         # Stage 2: walk the AST for instantiations bound to local names.
+        aliases: List["tuple[str, str, Optional[tuple[int, int]]]"] = []
+
         def visit(node: "Node"):
+            # ``const s2 = server`` / ``s2 := server`` / ``s2 = server``:
+            # resolved against the trusted set once the walk is done.
+            if node.type in (
+                "variable_declarator",
+                "short_var_declaration",
+                "assignment",
+                "assignment_expression",
+            ):
+                left = node.child_by_field_name("name") or node.child_by_field_name("left")
+                right = node.child_by_field_name("value") or node.child_by_field_name("right")
+                if right is not None and right.type == "expression_list" and right.named_child_count == 1:
+                    right = right.named_children[0]
+                if left is not None and left.type == "expression_list" and left.named_child_count == 1:
+                    left = left.named_children[0]
+                if (
+                    left is not None
+                    and right is not None
+                    and left.type == "identifier"
+                    and right.type == "identifier"
+                ):
+                    aliases.append(
+                        (
+                            self._ts_get_node_text(left),
+                            self._ts_get_node_text(right),
+                            self._ts_function_span(node),
+                        )
+                    )
+
             # JS/TS: ``const server = new McpServer(...)``
             if node.type in ("variable_declarator", "lexical_declaration"):
                 name_node = node.child_by_field_name("name")
@@ -2761,6 +2951,37 @@ class NativeAnalyzer:
                 visit(child)
 
         visit(root)
+        # Module-level aliases are trusted file-wide; an alias declared in a
+        # function is trusted only inside that function, so an unrelated
+        # parameter or local of the same name elsewhere is not a server.
+        scoped: List["tuple[str, str, tuple[int, int]]"] = []
+        roots: Dict[str, str] = {}
+
+        def root_of(name: str, span: Optional["tuple[int, int]"]) -> Optional[str]:
+            if name in trusted:
+                return roots.get(name, name)
+            for alias, root, scope in scoped:
+                if alias == name and span is not None and scope[0] <= span[0] and span[1] <= scope[1]:
+                    return root
+            return None
+
+        grew = True
+        while grew:
+            grew = False
+            for alias, source, span in aliases:
+                root = root_of(source, span)
+                if root is None:
+                    continue
+                if span is None:
+                    if alias not in trusted:
+                        trusted.add(alias)
+                        roots[alias] = root
+                        grew = True
+                elif (alias, root, span) not in scoped and alias not in trusted:
+                    scoped.append((alias, root, span))
+                    grew = True
+        self._mcp_receiver_roots = roots
+        self._mcp_scoped_aliases = scoped
         return trusted
 
     def _ts_is_mcp_instantiation(
@@ -3030,10 +3251,25 @@ class NativeAnalyzer:
         positional: List[tuple[str, Any]] = []
         direct_inline_handlers: List["Node"] = []
         object_inline_handlers: List["Node"] = []
+        description: Optional[str] = None
+        string_args: List[str] = []
 
         for child in args_node.children:
             if child.type in ("(", ")", ",", "comment"):
                 continue
+
+            named_desc = self._ts_named_description_argument(child)
+            if named_desc is not None:
+                description = description or named_desc
+                continue
+            if child.type in string_node_types:
+                string_args.append(_strip_string_quotes(self._ts_get_node_text(child)))
+            elif child.type == "value_argument":
+                lit = self._ts_extract_string_literal_text(child)
+                if lit is not None:
+                    string_args.append(lit)
+            if description is None:
+                description = self._ts_object_description(child)
 
             if child.type in func_types:
                 positional.append(("inline", child))
@@ -3112,15 +3348,1836 @@ class NativeAnalyzer:
         ):
             name = refs[0]
 
-        if handler_node is None and handler_name is None:
-            return None
-
+        capability = override_capability or _normalize_capability(capability_method)
+        # ``tool(name, description, ...)`` / ``prompt(name, description, ...)``;
+        # ``resource(name, uri, ...)`` puts the URI second.
+        if description is None and len(string_args) >= 2 and capability in ("tool", "prompt"):
+            description = string_args[1]
         return {
-            "capability": override_capability or _normalize_capability(capability_method),
+            "capability": capability,
             "name": name,
             "handler_node": handler_node,
             "handler_name": handler_name,
+            "description": description,
+            "arg_refs": refs,
         }
+
+    _TS_DESCRIPTION_CALL_RE = _re.compile(
+        r"""(?:WithDescription|withDescription|description)\s*\(\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1""",
+        _re.DOTALL,
+    )
+
+    def _ts_named_description_argument(self, node: "Node") -> Optional[str]:
+        """Description from a named argument (``description = "..."``).
+
+        Covers Kotlin ``value_argument``, C# ``argument`` and PHP named
+        arguments; returns ``None`` for any other node.
+        """
+        if "argument" not in node.type:
+            return None
+        text = self._ts_get_node_text(node)
+        if not _re.match(r"\s*\$?description\s*[:=]", text, _re.IGNORECASE):
+            return None
+        return self._ts_first_string_in_subtree(node) or ""
+
+    def _ts_first_string_in_subtree(self, node: "Node") -> Optional[str]:
+        stack = [node]
+        while stack:
+            cur = stack.pop()
+            lit = self._ts_extract_string_literal_text(cur)
+            if lit is not None:
+                return lit
+            stack.extend(reversed(cur.children))
+        return None
+
+    def _ts_object_description(self, node: "Node") -> Optional[str]:
+        """Description from a registration argument that is not a plain string.
+
+        Handles object/composite literals with a ``description`` field
+        (TS v2 config, Go ``&mcp.Tool{Description: ...}``) and builder calls
+        such as mcp-go's ``mcp.NewTool("x", mcp.WithDescription("..."))``.
+        """
+        candidates = [node]
+        if node.type == "unary_expression":
+            candidates.extend(node.children)
+        for cand in candidates:
+            if cand.type in (
+                "object",
+                "object_expression",
+                "literal_value",
+                "composite_literal",
+            ):
+                obj = cand
+                if cand.type == "composite_literal":
+                    obj = cand.child_by_field_name("body") or cand
+                for key, value_node in self._ts_iter_direct_object_entries(obj):
+                    if key and key.lower() == "description" and value_node is not None:
+                        lit = self._ts_string_value_from_object_field(value_node)
+                        if lit is not None:
+                            return lit
+        if node.type == "call_expression":
+            match = self._TS_DESCRIPTION_CALL_RE.search(self._ts_get_node_text(node))
+            if match:
+                return match.group(2)
+        return None
+
+    # ------------------------------------------------------------------
+    # Runtime description changes (rug pulls) for tree-sitter languages
+    # ------------------------------------------------------------------
+
+    _TS_CALL_NODE_TYPES: ClassVar[Set[str]] = {
+        "call_expression",
+        "method_invocation",
+        "invocation_expression",
+        "call",
+        "member_call_expression",
+        "method_call_expression",
+    }
+    _TS_IF_NODE_TYPES: ClassVar[Set[str]] = {
+        "if_statement",
+        "if_expression",
+        "if",
+        "unless",
+        "if_modifier",
+        "unless_modifier",
+    }
+    _TS_RECEIVER_BODY = (
+        r"[\$\w][\w$]*(?:\[[^\]\n]{1,60}\])*"
+        r"(?:(?:\.|->|\?\.)[\$\w]+(?:\[[^\]\n]{1,60}\])*)*?"
+    )
+    _TS_RECEIVER = r"(?P<recv>" + _TS_RECEIVER_BODY + r")\s*(?:\.|->|\?\.)\s*"
+    _TS_DESC_FIELD_RE = _re.compile("^" + _TS_RECEIVER + r"(?i:description)$")
+    # ``tool["description"] = ...``
+    _TS_DESC_SUBSCRIPT_RE = _re.compile(
+        r"^(?P<recv>" + _TS_RECEIVER_BODY + r")\s*(?:\?\.)?\[\s*([\"'`])(?i:description)\2\s*\]$"
+    )
+    _TS_DESC_METHOD_RE = _re.compile(
+        r"^\s*" + _TS_RECEIVER
+        + r"(?P<method>update|setDescription|set_description|SetDescription)\s*(?:\?\.)?\s*\("
+    )
+    # ``Object.assign(tool, {description})``, ``Object.defineProperty(tool,
+    # "description", {value})``, ``Reflect.set(tool, "description", v)``.
+    _TS_OBJECT_WRITE_RE = _re.compile(
+        r"^\s*(?P<fn>Object\s*\.\s*assign|Object\s*\.\s*defineProperty|Reflect\s*\.\s*set"
+        r"|Reflect\s*\.\s*defineProperty)\s*\(\s*(?P<recv>" + _TS_RECEIVER_BODY + r")\s*,\s*"
+    )
+    _TS_DESCRIPTION_KEY_RE = _re.compile(r"""^\s*(["'`])(?i:description)\1\s*,\s*""")
+    _TS_TOOL_BINDING_RE = _re.compile(
+        r"registerTool|\.tool\s*\(|addTool|AddTool|NewTool"
+        r"|\bTool\s*(?:\(|\{|::new|::builder|\.builder)|new\s+[\w.\\]*Tool\b"
+    )
+    _TS_NAME_FIELD_RE = _re.compile(
+        r"""\b[Nn]ame\s*[:=]\s*(["'`])((?:\\.|(?!\1)[^\\])*)\1""", _re.DOTALL
+    )
+    _TS_ANY_STRING_RE = _re.compile(r"""(["'`])((?:\\.|(?!\1)[^\\])*)\1""", _re.DOTALL)
+    _TS_DESC_IN_TEXT_RE = _re.compile(
+        r"""(?:WithDescription\s*\(|\b[Dd]escription\s*[:=]|setDescription\s*\()\s*"""
+        r"""(["'`])((?:\\.|(?!\1)[^\\])*)\1""",
+        _re.DOTALL,
+    )
+
+    _TS_EXCLUSIVE_BRANCH_NODE_TYPES: ClassVar[Set[str]] = _TS_IF_NODE_TYPES | {
+        "ternary_expression",
+        "conditional_expression",
+        "switch_body",
+        "switch_block",
+        "switch_statement",
+        "expression_switch_statement",
+        "type_switch_statement",
+        "when_expression",
+        "match_expression",
+        "match_block",
+        "case",
+    }
+    # Ruby ``case`` arms. C# also produces ``case`` nodes, but their children
+    # are statements of one section, which run in sequence.
+    _TS_CASE_ARM_NODE_TYPES: ClassVar[Set[str]] = {"when", "in_clause", "else"}
+    # Arms that never fall into the next one (Java ``case X -> ...``).
+    _TS_NO_FALLTHROUGH_ARM_TYPES: ClassVar[Set[str]] = {"switch_rule"}
+
+    def _ts_note_reregistration(
+        self,
+        ctx: FunctionContext,
+        first_reg: Optional[Dict[str, Any]],
+        reg: Dict[str, Any],
+        *,
+        own_context: bool,
+    ) -> None:
+        """Record a later registration of the same tool with a new description.
+
+        Registrations on another server object, or in branches that cannot
+        both run (``if``/``else``, ``switch`` cases, ternaries), are
+        alternatives rather than a swap. They are dropped only when the later
+        registration has its own context (its description is analyzed
+        there); one that shares this handler is kept, labelled as an
+        alternative, since this context is the only place its text appears.
+        """
+        new_desc = reg.get("description")
+        if not new_desc or new_desc in (ctx.docstring or ""):
+            return
+        call_node = reg.get("call_node")
+        first_node = (first_reg or {}).get("call_node")
+        via = "re-registration with description"
+        if call_node is not None and first_node is not None:
+            first_recv = self._ts_registration_receiver(first_node)
+            recv = self._ts_registration_receiver(call_node)
+            alternative = bool(first_recv and recv and first_recv != recv) or (
+                self._ts_mutually_exclusive(first_node, call_node)
+            )
+            if alternative:
+                if own_context:
+                    return
+                via = "alternative registration with description (same handler)"
+        add_runtime_description_override(
+            ctx,
+            new_desc,
+            line_number=(call_node.start_point[0] + 1) if call_node else 0,
+            condition=self._ts_enclosing_condition(call_node) if call_node else None,
+            mode="replace",
+            via=via,
+        )
+
+    def _ts_registration_receiver(self, call_node: "Node") -> Optional[str]:
+        func = call_node.child_by_field_name("function")
+        obj = None
+        if func is not None:
+            obj = func.child_by_field_name("object") or func.child_by_field_name("operand")
+        if obj is None:
+            obj = call_node.child_by_field_name("object") or call_node.child_by_field_name(
+                "receiver"
+            )
+        if obj is None:
+            return None
+        text = self._ts_get_node_text(obj).strip()
+        return (
+            self._ts_scoped_alias_root(text, call_node)
+            or getattr(self, "_mcp_receiver_roots", {}).get(text, text)
+        )
+
+    def _ts_mutually_exclusive(self, a: "Node", b: "Node") -> bool:
+        """Whether ``a`` and ``b`` sit in different arms of one branch construct."""
+        child_toward_a: Dict[Tuple[int, int, str], "Node"] = {}
+        prev, cur = a, a.parent
+        while cur is not None:
+            child_toward_a[(cur.start_byte, cur.end_byte, cur.type)] = prev
+            prev, cur = cur, cur.parent
+        prev, cur = b, b.parent
+        while cur is not None:
+            key = (cur.start_byte, cur.end_byte, cur.type)
+            if key in child_toward_a:
+                if cur.type not in self._TS_EXCLUSIVE_BRANCH_NODE_TYPES:
+                    return False
+                arm_a, arm_b = child_toward_a[key], prev
+                condition = cur.child_by_field_name("condition")
+                if condition is not None and (
+                    _is_same_ts_node(arm_a, condition) or _is_same_ts_node(arm_b, condition)
+                ):
+                    return False
+                if _is_same_ts_node(arm_a, arm_b):
+                    return False
+                if cur.type == "case" and not (
+                    arm_a.type in self._TS_CASE_ARM_NODE_TYPES
+                    and arm_b.type in self._TS_CASE_ARM_NODE_TYPES
+                ):
+                    return False
+                if cur.type in self._TS_SWITCH_BODY_NODE_TYPES:
+                    return not self._ts_falls_through(cur, arm_a, arm_b)
+                return True
+            prev, cur = cur, cur.parent
+        return False
+
+    _TS_SWITCH_BODY_NODE_TYPES: ClassVar[Set[str]] = {
+        "switch_body",
+        "switch_block",
+        "switch_statement",
+        "expression_switch_statement",
+        "type_switch_statement",
+    }
+    _TS_CASE_EXIT_NODE_TYPES: ClassVar[Set[str]] = {
+        "break_statement",
+        "return_statement",
+        "throw_statement",
+        "throw_expression",
+        "continue_statement",
+        "yield_statement",
+        "goto_statement",
+    }
+
+    _TS_LOOP_OR_SWITCH_NODE_TYPES: ClassVar[Set[str]] = {
+        "for_statement",
+        "for_in_statement",
+        "for_of_statement",
+        "enhanced_for_statement",
+        "foreach_statement",
+        "while_statement",
+        "do_statement",
+        "switch_statement",
+        "expression_switch_statement",
+        "type_switch_statement",
+    }
+
+    def _ts_exits_case(self, node: "Node", arm: "Node") -> bool:
+        """Whether an exit statement in ``arm`` leaves the switch case.
+
+        ``break``/``continue`` inside a nested loop or switch only leave that
+        construct; ``return``/``throw`` always leave the case.
+        """
+        if node.type not in ("break_statement", "continue_statement"):
+            return True
+        if node.child_by_field_name("label") is not None:
+            return True
+        cur = node.parent
+        while cur is not None and not _is_same_ts_node(cur, arm):
+            if cur.type in self._TS_LOOP_OR_SWITCH_NODE_TYPES and (
+                node.type == "break_statement" or "switch" not in cur.type
+            ):
+                return False
+            cur = cur.parent
+        return True
+
+    def _ts_falls_through(self, body: "Node", arm_a: "Node", arm_b: "Node") -> bool:
+        """Whether control can run from the earlier case arm into the later one."""
+        first, last = sorted((arm_a, arm_b), key=lambda n: n.start_byte)
+        go = self.language == "go"
+        for arm in body.named_children:
+            if arm.start_byte < first.start_byte:
+                continue
+            if arm.start_byte >= last.start_byte:
+                break
+            if arm.type in self._TS_NO_FALLTHROUGH_ARM_TYPES:
+                return False
+            func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+            stack = list(arm.children)
+            exits, falls = False, False
+            while stack:
+                node = stack.pop()
+                if node.type in func_types and node.type not in _TS_NON_FUNCTION_NODE_TYPES:
+                    continue  # ``return`` in a nested handler does not leave the case
+                if node.type in self._TS_CASE_EXIT_NODE_TYPES and self._ts_exits_case(node, arm):
+                    exits = True
+                elif node.type == "fallthrough_statement":
+                    falls = True
+                stack.extend(node.children)
+            if (go and not falls) or (not go and exits):
+                return False
+        return True
+
+    def _ts_apply_runtime_description_overrides(
+        self,
+        root: "Node",
+        contexts: List[FunctionContext],
+        reg_contexts: List["tuple[Dict[str, Any], FunctionContext]"],
+        handler_spans: Dict[int, "tuple[int, int]"],
+    ) -> None:
+        """Fold description changes made after registration into tool docstrings.
+
+        Covers field writes (``tool.description = ...``, Go/C#
+        ``tool.Description = ...``, PHP ``$tool->description = ...``),
+        ``tool.update({description: ...})`` (TS SDK ``RegisteredTool``) and
+        ``setDescription(...)``. A write only counts when its receiver
+        resolves to a registered tool, so ``issue.description = ...`` inside a
+        handler is not mistaken for a rug pull.
+        """
+        if not contexts:
+            return
+        self._last_root = root
+        self._ts_binding_cache: Dict[str, Optional[str]] = {}
+        # Tools registered through a variable (``s.AddTool(tool, handler)``)
+        # carry their description on the variable's initializer.
+        for reg, ctx in reg_contexts:
+            if ctx.docstring:
+                continue
+            for ref in reg.get("arg_refs") or []:
+                binding = self._ts_binding_value_text(ref)
+                match = self._TS_DESC_IN_TEXT_RE.search(binding or "")
+                if match:
+                    ctx.docstring = match.group(2)
+                    break
+
+        facts = self._ts_description_facts(root)
+        # Registrations that produced a context; a redefinition written inside
+        # one is analyzed there and its re-registration is already noted. A
+        # call that only looks like a registration (``registry.tools(...)``)
+        # has no context, so its write is still a redefinition.
+        recognized = [
+            (reg["call_node"].start_byte, reg["call_node"].end_byte)
+            for reg, _ in reg_contexts
+            if reg.get("call_node") is not None
+        ]
+        for name, write in facts.redefinitions:
+            if write.in_registration and any(
+                start <= write.start_byte < end for start, end in recognized
+            ):
+                continue
+            ctx = self._ts_context_named(name, contexts)
+            if ctx is not None and write.text not in (ctx.docstring or ""):
+                add_runtime_description_override(
+                    ctx,
+                    write.text,
+                    line_number=write.line,
+                    condition=write.condition,
+                    mode="replace",
+                    via="tool redefinition",
+                )
+        _, changes = summarize(facts)
+        for change in changes:
+            # The resolved alias names the tool more precisely than the
+            # receiver (a loop variable over several tools has one per tool).
+            ctx, nested = None, None
+            if change.alias:
+                ctx, nested = self._ts_resolve_receiver(
+                    change.alias, contexts, reg_contexts, change.start_byte
+                )
+            if ctx is None:
+                ctx, nested = self._ts_resolve_receiver(
+                    change.target, contexts, reg_contexts, change.start_byte
+                )
+            if ctx is None:
+                continue
+            placement = describe_nested_write(nested)
+            if placement is None:
+                continue
+            mode, suffix = placement
+            span = handler_spans.get(id(ctx))
+            if span and span[0] <= change.start_byte < span[1]:
+                suffix += " inside the tool's own handler"
+            add_runtime_description_override(
+                ctx,
+                change.text,
+                line_number=change.line,
+                condition=change.condition,
+                mode=mode or change.mode,
+                via=change.via + suffix,
+            )
+
+    _TS_EXTRA_CALL_NODE_TYPES: ClassVar[Set[str]] = {
+        "function_call_expression",
+        "scoped_call_expression",
+        "nullsafe_member_call_expression",
+    }
+
+    def _ts_parse_root(self) -> Optional["Node"]:
+        """Parse the file with its tree-sitter grammar; ``None`` if unsupported."""
+        if self.language not in self.FUNCTION_NODE_TYPES:
+            return None
+        lang_mod = _get_language_module(self.language)
+        if lang_mod is None:
+            return None
+        if self.language == "typescript":
+            lang = Language(lang_mod.language_typescript())
+        elif self.language == "php":
+            lang = Language(lang_mod.language_php())
+        else:
+            lang = Language(lang_mod.language())
+        return Parser(lang).parse(self.source_bytes).root_node
+
+    def _ts_description_facts(self, root: "Node") -> FileFacts:
+        """Description writes, tool redefinitions, calls and scopes in this file."""
+        facts = FileFacts(path=str(self.file_path), language=self.language)
+        self._last_root = root
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set()) | {
+            "class",
+            "abstract_class_declaration",
+        }
+        call_types = self._TS_CALL_NODE_TYPES | self._TS_EXTRA_CALL_NODE_TYPES
+        # (node, enclosing function, its params, class it is a method of,
+        #  innermost enclosing class)
+        stack: List[
+            "tuple[Node, Optional[str], tuple[str, ...], Optional[str], Optional[str]]"
+        ] = [(root, None, (), None, None)]
+        while stack:
+            node, fn_name, fn_params, fn_class, cls = stack.pop()
+            if node.type in class_types and node.type != "impl_item":
+                name_node = node.child_by_field_name("name")
+                cls = self._ts_get_node_text(name_node) if name_node is not None else None
+            elif node.type == "impl_item":
+                type_node = node.child_by_field_name("type")
+                cls = self._ts_get_node_text(type_node) if type_node is not None else None
+            if node.type in func_types and node.type not in _TS_NON_FUNCTION_NODE_TYPES:
+                fn_name = self._ts_get_function_name(node) or "<anonymous>"
+                if fn_name == "<anonymous>" and self._ts_is_default_export(node):
+                    fn_name = "default"
+                fn_params = self._ts_param_names(node)
+                facts.functions.setdefault(fn_name, fn_params)
+                # A function directly in a class body is its method; one nested
+                # in a method is a local function of no class.
+                fn_class = cls if cls and self._ts_is_method(node, func_types, class_types) else None
+                if node.type == "method_declaration" and self.language == "go":
+                    fn_class = self._go_receiver_type(node)
+                elif not fn_class and fn_name not in ("<anonymous>", "default"):
+                    produced = self._ts_returned_classes(node)
+                    if produced:
+                        facts.factories.setdefault(fn_name, produced)
+                if fn_class:
+                    facts.methods.setdefault(fn_class, set()).add(fn_name)
+            line = node.start_point[0] + 1
+            redefined = self._ts_tool_constructor(node)
+            if redefined is not None:
+                name, text = redefined
+                facts.redefinitions.append(
+                    (
+                        name,
+                        DescriptionWrite(
+                            target=name,
+                            text=text,
+                            mode="replace",
+                            via="tool redefinition",
+                            line=line,
+                            condition=self._ts_enclosing_condition(node),
+                            enclosing=fn_name,
+                            enclosing_params=fn_params,
+                            start_byte=node.start_byte,
+                            registered=self._ts_registered_on_local_server(node),
+                            in_registration=self._ts_enclosing_registration_call(node) is not None,
+                        ),
+                    )
+                )
+            else:
+                found = self._ts_description_write(node)
+                if found is not None:
+                    recv, text, mode, via = found
+                    head = (_re.split(r"\?\.|->|::|\.", recv.strip()) or [""])[0]
+                    # A write through a loop variable over several tools
+                    # writes each of them.
+                    for alias in self._ts_resolve_aliases(recv, node.start_byte) or [None]:
+                        alias_head = (_re.split(r"\?\.|->|::|\.", alias) or [""])[0] if alias else ""
+                        facts.writes.append(
+                            DescriptionWrite(
+                                target=recv,
+                                text=text,
+                                mode=mode,
+                                via=via,
+                                line=line,
+                                condition=self._ts_enclosing_condition(node),
+                                enclosing=fn_name,
+                                enclosing_params=fn_params,
+                                start_byte=node.start_byte,
+                                text_expr=computed_expr(text),
+                                enclosing_class=fn_class,
+                                local_head=self.language == "go"
+                                and self._go_declared_locally(head, node),
+                                alias=alias,
+                                alias_local_head=bool(alias)
+                                and self.language == "go"
+                                and self._go_declared_locally(alias_head, node),
+                            )
+                        )
+                elif node.type in call_types:
+                    call = self._ts_call_site(node, fn_name, fn_params)
+                    if call is not None:
+                        choices = [
+                            (self._ts_resolve_aliases(arg, node.start_byte) or [arg])
+                            if self._TS_REFERENCE_RE.match(arg) or "[" in arg
+                            else [arg]
+                            for arg in call.args
+                        ]
+                        for callee in self._ts_resolve_callee(call.callee, node):
+                            for args in bounded_product(choices):
+                                facts.calls.append(
+                                    replace(call, callee=callee, enclosing_class=fn_class, args=args)
+                                )
+            for child in reversed(node.children):
+                stack.append((child, fn_name, fn_params, fn_class, cls))
+        facts.imports = scan_imports(self.language, self.source_code)
+        if self.language == "go":
+            facts.bound_names = self._go_package_names(root)
+        else:
+            facts.bound_names = scan_bound_names(self.language, self.source_code) | set(
+                facts.functions
+            )
+        facts.classes = scan_classes(self.source_code) | set(facts.methods)
+        facts.bases = scan_bases(self.language, self.source_code)
+        facts.classes |= set(facts.bases)
+        # Only module-level instances are visible everywhere (and to other
+        # files); calls through local ones were resolved above.
+        facts.instances = {
+            name: cls
+            for name, cls in scan_instances(self.source_code).items()
+            if self._ts_constructed_class(
+                (self._ts_scoped_binding(name, -1) or (False, None))[1]
+            )
+            == cls
+        }
+        return facts
+
+    _TS_CONSTRUCTION_RE = _re.compile(
+        r"^(?P<new>new\s+)?&?(?P<name>(?:[\w$]+(?:\.|::|\\))*(?P<last>[\w$]+))\s*(?:<[^>]*>\s*)?"
+        r"(?P<open>\(|\{|::new\s*\()"
+    )
+
+    def _ts_constructed_class(self, value: Optional[str]) -> Optional[str]:
+        """Class (or factory) that built ``value``: ``new Armer()``,
+        ``Armer()``, ``&Armer{}``, ``Armer::new()``, ``lib.NewArmer()`` or a
+        lowercase function of this file or an import (``makeArmer()``).
+        Factories are mapped to their class through ``FileFacts.factories``
+        here or in the file defining them. Keeps the qualifier
+        (``lib.NewArmer``) so the call resolves through the import."""
+        if not value or value.startswith(self._LOOP_VALUE_PREFIX):
+            return None
+        match = self._TS_CONSTRUCTION_RE.match(value.strip())
+        if not match:
+            return None
+        name = _re.sub(r"::|\\", ".", match.group("name"))
+        if name.endswith(".new") and "::" in match.group("name"):
+            name = name[: -len(".new")]
+        last = name.rsplit(".", 1)[-1]
+        if not (last[:1].isupper() or match.group("new") or last in self._ts_known_callables()):
+            return None
+        return name
+
+    def _ts_known_callables(self) -> Set[str]:
+        """Functions defined in this file and imported names."""
+        cache = getattr(self, "_ts_callables_cache", None)
+        root = getattr(self, "_last_root", None)
+        if cache is not None and cache[0] is root:
+            return cache[1]
+        names = set(scan_imports(self.language, self.source_code))
+        types = self._ts_scope_node_types()
+        stack = [root] if root is not None else []
+        while stack:
+            node = stack.pop()
+            if node.type in types:
+                name = self._ts_get_function_name(node)
+                if name:
+                    names.add(name)
+            stack.extend(node.children)
+        self._ts_callables_cache = (root, names)
+        return names
+
+    _TS_RETURN_RE = _re.compile(r"\breturn\b[ \t]*([^;\n]*)")
+
+    def _ts_returned_classes(self, node: "Node") -> List[str]:
+        """Classes a function may return: those its ``return new Armer()`` /
+        ``return &Armer{}`` (or an arrow function's ``() => new Armer()``)
+        build, plus its declared result type (``func NewArmer() *Armer``,
+        ``(): Armer``) when some return is not a construction, since a
+        cast (``new Evil() as any``) can make the declaration lie."""
+        body = node.child_by_field_name("body")
+        if body is None:
+            return []
+        body_text = self._ts_get_node_text(body)
+        if body_text.lstrip().startswith("{"):
+            returned = [m.group(1) for m in self._TS_RETURN_RE.finditer(body_text)]
+        else:
+            returned = [body_text]
+        found: List[str] = []
+        opaque = not returned
+        for value in returned:
+            match = self._TS_CONSTRUCTION_RE.match(value.strip())
+            last = match.group("last") if match else ""
+            if match and (last[:1].isupper() or match.group("new")):
+                found.append(last)
+            elif value.strip():
+                opaque = True
+        declared = node.child_by_field_name("result") or node.child_by_field_name("return_type")
+        if declared is not None and (opaque or not found):
+            name = _re.search(r"[A-Za-z_][\w.]*", self._ts_get_node_text(declared))
+            last = name.group(0).rsplit(".", 1)[-1] if name else ""
+            if last[:1].isupper():
+                found.append(last)
+        return list(dict.fromkeys(found))
+
+    def _go_receiver_type(self, node: "Node") -> Optional[str]:
+        receiver = node.child_by_field_name("receiver")
+        if receiver is None:
+            return None
+        # ``(a *Armer[T])``: the type, not its type parameters.
+        text = _re.sub(r"\[[^\]]*\]", "", self._ts_get_node_text(receiver))
+        names = _re.findall(r"[A-Za-z_]\w*", text)
+        return names[-1] if names else None
+
+    def _ts_resolve_callee(self, callee: str, node: "Node") -> List[str]:
+        """``h.arm`` as ``Armer.arm`` when ``h`` (a variable in scope, or a
+        ``this.h`` field of the enclosing class) holds an ``Armer``; as
+        ``arm`` when ``h`` is an object literal defining it."""
+        parts = [p for p in _re.split(r"\?\.|->|::|\.", strip_self_prefix(callee)) if p]
+        if len(parts) < 2:
+            return [callee]
+        method = parts[-1]
+        holder = parts[-2]
+        self_field = len(parts) == 2 and strip_self_prefix(callee) != callee
+        if len(parts) > 2 and not self_field:
+            return [callee]
+        if self_field:
+            classes = self._ts_field_classes(holder, node)
+            return [f"{cls}.{method}" for cls in classes] or [callee]
+        binding = self._ts_scoped_binding(holder, node.start_byte)
+        value = (binding[1] or "").strip() if binding else ""
+        cls = self._ts_constructed_class(value)
+        if cls:
+            return [f"{cls}.{method}"]
+        if value.startswith("{"):
+            for item in self._ts_literal_items(_balanced_prefix(value)) or []:
+                if _re.match(r"^(?:async\s+)?\*?" + _re.escape(method) + r"\s*\(", item):
+                    return [method]
+                entry = self._TS_LITERAL_ENTRY_RE.match(item)
+                if entry and entry.group(1) == method:
+                    target = (entry.group(2) or method).strip()
+                    return [target if self._TS_REFERENCE_RE.match(target) else method]
+        return [callee]
+
+    def _ts_field_classes(self, field_name: str, node: "Node") -> List[str]:
+        """Classes (or factories) ``this.<field_name>`` is set to anywhere in
+        the class enclosing ``node`` (any method may have run first)."""
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set()) | {"class"}
+        cur = node.parent
+        while cur is not None and cur.type not in class_types:
+            cur = cur.parent
+        if cur is None:
+            return []
+        text = self._ts_get_node_text(cur)
+        name = _re.escape(field_name)
+        found = []
+        for match in _re.finditer(
+            r"(?:(?:this|self|\$this)\s*(?:\.|->)\s*\$?" + name + r"|(?<![\w$.])" + name
+            + r"\s*(?::[^=;\n]+)?)\s*=(?![=>])\s*",
+            text,
+        ):
+            cls = self._ts_constructed_class(_scan_initializer(text, match.end()))
+            if cls:
+                found.append(cls)
+        return list(dict.fromkeys(found))
+
+    @staticmethod
+    def _ts_is_method(node: "Node", func_types: Set[str], class_types: Set[str]) -> bool:
+        """Whether the nearest enclosing function or class of ``node`` is a class."""
+        cur = node.parent
+        while cur is not None:
+            if cur.type in class_types:
+                return True
+            if cur.type in func_types and cur.type not in _TS_NON_FUNCTION_NODE_TYPES:
+                return False
+            cur = cur.parent
+        return False
+
+    _TS_IDENTIFIER_NODE_TYPES: ClassVar[Set[str]] = {
+        "identifier",
+        "property_identifier",
+        "simple_identifier",
+        "field_identifier",
+        "variable_name",
+        "name",
+    }
+
+    def _ts_module_level_binding(self, name: str) -> bool:
+        """Whether ``name`` appears outside every function of this file
+        (declared at module/package level or as a class member, with or
+        without an initializer), i.e. may be visible to other files."""
+        names = getattr(self, "_ts_module_level_names_cache", None)
+        if names is None:
+            names = set()
+            root = getattr(self, "_last_root", None)
+            skip = self.FUNCTION_NODE_TYPES.get(self.language, set()) | self._TS_FUNCTION_LITERAL_TYPES
+            stack = [root] if root is not None else []
+            while stack:
+                cur = stack.pop()
+                if cur.type in skip and cur.type not in _TS_NON_FUNCTION_NODE_TYPES:
+                    continue
+                if cur.type in self._TS_IDENTIFIER_NODE_TYPES:
+                    names.add(self._ts_get_node_text(cur).lstrip("$"))
+                stack.extend(cur.children)
+            self._ts_module_level_names_cache = names
+        return name.lstrip("$") in names
+
+    # -- Go scopes ------------------------------------------------------------
+
+    _GO_SCOPE_HEADER_TYPES: ClassVar[Set[str]] = {
+        "for_statement",
+        "if_statement",
+        "expression_switch_statement",
+        "type_switch_statement",
+    }
+
+    def _go_declared_names(self, node: "Node") -> Set[str]:
+        """Names a Go declaration-like node introduces."""
+        names: Set[str] = set()
+        if node.type == "short_var_declaration":
+            left = node.child_by_field_name("left")
+            if left is not None:
+                names.update(
+                    self._ts_get_node_text(c) for c in left.named_children if c.type == "identifier"
+                )
+        elif node.type in ("var_declaration", "const_declaration", "var_spec_list"):
+            for child in node.named_children:
+                names |= self._go_declared_names(child)
+        elif node.type in ("var_spec", "const_spec"):
+            names.update(
+                self._ts_get_node_text(c) for c in node.named_children if c.type == "identifier"
+            )
+        elif node.type == "range_clause":
+            left = node.child_by_field_name("left")
+            if left is not None and ":=" in self.source_bytes[
+                left.end_byte : node.end_byte
+            ].decode("utf-8", "replace"):
+                names.update(
+                    self._ts_get_node_text(c) for c in left.named_children if c.type == "identifier"
+                )
+        elif node.type == "for_clause":
+            init = node.child_by_field_name("initializer")
+            if init is not None:
+                names |= self._go_declared_names(init)
+        elif node.type == "parameter_list":
+            for param in node.named_children:
+                names.update(
+                    self._ts_get_node_text(c) for c in param.named_children if c.type == "identifier"
+                )
+        return names
+
+    def _go_declared_locally(self, name: str, node: "Node") -> bool:
+        """Whether ``name`` at ``node`` refers to a local or parameter (declared
+        earlier in an enclosing block, statement header or function), not a
+        package-level variable."""
+        if not name:
+            return False
+        cur = node
+        while cur.parent is not None:
+            parent = cur.parent
+            if parent.type in ("function_declaration", "method_declaration", "func_literal"):
+                for child in parent.children:
+                    if child.type == "parameter_list" and name in self._go_declared_names(child):
+                        return True
+                if parent.type != "func_literal":
+                    return False
+            elif parent.type in ("block", "statement_list") or parent.type in self._GO_SCOPE_HEADER_TYPES:
+                for sibling in parent.named_children:
+                    if sibling.start_byte >= cur.start_byte:
+                        break
+                    if name in self._go_declared_names(sibling):
+                        return True
+            cur = parent
+        return False
+
+    def _go_package_names(self, root: "Node") -> Set[str]:
+        """Names declared at Go package level in this file."""
+        names: Set[str] = set()
+        for child in root.named_children:
+            if child.type in ("var_declaration", "const_declaration"):
+                names |= self._go_declared_names(child)
+            elif child.type == "function_declaration":
+                name_node = child.child_by_field_name("name")
+                if name_node is not None:
+                    names.add(self._ts_get_node_text(name_node))
+            elif child.type == "type_declaration":
+                for spec in child.named_children:
+                    name_node = spec.child_by_field_name("name")
+                    if name_node is not None:
+                        names.add(self._ts_get_node_text(name_node))
+        return names
+
+    _TS_REGISTRATION_CALLEE_RE = _re.compile(
+        r"(?i)(?:add|register)_?tools?$|(?:^|[.:>])tools?$|ToolSpecification$|ToolSpecification\.builder"
+    )
+    _TS_ARGUMENT_WRAPPER_TYPES: ClassVar[Set[str]] = {
+        "unary_expression",
+        "reference_expression",
+        "argument_list",
+        "arguments",
+        "value_argument",
+        "value_arguments",
+        "argument",
+        "parenthesized_expression",
+    }
+
+    _TS_SERVER_CONSTRUCTION_RE = _re.compile(
+        r"new\s+[\w.]*Server\b|\b(?:NewServer|NewMCPServer)\s*\(|\bFastMCP\s*\("
+        r"|McpServer\s*\.\s*(?:sync|async)\b|Server::new\b|ServerBuilder\b|\bServer\s*\("
+    )
+
+    def _ts_registered_on_local_server(self, node: "Node") -> bool:
+        """Whether ``node`` is passed straight to a registration on a server
+        constructed in this file (a separate server, not a swap of a tool
+        registered elsewhere)."""
+        call = self._ts_enclosing_registration_call(node)
+        if call is None:
+            return False
+        args = self._ts_call_arguments_node(call) or call.child_by_field_name("arguments")
+        candidates = []
+        receiver = self._ts_registration_receiver(call)
+        if receiver:
+            candidates.append(receiver)
+        if args is not None:
+            first = next((c for c in args.named_children if c.type != "comment"), None)
+            if first is not None and first.type == "identifier":
+                candidates.append(self._ts_get_node_text(first))
+        return any(self._ts_constructs_server(name, call) for name in candidates)
+
+    def _ts_enclosing_registration_call(self, node: "Node") -> Optional["Node"]:
+        """The registration call ``node`` is passed to directly, if any.
+
+        Java specifications (``new SyncToolSpecification(tool, h)`` and
+        ``SyncToolSpecification.builder().tool(t).callHandler(h).build()``)
+        are followed out to the ``addTool``/``tools`` call they are passed to.
+        """
+        call_types = (
+            self._TS_CALL_NODE_TYPES | self._TS_EXTRA_CALL_NODE_TYPES | {"object_creation_expression"}
+        )
+        cur: Optional["Node"] = node
+        for hop in range(3):
+            parent = cur.parent
+            if hop:
+                # Builder chain: the spec is the receiver of ``.callHandler(...)``
+                # / ``.build()`` rather than an argument.
+                for _ in range(16):
+                    if parent is None or parent.type not in call_types:
+                        break
+                    obj = parent.child_by_field_name("object")
+                    if obj is None or not _is_same_ts_node(obj, cur):
+                        break
+                    cur, parent = parent, parent.parent
+            while parent is not None and parent.type in self._TS_ARGUMENT_WRAPPER_TYPES:
+                parent = parent.parent
+            if parent is None or parent.type not in call_types:
+                return None
+            args = self._ts_call_arguments_node(parent) or parent.child_by_field_name("arguments")
+            if args is None or not (args.start_byte <= cur.start_byte < args.end_byte):
+                return None
+            callee = self.source_bytes[parent.start_byte : args.start_byte].decode(
+                "utf-8", "replace"
+            )
+            callee = _re.sub(r"<.*>$", "", _re.sub(r"^\s*new\s+", "", callee).strip()).strip()
+            if not self._TS_REGISTRATION_CALLEE_RE.search(callee):
+                return None
+            if "ToolSpecification" not in callee:
+                return parent
+            cur = parent
+        return None
+
+    # Nodes that bind one name to one value. Function/class declarations are
+    # excluded: their text spans whole bodies, comments included.
+    _TS_BINDING_NODE_TYPES: ClassVar[Set[str]] = {
+        "variable_declarator",
+        "short_var_declaration",
+        "var_spec",
+        "assignment",
+        "assignment_expression",
+        "assignment_statement",
+        "property_declaration",
+        "let_declaration",
+    }
+
+    # Function values whose bodies are not part of the binding itself.
+    _TS_FUNCTION_LITERAL_TYPES: ClassVar[Set[str]] = {
+        "func_literal",
+        "arrow_function",
+        "function_expression",
+        "function",
+        "lambda_expression",
+        "lambda_literal",
+        "anonymous_function",
+        "anonymous_function_creation_expression",
+        "closure_expression",
+        "lambda",
+    }
+
+    def _ts_constructs_server(self, name: str, at: "Node") -> bool:
+        """Whether a declaration visible at ``at`` binds ``name`` to a new MCP server.
+
+        Only bindings at module level or in a function enclosing ``at``
+        count. Comments and function bodies inside a binding are ignored, so
+        ``var arm = func(server) { // server := NewServer() ... }`` does not.
+        """
+        scope = self._ts_function_span(at)
+        cache = getattr(self, "_ts_server_construction_cache", None)
+        if cache is None:
+            cache = self._ts_server_construction_cache = {}
+        key = (name, scope)
+        if key in cache:
+            return cache[key]
+        root = getattr(self, "_last_root", None) or self._ts_parse_root()
+        pattern = _re.compile(
+            r"(?<![\w$.])" + _re.escape(name) + r"\s*(?::[^=\n]*)?(?::=|=)(?!=)\s*(?P<value>[^\n]*)"
+        )
+        skip = (
+            self.FUNCTION_NODE_TYPES.get(self.language, set())
+            | self._TS_FUNCTION_LITERAL_TYPES
+            | {"comment", "line_comment", "block_comment", "multiline_comment"}
+        )
+        found = False
+        stack = [root] if root is not None else []
+        while stack and not found:
+            cur = stack.pop()
+            if cur.type in self._TS_BINDING_NODE_TYPES:
+                span = self._ts_function_span(cur)
+                if span is None or span[0] <= at.start_byte < span[1]:
+                    match = pattern.search(self._ts_text_skipping(cur, skip))
+                    if match and self._TS_SERVER_CONSTRUCTION_RE.search(match.group("value")):
+                        found = True
+                        break
+            if cur.type not in ("comment", "line_comment", "block_comment"):
+                stack.extend(cur.children)
+        cache[key] = found
+        return found
+
+    def _ts_text_skipping(self, node: "Node", skip: Set[str]) -> str:
+        """Text of ``node`` with descendants of the ``skip`` types blanked out."""
+        pieces: List[str] = []
+        pos = node.start_byte
+        stack = list(reversed(node.children))
+        while stack:
+            cur = stack.pop()
+            if cur.type in skip:
+                pieces.append(self.source_bytes[pos : cur.start_byte].decode("utf-8", "replace"))
+                pieces.append(" ")
+                pos = cur.end_byte
+                continue
+            stack.extend(reversed(cur.children))
+        pieces.append(self.source_bytes[pos : node.end_byte].decode("utf-8", "replace"))
+        return "".join(pieces)
+
+    def _ts_is_default_export(self, node: "Node") -> bool:
+        """``export default function (t) {...}`` / ``module.exports = (t) => ...``."""
+        parent = node.parent
+        while parent is not None and parent.type == "parenthesized_expression":
+            parent = parent.parent
+        if parent is None:
+            return False
+        if parent.type == "export_statement":
+            return any(child.type == "default" for child in parent.children)
+        if parent.type == "assignment_expression":
+            left = parent.child_by_field_name("left")
+            return left is not None and self._ts_get_node_text(left).strip() == "module.exports"
+        return False
+
+    def _ts_param_names(self, node: "Node") -> "tuple[str, ...]":
+        names = []
+        for param in self._ts_extract_parameters(node):
+            match = _re.search(r"[\$\w]+$", (param.get("name") or "").strip())
+            if match:
+                names.append(match.group(0))
+        return tuple(names)
+
+    # Java MCP SDK: every capability is a ``Sync/Async…Specification`` pairing
+    # a definition (``new Tool(...)`` / ``Tool.builder()...``) with a handler.
+    _JAVA_SPEC_RE = _re.compile(
+        r"\b(?:Sync|Async)(Tool|Prompt|ResourceTemplate|Resource)Specification\b"
+    )
+    _JAVA_SPEC_CAPABILITY: ClassVar[Dict[str, str]] = {
+        "Tool": "tool",
+        "Prompt": "prompt",
+        "Resource": "resource",
+        "ResourceTemplate": "resource",
+    }
+    _JAVA_BUILDER_HANDLER_METHODS: ClassVar[Set[str]] = {
+        "callHandler",
+        "call",
+        "promptHandler",
+        "readHandler",
+    }
+    _JAVA_BUILDER_DEFINITION_METHODS: ClassVar[Set[str]] = {
+        "tool",
+        "prompt",
+        "resource",
+        "resourceTemplate",
+    }
+
+    def _java_find_spec_registrations(self, root: "Node") -> List[Dict[str, Any]]:
+        """Registrations built as Java SDK capability specifications.
+
+        Covers ``new McpServerFeatures.SyncToolSpecification(tool, handler)``
+        and ``SyncToolSpecification.builder().tool(tool).callHandler(h).build()``
+        (plus the prompt/resource equivalents), however the specification is
+        later handed to the server (``addTool``, ``.tools(...)``, a list).
+        """
+        regs: List[Dict[str, Any]] = []
+        stack = [root]
+        while stack:
+            node = stack.pop()
+            stack.extend(reversed(node.children))
+            definition: Optional["Node"] = None
+            handler: Optional["Node"] = None
+            if node.type == "object_creation_expression":
+                type_node = node.child_by_field_name("type")
+                match = self._JAVA_SPEC_RE.search(
+                    self._ts_get_node_text(type_node) if type_node is not None else ""
+                )
+                args = node.child_by_field_name("arguments")
+                items = (
+                    [c for c in args.named_children if c.type != "comment"]
+                    if args is not None
+                    else []
+                )
+                if match is None or len(items) < 2:
+                    continue
+                definition, handler = items[0], items[-1]
+            elif node.type == "method_invocation":
+                name_node = node.child_by_field_name("name")
+                obj = node.child_by_field_name("object")
+                if (
+                    name_node is None
+                    or obj is None
+                    or self._ts_get_node_text(name_node) not in self._JAVA_BUILDER_HANDLER_METHODS
+                ):
+                    continue
+                match = self._JAVA_SPEC_RE.search(self._ts_get_node_text(obj))
+                args = node.child_by_field_name("arguments")
+                if match is None or args is None or not args.named_children:
+                    continue
+                handler = args.named_children[0]
+                definition = self._java_builder_definition(node)
+            else:
+                continue
+
+            kind = match.group(1)
+            name, description = self._java_definition_info(definition, kind)
+            reg: Dict[str, Any] = {
+                "capability": self._JAVA_SPEC_CAPABILITY[kind],
+                "name": name,
+                "handler_node": None,
+                "handler_name": None,
+                "description": description,
+                "arg_refs": [],
+                "call_node": node,
+                "template_subtype": "template" if kind == "ResourceTemplate" else None,
+            }
+            if definition is not None and definition.type == "identifier":
+                reg["arg_refs"].append(self._ts_get_node_text(definition))
+            if handler.type == "lambda_expression":
+                reg["handler_node"] = handler
+            elif handler.type == "method_reference":
+                reg["handler_name"] = self._ts_get_node_text(handler).rsplit("::", 1)[-1].strip()
+            elif handler.type == "identifier":
+                reg["handler_name"] = self._ts_get_node_text(handler)
+            else:
+                continue
+            regs.append(reg)
+        return regs
+
+    def _java_builder_definition(self, node: "Node") -> Optional["Node"]:
+        """The ``.tool(X)`` / ``.prompt(X)`` argument in a specification builder chain."""
+        cur: Optional["Node"] = node
+        while cur is not None and cur.type == "method_invocation":
+            name_node = cur.child_by_field_name("name")
+            if (
+                name_node is not None
+                and self._ts_get_node_text(name_node) in self._JAVA_BUILDER_DEFINITION_METHODS
+            ):
+                args = cur.child_by_field_name("arguments")
+                if args is not None and args.named_children:
+                    return args.named_children[0]
+            cur = cur.child_by_field_name("object")
+        return None
+
+    def _java_definition_info(
+        self, definition: Optional["Node"], kind: str
+    ) -> "tuple[Optional[str], Optional[str]]":
+        """``(name, description)`` of a Java SDK capability definition."""
+        if definition is None:
+            return None, None
+        text = self._ts_get_node_text(definition)
+        if definition.type == "identifier":
+            text = self._ts_binding_value_text(text) or ""
+        name = _re.search(r"""\.name\(\s*"((?:\\.|[^"\\])*)"\s*\)""", text)
+        desc = _re.search(r"""\.description\(\s*"((?:\\.|[^"\\])*)"\s*\)""", text)
+        if name or desc:
+            return (name.group(1) if name else None), (desc.group(1) if desc else None)
+        strings = [m.group(2) for m in self._TS_ANY_STRING_RE.finditer(text)]
+        # Resource records lead with the URI: ``new Resource(uri, name, description, ...)``.
+        offset = 1 if kind.startswith("Resource") else 0
+        name_value = strings[offset] if len(strings) > offset else None
+        desc_value = strings[offset + 1] if len(strings) > offset + 1 else None
+        return name_value, desc_value
+
+    _TS_LABELED_ARGUMENT_TYPES: ClassVar[Set[str]] = {
+        "value_argument",
+        "argument",
+        "keyword_argument",
+        "pair",
+    }
+
+    def _ts_call_site(
+        self, node: "Node", fn_name: Optional[str], fn_params: "tuple[str, ...]"
+    ) -> Optional[CallSite]:
+        args_node = self._ts_call_arguments_node(node)
+        if args_node is None:
+            return None
+        callee = self.source_bytes[node.start_byte : args_node.start_byte].decode(
+            "utf-8", "replace"
+        )
+        callee = _re.sub(r"^\s*new\s+", "", callee).strip().rstrip("?.!").strip()
+        # ``name.method`` or, on a fresh object, ``Armer().method``.
+        if not callee or not _re.fullmatch(
+            r"(?:[\$@\w.:\\>\-?]+\([^()]*\)\s*(?:\.|\?\.|->)\s*)?[\$@\w.:\\>\-?]+", callee
+        ):
+            return None
+        args: List[str] = []
+        values: List[Optional[str]] = []
+        kwargs: List["tuple[str, str, Optional[str]]"] = []
+        for child in args_node.named_children:
+            if child.type == "comment":
+                continue
+            label: Optional[str] = None
+            value_node = child
+            if child.type in self._TS_LABELED_ARGUMENT_TYPES:
+                named = [c for c in child.named_children if c.type != "comment"]
+                if len(named) >= 2 and named[0].type in (
+                    "identifier",
+                    "simple_identifier",
+                    "name",
+                    "property_identifier",
+                    "hash_key_symbol",
+                    "name_colon",
+                ):
+                    label = self._ts_get_node_text(named[0]).rstrip(":").strip()
+                    value_node = named[-1]
+                elif len(named) == 1:
+                    value_node = named[0]
+            text = self._ts_get_node_text(value_node).strip()
+            literal = self._ts_extract_string_literal_text(value_node)
+            if label:
+                kwargs.append((label, text, literal))
+            else:
+                args.append(text)
+                values.append(literal)
+        return CallSite(
+            callee=callee,
+            args=tuple(args),
+            values=tuple(values),
+            kwargs=tuple(kwargs),
+            line=node.start_point[0] + 1,
+            condition=self._ts_enclosing_condition(node),
+            enclosing=fn_name,
+            enclosing_params=fn_params,
+            start_byte=node.start_byte,
+        )
+
+    def _ts_description_write(
+        self, node: "Node"
+    ) -> Optional["tuple[str, str, str, str]"]:
+        """Return ``(receiver, text, mode, via)`` for a description write."""
+        if "assignment" in node.type and "pattern" not in node.type:
+            named = node.named_children
+            left = node.child_by_field_name("left") or (named[0] if named else None)
+            right = node.child_by_field_name("right") or (
+                named[-1] if len(named) >= 2 else None
+            )
+            if left is None or right is None or _is_same_ts_node(left, right):
+                return None
+            left_text = self._ts_get_node_text(left).strip()
+            match = self._TS_DESC_FIELD_RE.match(left_text) or self._TS_DESC_SUBSCRIPT_RE.match(
+                left_text
+            )
+            if not match:
+                return None
+            between = self.source_bytes[left.end_byte : right.start_byte].decode(
+                "utf-8", "replace"
+            )
+            mode = "append" if ("+=" in between or ".=" in between) else "replace"
+            return (
+                match.group("recv"),
+                self._ts_description_value_text(right),
+                mode,
+                "description field write",
+            )
+        if node.type in self._TS_CALL_NODE_TYPES:
+            text = self._ts_get_node_text(node)
+            obj = self._TS_OBJECT_WRITE_RE.match(text)
+            if obj:
+                return self._ts_object_description_write(obj, text, node.start_byte)
+            match = self._TS_DESC_METHOD_RE.match(text)
+            if not match:
+                return None
+            args = text[match.end() :]
+            method = match.group("method")
+            if method == "update":
+                value = self._ts_description_entry(self._ts_call_arguments(args)[:1], node.start_byte)
+                if value is None:
+                    return None
+                return match.group("recv"), self._ts_value_text(value), "replace", "update({description})"
+            literal = self._TS_ANY_STRING_RE.match(args.lstrip())
+            if literal:
+                value = literal.group(2)
+            else:
+                expr = _re.split(r"[,})]", args, maxsplit=1)[0].strip()
+                value = f"<computed at runtime: {expr[:300]}>"
+            via = "update({description})" if method == "update" else f"{method}()"
+            return match.group("recv"), value, "replace", via
+        return None
+
+    def _ts_object_description_write(
+        self, match: "_re.Match[str]", text: str, start_byte: int
+    ) -> Optional["tuple[str, str, str, str]"]:
+        fn = _re.sub(r"\s+", "", match.group("fn"))
+        rest = text[match.end() :]
+        if fn == "Object.assign":
+            value = self._ts_description_entry(self._ts_call_arguments(rest), start_byte)
+            if value is None:
+                return None
+            return match.group("recv"), self._ts_value_text(value), "replace", f"{fn}()"
+        else:
+            key = self._TS_DESCRIPTION_KEY_RE.match(rest)
+            if not key:
+                return None
+            rest = rest[key.end() :]
+            if fn.endswith("defineProperty"):
+                value = _re.search(r"\bvalue\s*:\s*", rest)
+                if not value:
+                    return None
+                rest = rest[value.end() :]
+        literal = self._TS_ANY_STRING_RE.match(rest.lstrip())
+        if literal:
+            value_text = literal.group(2)
+        else:
+            expr = _re.split(r"[,})]", rest, maxsplit=1)[0].strip()
+            value_text = f"<computed at runtime: {expr[:300]}>"
+        return match.group("recv"), value_text, "replace", f"{fn}()"
+
+    def _ts_call_arguments(self, rest: str) -> List[str]:
+        """Top-level arguments in ``rest``, the text after a call's ``(``."""
+        call = _balanced_prefix("(" + rest)
+        return self._ts_literal_items("[" + call[1:-1] + "]") or [] if call else []
+
+    def _ts_description_entry(
+        self, objects: List[str], start_byte: int, _depth: int = 0
+    ) -> Optional[str]:
+        """Value of a top-level ``description`` key in the object literals
+        ``objects`` (the last one wins, as in ``Object.assign``), following
+        variables (``Object.assign(t, patch)``) and spreads (``{...patch}``)
+        bound in scope at ``start_byte`` to object literals."""
+        found = None
+        for obj in objects:
+            obj = obj.strip()
+            if not obj.startswith("{"):
+                if _depth >= 3 or not _re.fullmatch(r"[\$\w]+", obj):
+                    continue
+                binding = self._ts_scoped_binding(obj, start_byte)
+                value = (binding[1] or "").strip() if binding else ""
+                if not value.startswith("{"):
+                    continue
+                obj = _balanced_prefix(value) or ""
+            for item in self._ts_literal_items(obj) or []:
+                if item.startswith("..."):
+                    spread = self._ts_description_entry([item[3:]], start_byte, _depth + 1)
+                    found = spread if spread is not None else found
+                    continue
+                entry = self._TS_LITERAL_ENTRY_RE.match(item)
+                if entry and entry.group(1).lower() == "description":
+                    found = (entry.group(2) or entry.group(1)).strip()
+        return found
+
+    def _ts_value_text(self, value: str) -> str:
+        literal = self._TS_ANY_STRING_RE.fullmatch(value.strip())
+        if literal:
+            return literal.group(2)
+        return f"<computed at runtime: {value.strip()[:300]}>"
+
+    # -- tool aliases ---------------------------------------------------------
+
+    _TS_REFERENCE_RE = _re.compile(r"^[\$\w]+(?:(?:\.|->|\?\.)[\$\w]+)*$")
+
+    _MAX_ALIASES = 8
+    # Marks a loop variable's value: the iterable it takes elements from.
+    _LOOP_VALUE_PREFIX = "\0for "
+
+    def _ts_resolve_alias(self, recv: str, start_byte: int) -> Optional[str]:
+        """The single expression ``recv`` aliases, ``None`` when it is not an
+        alias or may be one of several."""
+        aliases = self._ts_resolve_aliases(recv, start_byte)
+        return aliases[0] if len(aliases) == 1 else None
+
+    def _ts_resolve_aliases(self, recv: str, start_byte: int) -> List[str]:
+        """What ``recv`` may refer to once aliases are replaced.
+
+        ``const alias = factTool`` / ``t := factTool`` (references),
+        ``tools[0]`` with ``tools = [factTool]``, ``registry.fact`` with
+        ``registry = { fact: factTool }`` (literal containers) and loop
+        variables over literal lists (``for (const t of [a, b])``,
+        ``for _, t := range []*mcp.Tool{a, b}``). Bindings are looked up in
+        the scopes enclosing ``start_byte`` only. Empty when nothing was
+        replaced.
+        """
+        original = strip_self_prefix(recv)
+        frontier, seen, results = [(original, 0)], set(), []
+        while frontier and len(results) < self._MAX_ALIASES:
+            current, depth = frontier.pop(0)
+            if current in seen:
+                continue
+            seen.add(current)
+            step = self._ts_alias_step(current, start_byte) if depth < 6 else []
+            if step:
+                frontier.extend((value, depth + 1) for value in step)
+            elif current != original:
+                results.append(current)
+        return results
+
+    def _ts_alias_step(self, current: str, start_byte: int) -> List[str]:
+        parts = [p for p in _re.split(r"\?\.|->|::|\.", current) if p]
+        if not parts:
+            return []
+        head = _re.fullmatch(r"([\$\w]+)((?:\[[^\]]+\])*)", parts[0])
+        if head is None:
+            return []
+        base, subscripts = head.group(1), head.group(2)
+        values = []
+        for value in self._ts_scoped_values(base, start_byte):
+            if value.startswith(self._LOOP_VALUE_PREFIX):
+                values.extend(
+                    self._ts_iterable_elements(value[len(self._LOOP_VALUE_PREFIX) :], start_byte)
+                )
+            else:
+                values.append(value)
+        out: List[str] = []
+        for value in values:
+            value = value.strip().rstrip(";").strip().lstrip("&*").strip()
+            rest = parts[1:]
+            for key in _re.findall(r"\[([^\]]+)\]", subscripts):
+                value = self._ts_literal_member(value, key.strip())
+                if value is None:
+                    break
+            if value is None:
+                continue
+            while rest and value.startswith("{"):
+                member = self._ts_literal_member(value, rest[0])
+                if member is None:
+                    break
+                value, rest = member, rest[1:]
+            if self._TS_REFERENCE_RE.match(value) and value != base:
+                out.append(".".join([value, *rest]))
+        return out
+
+    def _ts_iterable_elements(self, expr: str, start_byte: int, _depth: int = 0) -> List[str]:
+        """Elements of a literal list (or a variable bound to one)."""
+        expr = expr.strip()
+        go_composite = _re.match(r"^\[[^\]]*\][\w.*&\[\]]*\s*(?=\{)", expr)
+        if go_composite:
+            body = _balanced_prefix(expr[go_composite.end() :])
+            literal = "[" + body[1:-1] + "]" if body else ""
+        elif expr.startswith("["):
+            literal = _balanced_prefix(expr)
+        else:
+            name = _re.match(r"^[\$\w]+(?![\w$.(\[])", expr)
+            binding = self._ts_scoped_binding(name.group(0), start_byte) if name and _depth < 3 else None
+            if binding is None or not binding[1] or binding[1].startswith(self._LOOP_VALUE_PREFIX):
+                return []
+            return self._ts_iterable_elements(binding[1], start_byte, _depth + 1)
+        items = self._ts_literal_items(literal) or []
+        return [item for item in items if not item.startswith("...")]
+
+    @staticmethod
+    def _ts_literal_items(literal: str) -> Optional[List[str]]:
+        """Top-level items of an array or object literal."""
+        literal = literal.strip()
+        if not literal or literal[0] not in "[{" or literal[-1] not in "]}":
+            return None
+        items: List[str] = []
+        depth, quote, current = 0, None, []
+        body = literal[1:-1]
+        for i, c in enumerate(body):
+            if quote:
+                if c == quote and body[i - 1] != "\\":
+                    quote = None
+            elif c in "\"'`":
+                quote = c
+            elif c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            elif c == "," and depth == 0:
+                items.append("".join(current))
+                current = []
+                continue
+            current.append(c)
+        items.append("".join(current))
+        return [item.strip() for item in items if item.strip()]
+
+    _TS_LITERAL_ENTRY_RE = _re.compile(r"""^["'`]?([\$\w]+)["'`]?\s*(?::\s*(.+))?$""", _re.DOTALL)
+
+    @classmethod
+    def _ts_literal_member(cls, literal: str, key: str) -> Optional[str]:
+        """Element ``key`` of an array literal or entry of an object literal."""
+        items = cls._ts_literal_items(literal)
+        if items is None:
+            return None
+        if literal.strip()[0] == "[":
+            return items[int(key)] if key.isdigit() and int(key) < len(items) else None
+        key = key.strip("\"'`")
+        for item in items:
+            entry = cls._TS_LITERAL_ENTRY_RE.match(item)
+            if entry and entry.group(1) == key:
+                return (entry.group(2) or key).strip()
+        return None
+
+    # -- scoped bindings ------------------------------------------------------
+
+    def _ts_scope_node_types(self) -> Set[str]:
+        return (
+            self.FUNCTION_NODE_TYPES.get(self.language, set()) - _TS_NON_FUNCTION_NODE_TYPES
+        ) | self._TS_FUNCTION_LITERAL_TYPES
+
+    def _ts_enclosing_scopes(self, start_byte: int) -> List["Node"]:
+        """Functions enclosing ``start_byte``, innermost first."""
+        root = getattr(self, "_last_root", None)
+        if root is None or start_byte < 0:
+            return []
+        types = self._ts_scope_node_types()
+        node = root.descendant_for_byte_range(start_byte, start_byte)
+        scopes = []
+        while node is not None:
+            if node.type in types and node.is_named:
+                scopes.append(node)
+            node = node.parent
+        return scopes
+
+    # Binding forms, each with the bound name in group ``name``. All names
+    # are indexed in one pass per form (per-name scans are quadratic).
+    _TS_ASSIGNMENT_BINDING_RE = _re.compile(
+        r"(?<![\w$.])(?P<name>[\$\w]+)(?![\w$])\s*(?::\s*[^=\n;]{1,80}?)?\s*(?::=|=)(?![=>~])\s*"
+    )
+    _GO_FIRST_RESULT_BINDING_RE = _re.compile(
+        # ``h, err := NewArmer()``: the first result.
+        r"(?<![\w$.,])(?<!,\s)(?P<name>[\w$]+)(?:\s*,\s*[\w$]+)+\s*:?=(?!=)\s*"
+    )
+    _TS_LOOP_BINDING_RE = _re.compile(
+        r"\b(?:const|let|var|val)\s+(?P<name>[\$\w]+)\s+(?:of|in)\s+"
+    )
+    _TS_CATCH_BINDING_RE = _re.compile(r"\bcatch\s*\(\s*(?P<name>[\$\w]+)")
+    _TS_DESTRUCTURING_BINDING_RE = _re.compile(
+        r"\b(?:const|let|var|val)\s*(?P<pattern>[\[{][^=;\[\]{}]{0,400}[\]}])\s*="
+    )
+
+    def _ts_bindings(self, name: str) -> "List[tuple[int, Optional[tuple[int, int]], Optional[str]]]":
+        """``(byte offset, owning function span, value)`` of every binding of
+        ``name`` in this file, in source order. ``value`` is ``None`` when
+        unknown and starts with ``_LOOP_VALUE_PREFIX`` for loop variables."""
+        return self._ts_binding_index().get(name, [])
+
+    def _ts_binding_index(
+        self,
+    ) -> "Dict[str, List[tuple[int, Optional[tuple[int, int]], Optional[str]]]]":
+        root = getattr(self, "_last_root", None)
+        cache = getattr(self, "_ts_binding_index_cache", None)
+        if cache is not None and cache[0] is root:
+            return cache[1]
+        src = self.source_code
+        found: "List[tuple[int, str, Optional[str]]]" = []
+        for match in self._TS_ASSIGNMENT_BINDING_RE.finditer(src):
+            value = _scan_initializer(src, match.end())
+            if self.language == "go" and value.startswith("range "):
+                value = self._LOOP_VALUE_PREFIX + value[len("range ") :]
+            found.append((match.start(), match.group("name"), value))
+        if self.language == "go":
+            for match in self._GO_FIRST_RESULT_BINDING_RE.finditer(src):
+                found.append((match.start(), match.group("name"), _scan_initializer(src, match.end())))
+        for match in self._TS_LOOP_BINDING_RE.finditer(src):
+            value = self._LOOP_VALUE_PREFIX + _scan_initializer(src, match.end())
+            found.append((match.start(), match.group("name"), value))
+        for match in self._TS_CATCH_BINDING_RE.finditer(src):
+            found.append((match.start(), match.group("name"), None))
+        for match in self._TS_DESTRUCTURING_BINDING_RE.finditer(src):
+            for name in _re.findall(r"(?<![\w$.])[\$A-Za-z_][\w$]*(?![\w$]*\s*:)", match.group("pattern")):
+                found.append((match.start(), name, None))
+        found.sort(key=lambda entry: entry[0])
+        index: "Dict[str, List[tuple[int, Optional[tuple[int, int]], Optional[str]]]]" = {}
+        ascii_only = len(self.source_bytes) == len(src)
+        char_pos = byte_pos = 0
+        for pos, name, value in found:
+            if ascii_only:
+                offset = pos
+            else:
+                byte_pos += len(src[char_pos:pos].encode("utf-8"))
+                char_pos = pos
+                offset = byte_pos
+            scopes = self._ts_enclosing_scopes(offset)
+            owner = (scopes[0].start_byte, scopes[0].end_byte) if scopes else None
+            index.setdefault(name, []).append((offset, owner, value))
+        self._ts_binding_index_cache = (root, index)
+        return index
+
+    def _ts_scoped_binding(
+        self, name: str, start_byte: int
+    ) -> "Optional[tuple[bool, Optional[str]]]":
+        """``(local, value)`` of the binding of ``name`` visible at
+        ``start_byte``: the innermost enclosing function's parameter or
+        variable, else a module-level variable (never another function's
+        local). ``value`` is ``None`` when unknown; ``None`` when unbound."""
+        if not _re.fullmatch(r"[\$\w]+", name):
+            return None
+        bindings = self._ts_bindings(name)
+        for scope in self._ts_enclosing_scopes(start_byte):
+            if name in self._ts_param_names(scope):
+                return True, None
+            span = (scope.start_byte, scope.end_byte)
+            own = [entry for entry in bindings if entry[1] == span]
+            if own:
+                return True, self._ts_visible_value(own, start_byte)
+        module = [entry for entry in bindings if entry[1] is None]
+        if module:
+            return False, self._ts_visible_value(module, start_byte)
+        return None
+
+    def _ts_scoped_values(self, name: str, start_byte: int) -> List[str]:
+        """Known values ``name`` may hold at ``start_byte``: as
+        ``_ts_scoped_binding``, except that a module-level variable used
+        inside a function may hold any value assigned to it (the function
+        can run after any of the assignments)."""
+        binding = self._ts_scoped_binding(name, start_byte)
+        if binding is None or not binding[1]:
+            return []
+        local, value = binding
+        if local or not self._ts_enclosing_scopes(start_byte):
+            return [value]
+        values = [entry[2] for entry in self._ts_bindings(name) if entry[1] is None and entry[2]]
+        return list(dict.fromkeys(values))
+
+    @staticmethod
+    def _ts_visible_value(
+        entries: "List[tuple[int, Optional[tuple[int, int]], Optional[str]]]", start_byte: int
+    ) -> Optional[str]:
+        """The value assigned last before ``start_byte`` (the last one for a
+        use from another file, the first for a use before any)."""
+        if start_byte < 0:
+            return entries[-1][2]
+        before = [entry for entry in entries if entry[0] < start_byte]
+        return (before[-1] if before else entries[0])[2]
+
+    _TS_TOOL_CTOR_RE = _re.compile(
+        r"^(?:new\s+)?\\?(?:\w+(?:\.|::|\\))*Tool\s*(?:::new\s*|\.define\s*)?[\(\{]"
+    )
+    _TS_TOOL_BUILDER_RE = _re.compile(r"^(?:[\w]+\.)*Tool\s*\.\s*builder\s*\(\s*\)")
+    _TS_TOOL_CTOR_NODE_TYPES: ClassVar[Set[str]] = {
+        "method_invocation",
+        "object_creation_expression",
+        "new_expression",
+        "call_expression",
+        "call",
+        "struct_expression",
+        "composite_literal",
+    }
+
+    def _ts_tool_constructor(self, node: "Node") -> Optional["tuple[str, str]"]:
+        """``(name, description)`` for a tool object built in code.
+
+        Matches ``new McpSchema.Tool("x", "desc", ...)`` (Java),
+        ``Tool::new("x", "desc")`` / ``Tool { name, description }`` (Rust),
+        ``&mcp.Tool{Name: ..., Description: ...}`` (Go),
+        ``new Tool { Name = ..., Description = ... }`` (C#) and
+        ``Tool(name = ..., description = ...)`` (Kotlin, Swift, PHP).
+        """
+        if node.type not in self._TS_TOOL_CTOR_NODE_TYPES:
+            return None
+        text = self._ts_get_node_text(node)
+        builder = self._TS_TOOL_BUILDER_RE.match(text)
+        if builder:
+            parent = node.parent
+            if parent is not None and parent.type == "field_access":
+                parent = parent.parent
+            if parent is not None and parent.type == node.type and self._TS_TOOL_BUILDER_RE.match(
+                self._ts_get_node_text(parent)
+            ):
+                return None
+            name = _re.search(r"""\.name\(\s*"((?:\\.|[^"\\])*)"\s*\)""", text)
+            desc = _re.search(r"""\.description\(\s*"((?:\\.|[^"\\])*)"\s*\)""", text)
+            if name and desc:
+                return name.group(1), desc.group(1)
+            return None
+        if not self._TS_TOOL_CTOR_RE.match(text):
+            return None
+        name_match = self._TS_NAME_FIELD_RE.search(text)
+        desc_match = _re.search(
+            r"""\b[Dd]escription\s*[:=]\s*[^"'`,;]{0,40}?(["'`])((?:\\.|(?!\1)[^\\])*)\1""",
+            text,
+            _re.DOTALL,
+        )
+        strings = [m.group(2) for m in self._TS_ANY_STRING_RE.finditer(text)]
+        name = name_match.group(2) if name_match else (strings[0] if strings else None)
+        if desc_match:
+            desc = desc_match.group(2)
+        elif not name_match and len(strings) >= 2:
+            desc = strings[1]
+        else:
+            desc = None
+        if not name or not desc:
+            return None
+        return name, desc
+
+    def _ts_description_value_text(self, node: "Node") -> str:
+        lit = self._ts_extract_string_literal_text(node)
+        if lit is not None:
+            return lit
+        text = self._ts_get_node_text(node).strip()
+        literal = self._TS_ANY_STRING_RE.search(text)
+        # ``Some("...".into())`` / ``String::from("...")``: a literal in a thin wrapper.
+        if literal and len(text) - len(literal.group(0)) <= 40:
+            return literal.group(2)
+        return f"<computed at runtime: {text[:300]}>"
+
+    def _ts_tool_for_receiver(
+        self,
+        recv: str,
+        contexts: List[FunctionContext],
+        reg_contexts: List["tuple[Dict[str, Any], FunctionContext]"],
+        start_byte: int = -1,
+    ) -> Optional[FunctionContext]:
+        """The tool whose own description ``recv`` refers to (nested writes excluded)."""
+        ctx, nested = self._ts_resolve_receiver(recv, contexts, reg_contexts, start_byte)
+        return ctx if nested is None else None
+
+    def _ts_resolve_receiver(
+        self,
+        recv: str,
+        contexts: List[FunctionContext],
+        reg_contexts: List["tuple[Dict[str, Any], FunctionContext]"],
+        start_byte: int = -1,
+        *,
+        module_only: bool = False,
+        _alias_depth: int = 0,
+    ) -> "tuple[Optional[FunctionContext], Optional[str]]":
+        """``(tool, nested path)`` for a description write on ``recv``.
+
+        ``nested path`` is set when ``recv`` is a field inside the tool
+        (``tool.inputSchema.properties.q``), i.e. the write changes something
+        other than the tool's own description. ``module_only`` (a write made
+        in another file) skips names bound only inside this file's functions.
+        """
+        recv = strip_self_prefix(recv)
+        parts = [p for p in _re.split(r"\?\.|->|::|\.", recv) if p]
+        if not parts:
+            return None, None
+        candidates = [recv] if len(parts) == 1 else [recv, parts[0]]
+        for cand in candidates:
+            ctx = self._ts_tool_named_by(
+                cand, contexts, reg_contexts, start_byte, module_only=module_only
+            )
+            if ctx is not None:
+                return ctx, (None if cand == recv else ".".join(parts[1:]))
+        alias = None if _alias_depth else self._ts_resolve_alias(recv, start_byte)
+        if alias:
+            return self._ts_resolve_receiver(
+                alias, contexts, reg_contexts, start_byte, module_only=module_only, _alias_depth=1
+            )
+        return None, None
+
+    def _ts_tool_named_by(
+        self,
+        name: str,
+        contexts: List[FunctionContext],
+        reg_contexts: List["tuple[Dict[str, Any], FunctionContext]"],
+        start_byte: int,
+        *,
+        module_only: bool = False,
+    ) -> Optional[FunctionContext]:
+        if module_only and not self._ts_module_level_binding(name):
+            # Another file cannot see this file's function locals; only a
+            # handler function (module level by definition) can match.
+            for reg, ctx in reg_contexts:
+                if reg.get("handler_name") == name:
+                    return ctx
+            return None
+        local = self._ts_local_binding(name, start_byte)
+        if local is not None:
+            # A variable declared in the enclosing function shadows any
+            # file-level tool of the same name; it is a tool only if it is
+            # built as one or registered within that same function.
+            fn_start, fn_end, initializer = local
+            for reg, ctx in reg_contexts:
+                call_node = reg.get("call_node")
+                if (
+                    call_node is not None
+                    and fn_start <= call_node.start_byte < fn_end
+                    and name in (reg.get("arg_refs") or [])
+                ):
+                    return ctx
+            return self._ts_tool_from_binding(initializer, contexts)
+        for reg, ctx in reg_contexts:
+            if name in (reg.get("arg_refs") or []) or reg.get("handler_name") == name:
+                return ctx
+        # Not local here: only a module-level binding is visible, never a
+        # local of another function.
+        scoped = self._ts_scoped_binding(name, start_byte)
+        binding = scoped[1] if scoped is not None else None
+        if binding is not None and binding.startswith(self._LOOP_VALUE_PREFIX):
+            binding = None
+        if binding is not None:
+            ctx = self._ts_tool_from_binding(binding, contexts)
+            if ctx is not None or not self._TS_TOOL_BINDING_RE.search(binding):
+                return ctx
+        return self._ts_context_named(name.lstrip("$"), contexts)
+
+    def _ts_tool_from_binding(
+        self, binding: Optional[str], contexts: List[FunctionContext]
+    ) -> Optional[FunctionContext]:
+        if not binding or not self._TS_TOOL_BINDING_RE.search(binding):
+            return None
+        match = self._TS_NAME_FIELD_RE.search(binding) or self._TS_ANY_STRING_RE.search(binding)
+        return self._ts_context_named(match.group(2), contexts) if match else None
+
+    def _ts_local_binding(
+        self, name: str, start_byte: int
+    ) -> "Optional[tuple[int, int, Optional[str]]]":
+        """``(function start, function end, initializer)`` when ``name`` is a
+        parameter or local of the function enclosing ``start_byte``; ``None``
+        when it is not local."""
+        if start_byte < 0 or not _re.fullmatch(r"[\$\w]+", name):
+            return None
+        bindings = None
+        for scope in self._ts_enclosing_scopes(start_byte):
+            if name in self._ts_param_names(scope):
+                return scope.start_byte, scope.end_byte, None
+            if bindings is None:
+                bindings = self._ts_bindings(name)
+            span = (scope.start_byte, scope.end_byte)
+            own = [entry for entry in bindings if entry[1] == span]
+            if own:
+                value = self._ts_visible_value(own, start_byte)
+                if value is not None and value.startswith(self._LOOP_VALUE_PREFIX):
+                    value = None
+                return scope.start_byte, scope.end_byte, value
+        return None
+
+    @staticmethod
+    def _ts_binding_pattern(name: str) -> "_re.Pattern[str]":
+        return _re.compile(
+            r"(?<![\w$.])" + _re.escape(name)
+            + r"\s*(?::\s*[^=\n;]{1,80}?)?\s*(?::=|=)(?![=>~])\s*"
+        )
+
+    @staticmethod
+    def _ts_context_named(
+        name: str, contexts: List[FunctionContext]
+    ) -> Optional[FunctionContext]:
+        for ctx in contexts:
+            if ctx.name == name or ctx.name.endswith("." + name):
+                return ctx
+        return None
+
+    def _ts_binding_value_text(self, name: str) -> Optional[str]:
+        """Initializer text of the first ``name = ...`` / ``name := ...`` binding."""
+        cache = getattr(self, "_ts_binding_cache", None)
+        if cache is None:
+            cache = self._ts_binding_cache = {}
+        if name in cache:
+            return cache[name]
+        match = self._ts_binding_pattern(name).search(self.source_code)
+        value = _scan_initializer(self.source_code, match.end()) if match else None
+        cache[name] = value
+        return value
+
+    def _ts_enclosing_condition(self, node: Optional["Node"]) -> Optional[str]:
+        """Conditions of the enclosing ``if``s within the same function, outermost first."""
+        if node is None:
+            return None
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        conditions: List[str] = []
+        child, cur = node, node.parent
+        while cur is not None:
+            if cur.type in func_types:
+                break
+            if cur.type in self._TS_IF_NODE_TYPES:
+                cond = cur.child_by_field_name("condition")
+                if cond is None:
+                    named = [c for c in cur.named_children if c.start_byte < node.start_byte]
+                    cond = named[0] if named else None
+                text = self._ts_get_node_text(cond).strip() if cond is not None else "<condition>"
+                if text.startswith("(") and text.endswith(")"):
+                    text = text[1:-1].strip()
+                alt = cur.child_by_field_name("alternative")
+                in_else = alt is not None and alt.start_byte <= node.start_byte < alt.end_byte
+                if cur.type.startswith("unless"):
+                    in_else = not in_else
+                if cond is None or not _is_same_ts_node(child, cond):
+                    conditions.append(f"not ({text})" if in_else else text)
+            child, cur = cur, cur.parent
+        return " and ".join(reversed(conditions)) or None
 
     _TS_ENDPOINT_NAME_FIELDS: tuple[str, ...] = (
         "name",

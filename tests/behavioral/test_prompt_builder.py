@@ -224,3 +224,85 @@ class TestAlignmentPromptBuilderContent:
         assert "SECURITY FLAGS" in prompt
         assert "SUBPROCESS" in prompt
         assert "execute_shell_command(command: String)" in prompt
+
+
+class TestAlignmentPromptBudget:
+    """The JSON response contract must survive the default prompt cap."""
+
+    @staticmethod
+    def _ctx(name: str):
+        from mcpscanner.core.static_analysis.context_extractor import FunctionContext
+
+        return FunctionContext(
+            name=name,
+            decorator_types=["mcp.tool"],
+            imports=[],
+            function_calls=[],
+            assignments=[],
+            control_flow={},
+            parameter_flows=[],
+            constants={},
+            variable_dependencies={},
+            has_file_operations=False,
+            has_network_operations=False,
+            has_subprocess_calls=False,
+            has_eval_exec=False,
+            has_dangerous_imports=False,
+            docstring="Add two numbers.",
+            source=f"def {name}(a, b):\n    return a + b",
+        )
+
+    def test_default_cap_keeps_response_contract(self, caplog) -> None:
+        from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
+            AlignmentPromptBuilder,
+        )
+
+        builder = AlignmentPromptBuilder()
+        prompts = [
+            builder.build_prompt(self._ctx("add")),
+            builder.build_batch_prompt([self._ctx("add"), self._ctx("sub")]),
+        ]
+        for prompt in prompts:
+            assert '"mismatch_detected": true|false' in prompt
+            assert '"summary": "Brief one-sentence description' in prompt
+            assert "**threat_name**: REQUIRED" in prompt
+            assert "alignment instructions truncated" not in prompt
+
+    @pytest.mark.parametrize("configured", [0, 1_000, 50_000])
+    def test_cap_below_the_template_is_raised_to_fit_it(
+        self, monkeypatch: pytest.MonkeyPatch, caplog, configured: int
+    ) -> None:
+        from mcpscanner.config.constants import MCPScannerConstants
+        from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
+            AlignmentPromptBuilder,
+            alignment_prompt_cap,
+            alignment_template_chars,
+        )
+
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", configured)
+        builder = AlignmentPromptBuilder()
+        template = builder._template
+        cap = alignment_prompt_cap(len(template))
+        assert alignment_template_chars() == len(template)
+        assert cap > len(template) > configured
+
+        big = self._ctx("add")
+        big.source = "x = 1\n" * 50_000
+        prompts = [
+            builder.build_prompt(big),
+            builder.build_batch_prompt([big, self._ctx("sub")]),
+        ]
+        for prompt in prompts:
+            assert prompt.startswith(template.strip())
+            assert "**threat_name**: REQUIRED" in prompt
+            assert len(prompt) <= cap
+        assert "alignment prompt cap raised" in caplog.text
+
+    def test_cap_above_the_template_is_kept(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcpscanner.config.constants import MCPScannerConstants
+        from mcpscanner.core.analyzers.behavioral.alignment.alignment_prompt_builder import (
+            alignment_prompt_cap,
+        )
+
+        monkeypatch.setattr(MCPScannerConstants, "ALIGNMENT_MAX_PROMPT_CHARS", 500_000)
+        assert alignment_prompt_cap(80_000) == 500_000
