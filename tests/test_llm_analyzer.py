@@ -92,6 +92,38 @@ class TestLLMAnalyzer:
         assert "UNTRUSTED_INPUT_START_" in prompt
         assert "UNTRUSTED_INPUT_END_" in prompt
 
+    def test_parameter_schema_is_sent_whole(self):
+        """A schema without property objects must not crash, and keywords are kept."""
+        config = Config(llm_provider_api_key="test-api-key")
+        analyzer = LLMAnalyzer(config)
+
+        prompt, detected = analyzer._create_threat_analysis_prompt(
+            "chooser",
+            "Pick a mode",
+            {
+                "type": "object",
+                "required": ["mode"],
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["safe", "unsafe"],
+                        "pattern": "^[a-z]+$",
+                    }
+                },
+            },
+        )
+
+        assert detected is False
+        assert '"required"' in prompt
+        assert "unsafe" in prompt
+        assert "^[a-z]+$" in prompt
+        bare = analyzer._create_threat_analysis_prompt(
+            "bare",
+            "No properties",
+            {"type": "object", "required": ["name"]},
+        )
+        assert '"required"' in bare[0]
+
     def test_create_threat_analysis_prompt_resource_body(self):
         """Resource scans use Body + same threat_analysis_prompt.md."""
         config = Config(llm_provider_api_key="test-api-key")

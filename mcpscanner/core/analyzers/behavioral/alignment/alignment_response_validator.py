@@ -29,6 +29,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from ....evidence import prepare_behavioral_evidence
 from ...base import SecurityFinding
 from .....threats.threats import ThreatMapping
 from .....utils.log_format import truncate
@@ -260,22 +261,15 @@ class AlignmentResponseValidator:
         except (ValueError, KeyError):
             severity = "UNKNOWN"
 
-        # Format threat summary to show comparison: Claims vs Reality
         description_claims = analysis.get("description_claims", "")
         actual_behavior = analysis.get("actual_behavior", "")
-
-        # Include line number in the summary for easy reference
-        line_info = f"Line {func_context.line_number}: "
-
-        if description_claims and actual_behavior:
-            threat_summary = f"{line_info}Description claims: '{description_claims}' | Actual behavior: {actual_behavior}"
-        else:
-            # Fallback to security implications if comparison fields are missing
-            threat_summary = f"{line_info}{analysis.get('security_implications', f'Mismatch detected in {func_context.name}')}"
-
-        # If summary provided directly, use that
-        if "summary" in analysis:
-            threat_summary = f"{line_info}{analysis['summary']}"
+        threat_summary, evidence = prepare_behavioral_evidence(
+            threat_name,
+            analysis,
+            func_context,
+            None,
+            allow_flow_roles=False,
+        )
 
         finding = SecurityFinding(
             severity=severity,
@@ -299,8 +293,8 @@ class AlignmentResponseValidator:
                 "dataflow_evidence": analysis.get("dataflow_evidence"),
                 "parameter_flows": func_context.parameter_flows,
             },
+            evidence=evidence,
         )
-
         return finding
 
     def validate_batch(self, response: str, expected_count: int) -> Optional[List[Dict[str, Any]]]:

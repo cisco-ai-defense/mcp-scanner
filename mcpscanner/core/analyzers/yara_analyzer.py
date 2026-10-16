@@ -19,14 +19,15 @@
 This module contains the YARA analyzer class for analyzing MCP tools using YARA rules.
 """
 
-from typing import Any, Dict, List, Optional, Union
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 import yara
 
 from ...config.constants import MCPScannerConstants
 from ...threats.threats import YARA_THREAT_MAPPING
+from ..evidence import yara_evidence_record
 from .base import BaseAnalyzer, SecurityFinding
 
 
@@ -188,6 +189,9 @@ class YaraAnalyzer(BaseAnalyzer):
                             },
                             "content_type": content_type,
                         },
+                        evidence=yara_evidence_record(
+                            content, match, content_type, summary
+                        ),
                     )
                 )
 

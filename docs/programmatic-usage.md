@@ -1,5 +1,7 @@
 # Programmatic Usage
-For advanced use cases, you can use the MCP Scanner programmatically:
+For advanced use cases, you can use the MCP Scanner programmatically. JSON from `format_results_as_json` includes an `evidence` array on each analyzer that ran. The record shape is in [Finding evidence](finding-evidence-spec.md).
+
+
 
 ```python
 import asyncio

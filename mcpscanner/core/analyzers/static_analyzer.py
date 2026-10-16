@@ -336,7 +336,17 @@ class StaticAnalyzer:
                     f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
                 )
 
-            context = {"prompt_name": prompt_name, "content_type": "prompt"}
+            prompt_fields = {"name": prompt_name}
+            if prompt_description:
+                prompt_fields["description"] = prompt_description
+            if prompt_data.get("arguments"):
+                prompt_fields["arguments"] = prompt_data["arguments"]
+            context = {
+                "prompt_name": prompt_name,
+                "content_type": "prompt",
+                "entity_type": "prompt",
+                "mcp_fields": prompt_fields,
+            }
 
             findings = await self._analyze_content(analysis_content, context)
 

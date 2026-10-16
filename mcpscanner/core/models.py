@@ -475,6 +475,10 @@ class AnalyzerFinding(BaseModel):
     severity: str
     threat_names: List[str]
     total_findings: int
+    evidence: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="One evidence record per active finding, in finding order.",
+    )
 
 
 class MetaAnalysisAudit(BaseModel):

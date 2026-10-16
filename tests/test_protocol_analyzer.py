@@ -24,6 +24,7 @@ from typing import Any, Dict
 import pytest
 
 from mcpscanner.core.analyzers.protocol_analyzer import ProtocolAnalyzer
+from mcpscanner.core.evidence import public_evidence_for_finding
 
 
 class VulnerableHandler(BaseHTTPRequestHandler):
@@ -226,6 +227,26 @@ async def test_http_transport_finding():
     findings = analyzer._check_transport("http://example.com")
     assert len(findings) == 1
     assert findings[0].details["check_id"] == "MCPS-001"
+    evidence = public_evidence_for_finding(findings[0])
+    assert evidence["status"] == "observed"
+    source = evidence["sources"][0]
+    assert source["location"]["type"] == "probe"
+    assert source["location"]["locator"] == "MCPS-001"
+    assert source["matched_text"] is None
+    assert source["facts"] == [{"name": "probe.completed", "value": True}]
+
+
+def test_missing_signing_records_absent_headers():
+    """A finished signing probe records that no signature was present."""
+    analyzer = ProtocolAnalyzer(timeout=5.0)
+    findings = analyzer._check_signing(None, None)
+    evidence = public_evidence_for_finding(findings[0])
+    facts = {fact["name"]: fact["value"] for fact in evidence["sources"][0]["facts"]}
+    assert evidence["status"] == "observed"
+    assert evidence["sources"][0]["location"]["locator"] == "MCPS-003"
+    assert facts["integrity.signature_header_present"] is False
+    assert facts["integrity.signing_capability_present"] is False
+    assert facts["probe.completed"] is True
 
 
 @pytest.mark.asyncio

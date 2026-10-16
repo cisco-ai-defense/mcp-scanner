@@ -46,6 +46,7 @@ import httpx
 from ..config.config import Config
 from ..config.constants import MCPScannerConstants as CONSTANTS
 from ..utils.logging_config import get_logger
+from .evidence import public_evidence_for_finding
 from .docker_build import (
     DockerBuildError,
     default_scanner_image_tag,
@@ -431,11 +432,11 @@ class PyPIPackageScanner:
         # would silently no-op and we'd return is_safe=True for a
         # package we never actually analysed.
         config = self._config or _build_config_from_env()
-        if not getattr(config, "llm_provider_api_key", ""):
+        if not _llm_credentials_ready(config):
             raise LLMNotConfiguredError(
                 "no LLM API key configured for behavioural analysis. "
-                "Set MCP_SCANNER_LLM_API_KEY or pass a Config with "
-                "llm_provider_api_key= ... to the scanner."
+                "Set MCP_SCANNER_LLM_API_KEY, or set MCP_SCANNER_LLM_MODEL "
+                "to a bedrock/ model and use AWS credentials."
             )
 
         logger.warning(
@@ -585,6 +586,14 @@ def resolve_pypi_archive_url(
 # ----------------------------------------------------------------------
 # Shared result/Config helpers (used by both PyPI and NPM scanners)
 # ----------------------------------------------------------------------
+
+
+def _llm_credentials_ready(config: Config) -> bool:
+    """True when an API key or a Bedrock model is available for alignment."""
+    if getattr(config, "llm_provider_api_key", ""):
+        return True
+    model = getattr(config, "llm_model", "") or ""
+    return "bedrock/" in model
 
 
 def _build_config_from_env() -> Config:
@@ -740,6 +749,7 @@ def _build_scan_result(
                 "threat_category": getattr(f, "threat_category", None),
                 "summary": getattr(f, "summary", ""),
                 "details": getattr(f, "details", None) or {},
+                "evidence": public_evidence_for_finding(f),
             }
         )
     ecosystem_field = (

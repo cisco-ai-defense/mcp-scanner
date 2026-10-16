@@ -45,6 +45,7 @@ from ...static_analysis.interprocedural.call_graph_analyzer import CallGraphAnal
 from ...static_analysis.interprocedural.treesitter_call_graph import (
     TreeSitterCallGraphAnalyzer,
 )
+from ...evidence import incomplete_location_evidence, prepare_behavioral_evidence
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 from .alignment.alignment_response_validator import normalize_finding_class
@@ -371,6 +372,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             # Check if content is a directory
             if os.path.isdir(content):
                 self.logger.debug(f"Scanning directory: {content}")
+                context = {**context, "scan_root": os.path.realpath(content)}
 
                 source_files = self._find_source_files(content)
                 self.logger.debug(
@@ -960,7 +962,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     func_contexts, batch_size=batch_size
                 )
                 for analysis, ctx in batch_results:
-                    finding = self._create_security_finding(analysis, ctx, file_path)
+                    finding = self._create_security_finding(
+                        analysis, ctx, file_path, context.get("scan_root")
+                    )
                     if finding:
                         findings.append(finding)
             else:
@@ -988,7 +992,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                     if result:
                         analysis, ctx = result
-                        finding = self._create_security_finding(analysis, ctx, file_path)
+                        finding = self._create_security_finding(
+                            analysis, ctx, file_path, context.get("scan_root")
+                        )
                         if finding:
                             findings.append(finding)
 
@@ -1030,6 +1036,12 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                                 "no_findings": False,
                                 "analysis_status": "errored",
                             },
+                            evidence=incomplete_location_evidence(
+                                "Alignment check did not complete; finding is inconclusive",
+                                file_path,
+                                getattr(fc, "line_number", None),
+                                context.get("scan_root"),
+                            ),
                         )
                     )
                     continue
@@ -1072,7 +1084,11 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         return findings
 
     def _create_security_finding(
-        self, analysis: Dict[str, Any], func_context, file_path: str
+        self,
+        analysis: Dict[str, Any],
+        func_context,
+        file_path: str,
+        scan_root: Optional[str] = None,
     ) -> Optional[SecurityFinding]:
         """Create SecurityFinding from alignment analysis using threat mappings.
 
@@ -1080,6 +1096,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             analysis: Analysis dict from LLM with threat_name, severity, etc.
             func_context: FunctionContext with code details
             file_path: Path to the source file
+            scan_root: Directory being scanned, when this is a directory scan
 
         Returns:
             SecurityFinding with threat taxonomy mappings or None if invalid
@@ -1118,15 +1135,16 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     )
                     return None
 
-            # Build threat summary from analysis
             description_claims = analysis.get("description_claims", "")
             actual_behavior = analysis.get("actual_behavior", "")
-            line_info = f"Line {func_context.line_number}: "
-
-            if description_claims and actual_behavior:
-                threat_summary = f"{line_info}{threat_name} - Description claims: '{description_claims}' | Actual behavior: {actual_behavior}"
-            else:
-                threat_summary = f"{line_info}{threat_name} in {func_context.name}"
+            threat_summary, evidence = prepare_behavioral_evidence(
+                threat_name,
+                analysis,
+                func_context,
+                file_path,
+                allow_flow_roles=file_path.endswith(".py"),
+                scan_root=scan_root,
+            )
 
             # Create SecurityFinding with complete threat taxonomy
             # SecurityFinding will auto-generate mcp_taxonomy from threat_type
@@ -1169,6 +1187,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     "aisubtech_name": threat_info["aisubtech_name"],
                     "taxonomy_description": threat_info["description"],
                 },
+                evidence=evidence,
             )
 
             return finding

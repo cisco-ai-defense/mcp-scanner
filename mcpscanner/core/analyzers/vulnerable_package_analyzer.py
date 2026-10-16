@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...threats.threats import ThreatMapping
+from ..evidence import facts_record
 from .base import SecurityFinding
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ class VulnerablePackageAnalyzer:
         self.skip_deps = skip_deps
         self.disable_pip = disable_pip
         self.last_scan_summary: Optional[Dict[str, Any]] = None
+        self.last_error: Optional[str] = None
 
         self._pip_audit_cmd = self._find_pip_audit()
 
@@ -169,7 +171,9 @@ class VulnerablePackageAnalyzer:
         self, extra_args: List[str], source: str
     ) -> List[SecurityFinding]:
         """Execute pip-audit and convert JSON output to SecurityFindings."""
+        self.last_error = None
         if not self._pip_audit_cmd:
+            self.last_error = "pip-audit is not available"
             logger.error("pip-audit binary not available; cannot scan")
             return []
 
@@ -178,7 +182,9 @@ class VulnerablePackageAnalyzer:
             "--vulnerability-service", self.vulnerability_service,
         ]
         if self.desc:
-            cmd.append("--desc")
+            # pip-audit 2.10 takes --desc {on,off,auto}. A bare --desc
+            # consumes the following path and the audit never runs.
+            cmd.extend(["--desc", "on"])
         if self.fix_mode:
             cmd.append("--fix")
         cmd.extend(extra_args)
@@ -193,9 +199,11 @@ class VulnerablePackageAnalyzer:
                 timeout=self.timeout,
             )
         except subprocess.TimeoutExpired:
+            self.last_error = f"pip-audit timed out after {self.timeout}s"
             logger.error("pip-audit timed out after %ds", self.timeout)
             return []
         except FileNotFoundError:
+            self.last_error = "pip-audit binary was not found"
             logger.error(
                 "pip-audit binary not found at: %s",
                 self._pip_audit_cmd[0],
@@ -210,8 +218,13 @@ class VulnerablePackageAnalyzer:
                 "pip-audit exited with code %d and produced no JSON output",
                 result.returncode,
             )
+            error_hint = (
+                self._extract_error_hint(stderr)
+                if stderr
+                else f"pip-audit exited with code {result.returncode}"
+            )
+            self.last_error = error_hint
             if stderr:
-                error_hint = self._extract_error_hint(stderr)
                 logger.warning("pip-audit error: %s", error_hint)
                 if self._is_resolution_failure(stderr):
                     logger.warning(
@@ -226,11 +239,13 @@ class VulnerablePackageAnalyzer:
                 logger.debug("pip-audit stderr: %s", line)
 
         if not stdout:
+            self.last_error = "pip-audit returned no JSON"
             return []
 
         try:
             data = json.loads(stdout)
         except json.JSONDecodeError as e:
+            self.last_error = "pip-audit did not return JSON"
             logger.warning("Failed to parse pip-audit JSON: %s", e)
             logger.debug("Raw stdout: %s", stdout[:500])
             return []
@@ -376,4 +391,16 @@ class VulnerablePackageAnalyzer:
                 "aisubtech_name": threat_info["aisubtech_name"],
                 "taxonomy_description": threat_info["description"],
             },
+            evidence=facts_record(
+                summary,
+                "package",
+                f"pypi:{package_name}@{version}",
+                [
+                    ("package.ecosystem", "pypi"),
+                    ("package.name", package_name),
+                    ("package.version", version),
+                    ("advisory.id", vuln_id),
+                    ("audit.source", "pip-audit"),
+                ],
+            ),
         )

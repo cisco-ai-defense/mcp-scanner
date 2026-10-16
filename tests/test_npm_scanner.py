@@ -1003,6 +1003,35 @@ def test_count_source_files_parity_docker_vs_sdk(tmp_path: Path):
     assert sdk_count == docker_count == 2
 
 
+def test_published_package_with_only_dist_is_scanned(tmp_path: Path):
+    """A tarball that ships only compiled output is still scanned."""
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.js").write_text("export {}")
+    root = NPMPackageScanner._published_scan_root(tmp_path)
+    assert root == tmp_path / "dist"
+    assert NPMPackageScanner._count_js_files(root) == 1
+
+
+def test_entry_point_in_dist_wins_over_a_stray_root_config(tmp_path: Path):
+    """A root-level config file does not hide the published bundle."""
+    (tmp_path / ".eslintrc.js").write_text("module.exports = {}")
+    (tmp_path / "jest.config.js").write_text("module.exports = {}")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.js").write_text("export {}")
+    (tmp_path / "package.json").write_text(
+        json.dumps({"name": "pkg", "exports": {".": {"import": "./dist/index.js"}}})
+    )
+    assert NPMPackageScanner._published_scan_root(tmp_path) == tmp_path / "dist"
+
+
+def test_entry_point_at_root_keeps_the_root(tmp_path: Path):
+    (tmp_path / "index.js").write_text("module.exports = {}")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "bundle.js").write_text("export {}")
+    (tmp_path / "package.json").write_text(json.dumps({"main": "index.js"}))
+    assert NPMPackageScanner._published_scan_root(tmp_path) == tmp_path
+
+
 # ---------------------------------------------------------------------------
 # Atomic partial-write semantics (L6)
 # ---------------------------------------------------------------------------

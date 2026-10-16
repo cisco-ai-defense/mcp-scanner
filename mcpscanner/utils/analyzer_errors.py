@@ -318,6 +318,7 @@ def build_infrastructure_error_finding(
     exception text is never copied into the finding.
     """
     from ..core.analyzers.base import SecurityFinding
+    from ..core.evidence import facts_record
 
     kind = classify_analyzer_error(error, context=context, model=model)
     # Provider exception text may contain credentials, URLs, or scanned input.
@@ -339,12 +340,20 @@ def build_infrastructure_error_finding(
     }
     if model:
         details["model"] = model
+    summary = f"{analyzer_name} analysis did not complete for {subject}: {message}"
+    locator = analyzer_name.replace(" ", "-")
+    if "://" in locator or not locator or len(locator) > 120:
+        locator = "analyzer"
     return SecurityFinding(
         severity="INFO",
-        summary=(
-            f"{analyzer_name} analysis did not complete for {subject}: {message}"
-        ),
+        summary=summary,
         analyzer=analyzer_name,
         threat_category="ANALYZER INFRASTRUCTURE",
         details=details,
+        evidence=facts_record(
+            summary,
+            "probe",
+            locator,
+            [("probe.completed", False)],
+        ),
     )

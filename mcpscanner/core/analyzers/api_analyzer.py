@@ -24,10 +24,10 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from ...config.config import Config
-from .base import BaseAnalyzer, SecurityFinding
 from ...config.constants import CONSTANTS
 from ...threats.threats import API_THREAT_MAPPING
-
+from ..evidence import locator_for_content_type, scope_only_record
+from .base import BaseAnalyzer, SecurityFinding
 
 enabled_rules = [
     {"rule_name": "Prompt Injection"},
@@ -177,6 +177,12 @@ class ApiAnalyzer(BaseAnalyzer):
                 else:
                     threat_summary = f"Detected {len(classifications)} threats: {', '.join([c.lower().replace('_', ' ') for c in classifications])}"
 
+                if not classifications:
+                    raise ValueError(
+                        "API reported unsafe content without a classification"
+                    )
+
+                field_type = context.get("content_type") if context else None
                 for classification in classifications:
                     # Use centralized threat mapping (includes severity)
                     threat_info = API_THREAT_MAPPING.get(classification)
@@ -203,6 +209,11 @@ class ApiAnalyzer(BaseAnalyzer):
                                 "raw_response": response_json,
                                 "content_type": "text",
                             },
+                            evidence=scope_only_record(
+                                threat_summary,
+                                "mcp_field",
+                                locator_for_content_type(field_type),
+                            ),
                         )
                     )
 
