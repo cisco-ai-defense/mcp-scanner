@@ -355,6 +355,49 @@ class TestResourcesScanning:
         assert results[1]["status"] == "skipped"  # binary - skipped
 
     @pytest.mark.asyncio
+    async def test_scan_resource_mime_filter_ignores_parameters(
+        self, static_analyzer, temp_json_file
+    ):
+        """MIME parameters don't change the allowlist match, as on the remote path.
+
+        MCP Apps UI resources use ``text/html;profile=mcp-app``; they were
+        skipped by a ``text/html`` allowlist on the static path only.
+        """
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "ui://demo/app.html",
+                    "name": "app",
+                    "mimeType": "text/html;profile=mcp-app",
+                    "text": "<p>Hi</p>",
+                },
+                {
+                    "uri": "file:///notes.txt",
+                    "name": "notes",
+                    "mimeType": "Text/Plain; charset=utf-8",
+                    "text": "hello",
+                },
+                {
+                    "uri": "file:///data.json",
+                    "name": "data",
+                    "mimeType": "application/json; charset=utf-8",
+                    "text": "{}",
+                },
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await static_analyzer.scan_resources_file(
+            temp_json_file, allowed_mime_types=["text/plain", "text/html"]
+        )
+
+        assert [r["status"] for r in results] == ["completed", "completed", "skipped"]
+        # The declared type is reported as given.
+        assert results[0]["resource_mime_type"] == "text/html;profile=mcp-app"
+
+    @pytest.mark.asyncio
     async def test_scan_malicious_resource(self, static_analyzer, temp_json_file):
         """Test scanning a malicious resource."""
         resources_data = {
