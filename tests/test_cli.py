@@ -401,6 +401,43 @@ class TestScanMcpServerDirect:
                 assert len(panels) == 1
 
     @pytest.mark.asyncio
+    async def test_main_scan_error_uses_rich_panel_on_stderr(self, capsys):
+        """main()'s own top-level scan try/except is what a real
+        `mcp-scanner --server-url ...` invocation hits on a connection
+        failure -- scan_mcp_server_direct has no callers outside its own
+        tests, so its Panel never reaches a real user on its own. This
+        must render the same Rich panel, and (matching the pre-existing
+        stderr convention main() used before this PR) still write to
+        stderr, not stdout."""
+        from mcpscanner.cli import main
+
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
+                "Connection failed"
+            )
+            mock_scanner_class.return_value = mock_scanner
+
+            test_args = [
+                "mcp-scanner",
+                "--analyzers",
+                "yara",
+                "--server-url",
+                "https://test.com",
+            ]
+            with (
+                patch("sys.argv", test_args),
+                patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}),
+            ):
+                with pytest.raises(SystemExit):
+                    await main()
+
+                captured = capsys.readouterr()
+                assert captured.out == ""
+                assert "Connection Error" in captured.err
+                assert "Connection failed" in captured.err
+
+    @pytest.mark.asyncio
     async def test_scan_mcp_server_direct_with_endpoint_url(self, mock_scan_results):
         """Test scan_mcp_server_direct with custom endpoint URL."""
         with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
@@ -612,6 +649,59 @@ class TestDisplayResults:
 
         captured = capsys.readouterr()
         assert "evil[/red][bold]tool" in captured.out
+
+    def test_display_results_does_not_convert_emoji_shortcodes(self, capsys):
+        """rich.markup.escape() only escapes `[...]` markup, not `:name:`
+        emoji shortcodes -- Rich still converts those by default. A
+        server-controlled tool name containing a shortcode must display as
+        the literal text, not the emoji glyph: the glyph is a different
+        string than what the server actually sent, and on some terminals
+        (observed: Windows legacy console codepage) isn't even encodable,
+        crashing the write entirely."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "tool_name": "exfil:warning:tool",
+                    "is_safe": False,
+                    "findings": {},
+                }
+            ],
+        }
+
+        display_results(results)
+
+        captured = capsys.readouterr()
+        assert "exfil:warning:tool" in captured.out
+        assert "⚠" not in captured.out
+
+    def test_display_results_does_not_hard_wrap_long_lines(self, capsys):
+        """A threat summary or URL is an indicator a user may grep or copy
+        out of CI logs. Rich's default hard-wraps long lines at the console
+        width, splitting an indicator across multiple lines in piped
+        output and breaking exactly that grep/copy use case."""
+        long_summary = "Exfiltrates data to http://evil.example.com/" + "a" * 150
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "tool_name": "unsafe_tool",
+                    "is_safe": False,
+                    "findings": {
+                        "api_analyzer": {
+                            "total_findings": 1,
+                            "threat_summary": long_summary,
+                            "severity": "HIGH",
+                        }
+                    },
+                }
+            ],
+        }
+
+        display_results(results, detailed=True)
+
+        captured = capsys.readouterr()
+        assert long_summary in captured.out
 
     def test_display_results_no_table_when_no_unsafe_tools(self):
         """No unsafe tools means nothing to summarize in a table."""

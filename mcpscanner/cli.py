@@ -67,7 +67,26 @@ load_dotenv()
 # Shared console for all CLI output. A single instance (rather than one per
 # function) keeps terminal-width detection and color/markup behavior
 # consistent across the whole run.
-console = Console()
+#
+# soft_wrap=True: a scan result (tool names, URLs, threat descriptions) is
+# security-relevant text a user may grep, copy, or pipe through `tee`/a log
+# collector. Rich's default hard-wraps at the console width, which breaks a
+# long indicator (e.g. a URL in a threat summary) across lines in piped/CI
+# output and corrupts grepping and copy-paste.
+#
+# emoji=False: rich.markup.escape() only escapes `[...]` markup, not `:name:`
+# emoji shortcodes, which Rich still converts by default. A scan-derived
+# string containing something like `:warning:` or `:x:` would otherwise
+# render as the actual emoji glyph instead of literal text -- on some
+# terminals (observed: Windows' legacy console codepage) that glyph isn't
+# encodable at all and crashes the write. Disabling emoji conversion keeps
+# all scan-derived text literal.
+console = Console(soft_wrap=True, emoji=False, highlight=False)
+# Dedicated stderr console for main()'s top-level scan error handler, which
+# wrote to stderr (not stdout) before this PR -- conventional for a CLI
+# tool's own diagnostics, and relied on by callers that separate stdout
+# (scan results) from stderr (errors), e.g. in a CI pipeline.
+error_console = Console(stderr=True, soft_wrap=True, emoji=False, highlight=False)
 
 
 def _get_endpoint_from_env() -> str:
@@ -460,6 +479,57 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
     return _build_behavioral_results(analyzer, findings, source_path)
 
 
+def _display_scan_error(
+    exc: Exception,
+    *,
+    server_url: Optional[str] = None,
+    verbose: bool = False,
+    out: Optional[Console] = None,
+) -> None:
+    """Render a scan-time exception as a Rich panel.
+
+    Shared by scan_mcp_server_direct and main()'s own top-level scan
+    try/except -- the latter is the handler real `mcp-scanner scan ...`
+    invocations actually hit on a connection failure, so it needs the
+    same styling and escaping as scan_mcp_server_direct's, not a
+    separate plain print().
+
+    `out` lets each call site keep its own pre-existing output stream
+    (scan_mcp_server_direct always printed to stdout; main()'s top-level
+    handler always printed to stderr, the conventional stream for a CLI
+    tool's own errors) -- defaults to the shared stdout `console`.
+    """
+    out = out or console
+    if exc.__class__.__name__ in (
+        "MCPConnectionError",
+        "MCPAuthenticationError",
+        "MCPServerNotFoundError",
+    ):
+        tips = ""
+        if verbose and server_url:
+            tips = (
+                "\n\n[bold]Troubleshooting tips:[/bold]\n"
+                f"  - Make sure an MCP server is running at {escape(server_url)}\n"
+                "  - Verify the URL is correct (including protocol and port)\n"
+                "  - Check if the server is accessible from your network"
+            )
+        out.print(
+            Panel(
+                f"{escape(str(exc))}{tips}",
+                title="[bold red]Connection Error[/bold red]",
+                border_style="red",
+            )
+        )
+        return
+    out.print(
+        Panel(
+            escape(str(exc)),
+            title="[bold red]Error scanning server[/bold red]",
+            border_style="red",
+        )
+    )
+
+
 async def scan_mcp_server_direct(
     server_url: str,
     analyzers: List[AnalyzerEnum],
@@ -518,37 +588,12 @@ async def scan_mcp_server_direct(
         return json_results
 
     except Exception as e:
-        # Handle MCP-specific exceptions gracefully
-        if e.__class__.__name__ in (
+        _display_scan_error(e, server_url=server_url, verbose=verbose)
+        if verbose and e.__class__.__name__ not in (
             "MCPConnectionError",
             "MCPAuthenticationError",
             "MCPServerNotFoundError",
         ):
-            tips = ""
-            if verbose:
-                tips = (
-                    "\n\n[bold]Troubleshooting tips:[/bold]\n"
-                    f"  - Make sure an MCP server is running at {escape(server_url)}\n"
-                    "  - Verify the URL is correct (including protocol and port)\n"
-                    "  - Check if the server is accessible from your network"
-                )
-            console.print(
-                Panel(
-                    f"{escape(str(e))}{tips}",
-                    title="[bold red]Connection Error[/bold red]",
-                    border_style="red",
-                )
-            )
-            return []
-        # All other exceptions
-        console.print(
-            Panel(
-                escape(str(e)),
-                title="[bold red]Error scanning server[/bold red]",
-                border_style="red",
-            )
-        )
-        if verbose:
             traceback.print_exc()
         return []
 
@@ -2729,7 +2774,12 @@ async def main():
                     results = await results_to_json(results_raw)
 
     except Exception as e:
-        print(f"Error during scanning: {e}", file=sys.stderr)
+        _display_scan_error(
+            e,
+            server_url=getattr(args, "server_url", None),
+            verbose=getattr(args, "verbose", False),
+            out=error_console,
+        )
         sys.exit(1)
 
     # Display the results using the new report generator
