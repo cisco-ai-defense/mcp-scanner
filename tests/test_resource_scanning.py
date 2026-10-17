@@ -447,3 +447,309 @@ async def test_aggregate_budget_stops_later_resource_reads(config, monkeypatch):
     assert results[0].status == "failed"
     assert results[1].status == "failed"
     assert "budget" in results[1].findings[0].summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan_one", [False, True])
+async def test_json_resources_are_analyzed_by_default(config, scan_one):
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    resource = _listed_resource("stats://tickets", "application/json", name="ticket_stats")
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.read_resource.return_value = _read_body('{"total": 6}', "application/json")
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        if scan_one:
+            results = [
+                await scanner.scan_remote_server_resource(
+                    "https://example.com/mcp", "stats://tickets", analyzers=[AnalyzerEnum.YARA]
+                )
+            ]
+        else:
+            results = await scanner.scan_remote_server_resources(
+                "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+            )
+    assert results[0].status == "completed"
+    assert results[0].resource_mime_type == "application/json"
+    assert recorders["yara"].seen == ['{"total": 6}']
+
+
+def test_default_resource_mime_types_include_json():
+    from mcpscanner.core.models import SpecificResourceScanRequest
+
+    request = SpecificResourceScanRequest(server_url="https://example.com/mcp", resource_uri="r://x")
+    assert request.allowed_mime_types == ["text/plain", "text/html", "application/json"]
+    assert "application/json" in MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES
+
+
+def _listed_template(uri_template, name, description, mime="application/json"):
+    return SimpleNamespace(
+        uriTemplate=uri_template, name=name, description=description, mimeType=mime
+    )
+
+
+@pytest.mark.asyncio
+async def test_resource_templates_are_listed_after_static_resources(config):
+    """Static resources and templates both appear in the resource results."""
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(
+        resources=[_listed_resource("config://server-info", "text/plain", name="server_info")]
+    )
+    session.read_resource.return_value = _read_body("helpdesk", "text/plain")
+    session.list_resource_templates.return_value = SimpleNamespace(
+        resourceTemplates=[
+            _listed_template("employee://{employee_id}", "employee_detail", "One employee record."),
+            _listed_template("ticket://{ticket_id}", "ticket_detail", "Full ticket detail."),
+            _listed_template("policy://{name}", "policy_text", "", mime="text/plain"),
+        ],
+        nextCursor=None,
+    )
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+            allowed_mime_types=["text/plain"],
+        )
+
+    assert [(r.resource_uri, r.is_template) for r in results] == [
+        ("config://server-info", False),
+        ("employee://{employee_id}", True),
+        ("ticket://{ticket_id}", True),
+        ("policy://{name}", True),
+    ]
+    employee = results[1]
+    assert employee.status == "completed"
+    assert employee.resource_name == "employee_detail"
+    assert employee.resource_mime_type == "application/json"
+    assert recorders["yara"].seen == ["helpdesk", "One employee record.", "Full ticket detail."]
+    assert results[3].status == "skipped"
+    session.read_resource.assert_awaited_once_with("config://server-info")
+
+
+@pytest.mark.asyncio
+async def test_resource_templates_follow_pagination(config):
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.side_effect = [
+        SimpleNamespace(resourceTemplates=[_listed_template("a://{x}", "a", "first")], nextCursor="p2"),
+        SimpleNamespace(resourceTemplates=[_listed_template("b://{y}", "b", "second")], nextCursor=None),
+    ]
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert [r.resource_uri for r in results] == ["a://{x}", "b://{y}"]
+    assert session.list_resource_templates.await_args_list[1].args == ("p2",)
+
+
+def _template_result(uri, name):
+    from mcpscanner.core.result import ResourceScanResult
+
+    return ResourceScanResult(
+        resource_uri=uri,
+        resource_name=name,
+        resource_mime_type="text/plain",
+        status="completed",
+        analyzers=["YARA"],
+        findings=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_template_listing_failure_keeps_static_resources(config):
+    from mcpscanner.core.scanner import McpError
+
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(
+        resources=[_listed_resource("config://server-info", "text/plain")]
+    )
+    session.read_resource.return_value = _read_body("helpdesk", "text/plain")
+    session.list_resource_templates.side_effect = McpError(
+        SimpleNamespace(code=-32601, message="Method not found", data=None)
+    )
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+            allowed_mime_types=["text/plain"],
+        )
+    assert [r.resource_uri for r in results] == ["config://server-info"]
+
+
+@pytest.mark.asyncio
+async def test_template_page_limit_reports_incomplete_discovery(config, monkeypatch):
+    monkeypatch.setattr(Scanner, "_MAX_TEMPLATE_PAGES", 2)
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.side_effect = [
+        SimpleNamespace(resourceTemplates=[_listed_template("a://{x}", "a", "first")], nextCursor="p2"),
+        SimpleNamespace(resourceTemplates=[_listed_template("b://{y}", "b", "second")], nextCursor="p3"),
+    ]
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert [r.resource_uri for r in results] == [
+        "a://{x}",
+        "b://{y}",
+        "resources/templates/list",
+    ]
+    discovery = results[-1]
+    assert discovery.status == "failed"
+    assert discovery.is_template is True
+    assert "limit 2" in discovery.findings[0].summary
+    assert session.list_resource_templates.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_template_listing_error_mid_pagination_reports_failure(config, monkeypatch):
+    from unittest.mock import MagicMock
+
+    import mcpscanner.core.scanner as scanner_module
+    from mcpscanner.core.scanner import McpError
+
+    fake_logger = MagicMock()
+    monkeypatch.setattr(scanner_module, "logger", fake_logger)
+
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.side_effect = [
+        SimpleNamespace(resourceTemplates=[_listed_template("a://{x}", "a", "first")], nextCursor="p2"),
+        McpError(SimpleNamespace(code=-32603, message="secret-token-123 leaked", data=None)),
+    ]
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert [r.resource_uri for r in results] == ["a://{x}", "resources/templates/list"]
+    discovery = results[-1]
+    assert discovery.status == "failed"
+    assert discovery.findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+    assert "secret-token-123" not in discovery.findings[0].summary
+    logged = " ".join(str(c) for c in fake_logger.mock_calls)
+    assert "secret-token-123" not in logged
+    assert "McpError" in logged
+
+
+@pytest.mark.asyncio
+async def test_repeated_template_cursor_stops_discovery(config):
+    scanner = Scanner(config)
+    scanner._analyze_resource = AsyncMock(
+        side_effect=lambda content, uri, name, *a, **k: _template_result(uri, name)
+    )
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.side_effect = [
+        SimpleNamespace(resourceTemplates=[_listed_template("a://{x}", "a", "first")], nextCursor="p2"),
+        SimpleNamespace(resourceTemplates=[_listed_template("b://{y}", "b", "second")], nextCursor="p2"),
+        SimpleNamespace(resourceTemplates=[_listed_template("b://{y}", "b", "second")], nextCursor="p2"),
+    ]
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert [r.resource_uri for r in results] == [
+        "a://{x}",
+        "b://{y}",
+        "resources/templates/list",
+    ]
+    assert results[-1].status == "failed"
+    assert results[-1].findings[0].details["error_type"] == "ValueError"
+    assert session.list_resource_templates.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_templates_share_the_aggregate_budget(config, monkeypatch):
+    """Once resource bodies use the budget, templates are listed but not analyzed."""
+    monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPT_RESOURCE_AGGREGATE_CHARS", 5)
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(
+        resources=[_listed_resource("config://server-info", "text/plain")]
+    )
+    session.read_resource.return_value = _read_body("hello", "text/plain")
+    session.list_resource_templates.return_value = SimpleNamespace(
+        resourceTemplates=[_listed_template("ticket://{ticket_id}", "ticket_detail", "Full ticket detail.")],
+        nextCursor=None,
+    )
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+            allowed_mime_types=["text/plain"],
+        )
+    assert recorders["yara"].seen == ["hello"]
+    template = results[1]
+    assert template.is_template is True
+    assert template.resource_uri == "ticket://{ticket_id}"
+    assert template.status == "failed"
+    assert "budget" in template.findings[0].summary
+
+
+@pytest.mark.asyncio
+async def test_template_analysis_count_is_capped(config, monkeypatch):
+    monkeypatch.setattr(Scanner, "_MAX_ANALYZED_TEMPLATES", 2)
+    scanner = Scanner(config)
+    recorders = _install_recording_analyzers(scanner)
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[])
+    session.list_resource_templates.return_value = SimpleNamespace(
+        resourceTemplates=[
+            _listed_template(f"t{i}://{{id}}", f"t{i}", f"description {i}") for i in range(4)
+        ],
+        nextCursor=None,
+    )
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+        )
+    assert recorders["yara"].seen == ["description 0", "description 1"]
+    assert [r.status for r in results] == ["completed", "completed", "failed", "failed"]
+    assert all(r.is_template for r in results)
+    assert "limit 2" in results[2].findings[0].summary
+
+
+def test_resource_json_marks_templates():
+    import json
+
+    from mcpscanner.core.result import ResourceScanResult, format_results_as_json
+
+    template = ResourceScanResult(
+        resource_uri="ticket://{ticket_id}",
+        resource_name="ticket_detail",
+        resource_mime_type="application/json",
+        status="completed",
+        analyzers=["YARA"],
+        findings=[],
+        is_template=True,
+    )
+    payload = json.loads(format_results_as_json([template]))
+    assert payload["scan_results"][0]["is_template"] is True

@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional
 from mcpscanner.utils.logging_config import get_logger
 
 from mcpscanner import Config, Scanner
+from mcpscanner.config.constants import MCPScannerConstants
 from mcpscanner.core.models import AnalyzerEnum
 from mcpscanner.core.report_generator import (
     OutputFormat,
@@ -695,6 +696,8 @@ def display_resource_results_table(
             status_icon = "❌"
 
         resource_name = result.get("resource_name", "Unknown")
+        if result.get("is_template"):
+            resource_name = f"{resource_name} (template)"
         uri = result.get("resource_uri", "N/A")
         uri_short = uri[:40] + "..." if len(uri) > 40 else uri
         mime_type = result.get("resource_mime_type", "unknown")
@@ -1134,7 +1137,7 @@ async def main():
     )
     p_static.add_argument(
         "--mime-types",
-        default="text/plain,text/html",
+        default=",".join(MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES),
         help="Comma-separated MIME types for resource scanning (default: %(default)s)",
     )
 
@@ -1207,7 +1210,7 @@ async def main():
     )
     p_resources.add_argument(
         "--mime-types",
-        default="text/plain,text/html",
+        default=",".join(MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES),
         help="Comma-separated list of allowed MIME types (default: %(default)s)",
     )
 
@@ -1825,9 +1828,11 @@ async def main():
 
             # Scan resources
             if resources_file:
-                mime_types = getattr(args, "mime_types", "text/plain,text/html")
+                mime_types = getattr(args, "mime_types", None)
                 mime_types_list = (
-                    mime_types.split(",") if mime_types else ["text/plain", "text/html"]
+                    mime_types.split(",")
+                    if mime_types
+                    else list(MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES)
                 )
                 resources_results = await static.scan_resources_file(
                     resources_file, allowed_mime_types=mime_types_list
@@ -2105,6 +2110,7 @@ async def main():
                         "resource_uri": str(r.resource_uri),
                         "resource_name": r.resource_name,
                         "resource_mime_type": r.resource_mime_type,
+                        "is_template": getattr(r, "is_template", False),
                         "status": r.status,
                         "is_safe": r.is_safe,
                         "analyzer_errors": r.analyzer_errors,
