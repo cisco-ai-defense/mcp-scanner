@@ -60,6 +60,31 @@ async def main():
 asyncio.run(main())
 ```
 
+## Paginated Server Lists
+
+Tool and prompt scans follow MCP pagination for both remote and stdio servers.
+Remote resource scans also follow pagination. Bulk scans discover every listed
+item before analyzing the inventory. Scans for a specific tool, prompt, or
+resource stop discovery as soon as the requested item is found.
+
+The scanner forwards opaque `nextCursor` values without changing them, including
+empty strings, and continues past empty pages that have a cursor. Discovery ends
+when the server returns no next cursor. Existing prompt and resource content
+budgets apply across the combined inventory, rather than separately to each page.
+
+To bound discovery, each list request uses
+`MCPScannerConstants.MCP_CONTENT_READ_TIMEOUT_SECONDS` (30 seconds by default),
+with a maximum of 1,000 pages and 10,000 items per list operation. The timeout is
+per page, not a deadline for the whole scan. A repeated cursor, an exceeded limit,
+a request timeout, or an MCP error after the first page raises
+`mcpscanner.core.pagination.MCPPaginationError`. Bulk scans do not return a
+successful partial inventory in these cases. Existing handling for a server that
+does not support the requested list operation is preserved on the first request.
+
+These errors propagate from the individual server scan methods. Configuration
+scans that process multiple servers retain their existing behavior of recording
+a server error and continuing with the other servers.
+
 ## Advanced Examples
 
 ### Scanning a Specific Tool
