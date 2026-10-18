@@ -869,6 +869,8 @@ class NativeAnalyzer:
         
         # Taint tracking state (reset per function)
         self._taint_env: Dict[str, TaintInfo] = {}
+        # Nodes visited while building the per-scope alias/shadow index.
+        self._ts_scope_nodes_visited = 0
 
     def _detect_language(self) -> str:
         """Detect programming language from file extension."""
@@ -4960,11 +4962,6 @@ class NativeAnalyzer:
         )
 
     @staticmethod
-    def _ts_scope_lookup_key(fn: "Node", use_node: "Node") -> tuple[int, int, int]:
-        """Stable cache key for per-call-site TS scope lookups."""
-        return (fn.start_byte, fn.end_byte, use_node.start_byte)
-
-    @staticmethod
     def _ts_node_contains(ancestor: "Node", descendant: "Node") -> bool:
         """Return True if ``descendant`` is nested under ``ancestor``."""
         if ancestor is None or descendant is None:
@@ -4975,6 +4972,214 @@ class NativeAnalyzer:
                 return True
             cur = cur.parent
         return False
+
+    def _ts_build_scope_index(self, root: "Node") -> Dict[str, Any]:
+        """Index aliases and shadowing once for ``root``.
+
+        Each function, class, and the module is walked a single time.
+        Call sites then resolve against that index, so a large function
+        does not rescan its body at every call.
+        """
+        cache = getattr(self, "_ts_scope_index_cache", None)
+        if cache is None:
+            cache = {}
+            self._ts_scope_index_cache = cache
+        # tree-sitter Node wrappers are not stable objects, so identity
+        # cannot be the cache key. One analyzer owns one source.
+        cache_key = (root.start_byte, root.end_byte, self.language)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
+        scope_types = func_types | class_types
+        sink_category_for = self._ts_sink_category_for_language()
+        module: Dict[str, Any] = {"aliases": [], "is_function": False}
+        by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
+        stack: List[Dict[str, Any]] = [module]
+
+        def note_identifier(
+            binding_node: "Node", name: str, value: Optional["Node"]
+        ) -> None:
+            """Record one identifier binding on the current scope.
+
+            A missing initializer still shadows. Only a sink-alias initializer
+            is an alias, and it does not remove an earlier shadow of the name.
+            A ``const`` or ``let`` is in the temporal dead zone for its
+            initializer, so that shadow starts at the declaration. An
+            assignment still starts after its right-hand side, which resolves
+            to the previous binding.
+            """
+            current = stack[-1]
+            if value is not None:
+                category = self._ts_alias_value_category(value, sink_category_for)
+                if category:
+                    block_start, block_end = self._ts_alias_block_extent(binding_node)
+                    current["aliases"].append(
+                        (
+                            binding_node.start_byte,
+                            block_start,
+                            block_end,
+                            name,
+                            category,
+                        )
+                    )
+                    return
+            if current.get("is_function"):
+                # ``var`` and function-body bindings last for the function.
+                # A ``const`` or ``let`` in a nested block ends with that block.
+                bound_at = binding_node.start_byte
+                declaration = binding_node.parent
+                lexical = (
+                    declaration is not None
+                    and declaration.type == "lexical_declaration"
+                )
+                if value is not None and not lexical:
+                    bound_at = value.end_byte
+                _block_start, block_end = self._ts_alias_block_extent(binding_node)
+                current["shadows"].append((bound_at, block_end, name))
+
+        def visit(node: "Node") -> None:
+            self._ts_scope_nodes_visited += 1
+            pushed = False
+            if node.type in scope_types:
+                facts: Dict[str, Any] = {
+                    "aliases": [],
+                    "shadows": [],
+                    "parameters": set(),
+                    "is_function": node.type in func_types,
+                }
+                if facts["is_function"]:
+                    for param in self._ts_extract_parameters(node):
+                        name = param.get("name")
+                        if isinstance(name, str) and name:
+                            facts["parameters"].add(name)
+                by_span[(node.start_byte, node.end_byte)] = facts
+                stack.append(facts)
+                pushed = True
+            elif node.type in ("variable_declarator", "assignment_expression"):
+                target = node.child_by_field_name("name")
+                if target is None:
+                    target = node.child_by_field_name("left")
+                value = node.child_by_field_name("value")
+                if value is None:
+                    value = node.child_by_field_name("right")
+                if target is not None and target.type == "identifier":
+                    note_identifier(node, self._ts_get_node_text(target), value)
+                elif (
+                    node.type == "variable_declarator"
+                    and target is not None
+                    and target.type in ("object_pattern", "array_pattern")
+                    and stack[-1].get("is_function")
+                ):
+                    # The initializer and default expressions run before the
+                    # new names are in scope, so the shadow starts after them.
+                    bound_at = node.start_byte
+                    if value is not None:
+                        bound_at = value.end_byte
+                    _block_start, block_end = self._ts_alias_block_extent(node)
+                    for name in self._ts_extract_binding_identifiers(target):
+                        stack[-1]["shadows"].append((bound_at, block_end, name))
+            elif node.type == "for_in_statement" and stack[-1].get("is_function"):
+                # ``for (const run of xs)`` binds ``run`` for the loop body.
+                # The iterable is outside that binding. ``var`` stays visible
+                # for the rest of the function; ``let`` and ``const`` do not.
+                left = node.child_by_field_name("left")
+                keywords = {
+                    child.type
+                    for child in node.children
+                    if child.type in ("const", "let", "var")
+                }
+                if keywords and left is not None:
+                    right = node.child_by_field_name("right")
+                    bound_at = node.start_byte
+                    if right is not None:
+                        bound_at = right.end_byte
+                    end = None
+                    if "const" in keywords or "let" in keywords:
+                        end = node.end_byte
+                    for name in self._ts_extract_binding_identifiers(left):
+                        stack[-1]["shadows"].append((bound_at, end, name))
+            elif node.type == "catch_clause" and stack[-1].get("is_function"):
+                param = node.child_by_field_name("parameter")
+                body = node.child_by_field_name("body")
+                if param is not None and body is not None:
+                    for name in self._ts_extract_binding_identifiers(param):
+                        stack[-1]["shadows"].append(
+                            (body.start_byte, body.end_byte, name)
+                        )
+            for child in node.children:
+                visit(child)
+            if pushed:
+                stack.pop()
+
+        visit(root)
+        # Child bindings can start before an end-byte event recorded on the
+        # way down. Lookup binary-searches by start byte, so sort once.
+        for facts in by_span.values():
+            facts["shadows"].sort(key=lambda event: event[0])
+        built = {"module": module, "by_span": by_span}
+        cache[cache_key] = built
+        return built
+
+    def _ts_alias_block_extent(
+        self, binding_node: "Node"
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """Return the block that can see a ``const``/``let`` binding.
+
+        Used for sink aliases and for ordinary shadows. ``(None, None)``
+        means the binding is visible throughout the function or module that
+        owns it, including nested functions. A binding inside ``if``,
+        ``for``, or ``catch`` is visible only inside that statement. ``var``
+        and assignments stay function-wide.
+        """
+        declaration = binding_node.parent
+        if declaration is None or declaration.type != "lexical_declaration":
+            return None, None
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
+        scope_types = func_types | class_types
+        header_scopes = {
+            "for_statement",
+            "for_in_statement",
+            "for_of_statement",
+            "catch_clause",
+            "switch_body",
+            "switch_statement",
+        }
+        current: Optional["Node"] = declaration.parent
+        while current is not None and current.type not in scope_types:
+            if current.type in header_scopes:
+                return current.start_byte, current.end_byte
+            if current.type == "statement_block":
+                parent = current.parent
+                if parent is not None and parent.type in scope_types:
+                    return None, None
+                return current.start_byte, current.end_byte
+            current = current.parent
+        return None, None
+
+    @staticmethod
+    def _ts_alias_covers_use(alias: Tuple, use_byte: int) -> bool:
+        """Return True when ``use_byte`` is inside the alias's block."""
+        _declared_at, block_start, block_end, _name, _category = alias
+        if block_start is None or block_end is None:
+            return True
+        return block_start <= use_byte < block_end
+
+    @staticmethod
+    def _ts_events_before(events: List[Tuple], use_byte: int) -> int:
+        """Index of the first event whose byte is not before ``use_byte``."""
+        lo = 0
+        hi = len(events)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if events[mid][0] < use_byte:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
 
     def _ts_shadowed_names_at(self, use_node: "Node") -> Set[str]:
         """Names shadowed at ``use_node`` by parameters or earlier locals.
@@ -4987,107 +5192,60 @@ class NativeAnalyzer:
 
         Bindings in nested functions/classes that do not enclose ``use_node``
         are ignored so out-of-scope locals cannot suppress a visible alias.
+        A ``const`` or ``let`` in a nested block stops shadowing when that
+        block ends.
         """
         fn = self._ts_enclosing_function(use_node)
         if fn is None:
             return set()
-        cache = getattr(self, "_shadowed_names_cache", None)
-        if cache is None:
-            cache = {}
-            self._shadowed_names_cache = cache
-        cache_key = self._ts_scope_lookup_key(fn, use_node)
-        if cache_key in cache:
-            return cache[cache_key]
-        shadowed: Set[str] = set()
-        for param in self._ts_extract_parameters(fn):
-            name = param.get("name")
-            if name:
-                shadowed.add(name)
+        index = self._ts_build_scope_index(self._ts_root(use_node))
+        facts = index["by_span"].get((fn.start_byte, fn.end_byte))
+        if not facts:
+            return set()
+        shadowed = set(facts["parameters"])
         use_byte = use_node.start_byte
-        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
-        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
-        nested_scope_types = func_types | class_types
-
-        def collect_bindings(n: "Node") -> None:
-            if n.start_byte >= use_byte:
-                return
-            if n.type in ("variable_declarator", "assignment_expression"):
-                target = n.child_by_field_name("name") or n.child_by_field_name(
-                    "left"
-                )
-                if target is not None and target.type == "identifier":
-                    if not self._ts_is_sink_alias_binding(n):
-                        shadowed.add(self._ts_get_node_text(target))
-            for child in n.children:
-                if (
-                    child.type in nested_scope_types
-                    and not _is_same_ts_node(child, fn)
-                    and not self._ts_node_contains(child, use_node)
-                ):
-                    continue
-                collect_bindings(child)
-
-        collect_bindings(fn)
-        cache[cache_key] = shadowed
+        cutoff = self._ts_events_before(facts["shadows"], use_byte)
+        for _start, end, name in facts["shadows"][:cutoff]:
+            if end is None or use_byte < end:
+                shadowed.add(name)
         return shadowed
 
     def _ts_visible_sink_aliases_at(self, use_node: "Node") -> Dict[str, str]:
-        """Sink aliases visible at ``use_node`` without nested-scope bleed."""
+        """Sink aliases visible at ``use_node`` without nested-scope bleed.
+
+        Source order applies only inside the function that contains the use.
+        A function body runs when the function is called, so an alias in the
+        module or in an enclosing function is visible even when its
+        declaration appears later in the file. A ``const`` or ``let`` inside
+        a nested block stays inside that block, so a nested function declared
+        outside the block does not see it. Shadowing of those names is still
+        decided by ``_ts_shadowed_names_at``.
+        """
         fn = self._ts_enclosing_function(use_node)
         if fn is None:
             return {}
-        cache = getattr(self, "_visible_alias_cache", None)
-        if cache is None:
-            cache = {}
-            self._visible_alias_cache = cache
-        cache_key = self._ts_scope_lookup_key(fn, use_node)
-        if cache_key in cache:
-            return cache[cache_key]
-
-        visible: Dict[str, str] = {}
+        index = self._ts_build_scope_index(self._ts_root(use_node))
         use_byte = use_node.start_byte
-        sink_category_for = self._ts_sink_category_for_language()
-        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
-        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
-        nested_scope_types = func_types | class_types
-        root = self._ts_root(use_node)
-
-        def collect_alias(binding_node: "Node") -> None:
-            target = binding_node.child_by_field_name("name")
-            if target is None:
-                target = binding_node.child_by_field_name("left")
-            value = binding_node.child_by_field_name("value")
-            if value is None:
-                value = binding_node.child_by_field_name("right")
-            if (
-                target is not None
-                and value is not None
-                and target.type == "identifier"
-            ):
-                cat = self._ts_alias_value_category(value, sink_category_for)
-                if cat:
-                    visible[self._ts_get_node_text(target)] = cat
-
-        def walk_scope(node: "Node") -> None:
-            if node.start_byte >= use_byte:
-                return
-            if node.type in ("variable_declarator", "assignment_expression"):
-                collect_alias(node)
-            for child in node.children:
-                if (
-                    child.type in nested_scope_types
-                    and not _is_same_ts_node(child, fn)
-                    and not self._ts_node_contains(child, use_node)
-                ):
-                    continue
-                walk_scope(child)
-
-        for child in root.children:
-            if _is_same_ts_node(child, fn):
-                break
-            walk_scope(child)
-        walk_scope(fn)
-        cache[cache_key] = visible
+        visible: Dict[str, str] = {}
+        for alias in index["module"]["aliases"]:
+            if self._ts_alias_covers_use(alias, use_byte):
+                visible[alias[3]] = alias[4]
+        innermost = index["by_span"].get((fn.start_byte, fn.end_byte))
+        ancestors: List[Dict[str, Any]] = []
+        current: Optional["Node"] = use_node
+        while current is not None:
+            facts = index["by_span"].get((current.start_byte, current.end_byte))
+            if facts is not None:
+                ancestors.append(facts)
+            current = current.parent
+        for facts in reversed(ancestors):
+            aliases = facts["aliases"]
+            if facts is innermost:
+                cutoff = self._ts_events_before(aliases, use_byte)
+                aliases = aliases[:cutoff]
+            for alias in aliases:
+                if self._ts_alias_covers_use(alias, use_byte):
+                    visible[alias[3]] = alias[4]
         return visible
 
     def _ts_sync_param_flow_summary(self, ctx: FunctionContext) -> None:
