@@ -22,7 +22,8 @@ classifiers = [
     "Intended Audience :: Developers"
 ]
 dependencies = [
-    "mcp[cli]>=1.25.0",
+    # Scanner uses the SDK 1.x session API and models; 2.x requires a migration.
+    "mcp[cli]>=1.25.0,<2",
     "httpx>=0.28.1",
     "yara-python>=4.5.4",
     "fastapi>=0.125.0",

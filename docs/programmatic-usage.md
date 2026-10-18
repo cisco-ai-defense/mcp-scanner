@@ -62,6 +62,9 @@ asyncio.run(main())
 
 ## Paginated Server Lists
 
+These scan methods use the MCP SDK 1.x API; the package requirement excludes
+SDK 2.x, which requires a separate API and model migration.
+
 Tool and prompt scans follow MCP pagination for both remote and stdio servers.
 Remote resource scans also follow pagination. Bulk scans discover every listed
 item before analyzing the inventory. Scans for a specific tool, prompt, or
