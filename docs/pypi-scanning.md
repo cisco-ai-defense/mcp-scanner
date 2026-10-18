@@ -118,6 +118,8 @@ See `examples/sdk_pypi_scanner.py` for a complete example.
 | `MCP_SCANNER_PYPI_INDEX_URL` | `https://pypi.org/pypi` | PyPI JSON API base URL (supports private mirrors over HTTPS) |
 | `MCP_SCANNER_PYPI_SCAN_TIMEOUT` | `300` | Container timeout in seconds |
 
+Do not set `MCP_SCANNER_LLM_MODEL=apple-fm/system` for PyPI scans. Package scanning runs the behavioral analyzer, and those alignment prompts exceed the on-device context window. Use a hosted model.
+
 ### Docker Image
 
 The scanner uses a digest-pinned `python:3.13-alpine` base image with `cisco-ai-mcp-scanner` installed for behavioral analysis. When you run from a source checkout the image is built from that tree; when installed from PyPI the image pins the same package version you have locally and tags the image with that version (so upgrades do not silently reuse a stale `latest` image).

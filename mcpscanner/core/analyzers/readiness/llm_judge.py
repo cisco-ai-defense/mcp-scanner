@@ -40,17 +40,19 @@ from ....utils.analyzer_errors import build_infrastructure_error_finding
 from ....utils.logging_config import get_logger
 from ..base import SecurityFinding
 
-# Try to import litellm
+from ....utils.apple_fm import apple_fm_runtime_status, is_apple_fm_model
+from ....utils.llm_completion import acompletion
+
+# Hosted providers still go through LiteLLM. apple-fm/ does not.
 _litellm_available = False
 _litellm_import_error: Optional[str] = None
 
 try:
-    from litellm import acompletion
+    import litellm  # noqa: F401
 
     _litellm_available = True
 except ImportError as e:
     _litellm_import_error = str(e)
-    acompletion = None  # type: ignore
 
 
 # Readiness-specific threat categories
@@ -141,6 +143,9 @@ class ReadinessLLMJudge:
         Returns:
             True if the LLM judge can be used, False otherwise.
         """
+        if is_apple_fm_model(self.model):
+            available, _reason = apple_fm_runtime_status()
+            return available
         if not _litellm_available:
             return False
 
@@ -154,6 +159,9 @@ class ReadinessLLMJudge:
         Returns:
             Human-readable explanation or None if available.
         """
+        if is_apple_fm_model(self.model):
+            available, reason = apple_fm_runtime_status()
+            return None if available else reason
         if not _litellm_available:
             return f"litellm not installed: {_litellm_import_error}"
 

@@ -55,6 +55,8 @@ export MCP_SCANNER_LLM_MODEL="azure/gpt-4.1"
 
 See [LLM Providers](llm-providers.md) for complete configuration options.
 
+Do not use the on-device Apple Foundation Model (`MCP_SCANNER_LLM_MODEL=apple-fm/system`) for behavioral scanning. Alignment prompts include the tool source and dataflow context and exceed that model's context window. The check then fails, and the summary can report no tools. Use a hosted model such as Bedrock Claude or GPT-4o. `apple-fm/system` is for tool, prompt, resource, and instruction description scans.
+
 ## Output Formats
 
 The Behavioral Analyzer supports multiple output formats:

@@ -24,6 +24,20 @@ class TestClassifyAnalyzerError:
             is ErrorKind.TRANSIENT
         )
 
+    def test_empty_timeout_error_is_transient(self):
+        assert (
+            classify_analyzer_error(TimeoutError(), context="llm")
+            is ErrorKind.TRANSIENT
+        )
+
+    def test_concurrent_requests_are_transient(self):
+        assert (
+            classify_analyzer_error(
+                RuntimeError("Too many concurrent requests"), context="llm"
+            )
+            is ErrorKind.TRANSIENT
+        )
+
     def test_transient_rate_limit_message(self):
         assert (
             classify_analyzer_error(RuntimeError("429 rate limit exceeded"), context="llm")

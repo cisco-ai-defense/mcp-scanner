@@ -44,7 +44,8 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
-from litellm import acompletion
+from mcpscanner.utils.apple_fm import is_apple_fm_model
+from mcpscanner.utils.llm_completion import acompletion
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
@@ -190,8 +191,11 @@ class MetaAnalyzer:
 
         self._model = config.llm_model
         is_bedrock = self._model and "bedrock/" in self._model
+        is_apple_fm = is_apple_fm_model(self._model)
 
-        if not is_bedrock:
+        if is_apple_fm:
+            self._api_key = None
+        elif not is_bedrock:
             if not config.llm_provider_api_key:
                 raise ValueError(
                     "Meta-Analyzer LLM API key not configured. "
