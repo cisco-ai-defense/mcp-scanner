@@ -13,7 +13,14 @@ dereferences schema URLs or invokes tools during these checks.
 | MCP Apps | Resource scans can inspect declared resources as text. There is no app-rendering or browser sandbox verdict. | Script execution, cross-origin access, postMessage handling, and exfiltration from an embedded app. |
 | Sampling injection | Tool descriptions, instructions, prompts, and resource text can be scanned for injection patterns. | Whether server-driven sampling requests alter a model's behavior or leak data. |
 | MRTR replay and state hijack | No passive verdict. The `protocol` command avoids treating repeated `tools/list` as a replay attack on MCP 2.0. | Correlation of request IDs, auth context, state, and results across an instrumented client/server session. |
+| Shared-cache poisoning and server shadowing | No single-server verdict. Cache hints (`ttlMs`, `cacheScope`) describe freshness and caller sharing; they do not authenticate the server that produced a response. | A host or gateway using a shared cache must key entries by verified server origin (and private entries by authorization context). Detecting a name/version collision requires two controlled origins and observation of the client's cache behavior. |
 | Split payloads and exfiltration | Existing text/YARA/LLM analyzers inspect material present at scan time; schema reference locations are reported. | Payload reassembly across tool calls, actual outbound transfers, and client behavior after rendering or dereferencing. |
+
+For `resources/read`, the request `uri` is a resource identifier, not the MCP
+server origin. `tools/list` has no resource URI parameter. Matching method and
+parameters alone therefore cannot prove that a shared cache entry came from
+the intended server. See the [MCP caching draft](https://modelcontextprotocol.io/specification/draft/server/utilities/caching)
+and the [TypeScript SDK cache-store guidance](https://ts.sdk.modelcontextprotocol.io/v2/api/@modelcontextprotocol/client/client/client.html#responsecachestore).
 
 Use `mcp-scanner --analyzers schema remote --server-url URL` for advertised tool
 references, `mcp-scanner --analyzers schema --raw static --tools tools.json` for

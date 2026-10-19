@@ -408,6 +408,13 @@ class Scanner:
         base = mime.split(";", 1)[0].strip().lower()
         return base
 
+    @staticmethod
+    def _advertised_resource_mime(resource: Any) -> Optional[str]:
+        """Read the SDK attribute on both MCP 2.x and legacy resource models."""
+        return getattr(resource, "mime_type", None) or getattr(
+            resource, "mimeType", None
+        )
+
     @classmethod
     def _resource_mime_is_allowed(
         cls, effective_mime: str, allowed_mime_types: List[str]
@@ -644,7 +651,7 @@ class Scanner:
             if hasattr(content, "text") and content.text:
                 piece = content.text
                 observed += len(piece)
-                raw_mime = getattr(content, "mimeType", None)
+                raw_mime = cls._advertised_resource_mime(content)
                 if raw_mime:
                     read_mimes.append(raw_mime)
                 room = limit - len(text_content)
@@ -1247,13 +1254,23 @@ class Scanner:
 
     @staticmethod
     def _should_fallback_to_initialize(
-        error: Exception, *, legacy_stdio: bool = False
+        error: Exception, *, legacy_stdio: bool = False, legacy_http: bool = False
     ) -> bool:
         """Return True when ``discover()`` failed in a way that ``initialize()`` may still work."""
         rpc_error = getattr(error, "error", None)
         code = getattr(error, "code", None)
         if code is None:
             code = getattr(rpc_error, "code", None)
+        # MCP 1.x streamable HTTP servers can reject pre-initialize discover
+        # with this exact missing-session response. It is safe to retry the
+        # legacy initialize handshake only for this known server shape.
+        if code == -32600:
+            return (
+                legacy_http
+                and getattr(rpc_error, "message", str(error))
+                == "Bad Request: Missing session ID"
+                and getattr(rpc_error, "data", None) in (None, "")
+            )
         # MCP 1.x Python stdio servers use this exact generic error for an
         # unknown discover method. A modern server may use -32602 for a real
         # payload defect, so do not infer legacy support from the code alone.
@@ -1300,7 +1317,11 @@ class Scanner:
         return getattr(capabilities, capability, None) is not None
 
     async def _negotiate_mcp_session(
-        self, session: ClientSession, *, legacy_stdio: bool = False
+        self,
+        session: ClientSession,
+        *,
+        legacy_stdio: bool = False,
+        legacy_http: bool = False,
     ) -> Any:
         """Negotiate protocol version with the server.
 
@@ -1321,12 +1342,18 @@ class Scanner:
                 return connect_result
             except McpError as e:
                 if not self._should_fallback_to_initialize(
-                    e, legacy_stdio=legacy_stdio
+                    e, legacy_stdio=legacy_stdio, legacy_http=legacy_http
                 ):
                     raise
                 if getattr(e, "code", None) == -32602:
                     logger.warning(
                         "Legacy-shaped server/discover rejection over stdio; "
+                        "trying initialize() after: %s",
+                        e,
+                    )
+                elif getattr(e, "code", None) == -32600:
+                    logger.warning(
+                        "Legacy-shaped server/discover rejection over HTTP; "
                         "trying initialize() after: %s",
                         e,
                     )
@@ -1375,6 +1402,7 @@ class Scanner:
             getattr(session, "server_info", None),
             getattr(session, "protocol_version", None),
         )
+
     @staticmethod
     def _analyzer_label(analyzer: Any) -> str:
         """Return a stable display name for enum and custom analyzers."""
@@ -1447,10 +1475,14 @@ class Scanner:
         tool_data = json.loads(tool_json)
 
         if AnalyzerEnum.SCHEMA in analyzers:
-            schema_findings = await self._schema_analyzer.analyze(
-                tool_json, {"tool_name": name, "content_type": "parameters"}
-            )
-            all_findings.extend(schema_findings)
+            try:
+                schema_findings = await self._schema_analyzer.analyze(
+                    tool_json, {"tool_name": name, "content_type": "parameters"}
+                )
+                all_findings.extend(schema_findings)
+                successful_analyzers.append(AnalyzerEnum.SCHEMA)
+            except Exception as e:
+                self._record_analyzer_error(analyzer_errors, "SCHEMA", "parameters", e)
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the description
@@ -2168,7 +2200,9 @@ class Scanner:
                 session = ClientSession(read, write)
                 await session.__aenter__()
                 logger.debug(f'Initializing MCP session: server="{server_url}"')
-                await self._negotiate_mcp_session(session)
+                await self._negotiate_mcp_session(
+                    session, legacy_http="/sse" not in destination_url
+                )
             logger.debug(f'Successfully connected to MCP server: server="{server_url}"')
             return client_context, session
         except (asyncio.CancelledError, GeneratorExit) as e:
@@ -3712,12 +3746,13 @@ class Scanner:
             aggregate_limit = MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS
             remaining = aggregate_limit
             for resource in resource_list.resources:
+                resource_mime = self._advertised_resource_mime(resource)
                 if remaining <= 0:
                     results.append(
                         self._resource_coverage_limit_result(
                             resource.uri,
                             resource.name or "",
-                            self._normalize_mime_type(resource.mimeType) or "unknown",
+                            self._normalize_mime_type(resource_mime) or "unknown",
                             CoverageLimitExceeded(
                                 "resource scan aggregate budget exhausted",
                                 limit=aggregate_limit,
@@ -3728,8 +3763,8 @@ class Scanner:
                 # Check if MIME type is allowed. The normalized list MIME is
                 # the effective type for this early decision, so the result
                 # reports that value rather than the raw advertisement.
-                listed_mime = self._normalize_mime_type(resource.mimeType) or "unknown"
-                if resource.mimeType and not self._resource_mime_is_allowed(
+                listed_mime = self._normalize_mime_type(resource_mime) or "unknown"
+                if resource_mime and not self._resource_mime_is_allowed(
                     listed_mime, allowed_mime_types
                 ):
                     logger.info(
@@ -3763,7 +3798,7 @@ class Scanner:
                             truncated,
                             observed,
                         ) = self._extract_resource_read_result(
-                            resource_contents, resource.mimeType
+                            resource_contents, resource_mime
                         )
                     except (AttributeError, TypeError) as e:
                         logger.warning(
@@ -3773,7 +3808,7 @@ class Scanner:
                             ResourceScanResult(
                                 resource_uri=resource.uri,
                                 resource_name=resource.name or "",
-                                resource_mime_type=resource.mimeType or "unknown",
+                                resource_mime_type=resource_mime or "unknown",
                                 status="failed",
                                 analyzers=[],
                                 findings=[],
@@ -3877,7 +3912,7 @@ class Scanner:
                             ResourceScanResult(
                                 resource_uri=resource.uri,
                                 resource_name=resource.name or "",
-                                resource_mime_type=resource.mimeType or "unknown",
+                                resource_mime_type=resource_mime or "unknown",
                                 status="failed",
                                 analyzers=[],
                                 findings=[],
@@ -3890,7 +3925,7 @@ class Scanner:
                         ResourceScanResult(
                             resource_uri=resource.uri,
                             resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
+                            resource_mime_type=resource_mime or "unknown",
                             status="failed",
                             analyzers=[],
                             findings=[],
@@ -3902,7 +3937,7 @@ class Scanner:
                         ResourceScanResult(
                             resource_uri=resource.uri,
                             resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
+                            resource_mime_type=resource_mime or "unknown",
                             status="failed",
                             analyzers=[],
                             findings=[],
@@ -4016,12 +4051,12 @@ class Scanner:
                     f"Resource '{resource_uri}' not found on server {server_url}"
                 )
 
+            resource_mime = self._advertised_resource_mime(target_resource)
+
             # Check if MIME type is allowed. The normalized list MIME is
             # the effective type for this early decision.
-            listed_mime = (
-                self._normalize_mime_type(target_resource.mimeType) or "unknown"
-            )
-            if target_resource.mimeType and not self._resource_mime_is_allowed(
+            listed_mime = self._normalize_mime_type(resource_mime) or "unknown"
+            if resource_mime and not self._resource_mime_is_allowed(
                 listed_mime, allowed_mime_types
             ):
                 logger.info(
@@ -4052,7 +4087,7 @@ class Scanner:
                         truncated,
                         observed,
                     ) = self._extract_resource_read_result(
-                        resource_contents, target_resource.mimeType
+                        resource_contents, resource_mime
                     )
                 except (AttributeError, TypeError) as e:
                     logger.warning(
@@ -4061,7 +4096,7 @@ class Scanner:
                     return ResourceScanResult(
                         resource_uri=target_resource.uri,
                         resource_name=target_resource.name or "",
-                        resource_mime_type=target_resource.mimeType or "unknown",
+                        resource_mime_type=resource_mime or "unknown",
                         status="failed",
                         analyzers=[],
                         findings=[],
@@ -4144,7 +4179,7 @@ class Scanner:
                 return ResourceScanResult(
                     resource_uri=target_resource.uri,
                     resource_name=target_resource.name or "",
-                    resource_mime_type=target_resource.mimeType or "unknown",
+                    resource_mime_type=resource_mime or "unknown",
                     status="failed",
                     analyzers=[],
                     findings=[],
@@ -4154,7 +4189,7 @@ class Scanner:
                 return ResourceScanResult(
                     resource_uri=target_resource.uri,
                     resource_name=target_resource.name or "",
-                    resource_mime_type=target_resource.mimeType or "unknown",
+                    resource_mime_type=resource_mime or "unknown",
                     status="failed",
                     analyzers=[],
                     findings=[],

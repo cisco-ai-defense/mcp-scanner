@@ -1412,6 +1412,12 @@ def test_should_fallback_to_initialize_covers_legacy_shapes(config):
     assert scanner._should_fallback_to_initialize(
         generic_invalid, legacy_stdio=True
     )
+    missing_http_session = _mcp_error(-32600, "Bad Request: Missing session ID")
+    assert not scanner._should_fallback_to_initialize(missing_http_session)
+    assert scanner._should_fallback_to_initialize(missing_http_session, legacy_http=True)
+    assert not scanner._should_fallback_to_initialize(
+        _mcp_error(-32600, "Bad Request: Invalid session ID"), legacy_http=True
+    )
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32602, "params._meta is invalid"), legacy_stdio=True
     )
