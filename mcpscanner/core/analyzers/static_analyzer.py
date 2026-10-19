@@ -32,6 +32,18 @@ from ...utils.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def _normalize_mime_type(mime: Optional[str]) -> str:
+    """Base MIME type, lowercased, without parameters.
+
+    Same rule as ``Scanner._normalize_mime_type`` on the remote path, so
+    ``text/html;profile=mcp-app`` (MCP Apps UI resources) matches a
+    ``text/html`` allowlist entry here too instead of being skipped.
+    """
+    if not mime:
+        return ""
+    return mime.split(";", 1)[0].strip().lower()
+
+
 def _extract_html_text_if_needed(content: str, mime_type: Optional[str]) -> str:
     """Strip HTML tags from a resource body when ``mime_type`` is ``text/html``.
 
@@ -51,7 +63,7 @@ def _extract_html_text_if_needed(content: str, mime_type: Optional[str]) -> str:
     back to the raw content with a single warning per import failure
     (matches the remote path's exact behaviour).
     """
-    if mime_type != "text/html" or not content:
+    if _normalize_mime_type(mime_type) != "text/html" or not content:
         return content
     try:
         from bs4 import BeautifulSoup
@@ -552,7 +564,9 @@ class StaticAnalyzer:
         # result that matches the shape used by the skip_blob_only branch above.
         # Bug fix: previously this branch referenced an undefined `findings`
         # variable, since `findings` is only assigned by the analysis path below.
-        if allowed_mime_types and resource_mime not in allowed_mime_types:
+        if allowed_mime_types and _normalize_mime_type(resource_mime) not in {
+            _normalize_mime_type(m) for m in allowed_mime_types
+        }:
             return {
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,

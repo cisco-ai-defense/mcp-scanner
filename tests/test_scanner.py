@@ -970,7 +970,7 @@ def test_prompt_scan_result_failed_status():
     )
 
     assert result.status == "failed"
-    assert result.is_safe is True  # No findings means safe
+    assert result.is_safe is None  # A failed scan has unknown safety
 
 
 # --- Resource Scanning Tests ---
@@ -1031,7 +1031,7 @@ def test_resource_scan_result_skipped_status():
     )
 
     assert result.status == "skipped"
-    assert result.is_safe is True  # No findings means safe, even if skipped
+    assert result.is_safe is None  # No analysis ran
 
 
 def test_resource_scan_result_failed_status():
@@ -1046,7 +1046,7 @@ def test_resource_scan_result_failed_status():
     )
 
     assert result.status == "failed"
-    assert result.is_safe is True  # No findings means safe, even if failed
+    assert result.is_safe is None  # A failed scan has unknown safety
 
 
 # ---------------------------------------------------------------------------

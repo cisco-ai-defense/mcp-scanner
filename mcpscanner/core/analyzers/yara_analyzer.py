@@ -112,7 +112,7 @@ class YaraAnalyzer(BaseAnalyzer):
             self.logger.debug("YARA rules compiled successfully")
             return rules
         except yara.Error as e:
-            self.logger.error(f"Error compiling YARA rules: {e}")
+            self.logger.error("Error compiling YARA rules: %s", type(e).__name__)
             raise
 
     async def analyze(
@@ -192,7 +192,7 @@ class YaraAnalyzer(BaseAnalyzer):
                 )
 
         except Exception as e:
-            self.logger.error(f"YARA analysis failed for tool '{tool_name}': {e}")
+            self.logger.error("YARA analysis failed: %s", type(e).__name__)
             raise
 
         return findings
