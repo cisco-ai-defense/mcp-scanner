@@ -64,13 +64,15 @@ class SchemaReferenceAnalyzer(BaseAnalyzer):
                     # classifiable, but are not security findings by themselves.
                     if classified is not None and classified[0] != "INFO":
                         severity, category = classified
+                        article = "an" if category[0] in "aeiou" else "a"
                         findings.append(
                             self.create_security_finding(
                                 severity=severity,
-                                summary=f"Tool schema contains a {category} $ref. "
+                                summary=f"Tool schema contains {article} {category} $ref. "
                                 "A client that resolves it may load additional content.",
                                 threat_category="Indirect Schema Reference",
                                 details={
+                                    "threat_type": "INDIRECT SCHEMA REFERENCE",
                                     "check_id": "MCPS-011",
                                     "classification": category,
                                     "schema_path": f"{path}.$ref",

@@ -199,3 +199,44 @@ async def test_static_cli_schema_only(tmp_path, monkeypatch, capsys):
     await cli_main()
     results = json.loads(capsys.readouterr().out)
     assert results[0]["findings"]["schema_analyzer"]["total_findings"] == 1
+
+
+@pytest.mark.asyncio
+async def test_static_cli_schema_output_names_threat(tmp_path, monkeypatch, capsys):
+    file_path = tmp_path / "tools.json"
+    file_path.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "inputSchema": {
+                            "properties": {
+                                "q": {"$ref": "https://example.org/schema.json"}
+                            }
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mcp-scanner",
+            "--analyzers",
+            "schema",
+            "--raw",
+            "static",
+            "--tools",
+            str(file_path),
+        ],
+    )
+    await cli_main()
+    schema = json.loads(capsys.readouterr().out)[0]["findings"]["schema_analyzer"]
+    assert schema["threat_names"] == ["INDIRECT SCHEMA REFERENCE"]
+    assert schema["threat_summary"].startswith(
+        "Tool schema contains an external-network $ref."
+    )
