@@ -1846,6 +1846,7 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        analyzer_errors=r.get("analyzer_errors", []),
                     )
                     all_results.append(tool_result)
 
@@ -1861,6 +1862,7 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        analyzer_errors=r.get("analyzer_errors", []),
                     )
                     all_results.append(prompt_result)
 
@@ -1883,6 +1885,7 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        analyzer_errors=r.get("analyzer_errors", []),
                         # Thread the description / text the static analyzer
                         # consumed so ``--enable-meta`` can second-guess
                         # findings against the same evidence the primary

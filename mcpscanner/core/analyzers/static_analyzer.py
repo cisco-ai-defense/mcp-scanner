@@ -179,6 +179,7 @@ class StaticAnalyzer:
         content: str,
         context: Optional[Dict[str, Any]] = None,
         analyzers: Optional[List[BaseAnalyzer]] = None,
+        outcome: Optional[Dict[str, Any]] = None,
     ) -> List[SecurityFinding]:
         """Run all configured analyzers on the content.
 
@@ -186,6 +187,7 @@ class StaticAnalyzer:
             content: Content to analyze.
             context: Additional context for analysis.
             analyzers: Optional subset of configured analyzers for this content.
+            outcome: Optional per-item collector for successes and failures.
 
         Returns:
             List[SecurityFinding]: Combined findings from all analyzers.
@@ -193,14 +195,52 @@ class StaticAnalyzer:
         all_findings = []
 
         for analyzer in self.analyzers if analyzers is None else analyzers:
+            analyzer_name = self._get_finding_analyzer_name(analyzer)
             try:
                 findings = await analyzer.analyze(content, context)
                 all_findings.extend(findings)
+                if outcome is not None and analyzer_name not in outcome["analyzers"]:
+                    outcome["analyzers"].append(analyzer_name)
             except Exception as e:
-                # Log error but continue with other analyzers
-                print(f"Warning: {analyzer.name} failed: {e}")
+                # Provider exceptions may contain credentials or scanned text.
+                # Record only the exception type in user-visible results/logs.
+                error_type = type(e).__name__
+                content_type = str((context or {}).get("content_type", "content"))
+                if outcome is not None:
+                    outcome["analyzer_errors"].append(
+                        {
+                            "analyzer": analyzer_name,
+                            "content_type": content_type,
+                            "message": f"{error_type} during analysis",
+                        }
+                    )
+                logger.error(
+                    "%s analysis failed on %s: %s",
+                    analyzer_name,
+                    content_type,
+                    error_type,
+                )
 
         return all_findings
+
+    @staticmethod
+    def _scan_outcome(
+        findings: List[SecurityFinding], outcome: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Complete a static item without treating analyzer failure as safe."""
+        errors = outcome["analyzer_errors"]
+        successful = outcome["analyzers"]
+        if errors:
+            status = "partial" if successful else "failed"
+        else:
+            status = "completed" if successful else "skipped"
+        is_safe = False if findings else True if status == "completed" else None
+        return {
+            "is_safe": is_safe,
+            "status": status,
+            "analyzers": successful,
+            "analyzer_errors": errors,
+        }
 
     async def scan_tools_file(
         self, file_path: Union[str, Path]
@@ -253,12 +293,13 @@ class StaticAnalyzer:
             tool_description = tool_data.get("description", "")
 
             all_findings = []
+            outcome: Dict[str, Any] = {"analyzers": [], "analyzer_errors": []}
 
             # Analyze description
             if tool_description:
                 desc_context = {"tool_name": tool_name, "content_type": "description"}
                 desc_findings = await self._analyze_content(
-                    tool_description, desc_context
+                    tool_description, desc_context, outcome=outcome
                 )
                 all_findings.extend(desc_findings)
 
@@ -282,17 +323,18 @@ class StaticAnalyzer:
                     ]
                 )
                 params_findings = await self._analyze_content(
-                    params_json, params_context, analyzers=params_analyzers
+                    params_json,
+                    params_context,
+                    analyzers=params_analyzers,
+                    outcome=outcome,
                 )
                 all_findings.extend(params_findings)
 
             result = {
                 "tool_name": tool_name,
                 "tool_description": tool_description,
-                "is_safe": len(all_findings) == 0,
                 "findings": all_findings,
-                "status": "completed",
-                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
+                **self._scan_outcome(all_findings, outcome),
             }
 
             results.append(result)
@@ -343,6 +385,7 @@ class StaticAnalyzer:
         for prompt_data in data["prompts"]:
             prompt_name = prompt_data.get("name", "unknown")
             prompt_description = prompt_data.get("description", "")
+            outcome: Dict[str, Any] = {"analyzers": [], "analyzer_errors": []}
 
             # Analyze prompt content
             analysis_content = f"Prompt Name: {prompt_name}\n"
@@ -355,15 +398,15 @@ class StaticAnalyzer:
 
             context = {"prompt_name": prompt_name, "content_type": "prompt"}
 
-            findings = await self._analyze_content(analysis_content, context)
+            findings = await self._analyze_content(
+                analysis_content, context, outcome=outcome
+            )
 
             result = {
                 "prompt_name": prompt_name,
                 "prompt_description": prompt_description,
-                "is_safe": len(findings) == 0,
                 "findings": findings,
-                "status": "completed",
-                "analyzers": [self._get_finding_analyzer_name(a) for a in self.analyzers],
+                **self._scan_outcome(findings, outcome),
             }
 
             results.append(result)
@@ -594,7 +637,10 @@ class StaticAnalyzer:
             "has_resource_content": bool(text_content),
         }
 
-        findings = await self._analyze_content(analysis_content, context)
+        outcome: Dict[str, Any] = {"analyzers": [], "analyzer_errors": []}
+        findings = await self._analyze_content(
+            analysis_content, context, outcome=outcome
+        )
 
         return {
             "resource_uri": resource_uri,
@@ -618,8 +664,6 @@ class StaticAnalyzer:
             # ``Scanner._build_resource_description_for_meta``).
             "resource_description": resource_description,
             "resource_text": text_content,
-            "is_safe": len(findings) == 0,
             "findings": findings,
-            "status": "completed",
-            "analyzers": [a.name for a in self.analyzers],
+            **self._scan_outcome(findings, outcome),
         }
