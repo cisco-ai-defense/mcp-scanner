@@ -42,6 +42,7 @@ from .....utils.analyzer_errors import (
     retry_transient_async,
 )
 from .....utils.log_format import ERROR_TRUNCATE, RESPONSE_DEBUG_MAX, truncate
+from .alignment_prompt_builder import alignment_prompt_cap, alignment_template_chars
 
 
 # Process-wide, monotonically increasing counters used for log
@@ -198,7 +199,7 @@ class AlignmentLLMClient:
 
         # Alignment prompts are hard-capped by the prompt builder; warn if we
         # still exceed the alignment budget (builder bug or manual prompt).
-        alignment_cap = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
+        alignment_cap = alignment_prompt_cap(alignment_template_chars())
         if prompt_length > alignment_cap:
             self.logger.warning(
                 "LLM request_id=%d large_prompt prompt_length=%d threshold=%d model=%s "
