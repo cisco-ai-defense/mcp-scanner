@@ -295,6 +295,9 @@ class TestStaticPathHtmlStripping:
         assert "<h1>" not in out
         assert "Hello" in out
         assert "world" in out
+        # MIME parameters (MCP Apps use ``text/html;profile=mcp-app``) get the
+        # same extraction, matching the remote path's normalized type.
+        assert _extract_html_text_if_needed(html, "text/html;profile=mcp-app") == out
 
     @pytest.mark.skipif(
         _BS4_AVAILABLE,

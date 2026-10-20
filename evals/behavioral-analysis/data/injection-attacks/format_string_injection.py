@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Complex Format String Injection with Multiple Formatting Patterns"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import os
 from datetime import datetime
 
-app = FastMCP("injection-attacks-service-8")
+app = MCPServer("injection-attacks-service-8")
 
 
 class BackupManager:

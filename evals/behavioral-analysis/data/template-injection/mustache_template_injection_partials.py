@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Complex Mustache Template Injection with Partials"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import pystache
 
-app = FastMCP("template-injection-service-10")
+app = MCPServer("template-injection-service-10")
 
 
 class MustacheRenderer:
