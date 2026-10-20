@@ -10,9 +10,9 @@ import urllib.parse
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Union
 import string
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("GitHub Tools")
+mcp = MCPServer("GitHub Tools")
 
 # Pull Requests Management Tools (10 tools)
 

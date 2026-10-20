@@ -245,6 +245,7 @@ class ReportGenerator:
             "BEHAVIORAL": "behavioral_analyzer",
             "VULNERABLE_PACKAGE": "vulnerable_package_analyzer",
             "VIRUSTOTAL": "virustotal_analyzer",
+            "SCHEMA": "schema_analyzer",
         }
         self.requested_analyzer_keys = set()
         for analyzer in self.requested_analyzers:
@@ -357,12 +358,43 @@ class ReportGenerator:
 
             filtered_findings[analyzer] = analyzer_data
 
+        incomplete = (
+            result.get("is_safe") is None
+            or result.get("status") in {"failed", "partial", "skipped"}
+            or bool(result.get("analyzer_errors"))
+        )
         if not filtered_findings:
-            return None
+            # A severity filter must not erase a scan whose coverage failed.
+            # Keep only its error/unknown analyzer entries so lower-severity
+            # findings do not leak through an unrelated severity filter.
+            if severity_filter == SeverityFilter.ALL or not incomplete:
+                return None
+            filtered_findings = {
+                analyzer: data
+                for analyzer, data in findings.items()
+                if (not analyzer_filter or analyzer_filter == analyzer)
+                and (
+                    data.get("severity") == "UNKNOWN"
+                    or data.get("status") in {"error", "partial"}
+                )
+            }
+            if analyzer_filter and not filtered_findings:
+                return None
 
         # Create filtered result
         filtered_result = result.copy()
         filtered_result["findings"] = filtered_findings
+        if (
+            incomplete
+            and severity_filter != SeverityFilter.ALL
+            and not any(
+                data.get("severity") == severity_filter.value.upper()
+                for data in filtered_findings.values()
+            )
+        ):
+            # The original item may have concrete findings at a filtered-out
+            # severity. In this view its remaining evidence is incomplete.
+            filtered_result["is_safe"] = None
         return filtered_result
 
     def _format_raw(self) -> str:
@@ -691,13 +723,17 @@ class ReportGenerator:
 
             output.append(f"Severity breakdown: {dict(severity_counts)}")
 
-            # Show tools with findings
-            tools_with_findings = [
-                t for t in tools if t["data"].get("total_findings", 0) > 0
+            # Show failed analyzer invocations even without findings.
+            tools_to_show = [
+                t
+                for t in tools
+                if t["data"].get("total_findings", 0) > 0
+                or t["data"].get("status") in {"error", "partial"}
+                or t["data"].get("severity") == "UNKNOWN"
             ]
-            if tools_with_findings:
-                output.append("Tools with findings:")
-                for tool in tools_with_findings:
+            if tools_to_show:
+                output.append("Tools with findings or incomplete analysis:")
+                for tool in tools_to_show:
                     tool_name = tool["tool_name"]
                     data = tool["data"]
                     severity = data.get("severity", "SAFE")
@@ -721,8 +757,10 @@ class ReportGenerator:
 
         # Group by severity
         severity_groups = {}
+        incomplete_items = []
         for result in results:
             findings = result.get("findings", {})
+            matched_severity = False
             for analyzer, data in findings.items():
                 severity = data.get("severity", "SAFE")
 
@@ -731,6 +769,7 @@ class ReportGenerator:
                     and severity_filter.value.upper() != severity
                 ):
                     continue
+                matched_severity = True
 
                 if severity not in severity_groups:
                     severity_groups[severity] = []
@@ -742,6 +781,9 @@ class ReportGenerator:
                         "data": data,
                     }
                 )
+
+            if result.get("is_safe") is None and not matched_severity:
+                incomplete_items.append(result)
 
         # Sort by severity priority. UNKNOWN goes last because per the
         # rollup contract it represents "not yet analyzed" rather than a
@@ -773,6 +815,16 @@ class ReportGenerator:
                 threat_summary = item["data"].get("threat_summary", "N/A")
                 output.append(f"  • {tool_name} [{analyzer}]: {threat_summary}")
 
+            output.append("")
+
+        if incomplete_items:
+            output.append(f"⚠️ INCOMPLETE SCANS ({len(incomplete_items)} items)")
+            for result in incomplete_items:
+                tool_name = result.get(
+                    "tool_name",
+                    result.get("package_name", result.get("prompt_name", "Unknown")),
+                )
+                output.append(f"  • {tool_name}: scan incomplete")
             output.append("")
 
         return "\n".join(output)

