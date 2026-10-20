@@ -617,7 +617,7 @@ async def test_template_listing_failure_keeps_static_resources(config):
     )
     session.read_resource.return_value = _read_body("helpdesk", "text/plain")
     session.list_resource_templates.side_effect = McpError(
-        SimpleNamespace(code=-32601, message="Method not found", data=None)
+        code=-32601, message="Method not found"
     )
     patches = _patch_resource_session(scanner, session)
     with patches[0], patches[1], patches[2]:
@@ -677,7 +677,7 @@ async def test_template_listing_error_mid_pagination_reports_failure(config, mon
     session.list_resources.return_value = SimpleNamespace(resources=[])
     session.list_resource_templates.side_effect = [
         SimpleNamespace(resourceTemplates=[_listed_template("a://{x}", "a", "first")], nextCursor="p2"),
-        McpError(SimpleNamespace(code=-32603, message="secret-token-123 leaked", data=None)),
+        McpError(code=-32603, message="secret-token-123 leaked"),
     ]
     patches = _patch_resource_session(scanner, session)
     with patches[0], patches[1], patches[2]:
@@ -691,7 +691,7 @@ async def test_template_listing_error_mid_pagination_reports_failure(config, mon
     assert "secret-token-123" not in discovery.findings[0].summary
     logged = " ".join(str(c) for c in fake_logger.mock_calls)
     assert "secret-token-123" not in logged
-    assert "McpError" in logged
+    assert McpError.__name__ in logged
 
 
 @pytest.mark.asyncio
