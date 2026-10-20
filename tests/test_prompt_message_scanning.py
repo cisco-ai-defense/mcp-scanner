@@ -130,7 +130,7 @@ async def test_scan_remote_server_prompts_fetches_get_prompt(config):
     prompt = MCPPrompt(name="evil_prompt", description="desc", arguments=[])
 
     session = AsyncMock()
-    session.list_prompts.return_value = SimpleNamespace(prompts=[prompt])
+    session.list_prompts.return_value = SimpleNamespace(next_cursor=None, prompts=[prompt])
     session.get_prompt.return_value = SimpleNamespace(
         messages=[
             PromptMessage(
@@ -162,7 +162,7 @@ async def test_get_prompt_failure_marks_prompt_failed(config):
     scanner = Scanner(config)
     prompt = MCPPrompt(name="broken", description="d", arguments=[])
     session = AsyncMock()
-    session.list_prompts.return_value = SimpleNamespace(prompts=[prompt])
+    session.list_prompts.return_value = SimpleNamespace(next_cursor=None, prompts=[prompt])
     session.get_prompt.side_effect = RuntimeError("prompts/get unavailable")
 
     with patch.object(scanner, "_get_mcp_session", AsyncMock(return_value=(AsyncMock(), session))), patch.object(
@@ -265,7 +265,7 @@ async def test_oversized_prompt_does_not_reach_analyzers(config, monkeypatch):
     recorders = _install_recording_analyzers(scanner)
     prompt = MCPPrompt(name="big", description="d", arguments=[])
     session = AsyncMock()
-    session.list_prompts.return_value = SimpleNamespace(prompts=[prompt])
+    session.list_prompts.return_value = SimpleNamespace(next_cursor=None, prompts=[prompt])
     session.get_prompt.return_value = SimpleNamespace(
         messages=[
             PromptMessage(
@@ -297,7 +297,7 @@ async def test_prompt_count_budget_stops_further_fetches(config, monkeypatch):
         MCPPrompt(name="second", description="d", arguments=[]),
     ]
     session = AsyncMock()
-    session.list_prompts.return_value = SimpleNamespace(prompts=prompts)
+    session.list_prompts.return_value = SimpleNamespace(next_cursor=None, prompts=prompts)
     session.get_prompt.return_value = SimpleNamespace(
         messages=[
             PromptMessage(
@@ -338,7 +338,7 @@ async def test_prompt_count_budget_does_not_schedule_every_prompt(
         MCPPrompt(name="third", description="d", arguments=[]),
     ]
     session = AsyncMock()
-    session.list_prompts.return_value = SimpleNamespace(prompts=prompts)
+    session.list_prompts.return_value = SimpleNamespace(next_cursor=None, prompts=prompts)
     session.get_prompt.return_value = SimpleNamespace(
         messages=[
             PromptMessage(
@@ -377,7 +377,7 @@ async def test_within_limit_prompt_keeps_name_and_body(config):
     recorders = _install_recording_analyzers(scanner)
     prompt = MCPPrompt(name="notes", description="a note", arguments=[])
     session = AsyncMock()
-    session.list_prompts.return_value = SimpleNamespace(prompts=[prompt])
+    session.list_prompts.return_value = SimpleNamespace(next_cursor=None, prompts=[prompt])
     session.get_prompt.return_value = SimpleNamespace(
         messages=[
             PromptMessage(
@@ -408,7 +408,7 @@ async def test_prompt_aggregate_budget_stops_further_fetches(config, monkeypatch
         MCPPrompt(name="second", description="d", arguments=[]),
     ]
     session = AsyncMock()
-    session.list_prompts.return_value = SimpleNamespace(prompts=prompts)
+    session.list_prompts.return_value = SimpleNamespace(next_cursor=None, prompts=prompts)
     session.get_prompt.return_value = SimpleNamespace(
         messages=[
             PromptMessage(

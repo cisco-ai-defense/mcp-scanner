@@ -17,45 +17,62 @@
 """Bounded discovery for MCP's cursor-based list operations."""
 
 import asyncio
+import math
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from typing import Any
 
-from mcp.shared.exceptions import McpError
+try:
+    from mcp.shared.exceptions import MCPError as McpError
+except ImportError:  # pragma: no cover - matches the scanner's SDK compatibility
+    from mcp.shared.exceptions import McpError
 from mcp.types import PaginatedRequestParams
 
 from ..config.constants import MCPScannerConstants
-from .exceptions import MCPScannerError
-
-MAX_MCP_LIST_PAGES = 1000
-MAX_MCP_LIST_ITEMS = 10000
+from .exceptions import MCPConnectionError
 
 
-class MCPPaginationError(MCPScannerError):
-    """MCP discovery could not finish within its page, item, or time limits."""
+class MCPPaginationError(MCPConnectionError):
+    """An MCP server's inventory could not be discovered completely or uniquely."""
 
 
 async def iter_mcp_items(
     list_page: Callable[..., Awaitable[Any]],
     items_attribute: str,
     *,
-    max_pages: int = MAX_MCP_LIST_PAGES,
-    max_items: int = MAX_MCP_LIST_ITEMS,
+    max_pages: int | None = None,
+    max_items: int | None = None,
+    page_timeout: float | None = None,
 ) -> AsyncIterator[Any]:
     """Yield listed items in server order, following opaque pagination cursors.
 
-    A caller looking for one item may stop iteration as soon as it is found.
-    A bulk caller must exhaust discovery before reporting a complete scan.
+    Defaults come from the scanner's configurable inventory limits. The timeout
+    applies to every page, including the first, not to the complete operation.
     First-page MCP errors retain their type for existing capability handling;
-    errors on subsequent pages must not be mistaken for an absent capability.
-    Cursor values are never included in discovery error messages.
+    subsequent errors must not be mistaken for an absent capability. Cancellation
+    propagates unchanged. Cursor values are never included in error messages.
+    A caller that stops early must explicitly close this iterator.
     """
+    if max_pages is None:
+        max_pages = MCPScannerConstants.MAX_MCP_LIST_PAGES
+    if max_items is None:
+        max_items = MCPScannerConstants.MAX_MCP_LIST_ITEMS
+    if page_timeout is None:
+        page_timeout = MCPScannerConstants.MCP_LIST_PAGE_TIMEOUT_SECONDS
     if any(type(limit) is not int or limit < 1 for limit in (max_pages, max_items)):
         raise ValueError("MCP discovery page and item limits must be positive integers")
+    if (
+        type(page_timeout) not in (int, float)
+        or not math.isfinite(page_timeout)
+        or page_timeout <= 0
+    ):
+        raise ValueError("MCP list-page timeout must be a finite, positive number")
 
     cursor: str | None = None
     seen_cursors: set[str] = set()
     page_count = 0
     item_count = 0
+    missing = object()
 
     while True:
         if page_count >= max_pages:
@@ -63,22 +80,27 @@ async def iter_mcp_items(
                 f"MCP {items_attribute} discovery exceeded the {max_pages}-page limit"
             )
 
-        timeout = MCPScannerConstants.MCP_CONTENT_READ_TIMEOUT_SECONDS
         try:
             request = (
                 list_page()
                 if page_count == 0
                 else list_page(params=PaginatedRequestParams(cursor=cursor))
             )
-            page = await asyncio.wait_for(request, timeout=timeout)
+            page = await asyncio.wait_for(request, timeout=page_timeout)
         except asyncio.TimeoutError as error:
             raise MCPPaginationError(
-                f"MCP {items_attribute} discovery timed out after {timeout:g} seconds "
+                f"MCP {items_attribute} discovery timed out after {page_timeout:g} seconds "
                 f"waiting for page {page_count + 1}"
             ) from error
         except McpError as error:
             if page_count == 0:
                 raise
+            raise MCPPaginationError(
+                f"MCP {items_attribute} discovery failed on page {page_count + 1}"
+            ) from error
+        except Exception as error:
+            # Only wrap errors raised while requesting a page, not local item
+            # processing. CancelledError and GeneratorExit are BaseExceptions.
             raise MCPPaginationError(
                 f"MCP {items_attribute} discovery failed on page {page_count + 1}"
             ) from error
@@ -92,7 +114,15 @@ async def iter_mcp_items(
             item_count += 1
             yield item
 
-        cursor = getattr(page, "nextCursor", None)
+        # SDK 2 uses snake_case attributes; the protocol uses camelCase on wire.
+        # A present None means end-of-list, not a reason to try another alias.
+        cursor = getattr(page, "next_cursor", missing)
+        if cursor is missing:
+            cursor = getattr(page, "nextCursor", missing)
+        if cursor is missing:
+            raise MCPPaginationError(
+                f"MCP {items_attribute} discovery response has no pagination cursor field"
+            )
         if cursor is None:
             return
         if not isinstance(cursor, str):
@@ -104,3 +134,29 @@ async def iter_mcp_items(
                 f"MCP {items_attribute} discovery returned a repeated cursor"
             )
         seen_cursors.add(cursor)
+
+
+async def find_mcp_item(
+    list_page: Callable[..., Awaitable[Any]],
+    items_attribute: str,
+    identifier_attribute: str,
+    identifier: str,
+) -> Any | None:
+    """Find a unique item without silently accepting a later duplicate identity.
+
+    A named scan must finish bounded discovery before analyzing its target.
+    Duplicate tool/prompt names or resource URIs are ambiguous, so they fail
+    rather than returning a potentially misleading first match. Explicitly
+    close the iterator on duplicates, cancellation, and other early exits.
+    """
+    target = None
+    async with aclosing(iter_mcp_items(list_page, items_attribute)) as items:
+        async for item in items:
+            if str(getattr(item, identifier_attribute)) == identifier:
+                if target is not None:
+                    raise MCPPaginationError(
+                        f"MCP {items_attribute} discovery returned a duplicate "
+                        f"{identifier_attribute} for the requested item"
+                    )
+                target = item
+    return target

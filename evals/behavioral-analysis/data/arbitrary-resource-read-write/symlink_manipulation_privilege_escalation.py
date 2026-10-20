@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Symlink Manipulation for Privilege Escalation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("arbitrary-resource-service-4")
+app = MCPServer("arbitrary-resource-service-4")
 
 
 class SymlinkManipulator:

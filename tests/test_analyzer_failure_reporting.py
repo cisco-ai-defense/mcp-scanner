@@ -74,7 +74,7 @@ async def _scan_entity(scanner, entity, analyzers):
         tool = SimpleNamespace(
             name="example",
             description="Example tool",
-            model_dump_json=lambda: json.dumps(
+            model_dump_json=lambda **kwargs: json.dumps(
                 {"name": "example", "description": "Example tool", "inputSchema": {}}
             ),
         )
@@ -154,6 +154,32 @@ async def test_all_analyzers_crashed_reports_failed():
     assert result.analyzers == []
     assert result.is_safe is None
     assert filter_results_by_severity([result], "HIGH")[0].status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_schema_only_scan_reports_completed():
+    scanner = _scanner()
+    scanner._schema_analyzer = CleanAnalyzer()
+
+    result = await _scan_entity(scanner, "tool", [AnalyzerEnum.SCHEMA])
+
+    assert result.status == "completed"
+    assert result.analyzers == [AnalyzerEnum.SCHEMA]
+    assert result.analyzer_errors == []
+    assert result.is_safe is True
+
+
+@pytest.mark.asyncio
+async def test_schema_failure_reports_incomplete_without_exposing_error():
+    scanner = _scanner()
+    scanner._schema_analyzer = CrashingAnalyzer()
+
+    result = await _scan_entity(scanner, "tool", [AnalyzerEnum.SCHEMA])
+
+    assert result.status == "failed"
+    assert result.is_safe is None
+    assert {error["analyzer"] for error in result.analyzer_errors} == {"SCHEMA"}
+    assert "secret-token-must-not-leak" not in json.dumps(result.analyzer_errors)
 
 
 @pytest.mark.asyncio

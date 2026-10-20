@@ -24,9 +24,8 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError as McpError
 from mcp.types import (
-    ErrorData,
     GetPromptResult,
     ListPromptsResult,
     ListResourcesResult,
@@ -64,19 +63,19 @@ LIST_RESULTS = {
 
 def listed_item(collection, name, description="Returns the weather forecast."):
     if collection == "tools":
-        return Tool(name=name, description=description, inputSchema={"type": "object"})
+        return Tool(name=name, description=description, input_schema={"type": "object"})
     if collection == "prompts":
         return Prompt(name=name, description=description, arguments=[])
     return Resource(
         name=name,
         uri=f"resource://{name}",
         description=description,
-        mimeType="text/plain",
+        mime_type="text/plain",
     )
 
 
 def listing(collection, items, cursor=None):
-    return LIST_RESULTS[collection](**{collection: items, "nextCursor": cursor})
+    return LIST_RESULTS[collection](**{collection: items, "next_cursor": cursor})
 
 
 class ClosingContext:
@@ -108,7 +107,7 @@ class PagedSession(ClosingContext):
             assert params is None
         else:
             assert isinstance(params, PaginatedRequestParams)
-            assert params.cursor == self.pages[index - 1].nextCursor
+            assert params.cursor == self.pages[index - 1].next_cursor
         page = self.pages[index]
         if isinstance(page, BaseException):
             raise page
@@ -146,7 +145,7 @@ class PagedSession(ClosingContext):
             contents=[
                 TextResourceContents(
                     uri=uri,
-                    mimeType="text/plain",
+                    mime_type="text/plain",
                     text=self.bodies.get(uri, f"Weather for {uri}."),
                 )
             ]
@@ -269,22 +268,22 @@ async def test_empty_page_and_empty_opaque_cursor_continue(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("collection,transport", COLLECTIONS)
 @pytest.mark.parametrize("target_page", [1, 2])
-async def test_single_scan_stops_when_target_is_found(
+async def test_single_scan_finishes_discovery_before_analysis(
     scanner, bind_session, collection, transport, target_page
 ):
     pages = []
     if target_page == 2:
         pages.append(listing(collection, [listed_item(collection, "first")], "next"))
-    # This cursor is cyclic on page two, but irrelevant once the target is found.
-    pages.append(listing(collection, [listed_item(collection, "later")], "next"))
-    pages.append(AssertionError("A named scan must not request unrelated pages"))
+    # Later pages must be checked even after finding the requested identity.
+    pages.append(listing(collection, [listed_item(collection, "later")], "last"))
+    pages.append(listing(collection, [listed_item(collection, "unrelated")]))
     session = PagedSession(collection, pages)
     context = bind_session(session)
 
     result = await scan(scanner, collection, transport, target="later")
 
     assert result_name(collection, result) == "later"
-    assert len(session.list_requests) == target_page
+    assert len(session.list_requests) == target_page + 1
     assert session.closed and context.closed
 
 
@@ -312,9 +311,7 @@ async def test_single_absent_target_exhausts_pages_before_not_found(
 async def test_first_page_unsupported_preserves_empty_bulk_result(
     scanner, bind_session, collection, transport
 ):
-    session = PagedSession(
-        collection, [McpError(ErrorData(code=-32601, message="Method not found"))]
-    )
+    session = PagedSession(collection, [McpError(-32601, "Method not found")])
     context = bind_session(session)
 
     assert await scan(scanner, collection, transport) == []
@@ -333,7 +330,7 @@ async def test_first_page_unsupported_preserves_empty_bulk_result(
 async def test_later_page_error_never_becomes_unsupported_or_success(
     scanner, bind_session, collection, transport, single, code, message
 ):
-    failure = McpError(ErrorData(code=code, message=message))
+    failure = McpError(code, message)
     session = PagedSession(
         collection,
         [listing(collection, [listed_item(collection, "first")], "next"), failure],
@@ -393,7 +390,7 @@ async def test_later_page_reaches_real_yara(
 async def test_later_page_timeout_closes_session_and_transport(
     scanner, bind_session, monkeypatch, collection, transport
 ):
-    monkeypatch.setattr(MCPScannerConstants, "MCP_CONTENT_READ_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(MCPScannerConstants, "MCP_LIST_PAGE_TIMEOUT_SECONDS", 0.01)
     request_cancelled = asyncio.Event()
 
     async def blocked_page():

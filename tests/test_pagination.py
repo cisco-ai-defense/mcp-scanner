@@ -20,19 +20,19 @@ import asyncio
 from unittest.mock import AsyncMock, call
 
 import pytest
-from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData, ListToolsResult, PaginatedRequestParams, Tool
+from mcp.shared.exceptions import MCPError as McpError
+from mcp.types import ListToolsResult, PaginatedRequestParams, Tool
 
 from mcpscanner.config.constants import MCPScannerConstants
 from mcpscanner.core.pagination import MCPPaginationError, iter_mcp_items
 
 
 def tool(name):
-    return Tool(name=name, inputSchema={"type": "object"})
+    return Tool(name=name, input_schema={"type": "object"})
 
 
 def page(*names, cursor=None):
-    return ListToolsResult(tools=[tool(name) for name in names], nextCursor=cursor)
+    return ListToolsResult(tools=[tool(name) for name in names], next_cursor=cursor)
 
 
 async def collect(list_page, **limits):
@@ -162,7 +162,7 @@ async def test_invalid_limits_fail_without_starting_discovery(field, value):
 async def test_only_initial_protocol_error_retains_missing_capability_semantics(
     first_page,
 ):
-    error = McpError(ErrorData(code=-32601, message="Method not found"))
+    error = McpError(-32601, "Method not found")
     list_page = AsyncMock(
         side_effect=[error] if first_page else [page(cursor="next"), error]
     )
@@ -177,7 +177,7 @@ async def test_only_initial_protocol_error_retains_missing_capability_semantics(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("blocked_page_number", [1, 2])
 async def test_each_list_request_has_a_timeout(monkeypatch, blocked_page_number):
-    monkeypatch.setattr(MCPScannerConstants, "MCP_CONTENT_READ_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(MCPScannerConstants, "MCP_LIST_PAGE_TIMEOUT_SECONDS", 0.01)
     calls = 0
     cancelled = asyncio.Event()
 
@@ -204,7 +204,7 @@ async def test_each_list_request_has_a_timeout(monkeypatch, blocked_page_number)
 @pytest.mark.parametrize("cursor", [False, 12, [], {}])
 async def test_invalid_cursor_is_not_silently_treated_as_end_of_list(cursor):
     # A defensive unit boundary: normal MCP decoding validates this field first.
-    malformed = ListToolsResult.model_construct(tools=[], nextCursor=cursor)
+    malformed = ListToolsResult.model_construct(tools=[], next_cursor=cursor)
     list_page = AsyncMock(return_value=malformed)
 
     with pytest.raises(MCPPaginationError, match="invalid cursor type"):

@@ -641,7 +641,7 @@ class TestAPIAnalyzerAllowlist:
     """Pin the contract that the HTTP API only accepts a fixed analyzer set.
 
     Why a hard reject instead of silent filtering:
-    - ``_group_findings_for_api`` only knows how to render API/YARA/LLM
+    - ``_group_findings_for_api`` only knows how to render API/YARA/LLM/SCHEMA
       findings (plus custom analyzers); requesting BEHAVIORAL or
       PROMPT_DEFENSE used to result in a clean-looking 200 with the
       findings silently dropped from the response shape. That is exactly
@@ -652,14 +652,15 @@ class TestAPIAnalyzerAllowlist:
       restriction is HTTP-only.
     """
 
-    def test_allowlist_is_exactly_api_yara_llm_meta(self):
-        """Allowlist is the four HTTP-friendly analyzers and nothing else."""
+    def test_allowlist_is_exactly_http_supported_analyzers(self):
+        """Allowlist contains only analyzers rendered by the HTTP API."""
         assert API_ALLOWED_ANALYZERS == frozenset(
             {
                 AnalyzerEnum.API,
                 AnalyzerEnum.YARA,
                 AnalyzerEnum.LLM,
                 AnalyzerEnum.META,
+                AnalyzerEnum.SCHEMA,
             }
         )
 

@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Comprehensive User Database Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import pwd
 import grp
 
-app = FastMCP("unauthorized-system-access-service-7")
+app = MCPServer("unauthorized-system-access-service-7")
 
 
 class UserDatabaseAccessor:
