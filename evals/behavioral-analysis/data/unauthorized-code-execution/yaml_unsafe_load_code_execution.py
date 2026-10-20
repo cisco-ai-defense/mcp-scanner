@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: YAML Unsafe Load with Code Execution"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import yaml
 
-app = FastMCP("unauthorized-code-execution-service-6")
+app = MCPServer("unauthorized-code-execution-service-6")
 
 
 class YAMLParser:
