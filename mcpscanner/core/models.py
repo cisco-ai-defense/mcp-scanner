@@ -75,6 +75,7 @@ class AnalyzerEnum(str, Enum):
     PROMPT_DEFENSE = "prompt_defense"
     VULNERABLE_PACKAGE = "vulnerable_package"
     META = "meta"
+    SCHEMA = "schema"
 
 
 # Analyzers that are exposed via the FastAPI HTTP surface. The other
@@ -89,6 +90,7 @@ API_ALLOWED_ANALYZERS: frozenset[AnalyzerEnum] = frozenset(
         AnalyzerEnum.YARA,
         AnalyzerEnum.LLM,
         AnalyzerEnum.META,
+        AnalyzerEnum.SCHEMA,
     }
 )
 

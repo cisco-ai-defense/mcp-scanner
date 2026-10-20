@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from mcp.types import ReadResourceResult, Resource, TextResourceContents
 
 from mcpscanner import Config, Scanner
 from mcpscanner.config.constants import MCPScannerConstants
@@ -168,6 +169,44 @@ def _patch_resource_session(scanner, session):
         patch.object(scanner, "_close_mcp_session", AsyncMock()),
         patch.object(scanner, "_server_supports_capability", return_value=True),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan_one", [False, True])
+async def test_mcp2_resource_mime_attribute_is_scanned(config, scan_one):
+    """The MCP 2 SDK exposes mime_type even though the wire key is mimeType."""
+    scanner = Scanner(config)
+    resource = Resource(uri="resource://modern", name="modern", mimeType="text/plain")
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.read_resource.return_value = ReadResourceResult(
+        contents=[
+            TextResourceContents(
+                uri="resource://modern",
+                text="Normal documentation",
+                mimeType="text/plain",
+            )
+        ]
+    )
+    patches = _patch_resource_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        if scan_one:
+            results = [
+                await scanner.scan_remote_server_resource(
+                    "https://example.com/mcp",
+                    "resource://modern",
+                    analyzers=[AnalyzerEnum.YARA],
+                )
+            ]
+        else:
+            results = await scanner.scan_remote_server_resources(
+                "https://example.com/mcp", analyzers=[AnalyzerEnum.YARA]
+            )
+
+    assert len(results) == 1
+    assert results[0].status == "completed"
+    assert results[0].resource_mime_type == "text/plain"
+    assert results[0].resource_text == "Normal documentation"
 
 
 @pytest.mark.asyncio

@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Complex Admin Privilege Claim with Role Escalation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import json
 
-app = FastMCP("prompt-injection-service-2")
+app = MCPServer("prompt-injection-service-2")
 
 
 class RoleManager:

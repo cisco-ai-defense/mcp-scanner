@@ -53,6 +53,9 @@ from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
+from mcpscanner.core.analyzers.protocol_analyzer import ProtocolAnalyzer
+from mcpscanner.core.analyzers.schema_reference_analyzer import SchemaReferenceAnalyzer
+
 logger = get_logger(__name__)
 
 from dotenv import load_dotenv
@@ -1228,6 +1231,14 @@ async def main():
         help="Bearer token for authentication",
     )
 
+    p_protocol = subparsers.add_parser(
+        "protocol", help="Run read-only HTTP protocol checks on an MCP server"
+    )
+    p_protocol.add_argument("--server-url", required=True, help="MCP HTTP endpoint URL")
+    p_protocol.add_argument(
+        "--timeout", type=float, default=10.0, help="HTTP timeout in seconds"
+    )
+
     # VirusTotal subcommand - scan files/directories for malware
     p_virustotal = subparsers.add_parser(
         "virustotal",
@@ -1536,7 +1547,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package, meta (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package, meta, schema (default: %(default)s)",
     )
 
     parser.add_argument(
@@ -1656,6 +1667,7 @@ async def main():
             "behavioral_analyzer",
             "virustotal_analyzer",
             "vulnerable_package_analyzer",
+            "schema_analyzer",
         ],
         help="Filter results by specific analyzer",
     )
@@ -1746,6 +1758,32 @@ async def main():
         os.environ["MCP_SCANNER_STDIO_TIMEOUT"] = str(args.stdio_timeout)
 
     try:
+        if args.cmd == "protocol":
+            if args.timeout <= 0:
+                parser.error("--timeout must be positive")
+            findings = await ProtocolAnalyzer(timeout=args.timeout).analyze(
+                args.server_url
+            )
+            output = {
+                "server_url": args.server_url,
+                "findings": [
+                    {
+                        "severity": finding.severity,
+                        "summary": finding.summary,
+                        "threat_category": finding.threat_category,
+                        "analyzer": finding.analyzer,
+                        "details": finding.details,
+                    }
+                    for finding in findings
+                ],
+            }
+            rendered = json.dumps(output, indent=2)
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as output_file:
+                    output_file.write(rendered + "\n")
+            print(rendered)
+            return
+
         # Handle static file scanning subcommand (matches 'prompts' and 'resources' pattern)
         if args.cmd == "static":
 
@@ -1771,6 +1809,9 @@ async def main():
                         "Warning: API analyzer requested but MCP_SCANNER_API_KEY not set",
                         file=sys.stderr,
                     )
+
+            if AnalyzerEnum.SCHEMA in selected_analyzers:
+                analyzers.append(SchemaReferenceAnalyzer())
 
             if not analyzers:
                 print(
@@ -1808,6 +1849,7 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        analyzer_errors=r.get("analyzer_errors", []),
                     )
                     all_results.append(tool_result)
 
@@ -1823,6 +1865,7 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        analyzer_errors=r.get("analyzer_errors", []),
                     )
                     all_results.append(prompt_result)
 
@@ -1847,6 +1890,7 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        analyzer_errors=r.get("analyzer_errors", []),
                         # Thread the description / text the static analyzer
                         # consumed so ``--enable-meta`` can second-guess
                         # findings against the same evidence the primary
