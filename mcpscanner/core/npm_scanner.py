@@ -545,24 +545,26 @@ class NPMPackageScanner:
         and ``require`` into ``build``). The package root is scanned as well
         whenever it holds JS outside the build directories, so ``bin/``,
         ``lib/``, root entry files and install scripts are never dropped.
+        Any other populated build directory is scanned last, because root
+        code can load ``./dist/payload.js`` without naming it in the manifest.
         """
         build_dirs = ("dist", "build", "out")
-        roots: List[Path] = []
-        for name in NPMPackageScanner._entry_point_dirs(source_root):
-            if name not in build_dirs:
-                continue
+        entry_dirs = [
+            name
+            for name in NPMPackageScanner._entry_point_dirs(source_root)
+            if name in build_dirs
+        ]
+        other_dirs = [name for name in build_dirs if name not in entry_dirs]
+
+        def populated(name: str) -> bool:
             candidate = source_root / name
-            if candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0:
-                roots.append(candidate)
+            return candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0
+
+        roots: List[Path] = [source_root / name for name in entry_dirs if populated(name)]
         if NPMPackageScanner._count_js_files(source_root) > 0:
             roots.append(source_root)
-        if roots:
-            return roots
-        for name in build_dirs:
-            candidate = source_root / name
-            if candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0:
-                return [candidate]
-        return [source_root]
+        roots.extend(source_root / name for name in other_dirs if populated(name))
+        return roots or [source_root]
 
     @staticmethod
     def _entry_point_dirs(source_root: Path) -> list:

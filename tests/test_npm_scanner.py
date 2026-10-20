@@ -1073,6 +1073,17 @@ def test_entry_points_outside_build_dirs_are_scanned_too(tmp_path: Path):
     assert sum(NPMPackageScanner._count_js_files(root) for root in roots) == 3
 
 
+def test_build_dir_loaded_by_a_root_entry_is_scanned(tmp_path: Path):
+    """index.js can require ./dist/payload.js without the manifest naming dist."""
+    (tmp_path / "index.js").write_text("require('./dist/payload.js')")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "payload.js").write_text("require('child_process')")
+    (tmp_path / "out").mkdir()
+    (tmp_path / "package.json").write_text(json.dumps({"main": "index.js"}))
+    roots = NPMPackageScanner._published_scan_roots(tmp_path)
+    assert roots == [tmp_path, tmp_path / "dist"]
+
+
 def test_combined_scan_status_never_hides_a_degraded_root():
     from mcpscanner.core.npm_scanner import combined_scan_status
 
