@@ -16,7 +16,7 @@ The PyPI package scanner downloads Python packages from PyPI, extracts the sourc
 2. **Image build** — Builds a lightweight `python:3.13-alpine` based image with `cisco-ai-mcp-scanner` pre-installed. Cached after first build.
 3. **Package download** — Inside the container, downloads the package archive from PyPI over HTTPS (prefers source distributions; falls back to wheels). The archive is fetched directly — **no ``pip download`` and no execution of ``setup.py``**.
 4. **Extraction** — Extracts the archive (``.tar.gz``, ``.zip``, or ``.whl`` for Docker mode) to get the Python source files. Local (``--no-docker``) mode also supports wheels when no sdist is published; both modes use the same safe-extraction helpers.
-5. **Behavioral analysis** — Scans all `.py` files for docstring-vs-code mismatches using LLM-based analysis. Detects hidden behaviors like data exfiltration, backdoors, and prompt injection.
+5. **Behavioral analysis** — Scans all `.py` files for docstring-vs-code mismatches using LLM-based analysis. MCP tool entry points are discovered via static analysis (Python **`MCPServer`** on mcp 2.0 and legacy **`FastMCP`** patterns). Detects hidden behaviors like data exfiltration, backdoors, and prompt injection.
 6. **Results** — JSON results are returned to the host via stdout.
 
 ## CLI Usage

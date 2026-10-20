@@ -169,7 +169,7 @@ def test_instructions_scan_result_skipped():
     )
 
     assert result.status == "skipped"
-    assert result.is_safe is True  # No findings means safe
+    assert result.is_safe is None  # No analysis ran
     assert len(result.findings) == 0
 
 
@@ -306,7 +306,7 @@ async def test_scan_remote_server_instructions_no_instructions(config):
 
         assert result.status == "skipped"
         assert result.instructions == ""
-        assert result.is_safe is True  # No findings means safe
+        assert result.is_safe is None  # No analysis ran
 
 
 @pytest.mark.asyncio
