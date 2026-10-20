@@ -7,7 +7,7 @@ required-version = ">=0.8.17"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.8.6"
+version = "4.8.7"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
@@ -22,7 +22,7 @@ classifiers = [
     "Intended Audience :: Developers"
 ]
 dependencies = [
-    "mcp[cli]>=1.25.0",
+    "mcp[cli]>=2.0.0",
     "httpx>=0.28.1",
     "yara-python>=4.5.4",
     "fastapi>=0.125.0",
