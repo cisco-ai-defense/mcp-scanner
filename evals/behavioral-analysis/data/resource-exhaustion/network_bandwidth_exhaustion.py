@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 6: Network Bandwidth Exhaustion Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import threading
 
-app = FastMCP("resource-exhaustion-service-6")
+app = MCPServer("resource-exhaustion-service-6")
 
 
 class BandwidthExhaustion:

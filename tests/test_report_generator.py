@@ -979,3 +979,98 @@ class TestPromptAndResourceResults:
         assert json_results[2]["resource_uri"] == "file://test.txt"
         assert json_results[2]["resource_name"] == "test.txt"
         assert json_results[2]["resource_mime_type"] == "text/plain"
+
+
+@pytest.mark.parametrize(
+    "format_type",
+    [
+        OutputFormat.SUMMARY,
+        OutputFormat.DETAILED,
+        OutputFormat.BY_TOOL,
+        OutputFormat.BY_ANALYZER,
+        OutputFormat.BY_SEVERITY,
+        OutputFormat.TABLE,
+    ],
+)
+def test_severity_filter_keeps_failed_scan_visible(format_type):
+    report = ReportGenerator(
+        {
+            "server_url": "local",
+            "scan_results": [
+                {
+                    "tool_name": "failed_tool",
+                    "status": "failed",
+                    "is_safe": None,
+                    "analyzer_errors": [
+                        {
+                            "analyzer": "YARA",
+                            "content_type": "description",
+                            "message": "RuntimeError during analysis",
+                        }
+                    ],
+                    "findings": {
+                        "yara_analyzer": {
+                            "severity": "UNKNOWN",
+                            "total_findings": 0,
+                            "status": "error",
+                            "threat_summary": "Analysis failed",
+                        }
+                    },
+                },
+                {
+                    "tool_name": "safe_tool",
+                    "status": "completed",
+                    "is_safe": True,
+                    "findings": {
+                        "yara_analyzer": {"severity": "SAFE", "total_findings": 0}
+                    },
+                },
+            ],
+        }
+    )
+
+    output = report.format_output(
+        format_type, severity_filter=SeverityFilter.HIGH, show_safe=False
+    )
+
+    assert "failed_tool" in output
+    assert "safe_tool" not in output
+    assert "No results match the specified filters" not in output
+
+
+def test_severity_filter_relabels_filtered_partial_finding_as_incomplete():
+    report = ReportGenerator(
+        {
+            "server_url": "local",
+            "scan_results": [
+                {
+                    "tool_name": "partial_tool",
+                    "status": "partial",
+                    "is_safe": False,
+                    "analyzer_errors": [
+                        {
+                            "analyzer": "YARA",
+                            "content_type": "parameters",
+                            "message": "RuntimeError during analysis",
+                        }
+                    ],
+                    "findings": {
+                        "api_analyzer": {"severity": "LOW", "total_findings": 1},
+                        "yara_analyzer": {
+                            "severity": "UNKNOWN",
+                            "total_findings": 0,
+                            "status": "error",
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+    output = report.format_output(
+        OutputFormat.SUMMARY, severity_filter=SeverityFilter.HIGH
+    )
+
+    assert "Incomplete items: 1" in output
+    assert "Unsafe items: 0" in output
+    assert "partial_tool" in output

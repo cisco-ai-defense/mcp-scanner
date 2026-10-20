@@ -22,7 +22,7 @@ classifiers = [
     "Intended Audience :: Developers"
 ]
 dependencies = [
-    "mcp[cli]>=1.25.0",
+    "mcp[cli]>=2.0.0",
     "httpx>=0.28.1",
     "yara-python>=4.5.4",
     "fastapi>=0.125.0",
