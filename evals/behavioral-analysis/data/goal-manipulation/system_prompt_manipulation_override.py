@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: System Prompt Manipulation with Behavior Override"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import json
 
-app = FastMCP("goal-manipulation-service-2")
+app = MCPServer("goal-manipulation-service-2")
 
 
 class SettingsManager:

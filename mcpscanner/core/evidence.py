@@ -278,13 +278,15 @@ def _is_absolute_file_path(path: str) -> bool:
 def relative_file_locator(path: str, scan_root: Optional[str] = None) -> Optional[str]:
     """Relative file locator.
 
-    An absolute path under ``scan_root`` is published relative to that root,
-    so files with the same name in different directories stay distinct.
+    A path under ``scan_root`` is published relative to that root, so files
+    with the same name in different directories stay distinct. A relative
+    path is resolved against the working directory first, so ``pkg/tools.py``
+    and ``/abs/pkg/tools.py`` for the same file get the same locator.
     Other absolute paths publish only the file name.
     """
     if not isinstance(path, str) or not path:
         return None
-    if scan_root and _is_absolute_file_path(path):
+    if scan_root:
         try:
             relative = Path(path).resolve().relative_to(Path(scan_root).resolve())
         except (OSError, ValueError):
@@ -340,8 +342,10 @@ def source_or_none(
     line: Optional[int],
     facts: Sequence[Tuple[str, Any]],
 ) -> Optional[EvidenceSource]:
-    if location_type not in LOCATION_TYPES or not _valid_locator(
-        location_type, locator
+    if (
+        not isinstance(location_type, str)
+        or location_type not in LOCATION_TYPES
+        or not _valid_locator(location_type, locator)
     ):
         return None
     published_facts: List[EvidenceFact] = []

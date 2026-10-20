@@ -38,7 +38,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -76,6 +76,17 @@ from .pypi_scanner import (
 
 
 logger = get_logger(__name__)
+
+
+def combined_scan_status(statuses: Sequence[str], findings: Sequence[Any]) -> str:
+    """Status across several scanned roots, using ``analysis_scan_status`` rules.
+
+    Findings make the scan ``completed``. Without findings, one degraded root
+    means the package was not fully read and must not be reported safe.
+    """
+    if findings:
+        return "completed"
+    return next((status for status in statuses if status != "completed"), "completed")
 
 
 def _validate_npm_package_or_raise(package: str) -> None:
@@ -409,11 +420,15 @@ class NPMPackageScanner:
                     f"failed to fetch/extract {spec}: {e}"
                 ) from e
 
-            scan_root = self._published_scan_root(source_root)
-            analyzer = JSBehavioralCodeAnalyzer(config)
-            findings = await analyzer.analyze(str(scan_root), {})
-
-            js_files = self._count_js_files(scan_root)
+            findings: List[Any] = []
+            statuses: List[str] = []
+            js_files = 0
+            for scan_root in self._published_scan_roots(source_root):
+                analyzer = JSBehavioralCodeAnalyzer(config)
+                root_findings = await analyzer.analyze(str(scan_root), {})
+                findings.extend(root_findings)
+                statuses.append(analysis_scan_status(analyzer, root_findings))
+                js_files += self._count_js_files(scan_root)
             return raise_if_unreliable_package_scan(
                 _build_scan_result(
                     ecosystem="npm",
@@ -422,7 +437,7 @@ class NPMPackageScanner:
                     source_root=source_root,
                     files_scanned=js_files,
                     findings=findings,
-                    scan_status=analysis_scan_status(analyzer, findings),
+                    scan_status=combined_scan_status(statuses, findings),
                 ),
                 error_cls=NPMScanError,
             )
@@ -515,29 +530,38 @@ class NPMPackageScanner:
 
     @staticmethod
     def _published_scan_root(source_root: Path) -> Path:
-        """Directory the JS analyzer should read for a downloaded package.
+        """First directory from :meth:`_published_scan_roots`."""
+        return NPMPackageScanner._published_scan_roots(source_root)[0]
+
+    @staticmethod
+    def _published_scan_roots(source_root: Path) -> List[Path]:
+        """Directories the JS analyzer should read for a downloaded package.
 
         Source checkouts keep ``src`` and skip ``dist``. A published npm
         tarball often contains only ``dist``, and skipping that directory
         would report the package safe without reading it. When
-        ``package.json`` points its entry points into one of those
-        directories, that directory is scanned even if a stray config file
-        such as ``.eslintrc.js`` sits at the package root.
+        ``package.json`` points its entry points into those directories,
+        every one of them is scanned (for example ``import`` into ``dist``
+        and ``require`` into ``build``), even if a stray config file such as
+        ``.eslintrc.js`` sits at the package root.
         """
         build_dirs = ("dist", "build", "out")
+        roots: List[Path] = []
         for name in NPMPackageScanner._entry_point_dirs(source_root):
             if name not in build_dirs:
                 continue
             candidate = source_root / name
             if candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0:
-                return candidate
+                roots.append(candidate)
+        if roots:
+            return roots
         if NPMPackageScanner._count_js_files(source_root) > 0:
-            return source_root
+            return [source_root]
         for name in build_dirs:
             candidate = source_root / name
             if candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0:
-                return candidate
-        return source_root
+                return [candidate]
+        return [source_root]
 
     @staticmethod
     def _entry_point_dirs(source_root: Path) -> list:

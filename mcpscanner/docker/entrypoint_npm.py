@@ -193,11 +193,17 @@ async def main() -> None:
             llm_api_version=os.environ.get("LLM_API_VERSION", ""),
         )
 
-        from mcpscanner.core.npm_scanner import NPMPackageScanner
+        from mcpscanner.core.npm_scanner import NPMPackageScanner, combined_scan_status
 
-        scan_root = NPMPackageScanner._published_scan_root(source_root)
-        findings, scan_status = await run_behavioral_analysis(scan_root, config)
-        js_files = NPMPackageScanner._count_js_files(scan_root)
+        findings = []
+        statuses = []
+        js_files = 0
+        for scan_root in NPMPackageScanner._published_scan_roots(source_root):
+            root_findings, root_status = await run_behavioral_analysis(scan_root, config)
+            findings.extend(root_findings)
+            statuses.append(root_status)
+            js_files += NPMPackageScanner._count_js_files(scan_root)
+        scan_status = combined_scan_status(statuses, findings)
 
         # A degraded scan (LLM unreachable, etc.) reports no findings but
         # must not claim the package is safe.

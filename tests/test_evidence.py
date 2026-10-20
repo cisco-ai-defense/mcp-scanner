@@ -741,3 +741,18 @@ def test_file_locator_is_relative_to_the_scan_root(tmp_path):
     assert relative_file_locator(str(b), str(tmp_path)) == "b/utils.py"
     assert relative_file_locator(str(a)) == "utils.py"
     assert relative_file_locator("/elsewhere/utils.py", str(tmp_path)) == "utils.py"
+
+
+def test_relative_file_path_is_resolved_against_the_scan_root(tmp_path, monkeypatch):
+    from mcpscanner.core.evidence import relative_file_locator
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "utils.py").write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert relative_file_locator("a/utils.py", str(tmp_path)) == "a/utils.py"
+    assert relative_file_locator("./a/../a/utils.py", str(tmp_path)) == "a/utils.py"
+
+
+@pytest.mark.parametrize("location_type", [["mcp_field"], {"mcp_field": 1}, None, 3])
+def test_non_string_location_type_is_rejected_without_raising(location_type):
+    assert source_or_none(location_type, "/description", "x", None, []) is None

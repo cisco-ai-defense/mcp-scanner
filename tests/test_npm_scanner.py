@@ -1032,6 +1032,34 @@ def test_entry_point_at_root_keeps_the_root(tmp_path: Path):
     assert NPMPackageScanner._published_scan_root(tmp_path) == tmp_path
 
 
+def test_every_published_build_dir_is_scanned(tmp_path: Path):
+    """``import`` into dist and ``require`` into build: both are read."""
+    for name in ("dist", "build"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "index.js").write_text("export {}")
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "pkg",
+                "exports": {
+                    "import": "./dist/index.js",
+                    "require": "./build/index.js",
+                },
+            }
+        )
+    )
+    roots = NPMPackageScanner._published_scan_roots(tmp_path)
+    assert set(roots) == {tmp_path / "dist", tmp_path / "build"}
+
+
+def test_combined_scan_status_never_hides_a_degraded_root():
+    from mcpscanner.core.npm_scanner import combined_scan_status
+
+    assert combined_scan_status(["completed", "completed"], []) == "completed"
+    assert combined_scan_status(["completed", "error"], []) == "error"
+    assert combined_scan_status(["completed", "error"], [object()]) == "completed"
+
+
 # ---------------------------------------------------------------------------
 # Atomic partial-write semantics (L6)
 # ---------------------------------------------------------------------------
