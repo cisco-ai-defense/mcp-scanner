@@ -184,6 +184,10 @@ Readiness findings map to the following operational risk categories:
 | NO_OBSERVABILITY_HOOKS | AITech-OP-4.1 | Missing logging/metrics/tracing |
 | NON_DETERMINISTIC_RESPONSE | AITech-OP-5.1 | Unpredictable response format |
 
+## Evidence
+
+Each readiness finding has an observed probe record. The locator is the rule id (`HEUR-001`, an OPA rule id, or a readiness LLM judge id). A missing timeout records `check.timeout_present: false`. A missing required field records `check.field_present: false`. Other rules record `probe.completed: true`. The full contract is in [Finding evidence](finding-evidence-spec.md).
+
 ## Output Examples
 
 ### Summary Format

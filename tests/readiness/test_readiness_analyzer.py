@@ -25,6 +25,7 @@ import pytest
 from pathlib import Path
 
 from mcpscanner.core.analyzers.readiness import ReadinessAnalyzer
+from mcpscanner.core.evidence import public_evidence_for_finding
 
 
 # --- Helper Functions ---
@@ -92,6 +93,11 @@ class TestHEUR001MissingTimeout:
         assert finding is not None
         assert finding.severity == "HIGH"
         assert finding.threat_category == "MISSING_TIMEOUT_GUARD"
+        evidence = public_evidence_for_finding(finding)
+        assert evidence["status"] == "observed"
+        source = evidence["sources"][0]
+        assert source["location"]["locator"] == "HEUR-001"
+        assert source["facts"] == [{"name": "check.timeout_present", "value": False}]
 
     @pytest.mark.asyncio
     async def test_with_timeout_no_finding(self):

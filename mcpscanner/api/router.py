@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..core.analyzers.meta_analyzer import build_meta_audit_payload
 from ..core.auth import Auth
+from ..core.evidence import public_evidence_for_findings
 from ..core.exceptions import (
     MCPAuthenticationError,
     MCPConnectionError,
@@ -307,6 +308,7 @@ def _group_findings_for_api(
         analyzer_result = {
             "severity": highest_severity,
             "total_findings": len(vulns),
+            "evidence": public_evidence_for_findings(vulns),
         }
 
         errors = [

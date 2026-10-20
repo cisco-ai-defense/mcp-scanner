@@ -503,7 +503,7 @@ curl -X POST "http://localhost:8001/scan-instructions" \
 - `instructions`: The full instructions text from the server
 - `status`: Scan status ("completed", "skipped", or "failed")
 - `is_safe`: Boolean indicating if instructions are safe (null if skipped)
-- `findings`: Security findings grouped by analyzer
+- `findings`: Security findings grouped by analyzer. Each analyzer object includes `evidence`, one record per finding. The HTTP payload omits `threat_names` and `threat_summary`. See [Finding evidence](finding-evidence-spec.md).
 
 **Notes:**
 - If the server doesn't provide instructions, the status will be "skipped"

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .base import BaseAnalyzer, SecurityFinding
+from .prompt_defense_analyzer import PromptDefenseAnalyzer
 from .schema_reference_analyzer import SchemaReferenceAnalyzer
 from ..models import AnalyzerEnum
 from ...utils.logging_config import get_logger
@@ -306,7 +307,8 @@ class StaticAnalyzer:
             # Keep the established YARA/LLM/API parameter scope for tools
             # with inputSchema. Only the schema-reference analyzer inspects
             # an outputSchema-only tool; expanding every analyzer here would
-            # change unrelated static scan results.
+            # change unrelated static scan results. Prompt defense checks the
+            # description only, as in Scanner._analyze_tool.
             if "inputSchema" in tool_data or "outputSchema" in tool_data:
                 # Remove description to avoid duplicate analysis
                 params_data = {k: v for k, v in tool_data.items() if k != "description"}
@@ -314,7 +316,11 @@ class StaticAnalyzer:
 
                 params_context = {"tool_name": tool_name, "content_type": "parameters"}
                 params_analyzers = (
-                    None
+                    [
+                        analyzer
+                        for analyzer in self.analyzers
+                        if not isinstance(analyzer, PromptDefenseAnalyzer)
+                    ]
                     if "inputSchema" in tool_data
                     else [
                         analyzer
@@ -396,7 +402,17 @@ class StaticAnalyzer:
                     f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
                 )
 
-            context = {"prompt_name": prompt_name, "content_type": "prompt"}
+            prompt_fields = {"name": prompt_name}
+            if prompt_description:
+                prompt_fields["description"] = prompt_description
+            if prompt_data.get("arguments"):
+                prompt_fields["arguments"] = prompt_data["arguments"]
+            context = {
+                "prompt_name": prompt_name,
+                "content_type": "prompt",
+                "entity_type": "prompt",
+                "mcp_fields": prompt_fields,
+            }
 
             findings = await self._analyze_content(
                 analysis_content, context, outcome=outcome

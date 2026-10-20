@@ -677,6 +677,38 @@ class TestBuildScanResult:
         assert result["is_safe"] is True
         assert result["findings"] == []
 
+    def test_finding_evidence_is_kept(self):
+        from types import SimpleNamespace
+
+        from mcpscanner.core.evidence import facts_record
+        from mcpscanner.core.pypi_scanner import _build_scan_result
+
+        finding = SimpleNamespace(
+            analyzer="Behavioral",
+            severity="HIGH",
+            threat_category="DATA EXFILTRATION",
+            summary="sends the file",
+            details={"function_name": "send"},
+            evidence=facts_record(
+                "sends the file",
+                "file",
+                "src/server.py",
+                [("code.symbol", "send"), ("code.role", "sink")],
+                line=4,
+            ),
+        )
+        result = _build_scan_result(
+            ecosystem="pypi",
+            package="demo",
+            resolved_version="1.0.0",
+            source_root=Path("/tmp/demo"),
+            files_scanned=1,
+            findings=[finding],
+        )
+        evidence = result["findings"][0]["evidence"]
+        assert evidence["status"] == "observed"
+        assert evidence["sources"][0]["location"]["locator"] == "src/server.py"
+
     def test_unknown_findings_are_kept(self):
         from types import SimpleNamespace
 

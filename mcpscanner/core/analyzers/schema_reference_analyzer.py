@@ -21,7 +21,12 @@ import json
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
+from ..evidence import compile_record, source_or_none, unavailable_record
 from .base import BaseAnalyzer, SecurityFinding
+
+
+def _pointer_token(key: Any) -> str:
+    return str(key).replace("~", "~0").replace("/", "~1")
 
 
 class SchemaReferenceAnalyzer(BaseAnalyzer):
@@ -47,13 +52,13 @@ class SchemaReferenceAnalyzer(BaseAnalyzer):
 
         findings: List[SecurityFinding] = []
         stack = [
-            (schema, f"{key}", 0)
+            (schema, f"{key}", f"/{key}", 0)
             for key in ("inputSchema", "outputSchema")
             if isinstance((schema := tool.get(key)), (dict, list))
         ]
         nodes = 0
         while stack and nodes < self.MAX_NODES and len(findings) < self.MAX_REFS:
-            value, path, depth = stack.pop()
+            value, path, pointer, depth = stack.pop()
             nodes += 1
             if isinstance(value, dict):
                 ref = value.get("$ref")
@@ -65,11 +70,22 @@ class SchemaReferenceAnalyzer(BaseAnalyzer):
                     if classified is not None and classified[0] != "INFO":
                         severity, category = classified
                         article = "an" if category[0] in "aeiou" else "a"
+                        summary = (
+                            f"Tool schema contains {article} {category} $ref. "
+                            "A client that resolves it may load additional content."
+                        )
+                        source = source_or_none(
+                            "mcp_field", f"{pointer}/$ref", ref, None, []
+                        )
                         findings.append(
                             self.create_security_finding(
                                 severity=severity,
-                                summary=f"Tool schema contains {article} {category} $ref. "
-                                "A client that resolves it may load additional content.",
+                                summary=summary,
+                                evidence=(
+                                    compile_record(summary, [source])
+                                    if source is not None
+                                    else unavailable_record(summary)
+                                ),
                                 threat_category="Indirect Schema Reference",
                                 details={
                                     "threat_type": "INDIRECT SCHEMA REFERENCE",
@@ -83,13 +99,13 @@ class SchemaReferenceAnalyzer(BaseAnalyzer):
                         )
                 if depth < 64:
                     stack.extend(
-                        (child, f"{path}.{key}", depth + 1)
+                        (child, f"{path}.{key}", f"{pointer}/{_pointer_token(key)}", depth + 1)
                         for key, child in value.items()
                         if isinstance(child, (dict, list))
                     )
             elif isinstance(value, list) and depth < 64:
                 stack.extend(
-                    (child, f"{path}[{index}]", depth + 1)
+                    (child, f"{path}[{index}]", f"{pointer}/{index}", depth + 1)
                     for index, child in enumerate(value)
                     if isinstance(child, (dict, list))
                 )

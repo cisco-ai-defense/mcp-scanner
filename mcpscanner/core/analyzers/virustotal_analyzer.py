@@ -33,16 +33,17 @@ Integration point: Registered as a main analyzer alongside YARA, LLM, etc.
 import hashlib
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 
 from ...threats.threats import ThreatMapping
-from .base import SecurityFinding
 from ...utils.file_magic import detect_magic
 from ...utils.path_safety import filter_safe_paths, safe_resolve_root
-
+from ..evidence import facts_record, relative_file_locator
+from .base import SecurityFinding
 logger = logging.getLogger(__name__)
 
 # =========================================================================
@@ -942,6 +943,17 @@ class VirusTotalAnalyzer:
 
         threat_info = ThreatMapping.get_threat_mapping("virustotal", "MALWARE")
 
+        suspicious_count = vt_result.get("suspicious", 0)
+        facts = [
+            ("file.sha256", file_hash),
+            ("virustotal.malicious_count", malicious_count),
+            ("virustotal.suspicious_count", suspicious_count),
+            ("virustotal.total_engines", total_engines),
+        ]
+        scanned_at = _rfc3339_timestamp(vt_result.get("scan_date"))
+        if scanned_at:
+            facts.append(("virustotal.scanned_at", scanned_at))
+        locator = relative_file_locator(file_path)
         summary = (
             f"Malicious file detected: {file_path} - "
             f"VirusTotal: {malicious_count}/{total_engines} security vendors flagged this file. "
@@ -977,4 +989,16 @@ class VirusTotalAnalyzer:
                 "aisubtech_name": threat_info["aisubtech_name"],
                 "taxonomy_description": threat_info["description"],
             },
+            evidence=(
+                facts_record(summary, "file", locator, facts) if locator else None
+            ),
         )
+
+
+def _rfc3339_timestamp(value: Any) -> Optional[str]:
+    """Format a VirusTotal unix timestamp. Other shapes are left for validation."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return value if isinstance(value, str) else None
+    return datetime.fromtimestamp(value, timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )

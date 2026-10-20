@@ -862,6 +862,7 @@ def apply_meta_analysis(
                 analyzer=finding.analyzer,
                 threat_category=finding.threat_category,
                 details=base_details,
+                evidence=getattr(finding, "evidence", None),
             )
             dropped_findings.append(annotated)
             continue

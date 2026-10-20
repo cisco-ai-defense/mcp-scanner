@@ -347,10 +347,8 @@ class TestApiAnalyzer:
             )
         )
 
-        findings = await analyzer.analyze(content)
-
-        # Should handle missing classifications gracefully
-        assert findings == []
+        with pytest.raises(ValueError, match="without a classification"):
+            await analyzer.analyze(content)
 
     @respx.mock
     @pytest.mark.asyncio

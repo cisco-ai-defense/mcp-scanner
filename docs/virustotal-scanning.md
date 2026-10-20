@@ -93,6 +93,10 @@ summary = vt.last_scan_summary
 print(f"Scanned: {summary['scanned']}, Malicious: {summary['malicious']}")
 ```
 
+## Evidence
+
+A detection is an observed file record. The locator is the file basename. Facts are `file.sha256`, the malicious and suspicious engine counts, the engine total, and `virustotal.scanned_at`. File contents are not copied into `matched_text`. See [Finding evidence](finding-evidence-spec.md).
+
 ## Output Formats
 
 ### Summary Format

@@ -82,6 +82,7 @@ async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict],
     from mcpscanner.core.analyzers.behavioral.code_analyzer import (
         BehavioralCodeAnalyzer,
     )
+    from mcpscanner.core.evidence import public_evidence_for_finding
     from mcpscanner.core.pypi_scanner import (
         _reportable_findings,
         analysis_scan_status,
@@ -99,6 +100,7 @@ async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict],
             "threat_category": finding.threat_category,
             "summary": finding.summary,
             "details": finding.details if finding.details else {},
+            "evidence": public_evidence_for_finding(finding),
         })
     logger.info("Behavioral analysis: %d findings", len(findings))
     return findings, analysis_scan_status(analyzer, results)

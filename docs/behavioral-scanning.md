@@ -57,6 +57,8 @@ See [LLM Providers](llm-providers.md) for complete configuration options.
 
 ## Output Formats
 
+Each behavioral finding includes an evidence record. `status` is `observed` when the quoted line is in the source file, and `scope_only` when alignment did not locate it. A completed scan with no mismatches has no finding rows. The CLI then reports one safe row with `evidence: []`. See [Finding evidence](finding-evidence-spec.md).
+
 The Behavioral Analyzer supports multiple output formats:
 
 ### Summary (Default)

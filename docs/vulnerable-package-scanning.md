@@ -176,7 +176,7 @@ Running:
 mcp-scanner vulnerable-package requirements.txt --format detailed
 ```
 
-Produces output listing each vulnerable package with its vulnerability IDs, aliases, fix versions, and full descriptions. Packages without known vulnerabilities are reported as safe.
+Produces output listing each vulnerable package with its vulnerability IDs, aliases, fix versions, and full descriptions. Packages without known vulnerabilities are reported as safe, with `evidence: []`. If pip-audit exits without JSON, the scan is incomplete (`is_safe: null`), not safe. The evidence contract is in [Finding evidence](finding-evidence-spec.md).
 
 ### JSON Output Structure
 
@@ -195,6 +195,30 @@ Produces output listing each vulnerable package with its vulnerability IDs, alia
           "threat_summary": "Vulnerable dependency: flask==0.5 [PYSEC-2019-179] | Aliases: CVE-2019-1010083, GHSA-5wv5-4vpf-pj6m | Fix: 1.0 | Details: ...",
           "threat_names": ["VULNERABLE DEPENDENCY"],
           "total_findings": 1,
+          "evidence": [
+            {
+              "summary": "Vulnerable dependency: flask==0.5 [PYSEC-2019-179]",
+              "status": "observed",
+              "sources": [
+                {
+                  "location": {
+                    "type": "package",
+                    "locator": "pypi:flask@0.5",
+                    "line": null
+                  },
+                  "matched_text": null,
+                  "facts": [
+                    {"name": "package.ecosystem", "value": "pypi"},
+                    {"name": "package.name", "value": "flask"},
+                    {"name": "package.version", "value": "0.5"},
+                    {"name": "advisory.id", "value": "PYSEC-2019-179"},
+                    {"name": "audit.source", "value": "pip-audit"}
+                  ]
+                }
+              ],
+              "omitted_count": 0
+            }
+          ],
           "mcp_taxonomies": [
             {
               "aitech": "AITech-9.3",

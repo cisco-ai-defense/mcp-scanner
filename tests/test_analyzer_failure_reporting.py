@@ -37,6 +37,7 @@ from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.base import BaseAnalyzer, SecurityFinding
 from mcpscanner.core.analyzers.meta_analyzer import MetaAnalysisResult
 from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
+from mcpscanner.core.evidence import public_evidence_for_finding
 from mcpscanner.core.models import APIScanRequest, AnalyzerEnum, OutputFormat
 from mcpscanner.core.report_generator import ReportGenerator, results_to_json
 from mcpscanner.core.result import (
@@ -318,6 +319,7 @@ async def test_clean_scan_reports_safe_only_for_analyzers_that_ran():
             "total_findings": 0,
             "threat_names": [],
             "threat_summary": "No threats detected",
+            "evidence": [],
         }
     }
 
@@ -524,5 +526,11 @@ def test_infrastructure_finding_does_not_publish_provider_message():
 
     assert "secret-token-must-not-leak" not in finding.summary
     assert "secret-token-must-not-leak" not in json.dumps(finding.details)
+    evidence = public_evidence_for_finding(finding)
+    assert evidence["status"] == "observed"
+    assert evidence["sources"][0]["facts"] == [
+        {"name": "probe.completed", "value": False}
+    ]
+    assert "secret-token-must-not-leak" not in json.dumps(evidence)
     assert finding.details["error"] == "RuntimeError during analysis"
     assert finding.details["error_type"] == "RuntimeError"

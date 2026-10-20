@@ -66,6 +66,7 @@ async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict],
     from mcpscanner.core.analyzers.behavioral.js_code_analyzer import (
         JSBehavioralCodeAnalyzer,
     )
+    from mcpscanner.core.evidence import public_evidence_for_finding
     from mcpscanner.core.pypi_scanner import (
         _reportable_findings,
         analysis_scan_status,
@@ -84,6 +85,7 @@ async def run_behavioral_analysis(source_dir: Path, config) -> tuple[list[dict],
                 "threat_category": f.threat_category,
                 "summary": f.summary,
                 "details": f.details if f.details else {},
+                "evidence": public_evidence_for_finding(f),
             }
         )
     logger.info("Behavioural analysis: %d findings", len(findings))
@@ -102,12 +104,7 @@ async def main() -> None:
     try:
         from mcpscanner.config.config import Config
         from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
-        from mcpscanner.core.analyzers.behavioral.js_code_analyzer import (
-            _JS_EXTENSIONS,
-            _SKIP_DIRS,
-        )
         from mcpscanner.core.package_sandbox import (
-            count_source_files,
             download_archive,
             safe_extract_archive,
         )
@@ -196,10 +193,17 @@ async def main() -> None:
             llm_api_version=os.environ.get("LLM_API_VERSION", ""),
         )
 
-        findings, scan_status = await run_behavioral_analysis(source_root, config)
-        js_files = count_source_files(
-            source_root, extensions=_JS_EXTENSIONS, skip_dirs=_SKIP_DIRS
-        )
+        from mcpscanner.core.npm_scanner import NPMPackageScanner, combined_scan_status
+
+        findings = []
+        statuses = []
+        js_files = 0
+        for scan_root in NPMPackageScanner._published_scan_roots(source_root):
+            root_findings, root_status = await run_behavioral_analysis(scan_root, config)
+            findings.extend(root_findings)
+            statuses.append(root_status)
+            js_files += NPMPackageScanner._count_js_files(scan_root)
+        scan_status = combined_scan_status(statuses, findings)
 
         # A degraded scan (LLM unreachable, etc.) reports no findings but
         # must not claim the package is safe.

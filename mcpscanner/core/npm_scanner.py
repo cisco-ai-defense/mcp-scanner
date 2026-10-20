@@ -37,7 +37,8 @@ import json
 import os
 import subprocess
 import sys
-from typing import Any, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -67,6 +68,7 @@ from .pypi_scanner import (
     _assert_loop_not_running,
     _build_config_from_env,
     _build_scan_result,
+    _llm_credentials_ready,
     _https_get_json,
     analysis_scan_status,
     raise_if_unreliable_package_scan,
@@ -74,6 +76,17 @@ from .pypi_scanner import (
 
 
 logger = get_logger(__name__)
+
+
+def combined_scan_status(statuses: Sequence[str], findings: Sequence[Any]) -> str:
+    """Status across several scanned roots, using ``analysis_scan_status`` rules.
+
+    Findings make the scan ``completed``. Without findings, one degraded root
+    means the package was not fully read and must not be reported safe.
+    """
+    if findings:
+        return "completed"
+    return next((status for status in statuses if status != "completed"), "completed")
 
 
 def _validate_npm_package_or_raise(package: str) -> None:
@@ -355,11 +368,11 @@ class NPMPackageScanner:
         # Fail fast on missing LLM credentials; see PyPIPackageScanner
         # for rationale.
         config = self._config or _build_config_from_env()
-        if not getattr(config, "llm_provider_api_key", ""):
+        if not _llm_credentials_ready(config):
             raise LLMNotConfiguredError(
                 "no LLM API key configured for behavioural analysis. "
-                "Set MCP_SCANNER_LLM_API_KEY or pass a Config with "
-                "llm_provider_api_key= ... to the scanner."
+                "Set MCP_SCANNER_LLM_API_KEY, or set MCP_SCANNER_LLM_MODEL "
+                "to a bedrock/ model and use AWS credentials."
             )
 
         logger.warning(
@@ -407,10 +420,15 @@ class NPMPackageScanner:
                     f"failed to fetch/extract {spec}: {e}"
                 ) from e
 
-            analyzer = JSBehavioralCodeAnalyzer(config)
-            findings = await analyzer.analyze(str(source_root), {})
-
-            js_files = self._count_js_files(source_root)
+            findings: List[Any] = []
+            statuses: List[str] = []
+            js_files = 0
+            for scan_root in self._published_scan_roots(source_root):
+                analyzer = JSBehavioralCodeAnalyzer(config)
+                root_findings = await analyzer.analyze(str(scan_root), {})
+                findings.extend(root_findings)
+                statuses.append(analysis_scan_status(analyzer, root_findings))
+                js_files += self._count_js_files(scan_root)
             return raise_if_unreliable_package_scan(
                 _build_scan_result(
                     ecosystem="npm",
@@ -419,7 +437,7 @@ class NPMPackageScanner:
                     source_root=source_root,
                     files_scanned=js_files,
                     findings=findings,
-                    scan_status=analysis_scan_status(analyzer, findings),
+                    scan_status=combined_scan_status(statuses, findings),
                 ),
                 error_cls=NPMScanError,
             )
@@ -509,6 +527,74 @@ class NPMPackageScanner:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _published_scan_root(source_root: Path) -> Path:
+        """First directory from :meth:`_published_scan_roots`."""
+        return NPMPackageScanner._published_scan_roots(source_root)[0]
+
+    @staticmethod
+    def _published_scan_roots(source_root: Path) -> List[Path]:
+        """Directories the JS analyzer should read for a downloaded package.
+
+        Source checkouts keep ``src`` and skip ``dist``. A published npm
+        tarball often contains only ``dist``, and skipping that directory
+        would report the package safe without reading it. When
+        ``package.json`` points its entry points into those directories,
+        every one of them is scanned (for example ``import`` into ``dist``
+        and ``require`` into ``build``). The package root is scanned as well
+        whenever it holds JS outside the build directories, so ``bin/``,
+        ``lib/``, root entry files and install scripts are never dropped.
+        Any other populated build directory is scanned last, because root
+        code can load ``./dist/payload.js`` without naming it in the manifest.
+        """
+        build_dirs = ("dist", "build", "out")
+        entry_dirs = [
+            name
+            for name in NPMPackageScanner._entry_point_dirs(source_root)
+            if name in build_dirs
+        ]
+        other_dirs = [name for name in build_dirs if name not in entry_dirs]
+
+        def populated(name: str) -> bool:
+            candidate = source_root / name
+            return candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0
+
+        roots: List[Path] = [source_root / name for name in entry_dirs if populated(name)]
+        if NPMPackageScanner._count_js_files(source_root) > 0:
+            roots.append(source_root)
+        roots.extend(source_root / name for name in other_dirs if populated(name))
+        return roots or [source_root]
+
+    @staticmethod
+    def _entry_point_dirs(source_root: Path) -> list:
+        """Top-level directories named by ``main``, ``module``, ``bin``, and ``exports``."""
+        try:
+            manifest = json.loads((source_root / "package.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        if not isinstance(manifest, dict):
+            return []
+        targets: list = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, str):
+                targets.append(value)
+            elif isinstance(value, dict):
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        for key in ("main", "module", "bin", "exports"):
+            collect(manifest.get(key))
+        dirs: list = []
+        for target in targets:
+            parts = [part for part in target.replace("\\", "/").split("/") if part not in ("", ".")]
+            if len(parts) > 1 and parts[0] not in dirs:
+                dirs.append(parts[0])
+        return dirs
 
     @staticmethod
     def _count_js_files(source_root) -> int:

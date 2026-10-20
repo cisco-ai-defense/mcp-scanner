@@ -63,6 +63,32 @@ async def test_schema_scan_has_bounded_findings():
 
 
 @pytest.mark.asyncio
+async def test_schema_finding_evidence_points_at_the_ref():
+    analyzer = SchemaReferenceAnalyzer()
+    content = json.dumps(
+        {
+            "inputSchema": {
+                "properties": {
+                    "q": {"$ref": "file:///etc/passwd"},
+                    "a/b~c": {"anyOf": [{"$ref": "http://127.0.0.1/s"}]},
+                }
+            }
+        }
+    )
+    findings = await analyzer.analyze(content)
+    observed = {}
+    for finding in findings:
+        assert finding.evidence.status == "observed"
+        (source,) = finding.evidence.sources
+        assert source.location.type == "mcp_field"
+        observed[source.location.locator] = source.matched_text
+    assert observed == {
+        "/inputSchema/properties/q/$ref": "file:///etc/passwd",
+        "/inputSchema/properties/a~1b~0c/anyOf/0/$ref": "http://127.0.0.1/s",
+    }
+
+
+@pytest.mark.asyncio
 async def test_relative_reference_is_classified_but_keeps_tool_safe(tmp_path):
     analyzer = SchemaReferenceAnalyzer()
     assert analyzer._classify_ref("schemas/user.json") == ("INFO", "relative")
@@ -199,6 +225,45 @@ async def test_static_cli_schema_only(tmp_path, monkeypatch, capsys):
     await cli_main()
     results = json.loads(capsys.readouterr().out)
     assert results[0]["findings"]["schema_analyzer"]["total_findings"] == 1
+
+
+@pytest.mark.asyncio
+async def test_static_cli_prompt_defense_analyzer_filter(tmp_path, monkeypatch, capsys):
+    file_path = tmp_path / "tools.json"
+    file_path.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "description": "Lookup",
+                        "outputSchema": {"$ref": "file:///etc/passwd"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mcp-scanner",
+            "--analyzers",
+            "prompt_defense,schema",
+            "--analyzer-filter",
+            "prompt_defense_analyzer",
+            "--format",
+            "by_analyzer",
+            "static",
+            "--tools",
+            str(file_path),
+        ],
+    )
+    await cli_main()
+    out = capsys.readouterr().out
+    assert "PROMPT DEFENSE ANALYZER" in out
+    assert "SCHEMA ANALYZER" not in out
 
 
 @pytest.mark.asyncio

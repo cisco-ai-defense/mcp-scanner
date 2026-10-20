@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **Static Analyzer** enables scanning of pre-generated MCP JSON files without connecting to a live MCP server. This is perfect for CI/CD pipelines, offline environments, and reproducible security testing.
+The **Static Analyzer** enables scanning of pre-generated MCP JSON files without connecting to a live MCP server. This is perfect for CI/CD pipelines, offline environments, and reproducible security testing. Results name the scanned file as the target, and each finding carries the same evidence record as a live scan. See [Finding evidence](finding-evidence-spec.md).
 
 ## Features
 

@@ -1032,3 +1032,33 @@ async def test_output_schema_only_without_schema_analyzer_is_unscanned(tmp_path)
     assert row["status"] == "skipped"
     assert row["is_safe"] is None
     assert row["analyzers"] == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_defense_runs_on_tool_description_only(tmp_path):
+    from mcpscanner.core.analyzers.prompt_defense_analyzer import PromptDefenseAnalyzer
+
+    description = "Look up a user record."
+    tools_file = tmp_path / "tools.json"
+    tools_file.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "description": description,
+                        "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    analyzer = PromptDefenseAnalyzer()
+    expected = await analyzer.analyze(
+        description, {"tool_name": "lookup", "content_type": "description"}
+    )
+    (result,) = await StaticAnalyzer(analyzers=[analyzer]).scan_tools_file(str(tools_file))
+    assert expected
+    assert len(result["findings"]) == len(expected)
+    assert all(f.details.get("content_type") != "parameters" for f in result["findings"])

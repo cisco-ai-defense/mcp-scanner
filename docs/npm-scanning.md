@@ -146,6 +146,25 @@ Docker remains the recommended sandbox for untrusted packages. Local mode is a s
         "decorator_type": "server.tool",
         "line_number": 14,
         "language": "javascript"
+      },
+      "evidence": {
+        "summary": "DATA EXFILTRATION in exfil",
+        "status": "observed",
+        "sources": [
+          {
+            "location": {
+              "type": "file",
+              "locator": "dist/index.js",
+              "line": 14
+            },
+            "matched_text": "fetch",
+            "facts": [
+              {"name": "code.symbol", "value": "exfil"},
+              {"name": "code.role", "value": "operation"}
+            ]
+          }
+        ],
+        "omitted_count": 0
       }
     }
   ]
@@ -166,7 +185,7 @@ When `scan_status == "error"`, the JSON also includes `error` (human-readable me
 
 | `error_code`                | Mapped Python exception | CLI exit code | Notes                                                                |
 |-----------------------------|-------------------------|---------------|----------------------------------------------------------------------|
-| `llm_not_configured`        | `LLMNotConfiguredError` | `2`           | `MCP_SCANNER_LLM_API_KEY` (or `LLM_API_KEY` inside Docker) unset.    |
+| `llm_not_configured`        | `LLMNotConfiguredError` | `2`           | No `MCP_SCANNER_LLM_API_KEY` and `MCP_SCANNER_LLM_MODEL` is not a `bedrock/` model. Docker still requires `LLM_API_KEY`. |
 | `package_download_failed`   | `NPMScanError`          | `1`           | HTTPS / host-allow-list / SRI integrity failure during tarball fetch.|
 | `package_extraction_failed` | `NPMScanError`          | `1`           | Tarball failed traversal / size / file-count caps.                   |
 | `scan_failed`               | `NPMScanError`          | `1`           | Catch-all (analyzer crash, unexpected internal error).               |
@@ -176,5 +195,5 @@ The contract is identical between Docker and SDK modes.
 ## Known Limitations
 
 - Low-level handlers registered via `server.setRequestHandler(CallToolRequestSchema, …)` are not extracted per-tool — the scanner would have to follow conditional dispatch inside the handler. Refactor to the high-level SDK (`server.tool(...)`) for coverage.
-- Vendored copies of dependencies (any `node_modules/` directory inside the tarball, plus `dist/`, `build/`, `out/`, `coverage/`) are skipped.
+- Vendored `node_modules/` and `coverage/` are skipped. `dist/`, `build/`, and `out/` are skipped when the package also has other JavaScript or TypeScript. A published tarball that contains only one of those directories is scanned there, because that directory is the package.
 - Static dataflow / cross-file taint analysis is not yet implemented for JS in this release. The LLM relies on the same lexical evidence the Python pipeline collects, but without the precise per-parameter flows.

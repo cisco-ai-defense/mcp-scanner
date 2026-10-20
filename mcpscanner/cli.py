@@ -38,6 +38,10 @@ from mcpscanner.utils.logging_config import get_logger
 
 from mcpscanner import Config, Scanner
 from mcpscanner.core.models import AnalyzerEnum
+from mcpscanner.core.evidence import (
+    public_evidence_for_findings,
+    raw_finding_payload,
+)
 from mcpscanner.core.report_generator import (
     OutputFormat,
     ReportGenerator,
@@ -51,6 +55,7 @@ from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
 from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
+from mcpscanner.core.analyzers.prompt_defense_analyzer import PromptDefenseAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
 from mcpscanner.core.analyzers.protocol_analyzer import ProtocolAnalyzer
 from mcpscanner.core.analyzers.schema_reference_analyzer import SchemaReferenceAnalyzer
@@ -175,6 +180,7 @@ def _package_scan_to_tool_results(
                         "threat_names": [finding.get("threat_category", "UNKNOWN")],
                         "total_findings": 1,
                         "mcp_taxonomies": [],
+                        "evidence": public_evidence_for_findings([finding]),
                     }
                 },
             }
@@ -186,7 +192,15 @@ def _package_scan_to_tool_results(
                 "tool_description": f"{ecosystem_label} package scan of {pkg_spec}",
                 "status": "completed",
                 "is_safe": True,
-                "findings": {},
+                "findings": {
+                    "behavioral_analyzer": {
+                        "severity": "SAFE",
+                        "threat_summary": "No behavioral mismatches detected",
+                        "threat_names": [],
+                        "total_findings": 0,
+                        "evidence": [],
+                    }
+                },
             }
         )
     return out
@@ -382,6 +396,7 @@ def _build_behavioral_results(
                 "total_findings": len(cli_findings),
                 "source_file": source_file,
                 "mcp_taxonomies": mcp_taxonomies,
+                "evidence": public_evidence_for_findings(cli_findings),
             }
             if threat_vuln_classification:
                 analyzer_finding["threat_vulnerability_classification"] = (
@@ -412,6 +427,7 @@ def _build_behavioral_results(
                             "total_findings": 0,
                             "source_file": source_file,
                             "mcp_taxonomies": [],
+                            "evidence": [],
                         }
                     },
                 }
@@ -1087,6 +1103,18 @@ def display_instructions_results(
             print()
 
 
+def _static_scan_label(args) -> str:
+    """Label a static scan with the files that were read."""
+    files = []
+    for kind in ("tools", "prompts", "resources"):
+        path = getattr(args, kind, None)
+        if isinstance(path, str) and path:
+            files.append(path)
+    if not files:
+        return "static"
+    return "static:" + ",".join(files)
+
+
 async def main():
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(
@@ -1544,7 +1572,7 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package, meta, schema (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, prompt_defense, virustotal, readiness, vulnerable_package, meta, schema (default: %(default)s)",
     )
 
     parser.add_argument(
@@ -1662,6 +1690,7 @@ async def main():
             "yara_analyzer",
             "llm_analyzer",
             "behavioral_analyzer",
+            "prompt_defense_analyzer",
             "virustotal_analyzer",
             "vulnerable_package_analyzer",
             "schema_analyzer",
@@ -1791,7 +1820,8 @@ async def main():
             if AnalyzerEnum.YARA in selected_analyzers:
                 analyzers.append(YaraAnalyzer(rules_dir=args.rules_path))
             if AnalyzerEnum.LLM in selected_analyzers:
-                if cfg.llm_provider_api_key:
+                llm_is_bedrock = bool(cfg.llm_model and "bedrock/" in cfg.llm_model)
+                if cfg.llm_provider_api_key or llm_is_bedrock:
                     analyzers.append(LLMAnalyzer(cfg))
                 else:
                     print(
@@ -1806,6 +1836,8 @@ async def main():
                         "Warning: API analyzer requested but MCP_SCANNER_API_KEY not set",
                         file=sys.stderr,
                     )
+            if AnalyzerEnum.PROMPT_DEFENSE in selected_analyzers:
+                analyzers.append(PromptDefenseAnalyzer())
 
             if AnalyzerEnum.SCHEMA in selected_analyzers:
                 analyzers.append(SchemaReferenceAnalyzer())
@@ -2043,18 +2075,7 @@ async def main():
                         "is_safe": result.is_safe,
                         "analyzer_errors": result.analyzer_errors,
                         "findings": [
-                            {
-                                "severity": f.severity,
-                                "summary": f.summary,
-                                "analyzer": f.analyzer,
-                                "details": f.details,
-                                "mcp_taxonomy": (
-                                    f.mcp_taxonomy
-                                    if hasattr(f, "mcp_taxonomy")
-                                    else None
-                                ),
-                            }
-                            for f in result.findings
+                            raw_finding_payload(f) for f in result.findings
                         ],
                     }
                 ]
@@ -2072,20 +2093,7 @@ async def main():
                         "status": r.status,
                         "is_safe": r.is_safe,
                         "analyzer_errors": r.analyzer_errors,
-                        "findings": [
-                            {
-                                "severity": f.severity,
-                                "summary": f.summary,
-                                "analyzer": f.analyzer,
-                                "details": f.details,
-                                "mcp_taxonomy": (
-                                    f.mcp_taxonomy
-                                    if hasattr(f, "mcp_taxonomy")
-                                    else None
-                                ),
-                            }
-                            for f in r.findings
-                        ],
+                        "findings": [raw_finding_payload(f) for f in r.findings],
                     }
                     for r in prompt_results
                 ]
@@ -2121,18 +2129,7 @@ async def main():
                         "is_safe": result.is_safe,
                         "analyzer_errors": result.analyzer_errors,
                         "findings": [
-                            {
-                                "severity": f.severity,
-                                "summary": f.summary,
-                                "analyzer": f.analyzer,
-                                "details": f.details,
-                                "mcp_taxonomy": (
-                                    f.mcp_taxonomy
-                                    if hasattr(f, "mcp_taxonomy")
-                                    else None
-                                ),
-                            }
-                            for f in result.findings
+                            raw_finding_payload(f) for f in result.findings
                         ],
                     }
                 ]
@@ -2152,20 +2149,7 @@ async def main():
                         "status": r.status,
                         "is_safe": r.is_safe,
                         "analyzer_errors": r.analyzer_errors,
-                        "findings": [
-                            {
-                                "severity": f.severity,
-                                "summary": f.summary,
-                                "analyzer": f.analyzer,
-                                "details": f.details,
-                                "mcp_taxonomy": (
-                                    f.mcp_taxonomy
-                                    if hasattr(f, "mcp_taxonomy")
-                                    else None
-                                ),
-                            }
-                            for f in r.findings
-                        ],
+                        "findings": [raw_finding_payload(f) for f in r.findings],
                     }
                     for r in resource_results
                 ]
@@ -2190,18 +2174,7 @@ async def main():
                     "status": result.status,
                     "is_safe": result.is_safe,
                     "analyzer_errors": result.analyzer_errors,
-                    "findings": [
-                        {
-                            "severity": f.severity,
-                            "summary": f.summary,
-                            "analyzer": f.analyzer,
-                            "details": f.details,
-                            "mcp_taxonomy": (
-                                f.mcp_taxonomy if hasattr(f, "mcp_taxonomy") else None
-                            ),
-                        }
-                        for f in result.findings
-                    ],
+                    "findings": [raw_finding_payload(f) for f in result.findings],
                 }
             ]
 
@@ -2253,6 +2226,7 @@ async def main():
                         "threat_names": [finding.threat_category],
                         "total_findings": 1,
                         "mcp_taxonomies": [],
+                        "evidence": public_evidence_for_findings([finding]),
                     }
                     # Add MCP taxonomy if available
                     if finding.details:
@@ -2283,6 +2257,7 @@ async def main():
                             "threat_names": [],
                             "total_findings": 0,
                             "mcp_taxonomies": [],
+                            "evidence": [],
                         }
                     },
                 })
@@ -2523,6 +2498,7 @@ async def main():
                         "threat_names": [finding.threat_category],
                         "total_findings": 1,
                         "mcp_taxonomies": [],
+                        "evidence": public_evidence_for_findings([finding]),
                     }
                     if finding.details:
                         taxonomy = {}
@@ -2549,6 +2525,23 @@ async def main():
                         "is_safe": False,
                         "findings": {"vulnerable_package_analyzer": analyzer_finding},
                     })
+            elif analyzer.last_error:
+                results.append({
+                    "package_name": scan_path,
+                    "vulnerability_description": analyzer.last_error,
+                    "status": "error",
+                    "is_safe": None,
+                    "findings": {
+                        "vulnerable_package_analyzer": {
+                            "severity": "UNKNOWN",
+                            "threat_summary": analyzer.last_error,
+                            "threat_names": [],
+                            "total_findings": 0,
+                            "mcp_taxonomies": [],
+                            "evidence": [],
+                        }
+                    },
+                })
             else:
                 results.append({
                     "package_name": scan_path,
@@ -2562,6 +2555,7 @@ async def main():
                             "threat_names": [],
                             "total_findings": 0,
                             "mcp_taxonomies": [],
+                            "evidence": [],
                         }
                     },
                 })
@@ -2698,7 +2692,9 @@ async def main():
     if not args.raw and not args.detailed:
         # Choose an appropriate label for display based on scanning mode
         server_label = args.server_url
-        if hasattr(args, "cmd") and args.cmd == "stdio":
+        if hasattr(args, "cmd") and args.cmd == "static":
+            server_label = _static_scan_label(args)
+        elif hasattr(args, "cmd") and args.cmd == "stdio":
             label_args = []
             if getattr(args, "stdio_arg", None):
                 label_args.extend(args.stdio_arg)
@@ -2837,7 +2833,9 @@ async def main():
     else:
         # Choose an appropriate label for display based on scanning mode
         server_label = args.server_url
-        if args.stdio_command:
+        if hasattr(args, "cmd") and args.cmd == "static":
+            server_label = _static_scan_label(args)
+        elif args.stdio_command:
             label_args = []
             if args.stdio_arg:
                 label_args.extend(args.stdio_arg)
@@ -2881,6 +2879,15 @@ async def main():
         else:
             results_dict = {"server_url": server_label, "scan_results": results}
             display_results(results_dict, detailed=args.detailed)
+
+    if getattr(args, "cmd", None) == "vulnerable-package" and any(
+        row.get("status") == "error" for row in results
+    ):
+        print(
+            "Scan Error: vulnerable-package scan could not be completed reliably",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def cli_entry_point():

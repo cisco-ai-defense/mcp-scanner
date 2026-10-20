@@ -654,7 +654,7 @@ See [Readiness Scanning Documentation](https://github.com/cisco-ai-defense/mcp-s
 
 ### Prompt Defense Scanning
 
-The Prompt Defense Analyzer checks MCP tool descriptions and system prompts for **missing** defensive measures against 12 common attack vectors. It is pure regex — no API key or external dependencies required — and always runs by default.
+The Prompt Defense Analyzer checks MCP tool descriptions and system prompts for **missing** defensive measures against 12 common attack vectors. It is pure regex — no API key or external dependencies required — and always runs by default. A missing defense is an observed negative check: the evidence record lists how many patterns were checked and how many matched, and leaves `matched_text` null.
 
 **Attack vectors checked:**
 1. Instruction Override (HIGH)
@@ -772,6 +772,8 @@ The scanner supports multiple output formats:
 - **`table`**: Clean tabular format
 - **`by_severity`**: Results grouped by severity level
 - **`raw`**: Raw JSON output
+
+Each active finding in JSON output includes an `evidence` record (`summary`, `status`, `sources`). A completed analyzer with no findings has `evidence: []`. See [docs/finding-evidence-spec.md](docs/finding-evidence-spec.md).
 
 ### Example Output
 

@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from .analyzers.base import SecurityFinding
 from .analyzers.meta_analyzer import build_meta_audit_payload
+from .evidence import public_evidence_for_findings
 
 
 def analyzer_result_key(analyzer: Any) -> str:
@@ -735,6 +736,7 @@ def format_results_as_json(
                     "total_findings": len(vulns),
                     "threat_names": list(set(threat_names)),  # Deduplicate threat names
                     "threat_summary": threat_summary,
+                    "evidence": public_evidence_for_findings(vulns),
                 }
 
                 # Add threat/vulnerability classification if available
@@ -762,6 +764,7 @@ def format_results_as_json(
                     "total_findings": 0,
                     "status": "error" if analyzer_errors else "not_run",
                     "errors": analyzer_errors,
+                    "evidence": [],
                 }
 
         if scan_result.analyzer_errors:
