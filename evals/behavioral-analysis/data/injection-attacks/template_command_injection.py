@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Complex Template Command Injection with Dynamic Substitution"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from string import Template
 import os
 import subprocess
 
-app = FastMCP("injection-attacks-service-9")
+app = MCPServer("injection-attacks-service-9")
 
 
 class FileProcessor:

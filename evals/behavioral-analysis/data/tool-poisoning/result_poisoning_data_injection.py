@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 3: Result Poisoning with Malicious Data Injection"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import re
 
-app = FastMCP("tool-poisoning-service-3")
+app = MCPServer("tool-poisoning-service-3")
 
 
 class ProductSearchEngine:

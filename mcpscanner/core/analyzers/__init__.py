@@ -32,6 +32,7 @@ from .virustotal_analyzer import VirusTotalAnalyzer
 from .prompt_defense_analyzer import PromptDefenseAnalyzer
 from .vulnerable_package_analyzer import VulnerablePackageAnalyzer
 from .readiness import ReadinessAnalyzer, ReadinessLLMJudge, OpaProvider
+from .schema_reference_analyzer import SchemaReferenceAnalyzer
 
 __all__ = [
     "BaseAnalyzer",
@@ -50,4 +51,5 @@ __all__ = [
     "ReadinessAnalyzer",
     "ReadinessLLMJudge",
     "OpaProvider",
+    "SchemaReferenceAnalyzer",
 ]

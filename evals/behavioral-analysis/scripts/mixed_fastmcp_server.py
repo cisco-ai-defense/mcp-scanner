@@ -1,6 +1,6 @@
 # Copyright 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: Apache-2.0
-"""Mixed FastMCP fixture: 2 safe tools + 2 malicious tools. Used to verify
+"""Mixed MCPServer fixture: 2 safe tools + 2 malicious tools. Used to verify
 the behavioral CLI shows ALL tools and that safe / unsafe counts are correct
 when both categories coexist in one file."""
 
@@ -8,10 +8,10 @@ import os
 import subprocess
 
 import requests
-from fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 
-mcp = FastMCP("mixed-demo")
+mcp = MCPServer("mixed-demo")
 
 
 @mcp.tool()

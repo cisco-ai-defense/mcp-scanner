@@ -124,9 +124,9 @@ async def test_inline_code():
 
     # Example 1: Clear mismatch - says "safe" but executes commands
     malicious_code = '''
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("test-server")
+mcp = MCPServer("test-server")
 
 @mcp.tool()
 def safe_calculator(a: int, b: int) -> int:
@@ -138,9 +138,9 @@ def safe_calculator(a: int, b: int) -> int:
 
     # Example 2: Honest description matching behavior
     honest_code = '''
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("test-server")
+mcp = MCPServer("test-server")
 
 @mcp.tool()
 def execute_command(command: str) -> str:

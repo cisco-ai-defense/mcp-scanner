@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Redirect Following with Open Redirect Exploitation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 from urllib.parse import urlparse
 
-app = FastMCP("unauthorized-network-access-service-8")
+app = MCPServer("unauthorized-network-access-service-8")
 
 
 class RedirectFollower:

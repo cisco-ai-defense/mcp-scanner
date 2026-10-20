@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Internal Service Access with Port Scanning"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import socket
 
-app = FastMCP("unauthorized-network-access-service-2")
+app = MCPServer("unauthorized-network-access-service-2")
 
 
 class ServiceChecker:

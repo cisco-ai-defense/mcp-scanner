@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Complex Tornado Template Injection with Web Page Rendering"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from tornado.template import Template, Loader
 import os
 
-app = FastMCP("template-injection-service-4")
+app = MCPServer("template-injection-service-4")
 
 
 class WebPageRenderer:

@@ -39,15 +39,15 @@ from mcp.types import Tool as MCPTool, Prompt as MCPPrompt
 from mcp import StdioServerParameters
 
 try:
-    from mcp.shared.exceptions import McpError
-except (
-    ImportError
-):  # pragma: no cover - fallback for environments without mcp installed
+    from mcp.shared.exceptions import MCPError as McpError
+except ImportError:  # pragma: no cover - mcp < 2.0
+    from mcp.shared.exceptions import McpError  # type: ignore[no-redef]
 
-    class McpError(Exception):
-        """Fallback error class when MCP dependency is unavailable."""
-
-        pass
+try:
+    from mcp_types import METHOD_NOT_FOUND, UNSUPPORTED_PROTOCOL_VERSION
+except ImportError:  # pragma: no cover - mcp < 2.0
+    METHOD_NOT_FOUND = -32601
+    UNSUPPORTED_PROTOCOL_VERSION = -32022
 
 
 from ..config.config import Config
@@ -72,6 +72,7 @@ from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .analyzers.virustotal_analyzer import VirusTotalAnalyzer
 from .analyzers.prompt_defense_analyzer import PromptDefenseAnalyzer
 from .analyzers.readiness import ReadinessAnalyzer
+from .analyzers.schema_reference_analyzer import SchemaReferenceAnalyzer
 from .auth import (
     Auth,
     AuthType,
@@ -186,6 +187,7 @@ class Scanner:
         self._readiness_analyzer = ReadinessAnalyzer()
         # Prompt defense analyzer always available (pure regex, no API keys needed)
         self._prompt_defense_analyzer = PromptDefenseAnalyzer()
+        self._schema_analyzer = SchemaReferenceAnalyzer()
         # P1-3 fix: construct MetaAnalyzer once at __init__ under the same gate
         # used by LLM/Behavioral. The previous lazy-init path
         # (_validate_analyzer_requirements) was a method named "validate" that
@@ -405,6 +407,13 @@ class Scanner:
             return ""
         base = mime.split(";", 1)[0].strip().lower()
         return base
+
+    @staticmethod
+    def _advertised_resource_mime(resource: Any) -> Optional[str]:
+        """Read the SDK attribute on both MCP 2.x and legacy resource models."""
+        return getattr(resource, "mime_type", None) or getattr(
+            resource, "mimeType", None
+        )
 
     @classmethod
     def _resource_mime_is_allowed(
@@ -642,7 +651,7 @@ class Scanner:
             if hasattr(content, "text") and content.text:
                 piece = content.text
                 observed += len(piece)
-                raw_mime = getattr(content, "mimeType", None)
+                raw_mime = cls._advertised_resource_mime(content)
                 if raw_mime:
                     read_mimes.append(raw_mime)
                 room = limit - len(text_content)
@@ -1244,29 +1253,155 @@ class Scanner:
         return any(token in combined_message for token in tokens)
 
     @staticmethod
+    def _should_fallback_to_initialize(
+        error: Exception, *, legacy_stdio: bool = False, legacy_http: bool = False
+    ) -> bool:
+        """Return True when ``discover()`` failed in a way that ``initialize()`` may still work."""
+        rpc_error = getattr(error, "error", None)
+        code = getattr(error, "code", None)
+        if code is None:
+            code = getattr(rpc_error, "code", None)
+        # MCP 1.x streamable HTTP servers can reject pre-initialize discover
+        # with this exact missing-session response. It is safe to retry the
+        # legacy initialize handshake only for this known server shape.
+        if code == -32600:
+            return (
+                legacy_http
+                and getattr(rpc_error, "message", str(error))
+                == "Bad Request: Missing session ID"
+                and getattr(rpc_error, "data", None) in (None, "")
+            )
+        # MCP 1.x Python stdio servers use this exact generic error for an
+        # unknown discover method. A modern server may use -32602 for a real
+        # payload defect, so do not infer legacy support from the code alone.
+        if code == -32602:
+            return (
+                legacy_stdio
+                and getattr(rpc_error, "message", str(error))
+                == "Invalid request parameters"
+                and getattr(rpc_error, "data", None) in (None, "")
+            )
+        return (
+            code == UNSUPPORTED_PROTOCOL_VERSION
+            or Scanner._is_missing_capability_error(error)
+        )
+
+    @staticmethod
     def _server_supports_capability(
         session: Any, capability: str
     ) -> Optional[bool]:
         """Check whether the server advertised support for a capability.
 
-        Reads the ``InitializeResult.capabilities`` that ``_get_mcp_session``
-        stashes on the session as ``_init_result``. Returns:
+        Prefers ``ClientSession.server_capabilities`` (mcp ≥ 2.0, works for
+        both ``initialize()`` and ``discover()``). Falls back to the stashed
+        connect result on ``session._init_result`` for older call paths.
+
+        Returns:
 
         * ``True``  — server explicitly advertised this capability.
         * ``False`` — server explicitly omitted it; we can short-circuit.
         * ``None``  — we don't have init info; caller must fall back to the
                      try/except path on the actual JSON-RPC call.
         """
+        capabilities = None
         init_result = getattr(session, "_init_result", None)
-        if init_result is None:
-            return None
-        capabilities = getattr(init_result, "capabilities", None)
+        if init_result is not None:
+            capabilities = getattr(init_result, "capabilities", None)
+        elif getattr(session, "protocol_version", None) is not None:
+            capabilities = getattr(session, "server_capabilities", None)
         if capabilities is None:
             return None
         # ServerCapabilities is a pydantic model; missing optional fields
         # default to None. A non-None object (even if empty) signals the
         # server advertised the capability.
         return getattr(capabilities, capability, None) is not None
+
+    async def _negotiate_mcp_session(
+        self,
+        session: ClientSession,
+        *,
+        legacy_stdio: bool = False,
+        legacy_http: bool = False,
+    ) -> Any:
+        """Negotiate protocol version with the server.
+
+        On mcp ≥ 2.0, tries modern ``server/discover`` first (``2026-07-28``)
+        for all transports (streamable HTTP, SSE where applicable, and stdio).
+        Falls back to legacy ``initialize()`` when discover is unavailable or
+        the server only speaks handshake-era protocol versions. On mcp 1.x
+        (no ``discover`` method), uses ``initialize()`` directly.
+        """
+        if hasattr(session, "discover"):
+            try:
+                connect_result = await session.discover()
+                session._init_result = connect_result
+                logger.debug(
+                    'MCP session negotiated via discover: protocol="%s"',
+                    session.protocol_version,
+                )
+                return connect_result
+            except McpError as e:
+                if not self._should_fallback_to_initialize(
+                    e, legacy_stdio=legacy_stdio, legacy_http=legacy_http
+                ):
+                    raise
+                if getattr(e, "code", None) == -32602:
+                    logger.warning(
+                        "Legacy-shaped server/discover rejection over stdio; "
+                        "trying initialize() after: %s",
+                        e,
+                    )
+                elif getattr(e, "code", None) == -32600:
+                    logger.warning(
+                        "Legacy-shaped server/discover rejection over HTTP; "
+                        "trying initialize() after: %s",
+                        e,
+                    )
+                logger.debug(
+                    "server/discover unavailable (%s), falling back to initialize()",
+                    e,
+                )
+
+        connect_result = await session.initialize()
+        session._init_result = connect_result
+        protocol_version = getattr(
+            connect_result,
+            "protocol_version",
+            getattr(connect_result, "protocolVersion", "unknown"),
+        )
+        logger.debug(
+            'MCP session negotiated via initialize: protocol="%s"',
+            protocol_version,
+        )
+        return connect_result
+
+    @staticmethod
+    def _session_connect_metadata(session: Any) -> tuple[Any, Any, Optional[str]]:
+        """Return ``(instructions, server_info, protocol_version)`` from a session."""
+        init_result = getattr(session, "_init_result", None)
+        if init_result is not None:
+            instructions = getattr(init_result, "instructions", None)
+            server_info = getattr(init_result, "serverInfo", None)
+            if server_info is None:
+                server_info = getattr(init_result, "server_info", None)
+            protocol_version = getattr(init_result, "protocolVersion", None)
+            if protocol_version is None:
+                protocol_version = getattr(init_result, "protocol_version", None)
+            # DiscoverResult keeps identity and the negotiated version on the
+            # session, while instructions are present on the result.
+            if not hasattr(init_result, "instructions"):
+                instructions = getattr(session, "instructions", None)
+            if server_info is None:
+                server_info = getattr(session, "server_info", None)
+            if protocol_version is None:
+                protocol_version = getattr(session, "protocol_version", None)
+            return instructions, server_info, protocol_version
+
+        return (
+            getattr(session, "instructions", None),
+            getattr(session, "server_info", None),
+            getattr(session, "protocol_version", None),
+        )
 
     @staticmethod
     def _analyzer_label(analyzer: Any) -> str:
@@ -1336,8 +1471,18 @@ class Scanner:
         analyzer_errors: List[Dict[str, str]] = []
         name = tool.name
         description = tool.description
-        tool_json = tool.model_dump_json()
+        tool_json = tool.model_dump_json(by_alias=True)
         tool_data = json.loads(tool_json)
+
+        if AnalyzerEnum.SCHEMA in analyzers:
+            try:
+                schema_findings = await self._schema_analyzer.analyze(
+                    tool_json, {"tool_name": name, "content_type": "parameters"}
+                )
+                all_findings.extend(schema_findings)
+                successful_analyzers.append(AnalyzerEnum.SCHEMA)
+            except Exception as e:
+                self._record_analyzer_error(analyzer_errors, "SCHEMA", "parameters", e)
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the description
@@ -2055,9 +2200,9 @@ class Scanner:
                 session = ClientSession(read, write)
                 await session.__aenter__()
                 logger.debug(f'Initializing MCP session: server="{server_url}"')
-                init_result = await session.initialize()
-                # Store the initialize result on the session for later access
-                session._init_result = init_result
+                await self._negotiate_mcp_session(
+                    session, legacy_http="/sse" not in destination_url
+                )
             logger.debug(f'Successfully connected to MCP server: server="{server_url}"')
             return client_context, session
         except (asyncio.CancelledError, GeneratorExit) as e:
@@ -2382,7 +2527,10 @@ class Scanner:
 
                 session = ClientSession(read, write)
                 await asyncio.wait_for(session.__aenter__(), timeout=10)
-                await asyncio.wait_for(session.initialize(), timeout=10)
+                await asyncio.wait_for(
+                    self._negotiate_mcp_session(session, legacy_stdio=True),
+                    timeout=10,
+                )
 
             except asyncio.TimeoutError:
                 # Clean up on timeout
@@ -3053,16 +3201,17 @@ class Scanner:
                 tenant_id=tenant_id,
             )
 
-            # Get the initialize result which was stored during session initialization
-            init_result = getattr(session, "_init_result", None)
+            # Connect result is stashed on the session during negotiation.
+            instructions, server_info, protocol_version = self._session_connect_metadata(
+                session
+            )
 
-            if not init_result:
+            if protocol_version is None and not getattr(
+                session, "_init_result", None
+            ):
                 raise ValueError(
                     f"Failed to get initialization result from server at {server_url}"
                 )
-
-            # Extract instructions from the initialize result
-            instructions = getattr(init_result, "instructions", None)
 
             if not instructions:
                 # Return a result with no findings if instructions are not provided
@@ -3072,23 +3221,22 @@ class Scanner:
                 return InstructionsScanResult(
                     instructions="",
                     server_name=(
-                        getattr(init_result.serverInfo, "name", "Unknown")
-                        if hasattr(init_result, "serverInfo")
+                        getattr(server_info, "name", "Unknown")
+                        if server_info is not None
                         else "Unknown"
                     ),
-                    protocol_version=getattr(init_result, "protocolVersion", "Unknown"),
+                    protocol_version=protocol_version or "Unknown",
                     status="skipped",
                     analyzers=[],
                     findings=[],
                 )
 
-            # Extract server info
             server_name = (
-                getattr(init_result.serverInfo, "name", "Unknown")
-                if hasattr(init_result, "serverInfo")
+                getattr(server_info, "name", "Unknown")
+                if server_info is not None
                 else "Unknown"
             )
-            protocol_version = getattr(init_result, "protocolVersion", "Unknown")
+            protocol_version = protocol_version or "Unknown"
 
             # Analyze the instructions
             result = await self._analyze_instructions(
@@ -3598,12 +3746,13 @@ class Scanner:
             aggregate_limit = MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS
             remaining = aggregate_limit
             for resource in resource_list.resources:
+                resource_mime = self._advertised_resource_mime(resource)
                 if remaining <= 0:
                     results.append(
                         self._resource_coverage_limit_result(
                             resource.uri,
                             resource.name or "",
-                            self._normalize_mime_type(resource.mimeType) or "unknown",
+                            self._normalize_mime_type(resource_mime) or "unknown",
                             CoverageLimitExceeded(
                                 "resource scan aggregate budget exhausted",
                                 limit=aggregate_limit,
@@ -3614,8 +3763,8 @@ class Scanner:
                 # Check if MIME type is allowed. The normalized list MIME is
                 # the effective type for this early decision, so the result
                 # reports that value rather than the raw advertisement.
-                listed_mime = self._normalize_mime_type(resource.mimeType) or "unknown"
-                if resource.mimeType and not self._resource_mime_is_allowed(
+                listed_mime = self._normalize_mime_type(resource_mime) or "unknown"
+                if resource_mime and not self._resource_mime_is_allowed(
                     listed_mime, allowed_mime_types
                 ):
                     logger.info(
@@ -3649,7 +3798,7 @@ class Scanner:
                             truncated,
                             observed,
                         ) = self._extract_resource_read_result(
-                            resource_contents, resource.mimeType
+                            resource_contents, resource_mime
                         )
                     except (AttributeError, TypeError) as e:
                         logger.warning(
@@ -3659,7 +3808,7 @@ class Scanner:
                             ResourceScanResult(
                                 resource_uri=resource.uri,
                                 resource_name=resource.name or "",
-                                resource_mime_type=resource.mimeType or "unknown",
+                                resource_mime_type=resource_mime or "unknown",
                                 status="failed",
                                 analyzers=[],
                                 findings=[],
@@ -3763,7 +3912,7 @@ class Scanner:
                             ResourceScanResult(
                                 resource_uri=resource.uri,
                                 resource_name=resource.name or "",
-                                resource_mime_type=resource.mimeType or "unknown",
+                                resource_mime_type=resource_mime or "unknown",
                                 status="failed",
                                 analyzers=[],
                                 findings=[],
@@ -3776,7 +3925,7 @@ class Scanner:
                         ResourceScanResult(
                             resource_uri=resource.uri,
                             resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
+                            resource_mime_type=resource_mime or "unknown",
                             status="failed",
                             analyzers=[],
                             findings=[],
@@ -3788,7 +3937,7 @@ class Scanner:
                         ResourceScanResult(
                             resource_uri=resource.uri,
                             resource_name=resource.name or "",
-                            resource_mime_type=resource.mimeType or "unknown",
+                            resource_mime_type=resource_mime or "unknown",
                             status="failed",
                             analyzers=[],
                             findings=[],
@@ -3902,12 +4051,12 @@ class Scanner:
                     f"Resource '{resource_uri}' not found on server {server_url}"
                 )
 
+            resource_mime = self._advertised_resource_mime(target_resource)
+
             # Check if MIME type is allowed. The normalized list MIME is
             # the effective type for this early decision.
-            listed_mime = (
-                self._normalize_mime_type(target_resource.mimeType) or "unknown"
-            )
-            if target_resource.mimeType and not self._resource_mime_is_allowed(
+            listed_mime = self._normalize_mime_type(resource_mime) or "unknown"
+            if resource_mime and not self._resource_mime_is_allowed(
                 listed_mime, allowed_mime_types
             ):
                 logger.info(
@@ -3938,7 +4087,7 @@ class Scanner:
                         truncated,
                         observed,
                     ) = self._extract_resource_read_result(
-                        resource_contents, target_resource.mimeType
+                        resource_contents, resource_mime
                     )
                 except (AttributeError, TypeError) as e:
                     logger.warning(
@@ -3947,7 +4096,7 @@ class Scanner:
                     return ResourceScanResult(
                         resource_uri=target_resource.uri,
                         resource_name=target_resource.name or "",
-                        resource_mime_type=target_resource.mimeType or "unknown",
+                        resource_mime_type=resource_mime or "unknown",
                         status="failed",
                         analyzers=[],
                         findings=[],
@@ -4030,7 +4179,7 @@ class Scanner:
                 return ResourceScanResult(
                     resource_uri=target_resource.uri,
                     resource_name=target_resource.name or "",
-                    resource_mime_type=target_resource.mimeType or "unknown",
+                    resource_mime_type=resource_mime or "unknown",
                     status="failed",
                     analyzers=[],
                     findings=[],
@@ -4040,7 +4189,7 @@ class Scanner:
                 return ResourceScanResult(
                     resource_uri=target_resource.uri,
                     resource_name=target_resource.name or "",
-                    resource_mime_type=target_resource.mimeType or "unknown",
+                    resource_mime_type=resource_mime or "unknown",
                     status="failed",
                     analyzers=[],
                     findings=[],
