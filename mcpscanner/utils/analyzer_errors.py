@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import re
 from enum import Enum
-from typing import Awaitable, Callable, Optional, TypeVar, Union
+from typing import Awaitable, Callable, Literal, Optional, TypeVar, Union
 
 T = TypeVar("T")
 OnRetryCallback = Callable[[BaseException, int, float], Union[None, Awaitable[None]]]
@@ -308,17 +308,29 @@ def build_infrastructure_error_finding(
     error: BaseException,
     context: str = "llm",
     model: str | None = None,
+    safe_reason: Literal["empty_response", "coverage_limit"] | None = None,
 ):
     """Return a visible finding when an analyzer stage fails entirely.
 
     Callers should emit this instead of returning an empty findings list so
     scan output cannot be mistaken for a clean LLM pass.
+    ``safe_reason`` selects a fixed message for known local failures; arbitrary
+    exception text is never copied into the finding.
     """
     from ..core.analyzers.base import SecurityFinding
-    from .log_format import ERROR_TRUNCATE, truncate
 
     kind = classify_analyzer_error(error, context=context, model=model)
-    message = truncate(str(error), ERROR_TRUNCATE)
+    # Provider exception text may contain credentials, URLs, or scanned input.
+    # Preserve the error type and classification without publishing that text.
+    if safe_reason == "empty_response":
+        message = "Empty response from LLM during analysis"
+    elif safe_reason == "coverage_limit":
+        message = (
+            "Coverage budget exceeded during analysis "
+            f"(observed {error.observed}, limit {error.limit})"
+        )
+    else:
+        message = f"{type(error).__name__} during analysis"
     details: dict[str, str] = {
         "subject": subject,
         "error": message,

@@ -15,9 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Complex Cheetah Template Injection with Search Lists"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-app = FastMCP("template-injection-service-8")
+app = MCPServer("template-injection-service-8")
 
 
 class CheetahDocumentGenerator:

@@ -74,6 +74,7 @@ class AnalyzerEnum(str, Enum):
     PROMPT_DEFENSE = "prompt_defense"
     VULNERABLE_PACKAGE = "vulnerable_package"
     META = "meta"
+    SCHEMA = "schema"
 
 
 # Analyzers that are exposed via the FastAPI HTTP surface. The other
@@ -88,6 +89,7 @@ API_ALLOWED_ANALYZERS: frozenset[AnalyzerEnum] = frozenset(
         AnalyzerEnum.YARA,
         AnalyzerEnum.LLM,
         AnalyzerEnum.META,
+        AnalyzerEnum.SCHEMA,
     }
 )
 
@@ -508,7 +510,8 @@ class ToolScanResult(BaseModel):
     tool_name: str
     status: str
     findings: dict  # Dictionary with analyzer names as keys
-    is_safe: bool
+    is_safe: Optional[bool]
+    analyzer_errors: List[Dict[str, str]] = Field(default_factory=list)
     meta_analysis: Optional[MetaAnalysisAudit] = Field(
         default=None,
         description=(
