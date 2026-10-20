@@ -20,6 +20,7 @@ This module contains the LLM analyzer class for analyzing MCP tools using any LL
 via LiteLLM to detect malicious content and data exfiltration risks.
 """
 
+import asyncio
 import json
 import secrets
 from typing import Any, Dict, List, Optional
@@ -153,22 +154,26 @@ class LLMAnalyzer(BaseAnalyzer):
             self.logger.error(f"Prompt file not found: {prompt_file_name}")
             raise
         except Exception as e:
-            self.logger.error(f"Failed to load prompt {prompt_file_name}: {e}")
+            self.logger.error("Failed to load LLM prompt: %s", type(e).__name__)
             raise IOError(f"Could not load prompt {prompt_file_name}: {e}")
 
     def _create_threat_analysis_prompt(
         self,
-        tool_name: str,
+        entity_name: str,
         description: str = None,
         parameters: Dict[str, Any] = None,
+        entity_kind: str = "tool",
+        body_text: str = None,
         _context: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, bool]:
-        """Create a threat analysis prompt for comprehensive tool analysis.
+        """Create a threat analysis prompt for tools, resources, or prompts.
 
         Args:
-            tool_name: Name of the tool to analyze
-            description: Tool description to analyze (optional)
-            parameters: Tool parameters schema (optional)
+            entity_name: Name of the tool, resource, or prompt
+            description: Description or list metadata (optional)
+            parameters: Tool parameters schema (optional; ignored for resource/prompt)
+            entity_kind: ``tool``, ``resource``, or ``prompt``
+            body_text: Resource/prompt body from ``read_resource`` / ``get_prompt``
             _context: Additional context (unused)
 
         Returns:
@@ -180,30 +185,38 @@ class LLMAnalyzer(BaseAnalyzer):
         start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
         end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
 
-        # Format parameters for display
-        if parameters:
-            param_list = []
-            for param_name, param_info in parameters.items():
-                param_type = param_info.get("type", "unknown")
-                param_desc = param_info.get("description", "No description")
-                param_list.append(f"  - {param_name} ({param_type}): {param_desc}")
-            params_text = "\n".join(param_list)
+        if entity_kind in ("resource", "prompt"):
+            label = "Resource" if entity_kind == "resource" else "Prompt"
+            analysis_content = f"{label} Name: {entity_name}\n"
+            if description and description.strip():
+                analysis_content += f"Metadata:\n{description.strip()}\n"
+            analysis_content += f"Body:\n{(body_text or '').strip()}\n"
+            analysis_content += "Parameters:\n  Not applicable\n"
         else:
-            params_text = "  No parameters"
+            # Format parameters for display
+            if parameters:
+                param_list = []
+                for param_name, param_info in parameters.items():
+                    param_type = param_info.get("type", "unknown")
+                    param_desc = param_info.get("description", "No description")
+                    param_list.append(
+                        f"  - {param_name} ({param_type}): {param_desc}"
+                    )
+                params_text = "\n".join(param_list)
+            else:
+                params_text = "  No parameters"
 
-        # Build the analysis content
-        analysis_content = f"Tool Name: {tool_name}\n"
-
-        if description:
-            analysis_content += f"Description: {description}\n"
-
-        analysis_content += f"Parameters:\n{params_text}"
+            analysis_content = f"Tool Name: {entity_name}\n"
+            if description:
+                analysis_content += f"Description: {description}\n"
+            analysis_content += f"Parameters:\n{params_text}"
 
         # Security validation: Check that the untrusted input doesn't contain our delimiter tags
         prompt_injection_detected = False
         if start_tag in analysis_content or end_tag in analysis_content:
             self.logger.warning(
-                f"Potential prompt injection detected in tool {tool_name}: Input contains delimiter tags"
+                f"Potential prompt injection detected in {entity_kind} {entity_name}: "
+                "Input contains delimiter tags"
             )
             prompt_injection_detected = True
 
@@ -222,6 +235,42 @@ class LLMAnalyzer(BaseAnalyzer):
         """
 
         return prompt.strip(), prompt_injection_detected
+
+    @staticmethod
+    def _completion_text(response: Any) -> str:
+        """Extract non-empty text from a LiteLLM chat completion."""
+        try:
+            content = response.choices[0].message.content
+        except (AttributeError, IndexError, TypeError):
+            return ""
+        return (content or "").strip()
+
+    @staticmethod
+    def _completion_finish_reason(response: Any) -> str:
+        try:
+            reason = response.choices[0].finish_reason
+        except (AttributeError, IndexError, TypeError):
+            return ""
+        return str(reason or "")
+
+    @staticmethod
+    def _extract_mcp_entity_body(content: str, entity_kind: str) -> str:
+        """Extract analyzable body text from scanner-formatted resource/prompt content."""
+        if not content:
+            return ""
+        if entity_kind == "resource":
+            marker = "Content:\n"
+        elif entity_kind == "prompt":
+            marker = "Messages:\n"
+        else:
+            return content.strip()
+        idx = content.find(marker)
+        if idx == -1:
+            # No rendered messages or resource content. The formatted
+            # string is metadata only; returning it would present name,
+            # description, and arguments as the body.
+            return ""
+        return content[idx + len(marker) :].strip()
 
     def _parse_response(self, response_content: str) -> Dict[str, Any]:
         """Parse the LLM response and extract analysis results.
@@ -274,17 +323,21 @@ class LLMAnalyzer(BaseAnalyzer):
             return json.loads(json_content)
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse LLM response as JSON: {e}")
+            self.logger.error(
+                "Failed to parse LLM response as JSON: %s", type(e).__name__
+            )
             self.logger.error(
                 f"Response content length: {len(response_content)} characters"
             )
-            raise ValueError(f"Invalid JSON in LLM response: {e}")
+            raise ValueError("Invalid JSON in LLM response") from e
         except Exception as e:
-            self.logger.error(f"Unexpected error parsing LLM response: {e}")
+            self.logger.error(
+                "Unexpected error parsing LLM response: %s", type(e).__name__
+            )
             self.logger.error(
                 f"Response content length: {len(response_content)} characters"
             )
-            raise ValueError(f"Failed to parse LLM response: {e}")
+            raise ValueError("Failed to parse LLM response") from e
 
     def _create_findings_from_threat_analysis(
         self, analysis_result: Dict[str, Any], tool_name: str
@@ -362,22 +415,48 @@ class LLMAnalyzer(BaseAnalyzer):
         Raises:
             Exception: If the LLM API request fails.
         """
-        tool_name = (
-            context.get("tool_name", "Unknown Tool") if context else "Unknown Tool"
-        )
+        if context:
+            entity_name = (
+                context.get("tool_name")
+                or context.get("prompt_name")
+                or context.get("resource_name")
+            )
+        else:
+            entity_name = None
+        entity_name = entity_name or "Unknown Tool"
+        if context and context.get("entity_type") == "resource":
+            entity_kind = "resource"
+        elif context and (
+            context.get("prompt_name") or context.get("entity_type") == "prompt"
+        ):
+            entity_kind = "prompt"
+        else:
+            entity_kind = "tool"
 
         try:
             # Parse the content to extract tool information
             tool_info = self._parse_tool_content(content, context)
             findings = []
 
-            # Threat Analysis: Analyze tool name, description, and parameters together
-            if tool_info.get("description") or tool_info.get("parameters"):
+            body_text = ""
+            metadata_text = ""
+            if entity_kind in ("resource", "prompt"):
+                body_text = self._extract_mcp_entity_body(content, entity_kind)
+                metadata_text = content.split("Content:\n")[0].split("Messages:\n")[0].strip()
+            has_tool_fields = tool_info.get("description") or tool_info.get("parameters")
+            has_body = bool(body_text.strip())
+            if has_tool_fields or has_body:
                 threat_prompt, prompt_injection_detected = (
                     self._create_threat_analysis_prompt(
-                        tool_name,
-                        description=tool_info.get("description"),
+                        entity_name,
+                        description=(
+                            metadata_text
+                            if entity_kind in ("resource", "prompt")
+                            else tool_info.get("description")
+                        ),
                         parameters=tool_info.get("parameters"),
+                        entity_kind=entity_kind,
+                        body_text=body_text if entity_kind in ("resource", "prompt") else None,
                         _context=context,
                     )
                 )
@@ -390,7 +469,7 @@ class LLMAnalyzer(BaseAnalyzer):
                         analyzer="LLM",
                         threat_category="PROMPT INJECTION",
                         details={
-                            "tool_name": tool_name,
+                            "tool_name": entity_name,
                             "threat_type": "PROMPT INJECTION",
                             "evidence": "prompt injection detected in tool content",
                             "primary_threats": ["PROMPT INJECTION"],
@@ -398,34 +477,81 @@ class LLMAnalyzer(BaseAnalyzer):
                     )
                     findings.append(finding)
                 else:
-                    # No prompt injection detected, proceed with normal LLM analysis
-                    threat_response = await self._make_llm_request(
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": "You are a security expert analyzing MCP tools for threats. Follow the analysis framework provided.",
-                            },
-                            {"role": "user", "content": threat_prompt},
-                        ],
-                        context=f"threat analysis for {tool_name}",
-                    )
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                f"You are a security expert analyzing MCP {entity_kind}s "
+                                "for threats. Follow the analysis framework provided."
+                            ),
+                        },
+                        {"role": "user", "content": threat_prompt},
+                    ]
+                    max_attempts = self._max_retries + 1
+                    threat_content = ""
+                    finish_reason = ""
+                    for attempt in range(1, max_attempts + 1):
+                        threat_response = await self._make_llm_request(
+                            messages=messages,
+                            context=f"threat analysis for {entity_name}",
+                        )
+                        threat_content = self._completion_text(threat_response)
+                        finish_reason = self._completion_finish_reason(
+                            threat_response
+                        )
+                        if threat_content:
+                            break
+                        self.logger.warning(
+                            "Empty LLM completion for %s (attempt %d/%d, "
+                            "finish_reason=%s) — retrying",
+                            entity_name,
+                            attempt,
+                            max_attempts,
+                            finish_reason or "unknown",
+                        )
+                        if attempt < max_attempts:
+                            await asyncio.sleep(self._rate_limit_delay)
 
-                    threat_content = threat_response.choices[0].message.content
-                    threat_analysis = self._parse_response(threat_content)
-                    threat_findings = self._create_findings_from_threat_analysis(
-                        threat_analysis, tool_name
-                    )
-                    findings.extend(threat_findings)
+                    if not threat_content:
+                        empty_error = ValueError(
+                            "Empty response from LLM after "
+                            f"{max_attempts} attempt(s)"
+                            + (
+                                f" (finish_reason={finish_reason})"
+                                if finish_reason
+                                else ""
+                            )
+                        )
+                        self.logger.warning(
+                            "LLM threat analysis skipped after %d empty attempt(s)",
+                            max_attempts,
+                        )
+                        findings.append(
+                            build_infrastructure_error_finding(
+                                analyzer_name="LLM",
+                                subject=entity_name,
+                                error=empty_error,
+                                model=self._model,
+                                safe_reason="empty_response",
+                            )
+                        )
+                    else:
+                        threat_analysis = self._parse_response(threat_content)
+                        threat_findings = (
+                            self._create_findings_from_threat_analysis(
+                                threat_analysis, entity_name
+                            )
+                        )
+                        findings.extend(threat_findings)
 
             return findings
 
         except Exception as e:
-            self.logger.error(f"LLM analysis failed for {tool_name}: {str(e)}")
-            self.logger.error(f"Full traceback for {tool_name}:", exc_info=True)
+            self.logger.error("LLM analysis failed: %s", type(e).__name__)
             return [
                 build_infrastructure_error_finding(
                     analyzer_name="LLM",
-                    subject=tool_name,
+                    subject=entity_name,
                     error=e,
                     model=self._model,
                 )
@@ -526,13 +652,12 @@ class LLMAnalyzer(BaseAnalyzer):
             exc: BaseException, attempt: int, delay: float
         ) -> None:
             self.logger.warning(
-                "LLM API transient error for %s, retrying in %.1fs "
+                "LLM API transient error, retrying in %.1fs "
                 "(attempt %d/%d): %s",
-                context,
                 delay,
                 attempt,
                 max_attempts,
-                exc,
+                type(exc).__name__,
             )
 
         try:
@@ -546,11 +671,10 @@ class LLMAnalyzer(BaseAnalyzer):
         except Exception as e:
             kind = classify_analyzer_error(e, context="llm", model=self._model)
             if kind is ErrorKind.FINAL:
-                self.logger.error("LLM API final error for %s: %s", context, e)
+                self.logger.error("LLM API final error: %s", type(e).__name__)
             else:
                 self.logger.error(
-                    "LLM API transient error for %s, retries exhausted: %s",
-                    context,
-                    e,
+                    "LLM API transient error, retries exhausted: %s",
+                    type(e).__name__,
                 )
             raise

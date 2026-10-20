@@ -4,10 +4,10 @@
 functions. The behavioral CLI must surface exactly 1 row (the decorated
 ``add``), NOT 3 (decorated + both helpers)."""
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 
-mcp = FastMCP("plus-helpers-demo")
+mcp = MCPServer("plus-helpers-demo")
 
 
 def _validate_number(name: str, v) -> None:

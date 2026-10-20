@@ -1,10 +1,10 @@
 # Copyright 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: Apache-2.0
-"""Known-safe FastMCP server. Expected behavioral analyzer result: 0 findings."""
+"""Known-safe MCPServer fixture. Expected behavioral analyzer result: 0 findings."""
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("safe-demo")
+mcp = MCPServer("safe-demo")
 
 
 @mcp.tool()

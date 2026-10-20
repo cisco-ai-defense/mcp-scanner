@@ -163,7 +163,7 @@ asyncio.run(main())
 
 ### Scanning Server Instructions
 
-Server instructions are provided in the `InitializeResult` response and contain usage guidelines, security notes, and configuration details.
+Server instructions are returned during MCP session setup (`DiscoverResult` on mcp 2.0 servers, `InitializeResult` on legacy servers) and contain usage guidelines, security notes, and configuration details.
 
 ```python
 import asyncio

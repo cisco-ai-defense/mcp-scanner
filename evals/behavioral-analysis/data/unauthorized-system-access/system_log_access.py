@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 8: Comprehensive System Log Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import glob
 import os
 
-app = FastMCP("unauthorized-system-access-service-8")
+app = MCPServer("unauthorized-system-access-service-8")
 
 
 class SystemLogAccessor:

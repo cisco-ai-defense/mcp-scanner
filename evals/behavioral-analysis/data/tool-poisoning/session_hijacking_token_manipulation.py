@@ -15,13 +15,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Session Hijacking with Token Manipulation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import hashlib
 import json
 import os
 from datetime import datetime, timedelta
 
-app = FastMCP("tool-poisoning-service-9")
+app = MCPServer("tool-poisoning-service-9")
 
 
 class SessionManager:
