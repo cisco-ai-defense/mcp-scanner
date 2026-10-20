@@ -46,7 +46,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Union
+from typing import Any, ClassVar, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from .context_extractor import FunctionContext
 from .parser.python_parser import PythonParser
@@ -211,6 +211,16 @@ _TS_NON_FUNCTION_NODE_TYPES: Set[str] = {
     "impl_item",
 }
 
+# Member/property access nodes whose text is preserved as a handler or
+# dynamic-name hint (``m.fn``, ``obj.handler``) when bare identifiers are
+# absent.
+_TS_MEMBER_EXPR_TYPES: Set[str] = {
+    "member_expression",
+    "property_access_expression",
+    "field_expression",
+    "selector_expression",
+}
+
 
 # Compiled once: matches an annotation/attribute/macro sigil followed by an
 # identifier we want to inspect. Covers:
@@ -266,6 +276,33 @@ def _strip_string_quotes(s: str) -> str:
     if len(s) >= 2 and s[0] in ('"', "'", "`") and s[-1] == s[0]:
         return s[1:-1]
     return s
+
+
+def _bare_handler_symbol(name: str) -> str:
+    """Return the unqualified handler symbol (``Type.method`` -> ``method``)."""
+    if "." in name:
+        return name.rsplit(".", 1)[-1]
+    return name
+
+
+def _effective_capability_name(
+    registered_name: Optional[str],
+    handler_name: str,
+    capability: str,
+) -> str:
+    """Resolve the MCP-registered capability name for reports and LLM prompts.
+
+    Prefer an explicitly registered name (from ``AddTool``, ``#[tool(name=…)]``,
+    etc.). For tools without one, default to the bare handler symbol so
+    ``ShellExecutorService.execute_shell_command`` and ``executeShellCommand``
+    both surface as ``execute_shell_command`` / ``executeShellCommand`` rather
+    than class-qualified Java/Rust-style names.
+    """
+    if registered_name:
+        return registered_name
+    if capability == "tool":
+        return _bare_handler_symbol(handler_name)
+    return handler_name
 
 
 def _normalize_capability(method_name: str) -> str:
@@ -539,6 +576,7 @@ _MCP_SDK_MODULE_PREFIXES: Dict[str, "tuple[str, ...]"] = {
     ),
     "python": (
         "fastmcp",
+        "mcp.server.mcpserver",
         "mcp.server",
         "mcp.types",
         "modelcontextprotocol",
@@ -579,6 +617,7 @@ _MCP_KNOWN_SERVER_CLASSES: Set[str] = {
     "McpServer",
     "Server",
     "FastMCP",
+    "MCPServer",
     # Python
     "Server",
     # Kotlin
@@ -605,10 +644,12 @@ _MCP_PREFILTER_RE = _re.compile(
     rb"|io\.modelcontextprotocol"  # Java/Kotlin SDK
     rb"|org\.springframework\.ai"  # Spring AI MCP
     rb"|ModelContextProtocol"  # .NET SDK
-    rb"|fastmcp"  # Python FastMCP
+    rb"|fastmcp"  # Python FastMCP (legacy)
+    rb"|mcpserver"  # Python MCPServer (mcp 2.0)
     rb"|mcp\.server"  # Python low-level Server
     rb"|McpServer"  # JS/TS / .NET class
-    rb"|FastMCP\("  # Python instantiation
+    rb"|FastMCP\("  # Python legacy instantiation
+    rb"|MCPServer\("  # Python MCPServer instantiation
     rb"|McpServerTool"  # .NET attribute
     rb"|@McpTool"  # Spring AI MCP annotation
     rb"|@McpResource"
@@ -1141,6 +1182,27 @@ class NativeAnalyzer:
                 source_kind=source_kind,
             )
 
+        # Gap 8 extension: static endpoint tables (literal ``name`` /
+        # ``alias`` fields) including arrays reached via ``for (const tool
+        # of api.endpoints)`` loops (in-file and cross-file).
+        table_names = self._ts_collect_static_endpoint_tool_names(
+            tree.root_node,
+            import_target_map=import_target_map,
+            cross_file_analyzer=cross_file_analyzer,
+        )
+        for tool_name in table_names:
+            cap_key = (f"table:{tool_name}", "tool")
+            if cap_key in seen_handlers:
+                continue
+            seen_handlers.add(cap_key)
+            self._append_unresolved_capability(
+                contexts,
+                capability="tool",
+                registered_name=tool_name,
+                source_kind="registration.table",
+                handler_name_hint=tool_name,
+            )
+
         return contexts
 
     def _resolve_cross_file_handler(
@@ -1393,6 +1455,7 @@ class NativeAnalyzer:
         have empty bodies.
         """
         name = registered_name or handler_name_hint or "<unresolved>"
+        name = _effective_capability_name(registered_name, name, capability)
         ctx = FunctionContext(
             name=name,
             decorator_types=[f"<{source_kind}>.{capability}"],
@@ -1564,6 +1627,14 @@ class NativeAnalyzer:
                     f"{self.file_path}: {e}"
                 )
                 continue
+            try:
+                self._py_enrich_capability_with_callees(
+                    ctx, node, tree, class_methods, functions_by_name
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                self.logger.debug(
+                    f"Python callee enrichment failed for {node.name!r}: {e}"
+                )
             contexts.append(ctx)
 
         # Gap 8: programmatic registrations.
@@ -1629,6 +1700,18 @@ class NativeAnalyzer:
                 )
                 continue
             ctx.decorator_types.append(f"<registration>.{cap_kind}")
+            try:
+                self._py_enrich_capability_with_callees(
+                    ctx,
+                    handler_node,
+                    tree,
+                    class_methods,
+                    functions_by_name,
+                )
+            except Exception as e:  # pragma: no cover - defensive
+                self.logger.debug(
+                    f"Python callee enrichment failed for {label!r}: {e}"
+                )
             contexts.append(ctx)
 
         return contexts
@@ -2156,19 +2239,25 @@ class NativeAnalyzer:
         if ctx is None:
             return
 
-        # When an inline (anonymous) handler is registered as
-        # ``server.tool('add', ...)``, prefer the registered MCP name in
-        # CLI/SDK output. For named functions we keep the symbol name
-        # because that's also useful context; combine when both exist.
-        if registered_name:
-            if not ctx.name or ctx.name == "<anonymous>":
-                ctx.name = registered_name
-            elif registered_name != ctx.name and registered_name not in ctx.name:
-                ctx.name = f"{registered_name} ({ctx.name})"
+        ctx.name = _effective_capability_name(
+            registered_name, ctx.name, capability
+        )
 
         cap_tag = f"<{source_kind}>.{capability}"
         if cap_tag not in ctx.decorator_types:
             ctx.decorator_types.append(cap_tag)
+
+        # Attribute sinks reached through same-file helpers to the handler so
+        # delegated dangerous behavior (handler -> helper -> exec) is visible.
+        try:
+            self._ts_enrich_capability_with_callees(ctx, handler_node)
+        except Exception as e:  # pragma: no cover - defensive
+            self.logger.debug(f"Callee enrichment failed for MCP handler: {e}")
+
+        if not ctx.docstring:
+            anno_desc = self._parse_description_from_annotations(handler_node)
+            if anno_desc:
+                ctx.docstring = anno_desc
 
         out.append(ctx)
 
@@ -2383,11 +2472,6 @@ class NativeAnalyzer:
                     else:
                         reg = self._ts_parse_registration_args(args_node, method_lc)
                         if reg is None:
-                            # No string name and no inline/named handler in
-                            # ``arguments``, but the call site itself still
-                            # qualifies as a registration; allow Pass 1 (the
-                            # trailing-lambda lookup below) to populate the
-                            # handler.
                             reg = {
                                 "capability": _normalize_capability(method_lc),
                                 "name": None,
@@ -2944,32 +3028,36 @@ class NativeAnalyzer:
             "interpreted_string_literal",
         }
         name: Optional[str] = None
-        inline_handler: Optional["Node"] = None
-        identifier_refs: List[str] = []
+        # Positional slots preserve argument order so the first ref
+        # (``tool.alias``) is not confused with later identifiers
+        # (``toolDescription``, ``paramSchema``) in Graph-style loops.
+        positional: List[tuple[str, Any]] = []
+        direct_inline_handlers: List["Node"] = []
+        object_inline_handlers: List["Node"] = []
 
         for child in args_node.children:
             if child.type in ("(", ")", ",", "comment"):
                 continue
 
-            # Inline function expression / arrow function / lambda.
-            if inline_handler is None and child.type in func_types:
-                inline_handler = child
+            if child.type in func_types:
+                positional.append(("inline", child))
+                direct_inline_handlers.append(child)
                 continue
 
-            # Bare identifier reference (resolved later against in-file defs).
             if child.type == "identifier":
-                identifier_refs.append(self._ts_get_node_text(child))
+                positional.append(("ref", self._ts_get_node_text(child)))
                 continue
 
-            # First string literal we see is conventionally the MCP name
-            # (e.g. ``'add'`` in ``server.tool('add', schema, handler)``).
-            if name is None and child.type in string_node_types:
-                name = _strip_string_quotes(self._ts_get_node_text(child))
+            if child.type in _TS_MEMBER_EXPR_TYPES:
+                positional.append(("ref", self._ts_get_node_text(child)))
                 continue
 
-            # Object/struct literal may carry ``{ name: '...', handler: fn }``
-            # or Go's ``&mcp.Tool{Name: "add"}`` (which we read for the name
-            # only — the handler is a separate positional arg in Go).
+            if child.type in string_node_types:
+                positional.append(
+                    ("string", _strip_string_quotes(self._ts_get_node_text(child)))
+                )
+                continue
+
             if child.type in (
                 "object",
                 "object_expression",
@@ -2979,33 +3067,54 @@ class NativeAnalyzer:
                 obj_name, obj_handler = self._ts_extract_handler_from_object(
                     child, func_types
                 )
-                if name is None and obj_name:
-                    name = obj_name
-                if inline_handler is None and obj_handler is not None:
-                    inline_handler = obj_handler
+                if obj_name:
+                    positional.append(("string", obj_name))
+                if obj_handler is not None:
+                    positional.append(("inline", obj_handler))
+                    object_inline_handlers.append(obj_handler)
+                if not obj_name and obj_handler is None:
+                    positional.append(("schema", None))
                 continue
 
-            # Unary/pointer wrapper around an object literal (Go
-            # ``&mcp.Tool{...}``): peek through to find a Name field.
             if child.type == "unary_expression":
                 for sub in child.children:
                     if sub.type in ("composite_literal", "literal_value"):
-                        obj_name, _ = self._ts_extract_handler_from_object(
+                        obj_name, obj_handler = self._ts_extract_handler_from_object(
                             sub, func_types
                         )
-                        if name is None and obj_name:
-                            name = obj_name
+                        if obj_name:
+                            positional.append(("string", obj_name))
+                        if obj_handler is not None:
+                            positional.append(("inline", obj_handler))
+                            object_inline_handlers.append(obj_handler)
+                        if not obj_name and obj_handler is None:
+                            positional.append(("schema", None))
                         break
 
-        handler_node = inline_handler
+        for kind, val in positional:
+            if kind == "string" and val:
+                name = val
+                break
+
+        if direct_inline_handlers:
+            handler_node = direct_inline_handlers[-1]
+        elif object_inline_handlers:
+            handler_node = object_inline_handlers[-1]
+        else:
+            handler_node = None
+        refs = [val for kind, val in positional if kind == "ref"]
         handler_name: Optional[str] = None
 
-        if handler_node is None and identifier_refs:
-            # Prefer the LAST identifier: in ``mcp.AddTool(server, ..., add)``
-            # ``server`` is the receiver, ``add`` is the handler. The
-            # inline-function check above already covers the JS/TS case
-            # where the handler is the first inline argument.
-            handler_name = identifier_refs[-1]
+        if handler_node is None and refs:
+            handler_name = refs[-1]
+
+        if (
+            name is None
+            and refs
+            and self.language in ("javascript", "typescript")
+            and capability_method.lower() not in _MCP_LOW_LEVEL_REGISTRATION_METHODS
+        ):
+            name = refs[0]
 
         if handler_node is None and handler_name is None:
             return None
@@ -3017,15 +3126,182 @@ class NativeAnalyzer:
             "handler_name": handler_name,
         }
 
-    def _ts_extract_handler_from_object(
-        self, obj_node: "Node", func_types: Set[str]
-    ) -> "tuple[Optional[str], Optional[Node]]":
-        """Pull ``name`` + handler out of an object literal argument."""
-        obj_name: Optional[str] = None
-        obj_handler: Optional["Node"] = None
+    _TS_ENDPOINT_NAME_FIELDS: tuple[str, ...] = (
+        "name",
+        "alias",
+        "tool",
+        "toolName",
+    )
+    _TS_ENDPOINT_ROUTE_FIELDS: ClassVar[Set[str]] = {"path", "method", "route", "url"}
+    _TS_ENDPOINT_DESCRIPTOR_FIELDS: ClassVar[Set[str]] = {
+        "fn",
+        "handler",
+        "execute",
+        "callback",
+        "description",
+        "schema",
+        "inputSchema",
+        "parameters",
+    }
 
-        # ``pair`` (JS), ``field_initialization`` (TS), ``key_value`` (Go),
-        # ``element`` (Ruby) — try them all.
+    def _ts_collect_static_endpoint_tool_names(
+        self,
+        root: "Node",
+        *,
+        import_target_map: Optional[Dict[str, List[str]]] = None,
+        cross_file_analyzer: Optional[Any] = None,
+    ) -> List[str]:
+        """Collect static MCP tool names from descriptor arrays.
+
+        Only arrays reached through ``for (const tool of api.endpoints)``-style
+        loops are considered (in-file and cross-file). A blanket walk of every
+        array literal would mis-tag HTTP route tables and model catalogues as
+        MCP tools.
+        """
+        names: List[str] = []
+        seen: Set[str] = set()
+        bindings = self._ts_build_simple_value_bindings(root)
+
+        def add_name(value: Optional[str]) -> None:
+            if value and value not in seen:
+                seen.add(value)
+                names.append(value)
+
+        def visit(node: "Node") -> None:
+            if node.type in ("for_in_statement", "for_of_statement"):
+                src = self._ts_for_in_source_node(node)
+                if src is not None:
+                    array_node = self._ts_resolve_to_array_node(src, bindings, root)
+                    if array_node is None:
+                        array_node = self._ts_resolve_cross_file_endpoint_array(
+                            src,
+                            import_target_map=import_target_map,
+                            cross_file_analyzer=cross_file_analyzer,
+                        )
+                    if array_node is not None:
+                        for tool_name in self._ts_endpoint_names_in_array(array_node):
+                            add_name(tool_name)
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return names
+
+    def _ts_endpoint_names_in_array(self, array_node: "Node") -> List[str]:
+        """Return string tool names from object elements in an array literal."""
+        out: List[str] = []
+        for child in array_node.children:
+            if child.type not in ("object", "object_expression"):
+                continue
+            tool_name: Optional[str] = None
+            for name_field in self._TS_ENDPOINT_NAME_FIELDS:
+                tool_name = self._ts_object_string_field(child, name_field)
+                if tool_name:
+                    break
+            if not tool_name:
+                continue
+            if self._ts_object_has_any_field(child, self._TS_ENDPOINT_ROUTE_FIELDS):
+                continue
+            if not self._ts_object_has_any_field(
+                child, self._TS_ENDPOINT_DESCRIPTOR_FIELDS
+            ):
+                continue
+            out.append(tool_name)
+        return out
+
+    def _ts_build_simple_value_bindings(self, root: "Node") -> Dict[str, "Node"]:
+        """Map ``const foo = ...`` initializer nodes for simple resolution."""
+        bindings: Dict[str, "Node"] = {}
+
+        def visit(node: "Node") -> None:
+            if node.type == "export_statement":
+                for child in node.children:
+                    if child.type in (
+                        "object",
+                        "object_expression",
+                        "array",
+                        "array_expression",
+                    ):
+                        bindings.setdefault("default", child)
+            if node.type == "variable_declarator":
+                name_node = node.child_by_field_name("name")
+                value_node = node.child_by_field_name("value")
+                if (
+                    name_node is not None
+                    and value_node is not None
+                    and name_node.type == "identifier"
+                ):
+                    bindings[self._ts_get_node_text(name_node)] = value_node
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return bindings
+
+    def _ts_for_in_source_node(self, for_node: "Node") -> Optional["Node"]:
+        """Return the iterable expression in a ``for...of`` loop."""
+        src = for_node.child_by_field_name("right")
+        if src is not None:
+            return src
+        seen_of = False
+        skip_types = {
+            "for",
+            "of",
+            "const",
+            "let",
+            "var",
+            "identifier",
+            "(",
+            ")",
+            ";",
+        }
+        for child in for_node.children:
+            if child.type == "of":
+                seen_of = True
+                continue
+            if seen_of and child.type not in skip_types:
+                return child
+        return None
+
+    def _ts_resolve_to_array_node(
+        self,
+        expr: "Node",
+        bindings: Dict[str, "Node"],
+        root: "Node",
+    ) -> Optional["Node"]:
+        """Resolve ``api.endpoints`` / ``tools`` to an array literal node."""
+        if expr.type in ("array", "array_expression"):
+            return expr
+        if expr.type == "identifier":
+            bound = bindings.get(self._ts_get_node_text(expr))
+            if bound is not None and bound.type in ("array", "array_expression"):
+                return bound
+            return None
+        if expr.type in _TS_MEMBER_EXPR_TYPES:
+            obj_node = expr.child_by_field_name("object")
+            prop_node = expr.child_by_field_name("property")
+            if obj_node is None or prop_node is None:
+                return None
+            base_text = self._ts_get_node_text(obj_node)
+            prop_text = self._ts_get_node_text(prop_node)
+            if obj_node.type == "identifier":
+                bound = bindings.get(base_text)
+                if bound is not None and bound.type in (
+                    "object",
+                    "object_expression",
+                ):
+                    field_val = self._ts_object_field_value_node(bound, prop_text)
+                    if field_val is not None and field_val.type in (
+                        "array",
+                        "array_expression",
+                    ):
+                        return field_val
+        return None
+
+    def _ts_object_field_value_node(
+        self, obj_node: "Node", field: str
+    ) -> Optional["Node"]:
+        """Return the value node for ``field`` on an object literal."""
         pair_types = {
             "pair",
             "field_initialization",
@@ -3033,7 +3309,6 @@ class NativeAnalyzer:
             "object_property",
             "element",
         }
-
         for child in obj_node.children:
             if child.type not in pair_types:
                 continue
@@ -3042,24 +3317,303 @@ class NativeAnalyzer:
             if key_node is None or value_node is None:
                 continue
             key = _strip_string_quotes(self._ts_get_node_text(key_node).strip())
-            if (
-                key == "name"
-                and obj_name is None
-                and value_node.type
-                in (
-                    "string",
-                    "string_literal",
-                    "template_string",
-                    "raw_string_literal",
-                    "interpreted_string_literal",
-                )
-            ):
-                obj_name = _strip_string_quotes(self._ts_get_node_text(value_node))
-            elif (
-                key in ("handler", "execute", "fn", "callback", "run")
-                and value_node.type in func_types
-            ):
-                obj_handler = value_node
+            if key == field:
+                return value_node
+        return None
+
+    def _ts_resolve_cross_file_endpoint_array(
+        self,
+        expr: "Node",
+        *,
+        import_target_map: Optional[Dict[str, List[str]]] = None,
+        cross_file_analyzer: Optional[Any] = None,
+    ) -> Optional["Node"]:
+        """Resolve ``api.endpoints`` / imported arrays to a remote array literal."""
+        if not import_target_map or not cross_file_analyzer:
+            return None
+        files = getattr(cross_file_analyzer, "files", None)
+        if not files:
+            return None
+
+        base_name: Optional[str] = None
+        prop_name: Optional[str] = None
+        if expr.type == "identifier":
+            base_name = self._ts_get_node_text(expr)
+        elif expr.type in _TS_MEMBER_EXPR_TYPES:
+            obj_node = expr.child_by_field_name("object")
+            prop_node = expr.child_by_field_name("property")
+            if obj_node is not None and obj_node.type == "identifier" and prop_node is not None:
+                base_name = self._ts_get_node_text(obj_node)
+                prop_name = self._ts_get_node_text(prop_node)
+        if not base_name:
+            return None
+
+        target_paths = import_target_map.get(base_name)
+        if not target_paths:
+            return None
+
+        current_fp = str(self.file_path) if self.file_path else ""
+
+        for fp, (tree, source_bytes) in files.items():
+            fp_str = str(fp)
+            if current_fp and fp_str == current_fp:
+                continue
+            if not any(_path_endswith_suffix(fp_str, tgt) for tgt in target_paths):
+                continue
+
+            try:
+                remote_source = source_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            remote = NativeAnalyzer(remote_source, fp_str)
+            remote_bindings = remote._ts_build_simple_value_bindings(tree.root_node)
+            value_node = remote_bindings.get(base_name)
+            if value_node is None:
+                value_node = remote._ts_find_exported_binding(tree.root_node, base_name)
+            if value_node is None and "default" in remote_bindings:
+                value_node = remote_bindings.get("default")
+
+            if value_node is None:
+                continue
+
+            if prop_name:
+                if value_node.type not in ("object", "object_expression"):
+                    continue
+                field_val = remote._ts_object_field_value_node(value_node, prop_name)
+                if field_val is not None and field_val.type in (
+                    "array",
+                    "array_expression",
+                ):
+                    return field_val
+                continue
+
+            if value_node.type in ("array", "array_expression"):
+                return value_node
+
+        return None
+
+    def _ts_find_exported_binding(
+        self, root: "Node", symbol: str
+    ) -> Optional["Node"]:
+        """Return the initializer for ``export const symbol = ...`` if present."""
+        found: Optional["Node"] = None
+
+        def visit(node: "Node") -> None:
+            nonlocal found
+            if found is not None:
+                return
+            if node.type == "export_statement":
+                for child in node.children:
+                    if child.type == "lexical_declaration":
+                        for decl in child.children:
+                            if decl.type != "variable_declarator":
+                                continue
+                            name_node = decl.child_by_field_name("name")
+                            value_node = decl.child_by_field_name("value")
+                            if (
+                                name_node is not None
+                                and value_node is not None
+                                and name_node.type == "identifier"
+                                and self._ts_get_node_text(name_node) == symbol
+                            ):
+                                found = value_node
+                                return
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return found
+
+    def _ts_object_string_field(
+        self, obj_node: "Node", field: str
+    ) -> Optional[str]:
+        """Return a string literal value for ``field`` on an object literal."""
+        pair_types = {
+            "pair",
+            "field_initialization",
+            "key_value",
+            "object_property",
+            "element",
+        }
+        string_node_types = {
+            "string",
+            "string_literal",
+            "template_string",
+            "raw_string_literal",
+            "interpreted_string_literal",
+        }
+        for child in obj_node.children:
+            if child.type not in pair_types:
+                continue
+            key_node = child.child_by_field_name("key")
+            value_node = child.child_by_field_name("value")
+            if key_node is None or value_node is None:
+                continue
+            key = _strip_string_quotes(self._ts_get_node_text(key_node).strip())
+            if key != field:
+                continue
+            if value_node.type in string_node_types:
+                return _strip_string_quotes(self._ts_get_node_text(value_node))
+        return None
+
+    def _ts_object_has_any_field(
+        self, obj_node: "Node", fields: Set[str]
+    ) -> bool:
+        """Return True when ``obj_node`` defines any key in ``fields``."""
+        pair_types = {
+            "pair",
+            "field_initialization",
+            "key_value",
+            "object_property",
+            "element",
+        }
+        for child in obj_node.children:
+            if child.type not in pair_types:
+                continue
+            key_node = child.child_by_field_name("key")
+            if key_node is None:
+                continue
+            key = _strip_string_quotes(self._ts_get_node_text(key_node).strip())
+            if key in fields:
+                return True
+        return False
+
+    def _ts_field_key_text(self, key_node: "Node") -> str:
+        """Normalize an object-field key across JS/TS/Go/C# grammars."""
+        if key_node.type == "literal_element":
+            for sub in key_node.children:
+                if sub.type in ("field_identifier", "identifier", "property_identifier"):
+                    return self._ts_get_node_text(sub).strip()
+        text = self._ts_get_node_text(key_node).strip()
+        return _strip_string_quotes(text)
+
+    def _ts_string_value_from_object_field(self, value_node: "Node") -> Optional[str]:
+        """Extract a string value from an object-field value node."""
+        string_node_types = {
+            "string",
+            "string_literal",
+            "template_string",
+            "raw_string_literal",
+            "interpreted_string_literal",
+        }
+        if value_node.type in string_node_types:
+            return _strip_string_quotes(self._ts_get_node_text(value_node))
+        if value_node.type == "literal_element":
+            for sub in value_node.children:
+                lit = self._ts_extract_string_literal_text(sub)
+                if lit is not None:
+                    return lit
+        lit = self._ts_extract_string_literal_text(value_node)
+        return lit
+
+    def _ts_direct_function_value(
+        self, value_node: "Node", func_types: Set[str]
+    ) -> Optional["Node"]:
+        """Return an inline function at a field value root without nested-object descent.
+
+        Registration schema/config objects may nest decoy ``handler`` callbacks
+        several levels deep. Only unwrap grammar wrappers (parentheses, unary,
+        ``literal_element``) — never descend into object/composite literals.
+        """
+        if value_node.type in func_types:
+            return value_node
+        if value_node.type == "literal_element":
+            for sub in value_node.children:
+                if sub.type in func_types:
+                    return sub
+        unwrap_types = {
+            "parenthesized_expression",
+            "unary_expression",
+            "as_expression",
+            "await_expression",
+        }
+        if value_node.type in unwrap_types:
+            for sub in value_node.children:
+                found = self._ts_direct_function_value(sub, func_types)
+                if found is not None:
+                    return found
+        return None
+
+    def _ts_object_entry_key_value(
+        self, entry_node: "Node"
+    ) -> "tuple[Optional[str], Optional[Node]]":
+        """Return ``(field_key, value_node)`` for one object/composite entry."""
+        pair_types = {
+            "pair",
+            "field_initialization",
+            "key_value",
+            "object_property",
+            "element",
+            "keyed_element",
+        }
+        if entry_node.type not in pair_types:
+            return None, None
+
+        key_node = entry_node.child_by_field_name("key")
+        value_node = entry_node.child_by_field_name("value")
+        if key_node is not None and value_node is not None:
+            return self._ts_field_key_text(key_node), value_node
+
+        if entry_node.type == "keyed_element":
+            elements = [
+                c for c in entry_node.children if c.type == "literal_element"
+            ]
+            if len(elements) >= 2:
+                return self._ts_field_key_text(elements[0]), elements[1]
+        return None, None
+
+    def _ts_iter_direct_object_entries(
+        self, obj_node: "Node"
+    ) -> "Iterator[tuple[Optional[str], Optional[Node]]]":
+        """Yield ``(field_key, value_node)`` for one descriptor-object level only."""
+        entry_types = {
+            "pair",
+            "field_initialization",
+            "key_value",
+            "object_property",
+            "element",
+            "keyed_element",
+        }
+
+        def yield_entry(entry_node: "Node") -> "Iterator[tuple[Optional[str], Optional[Node]]]":
+            key, value = self._ts_object_entry_key_value(entry_node)
+            if key is not None:
+                yield key, value
+
+        for child in obj_node.children:
+            if child.type in entry_types or child.type == "literal_element":
+                yield from yield_entry(child)
+            elif child.type == "literal_value":
+                for sub in child.children:
+                    if sub.type in entry_types or sub.type == "literal_element":
+                        yield from yield_entry(sub)
+
+    def _ts_extract_handler_from_object(
+        self, obj_node: "Node", func_types: Set[str]
+    ) -> "tuple[Optional[str], Optional[Node]]":
+        """Pull ``name`` + handler from direct fields of a registration arg object.
+
+        Nested schema/metadata objects (``{ nested: { handler: ... } }``) are not
+        traversed so decoy callbacks cannot displace explicit positional handlers.
+        """
+        obj_name: Optional[str] = None
+        obj_handler: Optional["Node"] = None
+        handler_keys = {"handler", "execute", "fn", "callback", "run"}
+
+        for key, value_node in self._ts_iter_direct_object_entries(obj_node):
+            if not key or value_node is None:
+                continue
+            key_norm = key.lower()
+            if key_norm == "name" and obj_name is None:
+                lit = self._ts_string_value_from_object_field(value_node)
+                if lit is not None:
+                    obj_name = lit
+                continue
+            if key_norm not in handler_keys or obj_handler is not None:
+                continue
+            fn_node = self._ts_direct_function_value(value_node, func_types)
+            if fn_node is not None:
+                obj_handler = fn_node
 
         return obj_name, obj_handler
 
@@ -3104,12 +3658,23 @@ class NativeAnalyzer:
             return cached[cache_key]
 
         index: Dict[str, "Node"] = {}
+        ambiguous_bare: Set[str] = set()
+
+        def _index_bare(bare: str, node: "Node") -> None:
+            if bare in index and index[bare].start_byte != node.start_byte:
+                ambiguous_bare.add(bare)
+            else:
+                index.setdefault(bare, node)
 
         def visit(node: "Node") -> None:
             if node.type in func_types:
                 name_node = node.child_by_field_name("name")
                 if name_node is not None:
-                    index.setdefault(self._ts_get_node_text(name_node), node)
+                    bare = self._ts_get_node_text(name_node)
+                    _index_bare(bare, node)
+                    class_name = self._ts_find_enclosing_class_name(node)
+                    if class_name:
+                        index[f"{class_name}.{bare}"] = node
                 # ``const handler = async (args) => { ... };``
                 # ``handler = async (args) => { ... };``
                 if node.type in ("arrow_function", "function_expression"):
@@ -3123,14 +3688,17 @@ class NativeAnalyzer:
                         if parent_name is None:
                             parent_name = parent.child_by_field_name("left")
                         if parent_name is not None:
-                            index.setdefault(
-                                self._ts_get_node_text(parent_name), node
-                            )
+                            _index_bare(self._ts_get_node_text(parent_name), node)
             for child in node.children:
                 visit(child)
 
         visit(root)
         cached[cache_key] = index
+        amb_store = getattr(self, "_func_index_ambiguous_cache", None)
+        if amb_store is None:
+            amb_store = {}
+            self._func_index_ambiguous_cache = amb_store
+        amb_store[cache_key] = ambiguous_bare
         return index
 
     # =========================================================================
@@ -3231,6 +3799,26 @@ class NativeAnalyzer:
                 dec_params = self._py_extract_call_kwargs(dec)
                 if dec_params:
                     decorator_params[dec_name] = dec_params
+
+        for _dec_name, params in decorator_params.items():
+            if "name" in params:
+                raw_name = params["name"]
+                if isinstance(raw_name, str):
+                    try:
+                        name = ast.literal_eval(raw_name)
+                    except (ValueError, SyntaxError):
+                        name = raw_name
+                else:
+                    name = raw_name
+            if "description" in params and not docstring:
+                raw_desc = params["description"]
+                if isinstance(raw_desc, str):
+                    try:
+                        docstring = ast.literal_eval(raw_desc)
+                    except (ValueError, SyntaxError):
+                        docstring = raw_desc
+                else:
+                    docstring = raw_desc
 
         # Extract parameters from AST
         parameters = []
@@ -3608,6 +4196,298 @@ class NativeAnalyzer:
             "has_eval_exec": has_eval,
         }
 
+    def _py_build_function_index(
+        self,
+        class_methods: Dict[
+            str, Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]
+        ],
+        functions_by_name: Dict[
+            str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
+        ],
+    ) -> Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]:
+        """Index module functions and class methods for callee resolution."""
+        index: Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]] = {}
+        index.update(functions_by_name)
+        for cls_name, methods in class_methods.items():
+            for meth_name, meth_node in methods.items():
+                index[f"{cls_name}.{meth_name}"] = meth_node
+        return index
+
+    def _py_find_enclosing_class(
+        self,
+        tree: ast.AST,
+        func_node: Union[ast.FunctionDef, ast.AsyncFunctionDef],
+    ) -> Optional[str]:
+        """Return the class name directly enclosing ``func_node``, if any."""
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            for stmt in cls.body:
+                if stmt is func_node:
+                    return cls.name
+        return None
+
+    def _py_build_instance_class_map(
+        self,
+        node: Union[ast.FunctionDef, ast.AsyncFunctionDef],
+        *,
+        enclosing_class: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Map local instance variables to constructor class names in-scope only."""
+        mapping: Dict[str, str] = {}
+        if enclosing_class:
+            mapping["self"] = enclosing_class
+            mapping["cls"] = enclosing_class
+
+        def record_assign(target: ast.expr, value: ast.expr) -> None:
+            if not isinstance(target, ast.Name):
+                return
+            if not isinstance(value, ast.Call):
+                return
+            callee = value.func
+            if isinstance(callee, ast.Name):
+                mapping[target.id] = callee.id
+            elif isinstance(callee, ast.Attribute) and isinstance(
+                callee.value, ast.Name
+            ):
+                mapping[target.id] = f"{callee.value.id}.{callee.attr}"
+
+        def walk_stmts(stmts: List[ast.stmt]) -> None:
+            for stmt in stmts:
+                if isinstance(
+                    stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    continue
+                if isinstance(stmt, ast.Assign):
+                    for target in stmt.targets:
+                        record_assign(target, stmt.value)
+                elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+                    record_assign(stmt.target, stmt.value)
+                elif isinstance(stmt, ast.If):
+                    walk_stmts(stmt.body)
+                    walk_stmts(stmt.orelse)
+                elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+                    walk_stmts(stmt.body)
+                    walk_stmts(stmt.orelse)
+                elif isinstance(stmt, ast.While):
+                    walk_stmts(stmt.body)
+                    walk_stmts(stmt.orelse)
+                elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                    walk_stmts(stmt.body)
+                elif isinstance(stmt, ast.Try):
+                    walk_stmts(stmt.body)
+                    walk_stmts(stmt.orelse)
+                    for handler in stmt.handlers:
+                        walk_stmts(handler.body)
+                elif isinstance(stmt, ast.Match):
+                    for case in stmt.cases:
+                        walk_stmts(case.body)
+
+        walk_stmts(node.body)
+        return mapping
+
+    def _py_collect_call_refs(
+        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef]
+    ) -> List[str]:
+        """Collect normalized call-site names from a function body."""
+        refs: List[str] = []
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call):
+                name = self._py_get_node_name(child.func)
+                if name:
+                    refs.append(name)
+        return refs
+
+    def _py_resolve_indexed_call(
+        self,
+        ref: str,
+        index: Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]],
+        instance_map: Dict[str, str],
+    ) -> Optional["tuple[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]"]:
+        """Resolve a call reference to a same-file function/method node."""
+        if ref in index:
+            return ref, index[ref]
+        if ref.startswith(("self.", "cls.")):
+            root_name, attr = ref.split(".", 1)
+            cls = instance_map.get(root_name)
+            if cls:
+                qualified = f"{cls}.{attr}"
+                if qualified in index:
+                    return qualified, index[qualified]
+        if "." in ref:
+            base, attr = ref.rsplit(".", 1)
+            if base in instance_map:
+                qualified = f"{instance_map[base]}.{attr}"
+                if qualified in index:
+                    return qualified, index[qualified]
+        return None
+
+    def _py_call_ref_matches_dangerous(
+        self,
+        call: str,
+        dangerous_refs: Set[str],
+        instance_map: Dict[str, str],
+    ) -> bool:
+        """Return whether a handler call site reaches a dangerous callee."""
+        if call in dangerous_refs:
+            return True
+        if "." in call:
+            base, attr = call.rsplit(".", 1)
+            if base in instance_map:
+                qualified = f"{instance_map[base]}.{attr}"
+                if qualified in dangerous_refs:
+                    return True
+        for dref in dangerous_refs:
+            if call.endswith("." + dref) or dref.endswith("." + call):
+                return True
+            dref_leaf = dref.rsplit(".", 1)[-1]
+            call_leaf = call.rsplit(".", 1)[-1]
+            if call_leaf == dref_leaf and call_leaf:
+                return True
+        return False
+
+    def _py_sync_param_flow_summary(self, ctx: FunctionContext) -> None:
+        """Keep ``dataflow_summary['param_flows']`` aligned with ``parameter_flows``."""
+        summary = dict(ctx.dataflow_summary or {})
+        summary["param_flows"] = {
+            flow["parameter_name"]: {
+                "reaches_calls": flow.get("reaches_calls", []),
+                "reaches_returns": flow.get("reaches_returns", False),
+                "reaches_external": flow.get("reaches_external", False),
+            }
+            for flow in ctx.parameter_flows
+            if flow.get("parameter_name")
+        }
+        ctx.dataflow_summary = summary
+
+    def _py_enrich_capability_with_callees(
+        self,
+        ctx: FunctionContext,
+        handler_node: Union[ast.FunctionDef, ast.AsyncFunctionDef],
+        tree: ast.AST,
+        class_methods: Dict[
+            str, Dict[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]
+        ],
+        functions_by_name: Dict[
+            str, Union[ast.FunctionDef, ast.AsyncFunctionDef]
+        ],
+    ) -> None:
+        """Fold sinks reachable through same-file Python callees into ``ctx``.
+
+        MCP tool handlers often delegate dangerous work to helpers (e.g.
+        ``execute_shell_command`` -> ``ShellExecutor.execute_command`` ->
+        ``subprocess.run(..., shell=True)``). Without callee enrichment the
+        handler misses the subprocess flag and behavioral alignment reports SAFE.
+        """
+        index = self._py_build_function_index(class_methods, functions_by_name)
+        if not index:
+            return
+
+        enclosing_class = self._py_find_enclosing_class(tree, handler_node)
+        instance_map = self._py_build_instance_class_map(
+            handler_node, enclosing_class=enclosing_class
+        )
+        handler_key = (
+            f"{enclosing_class}.{handler_node.name}"
+            if enclosing_class
+            else handler_node.name
+        )
+        visited: Set[str] = set()
+        reachable: List[
+            Tuple[str, Union[ast.FunctionDef, ast.AsyncFunctionDef]]
+        ] = []
+        call_edges: Dict[str, Set[str]] = {}
+        frontier: List[
+            Tuple[Union[ast.FunctionDef, ast.AsyncFunctionDef], int, str]
+        ] = [(handler_node, 0, handler_key)]
+
+        while frontier:
+            node, depth, caller_key = frontier.pop()
+            if depth >= 3:
+                continue
+            node_class = (
+                enclosing_class
+                if node is handler_node
+                else self._py_find_enclosing_class(tree, node)
+            )
+            local_instances = self._py_build_instance_class_map(
+                node, enclosing_class=node_class
+            )
+            for ref in self._py_collect_call_refs(node):
+                resolved = self._py_resolve_indexed_call(
+                    ref, index, local_instances
+                )
+                if resolved is None:
+                    continue
+                resolved_key, target = resolved
+                if caller_key:
+                    call_edges.setdefault(caller_key, set()).add(resolved_key)
+                if resolved_key in visited:
+                    continue
+                if (
+                    isinstance(target, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and target is handler_node
+                ):
+                    continue
+                visited.add(resolved_key)
+                reachable.append((resolved_key, target))
+                frontier.append((target, depth + 1, resolved_key))
+
+        if not reachable:
+            return
+
+        dangerous_refs: Set[str] = set()
+        reachable_names = list(ctx.reachable_functions or [])
+        for resolved_key, target in reachable:
+            if resolved_key not in reachable_names:
+                reachable_names.append(resolved_key)
+            try:
+                ops = self._py_detect_security_ops(target)
+            except Exception as e:  # pragma: no cover - defensive
+                self.logger.debug(
+                    "Python callee security-op analysis failed for %r: %s",
+                    resolved_key,
+                    e,
+                )
+                continue
+            ctx.has_file_operations = ctx.has_file_operations or ops[
+                "has_file_operations"
+            ]
+            ctx.has_network_operations = ctx.has_network_operations or ops[
+                "has_network_operations"
+            ]
+            ctx.has_subprocess_calls = ctx.has_subprocess_calls or ops[
+                "has_subprocess_calls"
+            ]
+            ctx.has_eval_exec = ctx.has_eval_exec or ops["has_eval_exec"]
+            if any(ops.values()):
+                dangerous_refs.add(resolved_key)
+
+        dangerous = set(dangerous_refs)
+        changed = True
+        while changed:
+            changed = False
+            for caller, callees in call_edges.items():
+                if caller in dangerous:
+                    continue
+                if any(callee in dangerous for callee in callees):
+                    dangerous.add(caller)
+                    changed = True
+
+        ctx.reachable_functions = reachable_names
+
+        if dangerous:
+            for flow in ctx.parameter_flows:
+                reaches = flow.get("reaches_calls") or []
+                for call in reaches:
+                    if self._py_call_ref_matches_dangerous(
+                        str(call), dangerous, instance_map
+                    ):
+                        flow["reaches_external"] = True
+                        break
+
+        self._py_sync_param_flow_summary(ctx)
+
     # =========================================================================
     # Generic Tree-sitter Analysis - Supports all non-Python languages
     # =========================================================================
@@ -3730,6 +4610,10 @@ class NativeAnalyzer:
 
         # Extract docstring/JSDoc from AST
         docstring = self._ts_extract_docstring(node)
+        anno_description = self._parse_description_from_annotations(node)
+        if anno_description:
+            if not docstring:
+                docstring = anno_description
 
         # Extract decorators from AST (TypeScript)
         decorator_types = self._ts_extract_decorators(node)
@@ -3806,10 +4690,14 @@ class NativeAnalyzer:
             env_var_access=[],
             global_writes=[],
             attribute_access=[],
+            source=self._ts_get_node_text(node),
         )
 
     def _ts_get_node_text(self, node: "Node") -> str:
         """Get text content of a tree-sitter node."""
+        node_text = getattr(node, "text", None)
+        if node_text is not None:
+            return node_text.decode("utf-8")
         return self.source_bytes[node.start_byte:node.end_byte].decode("utf-8")
 
     def _ts_get_function_name(self, node: "Node") -> str:
@@ -3847,10 +4735,29 @@ class NativeAnalyzer:
                 if child.type == "identifier":
                     # Simple identifier (JS/TS)
                     param_info["name"] = self._ts_get_node_text(child)
-                
+
+                elif child.type in ("object_pattern", "array_pattern"):
+                    # JS destructured parameter, e.g. ``({ command }) => ...``.
+                    # Expand to its bound identifiers so taint tracking can
+                    # match the names actually used in the body.
+                    for bname in self._ts_extract_binding_identifiers(child):
+                        params.append({"name": bname})
+                    continue
+
                 elif child.type in ("required_parameter", "optional_parameter", "rest_parameter"):
                     # TypeScript parameters
                     name_node = child.child_by_field_name("pattern") or child.child_by_field_name("name")
+                    if name_node is not None and name_node.type in (
+                        "object_pattern",
+                        "array_pattern",
+                    ):
+                        # TS destructured parameter, e.g.
+                        # ``async ({ command }: Args) => ...``. Expand to its
+                        # bound identifiers (the literal pattern text
+                        # ``{ command }`` never matches the body identifier).
+                        for bname in self._ts_extract_binding_identifiers(name_node):
+                            params.append({"name": bname})
+                        continue
                     if name_node:
                         param_info["name"] = self._ts_get_node_text(name_node)
                     type_node = child.child_by_field_name("type")
@@ -3896,6 +4803,510 @@ class NativeAnalyzer:
         
         return params
 
+    def _ts_extract_binding_identifiers(self, node: "Node") -> List[str]:
+        """Flatten a JS/TS binding pattern into its bound identifier names.
+
+        Destructured tool handlers (``async ({ command }) => ...``) are the
+        norm for TypeScript/JavaScript MCP servers. Without expanding the
+        pattern, the parameter is recorded as the literal text ``{ command }``,
+        which never matches the identifier ``command`` used in the body. That
+        breaks parameter -> sink taint flows, so a tool that runs its argument
+        through ``execSync``/``eval`` looks SAFE. Expanding the pattern into
+        ``command`` restores flow tracking parity with named-parameter
+        languages (Go/Rust/Java).
+
+        Handles object patterns (incl. ``{ key: binding }`` renames, ``...rest``,
+        and ``{ x = default }`` defaults), array patterns, and nested patterns.
+        Default-value expressions on the right-hand side are intentionally not
+        descended into so unrelated identifiers are not treated as parameters.
+        """
+        names: List[str] = []
+
+        def walk(n: "Node") -> None:
+            t = n.type
+            if t in (
+                "identifier",
+                "shorthand_property_identifier_pattern",
+                "shorthand_property_identifier",
+            ):
+                names.append(self._ts_get_node_text(n))
+                return
+            if t == "pair_pattern":
+                # ``key: binding`` -- the binding (value side) is in scope.
+                value = n.child_by_field_name("value")
+                if value is not None:
+                    walk(value)
+                return
+            if t in ("rest_pattern", "rest_element"):
+                for c in n.children:
+                    if c.type in ("identifier", "object_pattern", "array_pattern"):
+                        walk(c)
+                return
+            if t in ("assignment_pattern", "object_assignment_pattern"):
+                # Default value (``{ x = 1 }`` / ``[a = 1]``): bind only the
+                # left side; do not descend into the default expression.
+                left = n.child_by_field_name("left")
+                if left is not None:
+                    walk(left)
+                else:
+                    for c in n.children:
+                        if c.type in (
+                            "identifier",
+                            "object_pattern",
+                            "array_pattern",
+                            "shorthand_property_identifier_pattern",
+                        ):
+                            walk(c)
+                            break
+                return
+            if t in ("object_pattern", "array_pattern"):
+                for c in n.children:
+                    walk(c)
+                return
+
+        walk(node)
+
+        seen: Set[str] = set()
+        ordered: List[str] = []
+        for nm in names:
+            if nm and nm not in seen:
+                seen.add(nm)
+                ordered.append(nm)
+        return ordered
+
+    @staticmethod
+    def _ts_root(node: "Node") -> "Node":
+        """Walk to the tree-sitter root from any node."""
+        cur = node
+        while cur.parent is not None:
+            cur = cur.parent
+        return cur
+
+    @staticmethod
+    def _ts_normalize_call_ref(ref: str) -> str:
+        """Normalize a call-site reference for index lookup."""
+        return ref.replace("::", ".").split("(")[0].strip()
+
+    def _ts_ambiguous_bare_functions(self, root: "Node") -> Set[str]:
+        """Return bare function names that map to multiple definitions."""
+        cache_key = (id(root), self.language)
+        store = getattr(self, "_func_index_ambiguous_cache", None)
+        if store is None:
+            return set()
+        return store.get(cache_key, set())
+
+    def _ts_resolve_indexed_function(
+        self, ref: str, index: Dict[str, "Node"], ambiguous_bare: Set[str]
+    ) -> Optional[Tuple[str, "Node"]]:
+        """Resolve a call reference, preferring qualified names."""
+        normalized = self._ts_normalize_call_ref(ref)
+        if not normalized:
+            return None
+        if normalized in index:
+            return normalized, index[normalized]
+        leaf = normalized.rsplit(".", 1)[-1]
+        if leaf in ambiguous_bare:
+            return None
+        matches = [k for k in index if k == leaf or k.endswith("." + leaf)]
+        if len(matches) == 1:
+            key = matches[0]
+            return key, index[key]
+        return None
+
+    def _ts_enclosing_function(self, node: "Node") -> Optional["Node"]:
+        """Return the innermost enclosing function node, if any."""
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        cur = node
+        while cur is not None:
+            if cur.type in func_types:
+                return cur
+            cur = cur.parent
+        return None
+
+    def _ts_sink_category_for_language(self):
+        """Return ``sink_category_for(text) -> category|None`` for this language."""
+        cache = getattr(self, "_sink_leaf_category_cache", None)
+        if cache is None:
+            cache = {}
+            self._sink_leaf_category_cache = cache
+        if self.language in cache:
+            return cache[self.language]
+
+        from .taint.patterns import get_all_sinks_for_language
+
+        sinks = get_all_sinks_for_language(self.language)
+        leaf_to_category: Dict[str, str] = {}
+        for category, sink_set in sinks.items():
+            for s in sink_set:
+                leaf = s.replace("::", ".").split(".")[-1].strip()
+                if leaf:
+                    leaf_to_category.setdefault(leaf, category)
+
+        def sink_category_for(text: str) -> Optional[str]:
+            leaf = text.replace("::", ".").split(".")[-1].strip()
+            return leaf_to_category.get(leaf)
+
+        cache[self.language] = sink_category_for
+        return sink_category_for
+
+    def _ts_is_sink_alias_binding(self, binding_node: "Node") -> bool:
+        """Return True when a declaration re-binds a name to a dangerous sink alias."""
+        value = None
+        if binding_node.type == "variable_declarator":
+            value = binding_node.child_by_field_name("value")
+        elif binding_node.type == "assignment_expression":
+            value = binding_node.child_by_field_name("right")
+        if value is None:
+            return False
+        return (
+            self._ts_alias_value_category(value, self._ts_sink_category_for_language())
+            is not None
+        )
+
+    @staticmethod
+    def _ts_scope_lookup_key(fn: "Node", use_node: "Node") -> tuple[int, int, int]:
+        """Stable cache key for per-call-site TS scope lookups."""
+        return (fn.start_byte, fn.end_byte, use_node.start_byte)
+
+    @staticmethod
+    def _ts_node_contains(ancestor: "Node", descendant: "Node") -> bool:
+        """Return True if ``descendant`` is nested under ``ancestor``."""
+        if ancestor is None or descendant is None:
+            return False
+        cur = descendant
+        while cur is not None:
+            if _is_same_ts_node(cur, ancestor):
+                return True
+            cur = cur.parent
+        return False
+
+    def _ts_shadowed_names_at(self, use_node: "Node") -> Set[str]:
+        """Names shadowed at ``use_node`` by parameters or earlier locals.
+
+        Sink-alias declarations (``const run = promisify(exec)``) are not
+        treated as shadowing: they re-introduce the alias in the current
+        function and calls through that binding must still classify as sinks.
+        Only non-alias bindings (parameters, ordinary locals) suppress a
+        visible module-level alias with the same name.
+
+        Bindings in nested functions/classes that do not enclose ``use_node``
+        are ignored so out-of-scope locals cannot suppress a visible alias.
+        """
+        fn = self._ts_enclosing_function(use_node)
+        if fn is None:
+            return set()
+        cache = getattr(self, "_shadowed_names_cache", None)
+        if cache is None:
+            cache = {}
+            self._shadowed_names_cache = cache
+        cache_key = self._ts_scope_lookup_key(fn, use_node)
+        if cache_key in cache:
+            return cache[cache_key]
+        shadowed: Set[str] = set()
+        for param in self._ts_extract_parameters(fn):
+            name = param.get("name")
+            if name:
+                shadowed.add(name)
+        use_byte = use_node.start_byte
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
+        nested_scope_types = func_types | class_types
+
+        def collect_bindings(n: "Node") -> None:
+            if n.start_byte >= use_byte:
+                return
+            if n.type in ("variable_declarator", "assignment_expression"):
+                target = n.child_by_field_name("name") or n.child_by_field_name(
+                    "left"
+                )
+                if target is not None and target.type == "identifier":
+                    if not self._ts_is_sink_alias_binding(n):
+                        shadowed.add(self._ts_get_node_text(target))
+            for child in n.children:
+                if (
+                    child.type in nested_scope_types
+                    and not _is_same_ts_node(child, fn)
+                    and not self._ts_node_contains(child, use_node)
+                ):
+                    continue
+                collect_bindings(child)
+
+        collect_bindings(fn)
+        cache[cache_key] = shadowed
+        return shadowed
+
+    def _ts_visible_sink_aliases_at(self, use_node: "Node") -> Dict[str, str]:
+        """Sink aliases visible at ``use_node`` without nested-scope bleed."""
+        fn = self._ts_enclosing_function(use_node)
+        if fn is None:
+            return {}
+        cache = getattr(self, "_visible_alias_cache", None)
+        if cache is None:
+            cache = {}
+            self._visible_alias_cache = cache
+        cache_key = self._ts_scope_lookup_key(fn, use_node)
+        if cache_key in cache:
+            return cache[cache_key]
+
+        visible: Dict[str, str] = {}
+        use_byte = use_node.start_byte
+        sink_category_for = self._ts_sink_category_for_language()
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        class_types = self.CLASS_NODE_TYPES.get(self.language, set())
+        nested_scope_types = func_types | class_types
+        root = self._ts_root(use_node)
+
+        def collect_alias(binding_node: "Node") -> None:
+            target = binding_node.child_by_field_name("name")
+            if target is None:
+                target = binding_node.child_by_field_name("left")
+            value = binding_node.child_by_field_name("value")
+            if value is None:
+                value = binding_node.child_by_field_name("right")
+            if (
+                target is not None
+                and value is not None
+                and target.type == "identifier"
+            ):
+                cat = self._ts_alias_value_category(value, sink_category_for)
+                if cat:
+                    visible[self._ts_get_node_text(target)] = cat
+
+        def walk_scope(node: "Node") -> None:
+            if node.start_byte >= use_byte:
+                return
+            if node.type in ("variable_declarator", "assignment_expression"):
+                collect_alias(node)
+            for child in node.children:
+                if (
+                    child.type in nested_scope_types
+                    and not _is_same_ts_node(child, fn)
+                    and not self._ts_node_contains(child, use_node)
+                ):
+                    continue
+                walk_scope(child)
+
+        for child in root.children:
+            if _is_same_ts_node(child, fn):
+                break
+            walk_scope(child)
+        walk_scope(fn)
+        cache[cache_key] = visible
+        return visible
+
+    def _ts_sync_param_flow_summary(self, ctx: FunctionContext) -> None:
+        """Keep ``dataflow_summary['param_flows']`` aligned with ``parameter_flows``."""
+        summary = dict(ctx.dataflow_summary or {})
+        summary["param_flows"] = {
+            flow["parameter_name"]: {
+                "reaches_calls": flow.get("reaches_calls", []),
+                "reaches_returns": flow.get("reaches_returns", False),
+                "reaches_external": flow.get("reaches_external", False),
+            }
+            for flow in ctx.parameter_flows
+            if flow.get("parameter_name")
+        }
+        ctx.dataflow_summary = summary
+
+    def _ts_build_sink_alias_map(self, root: "Node") -> Dict[str, str]:
+        """Map locally-aliased dangerous sinks to their category.
+
+        Recognizes ``const execAsync = promisify(exec)`` /
+        ``util.promisify(child_process.exec)`` and direct aliases
+        ``const e = exec``. Returns ``{alias_name: category}`` where
+        category is one of ``command``/``eval``/``sql``/``file``/
+        ``network``/``deserialization``.
+
+        Without this, a call through an alias is only detected when the
+        alias name coincidentally contains the SDK function name (e.g.
+        ``execAsync`` happens to contain ``exec``); a clean alias like
+        ``run`` slips through and the tool looks SAFE.
+        """
+        cache_key = (id(root), self.language)
+        store = getattr(self, "_sink_alias_cache", None)
+        if store is None:
+            store = {}
+            self._sink_alias_cache = store
+        if cache_key in store:
+            return store[cache_key]
+
+        sink_category_for = self._ts_sink_category_for_language()
+
+        alias_map: Dict[str, str] = {}
+
+        def visit(n: "Node") -> None:
+            if n.type in ("variable_declarator", "assignment_expression"):
+                target = n.child_by_field_name("name") or n.child_by_field_name(
+                    "left"
+                )
+                value = n.child_by_field_name("value") or n.child_by_field_name(
+                    "right"
+                )
+                if (
+                    target is not None
+                    and value is not None
+                    and target.type == "identifier"
+                ):
+                    cat = self._ts_alias_value_category(value, sink_category_for)
+                    if cat:
+                        alias_map[self._ts_get_node_text(target)] = cat
+            for c in n.children:
+                visit(c)
+
+        visit(root)
+        store[cache_key] = alias_map
+        return alias_map
+
+    def _ts_alias_value_category(self, value: "Node", sink_category_for) -> Optional[str]:
+        """Return the sink category an assignment's right-hand side aliases."""
+        t = value.type
+        if t in ("identifier", "member_expression"):
+            return sink_category_for(self._ts_get_node_text(value))
+        if t in ("call_expression", "new_expression"):
+            callee = value.child_by_field_name("function")
+            args = value.child_by_field_name("arguments")
+            if callee is not None:
+                leaf = self._ts_get_node_text(callee).split(".")[-1].strip()
+                if leaf == "promisify" and args is not None:
+                    for a in args.children:
+                        if a.type in ("identifier", "member_expression"):
+                            cat = sink_category_for(self._ts_get_node_text(a))
+                            if cat:
+                                return cat
+        return None
+
+    def _ts_enrich_capability_with_callees(
+        self, ctx: FunctionContext, handler_node: "Node"
+    ) -> None:
+        """Fold sinks reachable through same-file callees into ``ctx``.
+
+        MCP tool handlers frequently delegate the dangerous operation to a
+        helper (``async ({ command }) => ShellExecutor.executeCommand(command)``
+        where ``executeCommand`` runs ``execAsync(command)``). Inspecting only
+        the handler body then misses the sink and the tool is reported SAFE,
+        diverging from named-sink languages (Go/Rust) where the sink sits in
+        the handler. We resolve the handler's local callees (bounded depth),
+        detect their security operations (alias-aware), and OR the resulting
+        flags into the handler, record ``reachable_functions``, and mark any
+        tainted parameter that reaches a dangerous callee as ``reaches_external``.
+        """
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        if not func_types:
+            return
+        try:
+            root = self._ts_root(handler_node)
+            index = self._ts_build_function_index(root, func_types)
+            ambiguous_bare = self._ts_ambiguous_bare_functions(root)
+        except Exception as e:  # pragma: no cover - defensive
+            self.logger.debug(
+                "Callee enrichment setup failed for handler at byte %s: %s",
+                getattr(handler_node, "start_byte", "?"),
+                e,
+            )
+            return
+        if not index:
+            return
+
+        def callee_refs(node: "Node") -> List[str]:
+            refs: List[str] = []
+            for call in self._ts_extract_calls(node):
+                nm = self._ts_normalize_call_ref(call.get("name") or "")
+                if nm:
+                    refs.append(nm)
+            return refs
+
+        # Bounded BFS over local callees (depth 3 covers handler -> helper
+        # -> sink-wrapper without walking the whole transitive graph).
+        handler_key = ctx.name
+        visited: Set[str] = set()
+        reachable: List[Tuple[str, "Node"]] = []
+        call_edges: Dict[str, Set[str]] = {}
+        frontier: List[Tuple["Node", int, str]] = [(handler_node, 0, handler_key)]
+        while frontier:
+            node, depth, caller_key = frontier.pop()
+            if depth >= 3:
+                continue
+            for ref in callee_refs(node):
+                resolved = self._ts_resolve_indexed_function(
+                    ref, index, ambiguous_bare
+                )
+                if resolved is None:
+                    continue
+                resolved_key, target = resolved
+                if caller_key:
+                    call_edges.setdefault(caller_key, set()).add(resolved_key)
+                if resolved_key in visited:
+                    continue
+                if target.start_byte == handler_node.start_byte:
+                    continue
+                visited.add(resolved_key)
+                reachable.append((resolved_key, target))
+                frontier.append((target, depth + 1, resolved_key))
+
+        if not reachable:
+            return
+
+        dangerous_refs: Set[str] = set()
+        reachable_names = list(ctx.reachable_functions or [])
+        for resolved_key, target in reachable:
+            if resolved_key not in reachable_names:
+                reachable_names.append(resolved_key)
+            try:
+                ops = self._ts_detect_security_ops(target)
+            except Exception as e:  # pragma: no cover - defensive
+                self.logger.debug(
+                    "Callee security-op analysis failed for %r: %s",
+                    resolved_key,
+                    e,
+                )
+                continue
+            ctx.has_file_operations = ctx.has_file_operations or ops[
+                "has_file_operations"
+            ]
+            ctx.has_network_operations = ctx.has_network_operations or ops[
+                "has_network_operations"
+            ]
+            ctx.has_subprocess_calls = ctx.has_subprocess_calls or ops[
+                "has_subprocess_calls"
+            ]
+            ctx.has_eval_exec = ctx.has_eval_exec or ops["has_eval_exec"]
+            if any(ops.values()):
+                dangerous_refs.add(resolved_key)
+
+        dangerous = set(dangerous_refs)
+        changed = True
+        while changed:
+            changed = False
+            for caller, callees in call_edges.items():
+                if caller in dangerous:
+                    continue
+                if any(callee in dangerous for callee in callees):
+                    dangerous.add(caller)
+                    changed = True
+
+        ctx.reachable_functions = reachable_names
+
+        # A tainted parameter that flows into a dangerous callee reaches a
+        # security-relevant external operation, even though the sink itself
+        # lives in the callee. Reflect that so downstream analysis sees the
+        # parameter -> sink data flow.
+        if dangerous:
+            for flow in ctx.parameter_flows:
+                reaches = flow.get("reaches_calls") or []
+                for call in reaches:
+                    norm = self._ts_normalize_call_ref(str(call))
+                    if norm in dangerous:
+                        flow["reaches_external"] = True
+                        break
+                    if any(
+                        norm.endswith("." + dref) or dref.endswith("." + norm)
+                        for dref in dangerous
+                    ):
+                        flow["reaches_external"] = True
+                        break
+
+        self._ts_sync_param_flow_summary(ctx)
+
     def _ts_extract_return_type(self, node: "Node") -> Optional[str]:
         """Extract return type annotation from tree-sitter node."""
         return_type = node.child_by_field_name("return_type")
@@ -3923,6 +5334,30 @@ class NativeAnalyzer:
         
         return None
 
+    def _parse_description_from_annotations(self, node: "Node") -> Optional[str]:
+        """Extract MCP tool description from decorator/attribute text.
+
+        Supports ``@tool(description="...")``, ``#[tool(description = "...")]``,
+        and ``[Description("...")]`` patterns so behavioral alignment sees the
+        same description the MCP server registers.
+        """
+        import re
+
+        patterns = (
+            r'description\s*=\s*"([^"]*)"',
+            r"description\s*=\s*'([^']*)'",
+            r'Description\s*\(\s*"([^"]*)"\s*\)',
+            r"Description\s*\(\s*'([^']*)'\s*\)",
+        )
+        for dec in self._ts_extract_decorators(node):
+            for pattern in patterns:
+                match = re.search(pattern, dec)
+                if match:
+                    text = match.group(1).strip()
+                    if text:
+                        return text
+        return None
+
     def _ts_extract_decorators(self, node: "Node") -> List[str]:
         """Extract decorators/attributes from tree-sitter node.
         
@@ -3931,13 +5366,27 @@ class NativeAnalyzer:
         """
         decorators = []
         
-        # Check preceding siblings for decorators (TypeScript/Python style)
+        # Check preceding siblings for decorators (TypeScript/Python/Rust style)
         sib = node.prev_sibling
         while sib:
-            if sib.type in ("decorator", "attribute", "annotation"):
+            if sib.type in (
+                "decorator",
+                "attribute",
+                "annotation",
+                "attribute_item",
+                "inner_attribute_item",
+            ):
                 decorators.append(self._ts_get_node_text(sib))
             elif sib.type == "comment":
                 # Stop at comments (they're handled separately)
+                break
+            elif sib.type in (
+                "function_item",
+                "function_declaration",
+                "method_definition",
+                "function_definition",
+            ):
+                # Rust/C#: stop at the previous function's boundary
                 break
             sib = sib.prev_sibling
         
@@ -3949,6 +5398,9 @@ class NativeAnalyzer:
                         decorators.append(self._ts_get_node_text(dec))
                 else:
                     decorators.append(self._ts_get_node_text(child))
+            # Rust/Go: #[tool(...)] attributes are child attribute_item nodes
+            elif child.type in ("attribute_item", "inner_attribute_item"):
+                decorators.append(self._ts_get_node_text(child))
         
         # Reverse to get original order
         decorators.reverse()
@@ -4283,28 +5735,28 @@ class NativeAnalyzer:
         file_sinks = sinks.get("file", set())
         network_sinks = sinks.get("network", set())
         deser_sinks = sinks.get("deserialization", set())
-        
+
         def matches_sink(func_text: str, sink_set: set) -> bool:
-            """Check if function text matches any sink pattern."""
-            # Normalize the function text
+            """Check if function text matches any sink pattern.
+
+            A qualified call must match a sink on a path-component boundary.
+            Comparing leaf names alone collides whenever unrelated types share
+            a method name: ``CString::new`` would match ``Command::new``.
+            Unqualified calls are matched against the sink leaf so that
+            imported names (``exec(cmd)`` after destructuring) still resolve;
+            aliases that rebind a sink are handled by the caller.
+            """
             normalized = func_text.replace("::", ".").replace("->", ".")
-            parts = normalized.split(".")
-            func_name = parts[-1] if parts else normalized
-            
+            qualified = "." in normalized
+
             for sink in sink_set:
-                # Normalize sink pattern too
                 sink_normalized = sink.replace("::", ".").replace("->", ".")
-                sink_parts = sink_normalized.split(".")
-                sink_func = sink_parts[-1] if sink_parts else sink_normalized
-                
-                # Exact match (normalized)
                 if normalized == sink_normalized:
                     return True
-                # Function name match
-                if func_name == sink_func:
-                    return True
-                # Partial match (sink pattern in function text)
-                if sink_normalized in normalized:
+                if qualified:
+                    if normalized.endswith("." + sink_normalized):
+                        return True
+                elif normalized == sink_normalized.rsplit(".", 1)[-1]:
                     return True
             return False
         
@@ -4334,7 +5786,27 @@ class NativeAnalyzer:
                     has_network = True
                 if matches_sink(func_text, deser_sinks):
                     has_deserialization = True
-            
+
+                visible_aliases = self._ts_visible_sink_aliases_at(n)
+                if visible_aliases:
+                    leaf = func_text.replace("::", ".").split(".")[-1].strip()
+                    leaf = leaf.split("(")[0]
+                    shadowed = self._ts_shadowed_names_at(n)
+                    if leaf not in shadowed:
+                        alias_cat = visible_aliases.get(leaf)
+                        if alias_cat == "command":
+                            has_subprocess = True
+                        elif alias_cat == "eval":
+                            has_eval = True
+                        elif alias_cat == "sql":
+                            has_sql = True
+                        elif alias_cat == "file":
+                            has_file = True
+                        elif alias_cat == "network":
+                            has_network = True
+                        elif alias_cat == "deserialization":
+                            has_deserialization = True
+
             for child in n.children:
                 visit(child)
         

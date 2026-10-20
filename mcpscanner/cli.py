@@ -52,6 +52,8 @@ from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
 from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
+from mcpscanner.core.analyzers.protocol_analyzer import ProtocolAnalyzer
+from mcpscanner.core.analyzers.schema_reference_analyzer import SchemaReferenceAnalyzer
 
 logger = get_logger(__name__)
 
@@ -62,6 +64,15 @@ load_dotenv()
 
 def _get_endpoint_from_env() -> str:
     return os.environ.get("MCP_SCANNER_ENDPOINT", "")
+
+
+def _safety_status_icon(is_safe: Optional[bool]) -> str:
+    """Render safe, unsafe, and unknown outcomes distinctly."""
+    if is_safe is True:
+        return "✅"
+    if is_safe is False:
+        return "⚠️"
+    return "❌"
 
 
 def _parse_custom_headers(header_list: Optional[List[str]]) -> Dict[str, str]:
@@ -120,6 +131,67 @@ def _create_auth_with_headers(
         return Auth.custom(custom_headers)
 
 
+def _package_scan_to_tool_results(
+    *,
+    scan_results: dict,
+    pkg_spec: str,
+    ecosystem_label: str,
+) -> list:
+    """Render a package scanner JSON payload into the per-tool result shape
+    the report generator consumes. Shared between the ``pypi-scan`` and
+    ``npm-scan`` CLI handlers so the two flows stay aligned."""
+    scan_status = scan_results.get("scan_status", "completed")
+    is_safe = scan_results.get("is_safe")
+
+    if scan_status == "error" or is_safe is None:
+        message = scan_results.get("error") or (
+            f"{ecosystem_label} package scan of {pkg_spec} could not be completed"
+        )
+        return [
+            {
+                "tool_name": pkg_spec,
+                "tool_description": message,
+                "status": "error",
+                "is_safe": None,
+                "findings": {},
+            }
+        ]
+
+    out: list = []
+    for finding in scan_results.get("findings", []):
+        analyzer_name = (finding.get("analyzer", "unknown") or "unknown") + "_analyzer"
+        out.append(
+            {
+                "tool_name": (
+                    (finding.get("details") or {}).get("function_name", pkg_spec)
+                ),
+                "tool_description": finding.get("summary", ""),
+                "status": "completed",
+                "is_safe": False,
+                "findings": {
+                    analyzer_name: {
+                        "severity": finding.get("severity", "UNKNOWN"),
+                        "threat_summary": finding.get("summary", ""),
+                        "threat_names": [finding.get("threat_category", "UNKNOWN")],
+                        "total_findings": 1,
+                        "mcp_taxonomies": [],
+                    }
+                },
+            }
+        )
+    if not out:
+        out.append(
+            {
+                "tool_name": pkg_spec,
+                "tool_description": f"{ecosystem_label} package scan of {pkg_spec}",
+                "status": "completed",
+                "is_safe": True,
+                "findings": {},
+            }
+        )
+    return out
+
+
 def _build_config(
     selected_analyzers: List[AnalyzerEnum], endpoint_url: Optional[str] = None
 ) -> Config:
@@ -140,6 +212,7 @@ def _build_config(
             if (
                 AnalyzerEnum.LLM in selected_analyzers
                 or AnalyzerEnum.BEHAVIORAL in selected_analyzers
+                or AnalyzerEnum.META in selected_analyzers
             )
             else ""
         ),
@@ -148,6 +221,7 @@ def _build_config(
             if (
                 AnalyzerEnum.LLM in selected_analyzers
                 or AnalyzerEnum.BEHAVIORAL in selected_analyzers
+                or AnalyzerEnum.META in selected_analyzers
             )
             else ""
         ),
@@ -176,6 +250,57 @@ def _build_config(
     return Config(**config_params)
 
 
+def _finding_threat_vuln_classification(finding: Any) -> Optional[str]:
+    """Per-finding THREAT/VULNERABILITY label used for CLI output filtering."""
+    details = finding.details or {}
+    classification = details.get("threat_vulnerability_classification")
+    if classification:
+        return str(classification).upper()
+    if getattr(finding, "severity", "") in {"HIGH", "MEDIUM", "LOW"} and getattr(
+        finding, "threat_category", ""
+    ):
+        return "THREAT"
+    return None
+
+
+def _behavioral_findings_for_cli(func_findings: List[Any]) -> List[Any]:
+    """When a tool has both THREAT and VULNERABILITY rows, keep THREAT rows only."""
+    threat_rows = [
+        f for f in func_findings if _finding_threat_vuln_classification(f) == "THREAT"
+    ]
+    if threat_rows:
+        return threat_rows
+    return func_findings
+
+
+def _infer_behavioral_threat_classification(
+    func_findings: List[Any], max_severity: str
+) -> Optional[str]:
+    """Return THREAT/VULNERABILITY classification for CLI filtering.
+
+    When a tool has multiple findings, prefer ``THREAT`` if any row is
+    classified as a threat so VULNERABILITY rows do not hide real threats
+    in the non-raw CLI filter.
+    """
+    cli_findings = _behavioral_findings_for_cli(func_findings)
+    classifications: List[str] = []
+    for finding in cli_findings:
+        classification = _finding_threat_vuln_classification(finding)
+        if classification:
+            classifications.append(classification)
+
+    if any(c == "THREAT" for c in classifications):
+        return "THREAT"
+    if classifications:
+        return classifications[0]
+
+    if max_severity in {"HIGH", "MEDIUM", "LOW"} and any(
+        getattr(f, "threat_category", "") for f in cli_findings
+    ):
+        return "THREAT"
+    return None
+
+
 def _build_behavioral_results(
     analyzer: Any,
     findings: List[Any],
@@ -183,28 +308,11 @@ def _build_behavioral_results(
 ) -> List[Dict[str, Any]]:
     """Build tool-style result dicts for every function analyzed by the behavioral analyzer.
 
-    The behavioral analyzer only emits a ``SecurityFinding`` when it detects a
-    docstring/behavior mismatch, which means functions that come back clean
-    would otherwise be invisible in the scan output. This helper uses
-    ``analyzer.analyzed_functions`` to ensure the returned list contains one
-    entry per tool discovered during the scan — safe tools (no findings) and
-    unsafe tools (with findings) alike.
-
-    Args:
-        analyzer: A ``BehavioralCodeAnalyzer`` instance that has just completed
-            an ``analyze()`` call. Its ``analyzed_functions`` attribute is used
-            to enumerate every function the scan visited.
-        findings: The list of ``SecurityFinding`` objects returned by
-            ``analyzer.analyze(...)``.
-        source_path: The original path that was scanned (file or directory).
-
-    Returns:
-        A list of result dictionaries matching the structure produced elsewhere
-        for tool scan results. Each dictionary exposes ``tool_name``,
-        ``tool_description``, ``status``, ``is_safe`` and ``findings``.
+    ``analyze()`` returns one ``SecurityFinding`` per scanned MCP tool (including
+    SAFE rows). Findings are the authoritative enumeration; ``analyzed_functions``
+    is merged in when present so legacy side-channel data still surfaces tools
+    that somehow lack a finding row.
     """
-    # Group findings by (source_file, function_name) so multi-file scans with
-    # identically named functions don't collide on a single result entry.
     findings_by_key: Dict[tuple, List[Any]] = {}
     for finding in findings:
         details = finding.details or {}
@@ -214,35 +322,39 @@ def _build_behavioral_results(
 
     severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
     results: List[Dict[str, Any]] = []
-    seen_keys: set = set()
 
-    # Iterate over every function the analyzer processed so that safe tools
-    # appear in the output even when no finding was produced for them.
     analyzed_functions = getattr(analyzer, "analyzed_functions", []) or []
+    tool_keys: List[tuple] = []
+    seen_keys: set = set()
+    for key in findings_by_key:
+        if key not in seen_keys:
+            tool_keys.append(key)
+            seen_keys.add(key)
     for analyzed in analyzed_functions:
         func_name = analyzed.get("name", "unknown")
         source_file = analyzed.get("source_file", source_path)
         key = (source_file, func_name)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
+        if key not in seen_keys:
+            tool_keys.append(key)
+            seen_keys.add(key)
 
+    for source_file, func_name in tool_keys:
         display_name = (
             os.path.basename(source_file)
             if source_file and source_file != source_path
             else source_path
         )
-
-        func_findings = findings_by_key.get(key, [])
+        func_findings = findings_by_key.get((source_file, func_name), [])
 
         if func_findings:
+            cli_findings = _behavioral_findings_for_cli(func_findings)
             max_severity = max(
-                (f.severity for f in func_findings),
+                (f.severity for f in cli_findings),
                 key=lambda s: severity_order.get(s, 0),
             )
 
             mcp_taxonomies: List[Dict[str, Any]] = []
-            for finding in func_findings:
+            for finding in cli_findings:
                 taxonomy = getattr(finding, "mcp_taxonomy", None)
                 if not taxonomy:
                     continue
@@ -256,25 +368,18 @@ def _build_behavioral_results(
                 if taxonomy_key not in existing_keys:
                     mcp_taxonomies.append(taxonomy)
 
-            threat_vuln_classification = None
-            if func_findings[0].details:
-                threat_vuln_classification = func_findings[0].details.get(
-                    "threat_vulnerability_classification"
-                )
-
-            # Derive is_safe from severity instead of hardcoding False.
-            # Analyzers can now emit SAFE-severity findings for tools that
-            # came back clean (see BehavioralCodeAnalyzer.analyze docstring);
-            # those rows must NOT be filtered out downstream as unsafe.
+            threat_vuln_classification = _infer_behavioral_threat_classification(
+                func_findings, max_severity
+            )
             is_safe_row = max_severity == "SAFE"
 
             analyzer_finding: Dict[str, Any] = {
                 "severity": max_severity,
-                "threat_summary": func_findings[0].summary,
+                "threat_summary": cli_findings[0].summary,
                 "threat_names": sorted(
-                    {f.threat_category for f in func_findings if f.threat_category}
+                    {f.threat_category for f in cli_findings if f.threat_category}
                 ),
-                "total_findings": len(func_findings),
+                "total_findings": len(cli_findings),
                 "source_file": source_file,
                 "mcp_taxonomies": mcp_taxonomies,
             }
@@ -293,9 +398,6 @@ def _build_behavioral_results(
                 }
             )
         else:
-            # No mismatch detected for this tool — still surface it as a safe
-            # result so the scan output enumerates ALL tools that were found,
-            # not only the ones flagged as malicious.
             results.append(
                 {
                     "tool_name": func_name,
@@ -314,52 +416,6 @@ def _build_behavioral_results(
                     },
                 }
             )
-
-    # Surface any findings that didn't match a recorded analyzed function
-    # (defensive: should be rare, but guarantees no finding is dropped).
-    for (src_file, func_name), func_findings in findings_by_key.items():
-        if (src_file, func_name) in seen_keys:
-            continue
-        seen_keys.add((src_file, func_name))
-
-        max_severity = max(
-            (f.severity for f in func_findings),
-            key=lambda s: severity_order.get(s, 0),
-        )
-        display_name = (
-            os.path.basename(src_file)
-            if src_file and src_file != source_path
-            else source_path
-        )
-        mcp_taxonomies = []
-        for finding in func_findings:
-            taxonomy = getattr(finding, "mcp_taxonomy", None)
-            if taxonomy and taxonomy not in mcp_taxonomies:
-                mcp_taxonomies.append(taxonomy)
-
-        results.append(
-            {
-                "tool_name": func_name,
-                "tool_description": f"MCP function from {display_name}",
-                "status": "completed",
-                # Same severity-derived semantics as the inventory loop
-                # above: a stray SAFE finding must not be misreported as
-                # unsafe and dropped by the downstream THREAT filter.
-                "is_safe": max_severity == "SAFE",
-                "findings": {
-                    "behavioral_analyzer": {
-                        "severity": max_severity,
-                        "threat_summary": func_findings[0].summary,
-                        "threat_names": sorted(
-                            {f.threat_category for f in func_findings if f.threat_category}
-                        ),
-                        "total_findings": len(func_findings),
-                        "source_file": src_file,
-                        "mcp_taxonomies": mcp_taxonomies,
-                    }
-                },
-            }
-        )
 
     if not results:
         results.append(
@@ -490,11 +546,22 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
     scan_results = results.get("scan_results", [])
     print(f"Tools scanned: {len(scan_results)}")
 
-    safe_tools = [tool for tool in scan_results if tool.get("is_safe", False)]
-    unsafe_tools = [tool for tool in scan_results if not tool.get("is_safe", False)]
+    safe_tools = [tool for tool in scan_results if tool.get("is_safe") is True]
+    unsafe_tools = [tool for tool in scan_results if tool.get("is_safe") is False]
+    incomplete_tools = [tool for tool in scan_results if tool.get("is_safe") is None]
 
     print(f"Safe tools: {len(safe_tools)}")
     print(f"Unsafe tools: {len(unsafe_tools)}")
+    print(f"Incomplete tools: {len(incomplete_tools)}")
+
+    if incomplete_tools:
+        print("\n=== Incomplete Tools ===\n")
+        for tool in incomplete_tools:
+            print(
+                f"{tool.get('tool_name', 'Unknown')}: {tool.get('status', 'unknown')}"
+            )
+            for error in tool.get("analyzer_errors", []):
+                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
 
     # Display unsafe tools
     if unsafe_tools:
@@ -580,7 +647,7 @@ def display_prompt_results_table(
     # Prepare table data
     table_data = []
     for result in results:
-        status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        status_icon = _safety_status_icon(result.get("is_safe"))
         prompt_name = result.get("prompt_name", "Unknown")
         desc = result.get("prompt_description", "")
         desc_short = desc[:40] + "..." if len(desc) > 40 else desc
@@ -595,9 +662,12 @@ def display_prompt_results_table(
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
     # Summary
-    safe = sum(1 for r in results if r.get("is_safe", False))
-    unsafe = sum(1 for r in results if not r.get("is_safe", False))
-    print(f"\n📊 Summary: {len(results)} total | {safe} safe | {unsafe} unsafe")
+    safe = sum(1 for r in results if r.get("is_safe") is True)
+    unsafe = sum(1 for r in results if r.get("is_safe") is False)
+    unknown = sum(1 for r in results if r.get("is_safe") is None)
+    print(
+        f"\n📊 Summary: {len(results)} total | {safe} safe | {unsafe} unsafe | {unknown} unknown"
+    )
 
 
 def display_resource_results_table(
@@ -620,8 +690,8 @@ def display_resource_results_table(
     for result in results:
         status = result.get("status", "unknown")
 
-        if status == "completed":
-            status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        if status in {"completed", "partial"}:
+            status_icon = _safety_status_icon(result.get("is_safe"))
         elif status == "skipped":
             status_icon = "⏭️"
         else:
@@ -632,7 +702,9 @@ def display_resource_results_table(
         uri_short = uri[:40] + "..." if len(uri) > 40 else uri
         mime_type = result.get("resource_mime_type", "unknown")
         findings_count = (
-            len(result.get("findings", [])) if status == "completed" else "-"
+            len(result.get("findings", []))
+            if status in {"completed", "partial"}
+            else "-"
         )
 
         table_data.append(
@@ -644,16 +716,17 @@ def display_resource_results_table(
 
     # Summary
     completed = [r for r in results if r.get("status") == "completed"]
+    partial = [r for r in results if r.get("status") == "partial"]
     skipped = [r for r in results if r.get("status") == "skipped"]
     failed = [r for r in results if r.get("status") == "failed"]
-    safe = sum(1 for r in completed if r.get("is_safe", False))
-    unsafe = sum(1 for r in completed if not r.get("is_safe", False))
+    safe = sum(1 for r in results if r.get("is_safe") is True)
+    unsafe = sum(1 for r in results if r.get("is_safe") is False)
+    unknown = sum(1 for r in results if r.get("is_safe") is None)
 
     print(
-        f"\n📊 Summary: {len(results)} total | {len(completed)} scanned | {len(skipped)} skipped | {len(failed)} failed"
+        f"\n📊 Summary: {len(results)} total | {len(completed)} completed | {len(partial)} partial | {len(skipped)} skipped | {len(failed)} failed"
     )
-    if completed:
-        print(f"   Security: {safe} safe | {unsafe} unsafe")
+    print(f"   Security: {safe} safe | {unsafe} unsafe | {unknown} unknown")
 
 
 def display_prompt_results(
@@ -671,11 +744,22 @@ def display_prompt_results(
     print(f"Server URL: {server_url}")
     print(f"Prompts scanned: {len(results)}")
 
-    safe_prompts = [p for p in results if p.get("is_safe", False)]
-    unsafe_prompts = [p for p in results if not p.get("is_safe", False)]
+    safe_prompts = [p for p in results if p.get("is_safe") is True]
+    unsafe_prompts = [p for p in results if p.get("is_safe") is False]
+    incomplete_prompts = [p for p in results if p.get("is_safe") is None]
 
     print(f"Safe prompts: {len(safe_prompts)}")
     print(f"Unsafe prompts: {len(unsafe_prompts)}")
+    print(f"Incomplete prompts: {len(incomplete_prompts)}")
+
+    if incomplete_prompts:
+        print("\n=== Incomplete Prompts ===\n")
+        for prompt in incomplete_prompts:
+            print(
+                f"{prompt.get('prompt_name', 'Unknown')}: {prompt.get('status', 'unknown')}"
+            )
+            for error in prompt.get("analyzer_errors", []):
+                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
 
     # Display unsafe prompts
     if unsafe_prompts:
@@ -751,75 +835,87 @@ def display_resource_results(
     print(f"Resources found: {len(results)}")
 
     completed = [r for r in results if r.get("status") == "completed"]
+    partial = [r for r in results if r.get("status") == "partial"]
     skipped = [r for r in results if r.get("status") == "skipped"]
     failed = [r for r in results if r.get("status") == "failed"]
 
     print(f"Scanned: {len(completed)}")
+    print(f"Partial: {len(partial)}")
     print(f"Skipped: {len(skipped)}")
     print(f"Failed: {len(failed)}")
 
-    if completed:
-        safe_resources = [r for r in completed if r.get("is_safe", False)]
-        unsafe_resources = [r for r in completed if not r.get("is_safe", False)]
+    safe_resources = [r for r in results if r.get("is_safe") is True]
+    unsafe_resources = [r for r in results if r.get("is_safe") is False]
+    incomplete_resources = [r for r in results if r.get("is_safe") is None]
 
-        print(f"Safe resources: {len(safe_resources)}")
-        print(f"Unsafe resources: {len(unsafe_resources)}")
+    print(f"Safe resources: {len(safe_resources)}")
+    print(f"Unsafe resources: {len(unsafe_resources)}")
+    print(f"Incomplete resources: {len(incomplete_resources)}")
 
-        # Display unsafe resources
-        if unsafe_resources:
-            print("\n=== Unsafe Resources ===\n")
-            for i, resource in enumerate(unsafe_resources, 1):
-                print(f"{i}. {resource.get('resource_name', 'Unknown')}")
-                print(f"   URI: {resource.get('resource_uri', 'N/A')}")
-                print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+    # Display unsafe resources
+    if unsafe_resources:
+        print("\n=== Unsafe Resources ===\n")
+        for i, resource in enumerate(unsafe_resources, 1):
+            print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+            print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+            print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
 
-                findings = resource.get("findings", [])
-                print(f"   Findings: {len(findings)}")
+            findings = resource.get("findings", [])
+            print(f"   Findings: {len(findings)}")
 
-                if detailed and findings:
-                    for j, finding in enumerate(findings, 1):
-                        print(f"   {j}. {finding.get('summary', 'No summary')}")
-                        print(f"      Severity: {finding.get('severity', 'Unknown')}")
-                        print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
+            if detailed and findings:
+                for j, finding in enumerate(findings, 1):
+                    print(f"   {j}. {finding.get('summary', 'No summary')}")
+                    print(f"      Severity: {finding.get('severity', 'Unknown')}")
+                    print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
 
-                        details = finding.get("details", {})
-                        if details.get("primary_threats"):
-                            threats = ", ".join(
-                                [
-                                    t.replace("_", " ").title()
-                                    for t in details["primary_threats"]
-                                ]
+                    details = finding.get("details", {})
+                    if details.get("primary_threats"):
+                        threats = ", ".join(
+                            [
+                                t.replace("_", " ").title()
+                                for t in details["primary_threats"]
+                            ]
+                        )
+                        print(f"      Threats: {threats}")
+
+                    # Display MCP Taxonomy if available
+                    mcp_taxonomy = finding.get("mcp_taxonomy")
+                    if mcp_taxonomy:
+                        aitech = mcp_taxonomy.get("aitech")
+                        aitech_name = mcp_taxonomy.get("aitech_name")
+                        aisubtech = mcp_taxonomy.get("aisubtech")
+                        aisubtech_name = mcp_taxonomy.get("aisubtech_name")
+                        description = mcp_taxonomy.get("description")
+
+                        if aitech:
+                            print(f"      Technique: {aitech} - {aitech_name}")
+                        if aisubtech:
+                            print(
+                                f"      Sub-Technique: {aisubtech} - {aisubtech_name}"
                             )
-                            print(f"      Threats: {threats}")
+                        if description:
+                            print(f"      Description: {description}")
+                    print()
+            print()
 
-                        # Display MCP Taxonomy if available
-                        mcp_taxonomy = finding.get("mcp_taxonomy")
-                        if mcp_taxonomy:
-                            aitech = mcp_taxonomy.get("aitech")
-                            aitech_name = mcp_taxonomy.get("aitech_name")
-                            aisubtech = mcp_taxonomy.get("aisubtech")
-                            aisubtech_name = mcp_taxonomy.get("aisubtech_name")
-                            description = mcp_taxonomy.get("description")
+    if incomplete_resources:
+        print("\n=== Incomplete Resources ===\n")
+        for resource in incomplete_resources:
+            print(
+                f"{resource.get('resource_name', 'Unknown')}: {resource.get('status', 'unknown')}"
+            )
+            for error in resource.get("analyzer_errors", []):
+                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
 
-                            if aitech:
-                                print(f"      Technique: {aitech} - {aitech_name}")
-                            if aisubtech:
-                                print(
-                                    f"      Sub-Technique: {aisubtech} - {aisubtech_name}"
-                                )
-                            if description:
-                                print(f"      Description: {description}")
-                        print()
-                print()
-
-        # Display safe resources if detailed
-        if detailed and safe_resources:
-            print("\n=== Safe Resources ===\n")
-            for i, resource in enumerate(safe_resources, 1):
-                print(f"{i}. {resource.get('resource_name', 'Unknown')}")
-                print(f"   URI: {resource.get('resource_uri', 'N/A')}")
-                print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
-                print()
+    # Display safe resources if detailed
+    if detailed and safe_resources:
+        print("\n=== Safe Resources ===\n")
+        for i, resource in enumerate(safe_resources, 1):
+            print(f"{i}. {resource.get('resource_name', 'Unknown')}")
+            print(f"   URI: {resource.get('resource_uri', 'N/A')}")
+            print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
+            print()
 
     # Display skipped resources if any
     if skipped and detailed:
@@ -850,7 +946,7 @@ def display_instructions_results_table(
     table_data = []
     for result in results:
         status = result.get("status", "unknown")
-        status_icon = "✅" if result.get("is_safe", False) else "⚠️"
+        status_icon = _safety_status_icon(result.get("is_safe"))
         server_name = result.get("server_name", "Unknown")
         protocol_version = result.get("protocol_version", "N/A")
         findings_count = len(result.get("findings", []))
@@ -882,9 +978,12 @@ def display_instructions_results_table(
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
     # Summary
-    safe = sum(1 for r in results if r.get("is_safe", False))
-    unsafe = sum(1 for r in results if not r.get("is_safe", False))
-    print(f"\n📊 Summary: {len(results)} scanned | {safe} safe | {unsafe} unsafe")
+    safe = sum(1 for r in results if r.get("is_safe") is True)
+    unsafe = sum(1 for r in results if r.get("is_safe") is False)
+    unknown = sum(1 for r in results if r.get("is_safe") is None)
+    print(
+        f"\n📊 Summary: {len(results)} scanned | {safe} safe | {unsafe} unsafe | {unknown} unknown"
+    )
 
 
 def display_instructions_results(
@@ -901,11 +1000,22 @@ def display_instructions_results(
     print(f"Server URL: {server_url}")
     print(f"Instructions scanned: {len(results)}")
 
-    safe_instructions = [i for i in results if i.get("is_safe", False)]
-    unsafe_instructions = [i for i in results if not i.get("is_safe", False)]
+    safe_instructions = [i for i in results if i.get("is_safe") is True]
+    unsafe_instructions = [i for i in results if i.get("is_safe") is False]
+    incomplete_instructions = [i for i in results if i.get("is_safe") is None]
 
     print(f"Safe: {len(safe_instructions)}")
     print(f"Unsafe: {len(unsafe_instructions)}")
+    print(f"Incomplete: {len(incomplete_instructions)}")
+
+    if incomplete_instructions:
+        print("\n=== Incomplete Instructions ===\n")
+        for instr in incomplete_instructions:
+            print(
+                f"{instr.get('server_name', 'Unknown')}: {instr.get('status', 'unknown')}"
+            )
+            for error in instr.get("analyzer_errors", []):
+                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
 
     # Display unsafe instructions
     if unsafe_instructions:
@@ -1118,6 +1228,14 @@ async def main():
         help="Bearer token for authentication",
     )
 
+    p_protocol = subparsers.add_parser(
+        "protocol", help="Run read-only HTTP protocol checks on an MCP server"
+    )
+    p_protocol.add_argument("--server-url", required=True, help="MCP HTTP endpoint URL")
+    p_protocol.add_argument(
+        "--timeout", type=float, default=10.0, help="HTTP timeout in seconds"
+    )
+
     # VirusTotal subcommand - scan files/directories for malware
     p_virustotal = subparsers.add_parser(
         "virustotal",
@@ -1185,6 +1303,102 @@ async def main():
         ],
         default="summary",
         help="Output format (default: %(default)s)",
+    )
+
+    # PyPI package scan subcommand (Docker-sandboxed by default)
+    p_pypi = subparsers.add_parser(
+        "pypi-scan",
+        help="Download and scan a PyPI package in a Docker sandbox",
+    )
+    p_pypi.add_argument("package", help="PyPI package name (e.g., flask)")
+    p_pypi.add_argument(
+        "--version", help="Specific package version (default: latest)"
+    )
+    p_pypi.add_argument(
+        "--output", "-o", help="Save scan results to a file"
+    )
+    p_pypi.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_pypi.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_pypi.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_pypi.add_argument(
+        "--format",
+        choices=[
+            "raw", "summary", "detailed", "by_tool",
+            "by_analyzer", "by_severity", "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+    p_pypi.add_argument(
+        "--rebuild-image",
+        action="store_true",
+        help="Force rebuild of the Docker scanner image",
+    )
+    p_pypi.add_argument(
+        "--no-docker",
+        action="store_true",
+        help=(
+            "Run the PyPI scan locally without Docker. Intended for SDK / CI "
+            "environments where Docker is unavailable; archives are size-capped "
+            "and extracted via tarfile data filter. The package's own code is "
+            "never executed, but local mode is a weaker sandbox than Docker."
+        ),
+    )
+
+    # npm package scan subcommand (Docker-sandboxed by default; --no-docker
+    # opt-in for SDK environments).
+    p_npm = subparsers.add_parser(
+        "npm-scan",
+        help="Download and scan an npm package in a Docker sandbox",
+    )
+    p_npm.add_argument(
+        "package",
+        help="npm package name (supports @scope/name, e.g. @modelcontextprotocol/server-everything)",
+    )
+    p_npm.add_argument(
+        "--version", help="Specific package version (default: latest)"
+    )
+    p_npm.add_argument(
+        "--output", "-o", help="Save scan results to a file"
+    )
+    p_npm.add_argument(
+        "--verbose", "-v", action="store_true", help="Print verbose output"
+    )
+    p_npm.add_argument(
+        "--raw", "-r", action="store_true", help="Print raw JSON output"
+    )
+    p_npm.add_argument(
+        "--detailed", "-d", action="store_true", help="Show detailed results"
+    )
+    p_npm.add_argument(
+        "--format",
+        choices=[
+            "raw", "summary", "detailed", "by_tool",
+            "by_analyzer", "by_severity", "table",
+        ],
+        default="summary",
+        help="Output format (default: %(default)s)",
+    )
+    p_npm.add_argument(
+        "--rebuild-image",
+        action="store_true",
+        help="Force rebuild of the npm Docker scanner image",
+    )
+    p_npm.add_argument(
+        "--no-docker",
+        action="store_true",
+        help=(
+            "Run the npm scan locally without Docker. Intended for SDK / CI "
+            "environments where Docker is unavailable; tarballs are size-capped "
+            "and extracted via tarfile data filter. The package's JS is never "
+            "executed (only parsed), but local mode is a weaker sandbox than Docker."
+        ),
     )
 
     # vulnerable-package subcommand - scan Python dependencies for known vulnerabilities
@@ -1330,7 +1544,18 @@ async def main():
     parser.add_argument(
         "--analyzers",
         default="api,yara,llm",
-        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package (default: %(default)s)",
+        help="Comma-separated list of analyzers to run. Options: api, yara, llm, behavioral, virustotal, readiness, vulnerable_package, meta, schema (default: %(default)s)",
+    )
+
+    parser.add_argument(
+        "--enable-meta",
+        action="store_true",
+        help=(
+            "Enable the LLM meta-analyzer for second-pass analysis. "
+            "Reviews findings from all other analyzers to filter false positives, "
+            "prioritize by actual risk, and correlate related findings. "
+            "Requires MCP_SCANNER_LLM_API_KEY. Adds 'meta' to the analyzer list."
+        ),
     )
 
     parser.add_argument("--output", "-o", help="Save scan results to a file")
@@ -1439,6 +1664,7 @@ async def main():
             "behavioral_analyzer",
             "virustotal_analyzer",
             "vulnerable_package_analyzer",
+            "schema_analyzer",
         ],
         help="Filter results by specific analyzer",
     )
@@ -1479,6 +1705,10 @@ async def main():
     # Convert to AnalyzerEnum list
     selected_analyzers = [AnalyzerEnum(name) for name in analyzer_names]
 
+    # Add META analyzer if --enable-meta flag is set
+    if getattr(args, "enable_meta", False) and AnalyzerEnum.META not in selected_analyzers:
+        selected_analyzers.append(AnalyzerEnum.META)
+
     # Validate behavioral analyzer requirements
     if AnalyzerEnum.BEHAVIORAL in selected_analyzers:
         if not args.source_path and not (
@@ -1494,14 +1724,14 @@ async def main():
         logging.basicConfig(
             level=effective_level,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            stream=sys.stdout,
+            stream=sys.stderr,
         )
         set_log_level(effective_level)
     elif args.verbose:
         logging.basicConfig(
             level=logging.DEBUG,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            stream=sys.stdout,
+            stream=sys.stderr,
         )
         set_log_level(logging.DEBUG)
         logger.info("Verbose output enabled - detailed analyzer logs will be shown")
@@ -1509,7 +1739,7 @@ async def main():
         logging.basicConfig(
             level=logging.WARNING,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            stream=sys.stdout,
+            stream=sys.stderr,
         )
         set_log_level(logging.WARNING)
 
@@ -1525,6 +1755,32 @@ async def main():
         os.environ["MCP_SCANNER_STDIO_TIMEOUT"] = str(args.stdio_timeout)
 
     try:
+        if args.cmd == "protocol":
+            if args.timeout <= 0:
+                parser.error("--timeout must be positive")
+            findings = await ProtocolAnalyzer(timeout=args.timeout).analyze(
+                args.server_url
+            )
+            output = {
+                "server_url": args.server_url,
+                "findings": [
+                    {
+                        "severity": finding.severity,
+                        "summary": finding.summary,
+                        "threat_category": finding.threat_category,
+                        "analyzer": finding.analyzer,
+                        "details": finding.details,
+                    }
+                    for finding in findings
+                ],
+            }
+            rendered = json.dumps(output, indent=2)
+            if args.output:
+                with open(args.output, "w", encoding="utf-8") as output_file:
+                    output_file.write(rendered + "\n")
+            print(rendered)
+            return
+
         # Handle static file scanning subcommand (matches 'prompts' and 'resources' pattern)
         if args.cmd == "static":
 
@@ -1550,6 +1806,9 @@ async def main():
                         "Warning: API analyzer requested but MCP_SCANNER_API_KEY not set",
                         file=sys.stderr,
                     )
+
+            if AnalyzerEnum.SCHEMA in selected_analyzers:
+                analyzers.append(SchemaReferenceAnalyzer())
 
             if not analyzers:
                 print(
@@ -1587,6 +1846,7 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        analyzer_errors=r.get("analyzer_errors", []),
                     )
                     all_results.append(tool_result)
 
@@ -1602,6 +1862,7 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        analyzer_errors=r.get("analyzer_errors", []),
                     )
                     all_results.append(prompt_result)
 
@@ -1624,8 +1885,48 @@ async def main():
                         status=r["status"],
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
+                        analyzer_errors=r.get("analyzer_errors", []),
+                        # Thread the description / text the static analyzer
+                        # consumed so ``--enable-meta`` can second-guess
+                        # findings against the same evidence the primary
+                        # pass saw. Without these the meta-analyzer falls
+                        # back to ``"N/A"`` for description and FP triage
+                        # on file-based resources is unsupervised.
+                        resource_description=r.get("resource_description", ""),
+                        resource_text=r.get("resource_text", ""),
                     )
                     all_results.append(resource_result)
+
+            # P0-5 fix: also accept Bedrock-via-AWS-credentials. Previously
+            # this gate only honoured ``llm_provider_api_key`` and silently
+            # no-op'd on the IAM-only Lambda flow this branch was built for.
+            # Mirror Scanner.__init__'s ``(api_key or is_bedrock)`` rule so
+            # ``--enable-meta`` with ``MCP_SCANNER_LLM_MODEL=bedrock/...`` and
+            # an AWS profile works end-to-end.
+            _meta_is_bedrock = bool(
+                cfg.llm_model and "bedrock/" in cfg.llm_model
+            )
+            if AnalyzerEnum.META in selected_analyzers and (
+                cfg.llm_provider_api_key or _meta_is_bedrock
+            ):
+                # P1-6 fix: route through Scanner.apply_meta_to_results
+                # rather than reimplementing per-result meta-analysis here.
+                # The previous inline loop had drifted from the Scanner
+                # helpers and produced two real bugs (P0-4 silently dropped
+                # resource/instructions enrichment, P0-5 silently no-op'd
+                # on the IAM-only Bedrock flow). One source of truth.
+                #
+                # M2 fix: use ``for_meta_only`` so the static path doesn't
+                # pay the cost of constructing every primary analyzer
+                # (Yara compilation, ApiAnalyzer endpoint validation,
+                # Behavioral / VT / Readiness / PromptDefense) just to
+                # invoke a single LLM-backed entrypoint. ``rules_dir``
+                # is intentionally dropped here — the meta-only path
+                # never touches Yara.
+                meta_scanner = Scanner.for_meta_only(cfg)
+                all_results = await meta_scanner.apply_meta_to_results(
+                    all_results, [AnalyzerEnum.META]
+                )
 
             results = await results_to_json(all_results)
 
@@ -1740,6 +2041,7 @@ async def main():
                         "prompt_description": result.prompt_description,
                         "status": result.status,
                         "is_safe": result.is_safe,
+                        "analyzer_errors": result.analyzer_errors,
                         "findings": [
                             {
                                 "severity": f.severity,
@@ -1769,6 +2071,7 @@ async def main():
                         "prompt_description": r.prompt_description,
                         "status": r.status,
                         "is_safe": r.is_safe,
+                        "analyzer_errors": r.analyzer_errors,
                         "findings": [
                             {
                                 "severity": f.severity,
@@ -1815,9 +2118,8 @@ async def main():
                         "resource_name": result.resource_name,
                         "resource_mime_type": result.resource_mime_type,
                         "status": result.status,
-                        "is_safe": (
-                            result.is_safe if result.status == "completed" else None
-                        ),
+                        "is_safe": result.is_safe,
+                        "analyzer_errors": result.analyzer_errors,
                         "findings": [
                             {
                                 "severity": f.severity,
@@ -1848,7 +2150,8 @@ async def main():
                         "resource_name": r.resource_name,
                         "resource_mime_type": r.resource_mime_type,
                         "status": r.status,
-                        "is_safe": r.is_safe if r.status == "completed" else None,
+                        "is_safe": r.is_safe,
+                        "analyzer_errors": r.analyzer_errors,
                         "findings": [
                             {
                                 "severity": f.severity,
@@ -1886,6 +2189,7 @@ async def main():
                     "protocol_version": result.protocol_version,
                     "status": result.status,
                     "is_safe": result.is_safe,
+                    "analyzer_errors": result.analyzer_errors,
                     "findings": [
                         {
                             "severity": f.severity,
@@ -2024,8 +2328,8 @@ async def main():
             results = _build_behavioral_results(analyzer, findings, source_path)
 
             # Filter out VULNERABILITY findings — only surface THREATS — while
-            # always keeping safe results so every analyzed tool remains
-            # visible in the output.
+            # always keeping safe results so every analyzed tool remains visible.
+            # Applies to both formatted and ``--raw`` JSON output.
             filtered_results = []
             for result in results:
                 if result.get("is_safe", False):
@@ -2050,6 +2354,134 @@ async def main():
                     json.dump(results, f, indent=2)
                 if args.verbose:
                     print(f"Results saved to {args.output}")
+
+        elif args.cmd == "pypi-scan":
+            from mcpscanner.core.pypi_scanner import (
+                DockerNotAvailableError,
+                LLMNotConfiguredError,
+                PyPIPackageScanner,
+                PyPIScanError,
+            )
+
+            use_docker = not getattr(args, "no_docker", False)
+            try:
+                scanner = PyPIPackageScanner(use_docker=use_docker)
+                if use_docker and getattr(args, "rebuild_image", False):
+                    scanner.build_image(force=True)
+
+                if use_docker:
+                    scan_results = scanner.scan_package(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+                else:
+                    scan_results = await scanner.scan_package_async(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+
+                pkg_spec = args.package
+                if getattr(args, "version", None):
+                    pkg_spec = f"{args.package}=={args.version}"
+
+                results = _package_scan_to_tool_results(
+                    scan_results=scan_results,
+                    pkg_spec=pkg_spec,
+                    ecosystem_label="PyPI",
+                )
+
+                if any(
+                    row.get("status") == "error" or row.get("is_safe") is None
+                    for row in results
+                ):
+                    print(
+                        "Scan Error: package scan could not be completed reliably",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+
+                if args.output:
+                    with open(args.output, "w", encoding="utf-8") as f:
+                        json.dump(results, f, indent=2)
+                    if args.verbose:
+                        print(f"Results saved to {args.output}")
+
+            except DockerNotAvailableError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            except LLMNotConfiguredError as e:
+                print(f"Config Error: {e}", file=sys.stderr)
+                sys.exit(2)
+            except PyPIScanError as e:
+                print(f"Scan Error: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        elif args.cmd == "npm-scan":
+            from mcpscanner.core.npm_scanner import (
+                NPMPackageScanner,
+                NPMScanError,
+            )
+            from mcpscanner.core.pypi_scanner import (
+                DockerNotAvailableError,
+                LLMNotConfiguredError,
+            )
+
+            use_docker = not getattr(args, "no_docker", False)
+            try:
+                scanner = NPMPackageScanner(use_docker=use_docker)
+                if use_docker and getattr(args, "rebuild_image", False):
+                    scanner.build_image(force=True)
+
+                if use_docker:
+                    scan_results = scanner.scan_package(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+                else:
+                    scan_results = await scanner.scan_package_async(
+                        package=args.package,
+                        version=getattr(args, "version", None),
+                        verbose=getattr(args, "verbose", False),
+                    )
+
+                pkg_spec = args.package
+                if getattr(args, "version", None):
+                    pkg_spec = f"{args.package}@{args.version}"
+
+                results = _package_scan_to_tool_results(
+                    scan_results=scan_results,
+                    pkg_spec=pkg_spec,
+                    ecosystem_label="npm",
+                )
+
+                if any(
+                    row.get("status") == "error" or row.get("is_safe") is None
+                    for row in results
+                ):
+                    print(
+                        "Scan Error: package scan could not be completed reliably",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+
+                if args.output:
+                    with open(args.output, "w", encoding="utf-8") as f:
+                        json.dump(results, f, indent=2)
+                    if args.verbose:
+                        print(f"Results saved to {args.output}")
+
+            except DockerNotAvailableError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            except LLMNotConfiguredError as e:
+                print(f"Config Error: {e}", file=sys.stderr)
+                sys.exit(2)
+            except NPMScanError as e:
+                print(f"Scan Error: {e}", file=sys.stderr)
+                sys.exit(1)
 
         elif args.cmd == "vulnerable-package":
             import os
@@ -2287,6 +2719,16 @@ async def main():
             server_label = f"vulnerable-package:{args.scan_path}"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "pypi-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}=={args.version}"
+            server_label = f"pypi:{pkg_spec}"
+        elif hasattr(args, "cmd") and args.cmd == "npm-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}@{args.version}"
+            server_label = f"npm:{pkg_spec}"
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
             server_label = f"behavioral:{args.source_path}"
         elif args.stdio_command:
@@ -2408,6 +2850,16 @@ async def main():
             server_label = "well-known-configs"
         elif hasattr(args, "cmd") and args.cmd == "behavioral":
             server_label = f"behavioral:{args.source_path}"
+        elif hasattr(args, "cmd") and args.cmd == "pypi-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}=={args.version}"
+            server_label = f"pypi:{pkg_spec}"
+        elif hasattr(args, "cmd") and args.cmd == "npm-scan":
+            pkg_spec = args.package
+            if getattr(args, "version", None):
+                pkg_spec = f"{args.package}@{args.version}"
+            server_label = f"npm:{pkg_spec}"
         elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
             server_label = f"vulnerable-package:{args.scan_path}"
 

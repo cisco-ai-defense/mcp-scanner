@@ -20,16 +20,16 @@ Dynamically probes live MCP server endpoints for protocol-level security
 controls. Complements static analyzers (code analysis) with runtime
 protocol verification.
 
-Checks:
+Active checks:
     MCPS-001: Unencrypted HTTP transport (CWE-319)
-    MCPS-002: Unauthenticated requests accepted (CWE-306)
-    MCPS-003: No message signing detected (CWE-345)
-    MCPS-004: No replay protection (CWE-294)
-    MCPS-005: Tool definitions lack integrity hashes (CWE-494)
-    MCPS-006: (removed -- handled by existing LLM/YARA analyzers)
-    MCPS-007: Spoofed agent identity accepted (CWE-290)
+    MCPS-002: Tool definitions exposed without authentication (CWE-306)
     MCPS-008: Fail-open semantics (CWE-636)
-    MCPS-009: No rate limiting (CWE-770)
+    MCPS-010: Modern HTTP method header/body mismatch accepted (CWE-436)
+    MCPS-012: Modern tools/list probe incomplete (diagnostic)
+
+Signing, replay, tool-integrity, identity, and rate-limit helper methods remain
+for SDK compatibility but are not called by analyze: the existing probes do
+not establish those properties from a safe unauthenticated scan.
 
 References:
     OWASP MCP Security Cheat Sheet:
@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import httpx
-from mcp.types import LATEST_PROTOCOL_VERSION
+from mcp.types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION
 
 from .base import BaseAnalyzer, SecurityFinding
 
@@ -57,7 +57,9 @@ class ProtocolAnalyzer(BaseAnalyzer):
     through JSON-RPC requests.
     """
 
-    DEFAULT_PROTOCOL_VERSION = LATEST_PROTOCOL_VERSION
+    # The legacy probes speak the initialize-era wire format, so they must
+    # offer a handshake version rather than the SDK's latest (modern) one.
+    DEFAULT_PROTOCOL_VERSION = LATEST_HANDSHAKE_VERSION
     PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version"
     SESSION_ID_HEADER = "MCP-Session-Id"
 
@@ -94,6 +96,55 @@ class ProtocolAnalyzer(BaseAnalyzer):
             verify=True,
             limits=httpx.Limits(max_connections=5),
         ) as client:
+            # Modern requests are self-contained. Only use the legacy probes
+            # when discovery did not confirm the modern protocol.
+            discover_response = await self._rpc(
+                client, target, "server/discover", modern=True
+            )
+            if self._supports_modern_protocol(discover_response):
+                tools_response = await self._rpc(
+                    client, target, "tools/list", modern=True
+                )
+                findings.extend(self._check_transport(target))
+                tools_body = self._parse_body(tools_response)
+                tools_result = (
+                    tools_body.get("result") if isinstance(tools_body, dict) else None
+                )
+                tools_listed = (
+                    tools_response is not None
+                    and tools_response.status_code == 200
+                    and isinstance(tools_result, dict)
+                    and isinstance(tools_result.get("tools"), list)
+                )
+                if tools_listed:
+                    findings.extend(self._check_auth(tools_response))
+                    findings.extend(
+                        await self._check_header_consistency(client, target)
+                    )
+                else:
+                    findings.append(
+                        self.create_security_finding(
+                            severity="UNKNOWN",
+                            summary="MCP 2.0 discovery succeeded, but tools/list "
+                            "could not be assessed; header and tool access "
+                            "checks are incomplete.",
+                            threat_category="Protocol Probe Incomplete",
+                            details={
+                                "check_id": "MCPS-012",
+                                "target": target,
+                                "status_code": (
+                                    tools_response.status_code
+                                    if tools_response is not None
+                                    else None
+                                ),
+                            },
+                        )
+                    )
+                findings.extend(await self._check_fail_open(client, target))
+                return findings
+
+            # Legacy checks use the initialize-era wire format. Only run
+            # probes that can establish their result without invoking tools.
             init_response = await self._rpc(
                 client,
                 target,
@@ -117,34 +168,33 @@ class ProtocolAnalyzer(BaseAnalyzer):
                     headers=session_headers,
                 )
 
-            # Gather data after the MCP lifecycle handshake. Stateful HTTP servers
-            # can reject non-initialize requests that do not include the session ID.
+            # Stateful HTTP servers reject requests after initialize that
+            # do not carry the session ID.
             tools_response = await self._rpc(
-                client,
-                target,
-                "tools/list",
-                params={},
-                headers=session_headers,
+                client, target, "tools/list", headers=session_headers
             )
+            if (
+                discover_response is None
+                and tools_response is None
+                and init_response is None
+            ):
+                raise ConnectionError(f"Could not connect to MCP server at {target}")
 
-            # Run all checks
             findings.extend(self._check_transport(target))
             findings.extend(self._check_auth(tools_response))
-            findings.extend(self._check_signing(tools_response, init_response))
-            findings.extend(await self._check_replay(client, target, session_headers))
-            findings.extend(self._check_tool_integrity(tools_response))
-            # Tool description scanning handled by existing analyzers (LLM, YARA)
-            findings.extend(
-                await self._check_spoofed_identity(client, target, session_headers)
-            )
             findings.extend(
                 await self._check_fail_open(client, target, session_headers)
             )
-            findings.extend(
-                await self._check_rate_limiting(client, target, session_headers)
-            )
 
         return findings
+
+    def _supports_modern_protocol(self, response: Optional[httpx.Response]) -> bool:
+        body = self._parse_body(response)
+        if not isinstance(body, dict):
+            return False
+        result = body.get("result")
+        versions = result.get("supportedVersions") if isinstance(result, dict) else None
+        return isinstance(versions, list) and "2026-07-28" in versions
 
     # ── JSON-RPC helper ─────────────────────────────────────────
 
@@ -154,6 +204,9 @@ class ProtocolAnalyzer(BaseAnalyzer):
         url: str,
         method: str,
         params: Optional[Dict] = None,
+        *,
+        modern: bool = False,
+        method_header: Optional[str] = None,
         request_id: Optional[Any] = 1,
         headers: Optional[Dict[str, str]] = None,
     ) -> Optional[httpx.Response]:
@@ -164,26 +217,45 @@ class ProtocolAnalyzer(BaseAnalyzer):
             url: The server URL.
             method: The JSON-RPC method name.
             params: Optional parameters.
-            request_id: Optional request ID. Omit for notifications.
-            headers: Optional additional HTTP headers.
+            request_id: Request ID. ``None`` sends a notification.
+            headers: Additional HTTP headers, such as MCP session headers.
 
         Returns:
             The HTTP response, or None on error.
         """
-        payload = {
+        payload: Dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": method,
         }
         if request_id is not None:
             payload["id"] = request_id
-        if params is not None:
-            payload["params"] = params
+        request_params = dict(params or {})
+        headers = self._json_rpc_headers(headers)
+        if modern:
+            request_params["_meta"] = {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "mcp-scanner-protocol",
+                    "version": "1.0",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
+            headers["MCP-Protocol-Version"] = "2026-07-28"
+            if method_header != "":
+                headers["Mcp-Method"] = (
+                    method if method_header is None else method_header
+                )
+            name = request_params.get("name") or request_params.get("uri")
+            if isinstance(name, str):
+                headers["Mcp-Name"] = name
+        if request_params:
+            payload["params"] = request_params
 
         try:
             resp = await client.post(
                 url,
                 json=payload,
-                headers=self._json_rpc_headers(headers),
+                headers=headers,
             )
             return resp
         except Exception as e:
@@ -205,7 +277,7 @@ class ProtocolAnalyzer(BaseAnalyzer):
     def _mcp_session_headers(
         self, protocol_version: Optional[str], session_id: Optional[str]
     ) -> Dict[str, str]:
-        """Build MCP lifecycle headers for post-initialize HTTP requests."""
+        """Build MCP lifecycle headers for requests after initialize."""
         headers = {}
         if protocol_version:
             headers[self.PROTOCOL_VERSION_HEADER] = protocol_version
@@ -214,29 +286,65 @@ class ProtocolAnalyzer(BaseAnalyzer):
         return headers
 
     def _get_protocol_version(self, resp: Optional[httpx.Response]) -> str:
-        """Return the negotiated protocol version from initialize."""
+        """Negotiated handshake version from initialize, or the requested one."""
         body = self._parse_body(resp)
-        if body and isinstance(body, dict):
-            result = body.get("result", {})
-            if isinstance(result, dict):
-                protocol_version = result.get("protocolVersion")
-                if isinstance(protocol_version, str) and protocol_version:
-                    return protocol_version
+        result = body.get("result") if isinstance(body, dict) else None
+        version = result.get("protocolVersion") if isinstance(result, dict) else None
+        if version in HANDSHAKE_PROTOCOL_VERSIONS:
+            return version
         return self.DEFAULT_PROTOCOL_VERSION
 
     def _get_session_id(self, resp: Optional[httpx.Response]) -> Optional[str]:
-        """Return the MCP HTTP session ID assigned during initialize."""
+        """MCP HTTP session ID assigned during initialize."""
         if resp is None:
             return None
         return resp.headers.get(self.SESSION_ID_HEADER)
 
     def _is_successful_response(self, resp: Optional[httpx.Response]) -> bool:
-        """Return True when a JSON-RPC response does not contain an error."""
+        """True when a JSON-RPC response has no HTTP or JSON-RPC error."""
         if resp is None or resp.status_code >= 400:
             return False
-
         body = self._parse_body(resp)
         return not (isinstance(body, dict) and body.get("error"))
+
+    async def _check_header_consistency(
+        self, client: httpx.AsyncClient, target: str
+    ) -> List[SecurityFinding]:
+        """Probe modern method header validation with read-only tools/list."""
+        accepted = []
+        for label, header in (("missing", ""), ("mismatched", "resources/list")):
+            response = await self._rpc(
+                client,
+                target,
+                "tools/list",
+                modern=True,
+                method_header=header,
+            )
+            body = self._parse_body(response)
+            result = body.get("result") if isinstance(body, dict) else None
+            if (
+                response is not None
+                and response.status_code == 200
+                and isinstance(result, dict)
+                and isinstance(result.get("tools"), list)
+            ):
+                accepted.append(label)
+        if not accepted:
+            return []
+        return [
+            self.create_security_finding(
+                severity="HIGH",
+                summary="Server accepted a 2026-07-28 tools/list request with a "
+                "missing or mismatched Mcp-Method header.",
+                threat_category="Protocol Header Mismatch",
+                details={
+                    "check_id": "MCPS-010",
+                    "cwe": "CWE-436",
+                    "accepted_variants": accepted,
+                    "target": target,
+                },
+            )
+        ]
 
     def _parse_body(self, resp: Optional[httpx.Response]) -> Any:
         """Parse a JSON-RPC response body, handling SSE format.
@@ -315,10 +423,10 @@ class ProtocolAnalyzer(BaseAnalyzer):
             if body and not (isinstance(body, dict) and body.get("error")):
                 return [
                     self.create_security_finding(
-                        severity="HIGH",
-                        summary="MCP server accepts unauthenticated requests. "
-                        "Any caller can invoke tools without credentials.",
-                        threat_category="Authentication Bypass",
+                        severity="MEDIUM",
+                        summary="MCP server exposes tool definitions to unauthenticated "
+                        "callers. Tool invocation permissions were not tested.",
+                        threat_category="Unauthenticated Tool Discovery",
                         details={
                             "check_id": "MCPS-002",
                             "cwe": "CWE-306",
@@ -466,14 +574,12 @@ class ProtocolAnalyzer(BaseAnalyzer):
         session_headers: Optional[Dict[str, str]] = None,
     ) -> List[SecurityFinding]:
         """Check if the server accepts spoofed agent identity headers."""
-        spoofed_headers = self._json_rpc_headers(session_headers)
-        spoofed_headers.update(
-            {
-                "X-Agent-ID": "spoofed-admin-agent",
-                "X-Agent-Role": "admin",
-                "X-Agent-Trust-Level": "4",
-            }
-        )
+        spoofed_headers = {
+            **self._json_rpc_headers(session_headers),
+            "X-Agent-ID": "spoofed-admin-agent",
+            "X-Agent-Role": "admin",
+            "X-Agent-Trust-Level": "4",
+        }
         payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
 
         try:
@@ -510,12 +616,6 @@ class ProtocolAnalyzer(BaseAnalyzer):
     ) -> List[SecurityFinding]:
         """Check if the server fails open on invalid input."""
         invalid_payloads = [
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {"name": "../../../../etc/passwd", "arguments": {}},
-            },
             {"not_jsonrpc": True},
             "this is not json",
         ]

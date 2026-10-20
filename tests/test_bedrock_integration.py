@@ -215,19 +215,20 @@ class TestBedrockErrorHandling:
             llm_provider_api_key="bedrock-api-key-invalid",
             llm_model="bedrock/anthropic.claude-sonnet-4-5-20250929-v2:0",
             aws_region_name="us-east-1",
-            llm_max_retries=2,  # Reduce retries for faster test
+            llm_max_retries=2,
         )
 
         analyzer = LLMAnalyzer(config)
         content = "Test content"
         context = {"tool_name": "test_tool"}
 
-        # Should return empty list on error after retries
+        # Auth errors are final — no retry amplification; surface infra finding.
         findings = await analyzer.analyze(content, context)
-        assert len(findings) == 0
+        assert len(findings) == 1
+        assert findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+        assert findings[0].details["error_kind"] == "final"
 
-        # Verify retries occurred (initial + max_retries)
-        assert mock_completion.call_count == 3
+        assert mock_completion.call_count == 1
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
@@ -248,7 +249,9 @@ class TestBedrockErrorHandling:
         context = {"tool_name": "test_tool"}
 
         findings = await analyzer.analyze(content, context)
-        assert len(findings) == 0
+        assert len(findings) == 1
+        assert findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+        assert findings[0].details["error_kind"] == "transient"
 
         # Verify retries with exponential backoff
         assert mock_completion.call_count == 3

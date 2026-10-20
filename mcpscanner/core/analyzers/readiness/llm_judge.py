@@ -36,6 +36,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ....config.constants import MCPScannerConstants
+from ....utils.analyzer_errors import build_infrastructure_error_finding
 from ....utils.logging_config import get_logger
 from ..base import SecurityFinding
 
@@ -176,7 +177,9 @@ class ReadinessLLMJudge:
             self._prompt_template = prompt_path.read_text(encoding="utf-8")
             return self._prompt_template
         except Exception as e:
-            self.logger.error(f"Failed to load readiness judge prompt: {e}")
+            self.logger.error(
+                "Failed to load readiness judge prompt: %s", type(e).__name__
+            )
             # Return a minimal fallback prompt
             return (
                 "Analyze this MCP tool definition for production readiness issues. "
@@ -217,9 +220,15 @@ class ReadinessLLMJudge:
             result = await self._run_evaluation(tool_json)
             findings = self._results_to_findings(result, tool_name)
         except Exception as e:
-            self.logger.error(f"LLM readiness evaluation failed for {tool_name}: {e}")
-            # Don't add error findings - just log and return empty
-            # This prevents polluting results when LLM is temporarily unavailable
+            self.logger.error("LLM readiness evaluation failed: %s", type(e).__name__)
+            return [
+                build_infrastructure_error_finding(
+                    analyzer_name="READINESS-LLM",
+                    subject=tool_name,
+                    error=e,
+                    model=self.model,
+                )
+            ]
 
         return findings
 
@@ -253,7 +262,11 @@ class ReadinessLLMJudge:
         if self.api_base:
             request_params["api_base"] = self.api_base
 
-        response = await acompletion(**request_params)
+        from mcpscanner.utils.llm_request_params import apply_model_constraints
+
+        apply_model_constraints(self.model, request_params)
+
+        response = await acompletion(**request_params, drop_params=True)
 
         # Parse response
         content = response.choices[0].message.content
@@ -270,7 +283,9 @@ class ReadinessLLMJudge:
 
             return json.loads(content.strip())
         except json.JSONDecodeError as e:
-            self.logger.warning(f"Failed to parse LLM response as JSON: {e}")
+            self.logger.warning(
+                "Failed to parse LLM response as JSON: %s", type(e).__name__
+            )
             return {"error": "Failed to parse LLM response", "raw": content}
 
     def _results_to_findings(
@@ -380,4 +395,3 @@ class ReadinessLLMJudge:
             threat_category=threat_category,
             details=details,
         )
-

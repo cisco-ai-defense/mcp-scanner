@@ -24,13 +24,15 @@ Kept here for compatibility and full-featured cross-file analysis.
 """
 
 import ast
-import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
 from ..semantic.type_analyzer import TypeAnalyzer
+from ....utils.log_format import sanitize_log_value, truncate
+from ....utils.logging_config import get_logger
 
 
 class CallGraph:
@@ -104,7 +106,9 @@ class CrossFileAnalyzer:
         self.analyzers: Dict[Path, BaseParser] = {}
         self.import_map: Dict[Path, List[Path]] = {}  # file -> imported files
         self.type_analyzers: Dict[Path, TypeAnalyzer] = {}  # file -> type analyzer
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
+        self._skipped_files: int = 0
+        self._added_files: int = 0
 
     def add_file(self, file_path: Path, source_code: str) -> None:
         """Add a file to the analysis.
@@ -128,8 +132,16 @@ class CrossFileAnalyzer:
 
             # Extract imports
             self._extract_imports(file_path, analyzer)
+            self._added_files += 1
         except Exception as e:
-            self.logger.debug(f"Skipping unparseable file {file_path}: {e}")
+            self._skipped_files += 1
+            self.logger.debug(
+                "static_interproc python skipped_unparseable file=%s "
+                "error_type=%s error=%s",
+                sanitize_log_value(file_path),
+                type(e).__name__,
+                truncate(e, 200),
+            )
 
     def _extract_python_functions(
         self, file_path: Path, analyzer: PythonParser
@@ -261,10 +273,25 @@ class CrossFileAnalyzer:
         Returns:
             Call graph
         """
+        build_start = time.perf_counter()
         # Extract function calls from each file
         for file_path, analyzer in self.analyzers.items():
             self._extract_python_calls(file_path, analyzer)
 
+        functions = len(self.call_graph.functions)
+        calls = len(self.call_graph.calls)
+        entry_points = len(self.call_graph.get_mcp_entry_points())
+        self.logger.info(
+            "static_interproc python_legacy call_graph_built files=%d added=%d "
+            "skipped=%d functions=%d calls=%d mcp_entry_points=%d duration_ms=%d",
+            len(self.analyzers),
+            self._added_files,
+            self._skipped_files,
+            functions,
+            calls,
+            entry_points,
+            int((time.perf_counter() - build_start) * 1000),
+        )
         return self.call_graph
 
     def _extract_python_calls(self, file_path: Path, analyzer: PythonParser) -> None:

@@ -373,9 +373,9 @@ class OpaProvider:
                 "is_error": True,
             })
         except json.JSONDecodeError as e:
-            self.logger.warning(f"Failed to parse OPA output: {e}")
+            self.logger.warning("Failed to parse OPA output: %s", type(e).__name__)
         except Exception as e:
-            self.logger.debug(f"OPA evaluation failed: {e}")
+            self.logger.debug("OPA evaluation failed: %s", type(e).__name__)
 
         return violations
 
@@ -419,4 +419,3 @@ class OpaProvider:
             "severity": severity,
             "rule_id": f"OPA-{policy}",
         }
-

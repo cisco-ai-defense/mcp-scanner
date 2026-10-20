@@ -7,11 +7,11 @@
 [![Cisco AI Defense](https://img.shields.io/badge/Cisco-AI%20Defense-049fd9?logo=cisco&logoColor=white)](https://www.cisco.com/site/us/en/products/security/ai-defense/index.html)
 [![AI Security and Safety Framework](https://img.shields.io/badge/AI%20Security-Framework-orange)](https://learn-cloudsecurity.cisco.com/ai-security-framework)
 
-A Python tool for scanning MCP (Model Context Protocol) servers and tools for potential security findings. The MCP Scanner combines Cisco AI Defense inspect API, YARA rules and LLM-as-a-judge to detect malicious MCP tools.
+A Python tool for scanning MCP (Model Context Protocol) servers and tools for potential security findings. The MCP Scanner combines Cisco AI Defense inspect API, YARA rules and LLM-based analysis to detect malicious MCP tools.
 
 ## Overview
 
-The MCP Scanner provides a comprehensive solution for scanning MCP servers and tools for security findings. It leverages three powerful scanning engines (Yara, LLM-as-judge, Cisco AI Defense) that can be used together or independently.
+The MCP Scanner provides a comprehensive solution for scanning MCP servers and tools for security findings. It leverages three powerful scanning engines (Yara, LLM-based analysis, Cisco AI Defense) that can be used together or independently.
 
 The SDK is designed to be easy to use while providing powerful scanning capabilities, flexible authentication options, and customization.
 
@@ -27,12 +27,14 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 - **Comprehensive Scanning**: Scan MCP tools, prompts, resources, and server instructions for security findings
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for finding threats.
 - **VirusTotal Binary Scanning**: Automatically detect malware in binary files (images, PDFs, executables, archives) bundled with MCP servers using VirusTotal hash lookups.
+- **PyPI Package Scanning**: Download and scan PyPI packages inside a Docker sandbox with behavioral analysis.
 - **Behavioural Code Scanning**: Scan Source code of MCP servers for detecting threats.
 - **Static/Offline Scanning**: Scan pre-generated JSON files without live server connections - perfect for CI/CD pipelines and air-gapped environments
 - **Explicit Authentication Control**: Fine-grained control over authentication with explicit Auth parameters.
 - **OAuth Support**: Full OAuth authentication support for both SSE and streamable HTTP connections.
 - **Custom Endpoints**: Configure the API endpoint to support any Cisco AI Defense environments.
 - **MCP Server Integration**: Connect directly to MCP servers to scan tools, prompts, and resources with flexible authentication.
+- **MCP 2.0 Protocol Support**: Negotiates modern protocol (`2026-07-28` via `server/discover`) with automatic fallback to legacy `initialize()` for older servers — remote HTTP/SSE and stdio.
 - **Customizable YARA Rules**: Add your own YARA rules to detect specific patterns.
 - **Comprehensive Reporting**: Detailed reports on detected security findings.
 
@@ -43,6 +45,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - Python 3.11+
 - uv (Python package manager)
+- **MCP Python SDK** (`mcp>=2.0.0`, bundled with this package). Live scans negotiate `2026-07-28` when the server supports it and fall back to legacy handshake versions automatically.
 - A valid Cisco AI Defense API Key (optional)
 - LLM Provider API Key (optional)
 - VirusTotal API Key (optional, for binary file malware scanning)
@@ -67,6 +70,36 @@ git clone https://github.com/cisco-ai-defense/mcp-scanner
 cd mcp-scanner
 uv sync --python 3.13 
 ```
+
+### MCP protocol compatibility
+
+Live scans (remote HTTP/SSE and stdio) negotiate the MCP protocol version automatically:
+
+1. **Modern (mcp SDK ≥ 2.0):** The scanner calls `server/discover` first. Servers built with the current Python SDK (`MCPServer`) typically respond with protocol version **`2026-07-28`**.
+2. **Legacy fallback:** If `discover` is unavailable or the server only supports handshake-era versions, the scanner falls back to **`initialize()`** (for example `2024-11-05`, `2025-06-18`, `2025-11-25`).
+3. **Backward compatible:** Existing stdio and remote servers that predate mcp 2.0 continue to work without changes on the scanner side.
+
+The Python MCP 1.x stdio server reports an unknown `server/discover` request as
+a generic `-32602` invalid-parameters error. The scanner retries `initialize()`
+for that specific stdio error shape and logs a warning. Other `-32602` errors
+surface to the caller so malformed modern discovery is not silently downgraded.
+
+Example servers under `examples/` and eval fixtures use **`MCPServer`** from `mcp.server.mcpserver` (mcp 2.0). The static/behavioral analyzers still recognize **legacy `FastMCP` patterns** in third-party source code for capability extraction.
+
+Integration tests: `uv run pytest tests/test_stdio_modern_integration.py tests/test_scanner.py -k negotiate`
+
+For an unauthenticated HTTP endpoint, run read-only wire-protocol probes with
+`mcp-scanner protocol --server-url https://your-server.example/mcp`. This checks
+modern request envelope headers on servers advertising `2026-07-28` and runs
+safe legacy checks for older endpoints. It does not call tools or prove
+that unauthenticated callers can invoke them. A protected endpoint may require
+separate authorized testing to assess its behavior after authentication.
+
+The opt-in `schema` analyzer classifies nested `$ref` values in advertised
+tool input and output schemas. Use `--analyzers schema` to run this check,
+including with the `static --tools` mode. See
+[MCP 2.0 threat coverage](docs/mcp-2-threat-coverage.md)
+for the scan-time and runtime boundary.
 
 ### Install as a dependency in other projects
 
@@ -283,9 +316,11 @@ asyncio.run(main())
 - **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`, `--header`.
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
-- **instructions**: scan server instructions from InitializeResult. Requires `--server-url`; optional `--bearer-token`.
+- **instructions**: scan server instructions from the connect handshake (`DiscoverResult` on mcp 2.0, `InitializeResult` on legacy servers). Requires `--server-url`; optional `--bearer-token`.
 - **virustotal**: scan files or directories for malware using VirusTotal hash lookups. Requires a `scan_path` argument (file or directory).
-- **supplychain**: scan source code of an MCP server for Behavioural analysis. requires 'path of MCP Server source code or MCP Server source file'
+- **pypi-scan**: download and scan a PyPI package with behavioral analysis. Docker-sandboxed by default; pass `--no-docker` (or `use_docker=False` in the SDK) to run in-process — package code is never executed in either mode.
+- **npm-scan**: download and scan an npm package with full behavioral analysis on JavaScript / TypeScript sources. Docker-sandboxed by default; supports `--no-docker` for SDK / CI environments.
+- **supplychain**: scan source code of an MCP server for Behavioural analysis. Requires path to MCP Server source code or source file.
 - **vulnerable-package**: scan Python dependencies for known vulnerabilities using pip-audit. Requires a path to a requirements file or project directory.
 - **static**: scan pre-generated MCP JSON files offline (CI/CD mode). Supports `--tools`, `--prompts`, `--resources`, optional `--mime-types`.
 
@@ -405,7 +440,7 @@ mcp-scanner --analyzers llm resources --server-url http://127.0.0.1:8000/mcp \
 
 #### Scan Server Instructions
 
-Server instructions provide usage guidelines, security notes, and configuration details in the MCP `InitializeResult`. Scanning instructions helps detect prompt injection, tool poisoning, and misleading guidance.
+Server instructions provide usage guidelines, security notes, and configuration details returned during MCP session setup (`DiscoverResult` on modern servers, `InitializeResult` on legacy servers). Scanning instructions helps detect prompt injection, tool poisoning, and misleading guidance.
 
 ```bash
 # Scan server instructions (defaults to API, YARA, and LLM analyzers)
@@ -478,6 +513,41 @@ mcp-scanner behavioral /path/to/mcp_server.py --output results.json --format raw
 
 
 See [Behavioral Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md) for complete technical details.
+
+#### PyPI Package Scanning
+
+Download and scan PyPI packages with behavioral analysis to detect hidden behaviors like data exfiltration, backdoors, and prompt injection. Docker-sandboxed by default; pass `--no-docker` for SDK / CI environments — package code is never executed in either mode.
+
+```bash
+# Scan a package (latest version)
+mcp-scanner pypi-scan flask
+
+# Scan a specific version
+mcp-scanner pypi-scan requests --version 2.31.0
+
+# Save results
+mcp-scanner pypi-scan fastapi -o results.json --format detailed
+
+# Force rebuild the Docker image
+mcp-scanner pypi-scan flask --rebuild-image
+```
+
+See [PyPI Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/pypi-scanning.md) for complete details.
+
+#### Scan an npm Package
+
+```bash
+# Scan latest version (Docker-sandboxed)
+mcp-scanner npm-scan @modelcontextprotocol/server-everything
+
+# Specific version
+mcp-scanner npm-scan my-mcp-server --version 1.2.3
+
+# No-Docker SDK / CI runner mode
+mcp-scanner npm-scan my-mcp-server --no-docker
+```
+
+See [npm Scanning Documentation](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/npm-scanning.md) for complete details.
 
 #### Vulnerable Packages Scanning
 
@@ -688,7 +758,7 @@ Once running, the API server provides endpoints for:
 - **`/scan-all-prompts`** - Scan all prompts on an MCP server
 - **`/scan-resource`** - Scan a specific resource on an MCP server
 - **`/scan-all-resources`** - Scan all resources on an MCP server
-- **`/scan-instructions`** - Scan server instructions from InitializeResult
+- **`/scan-instructions`** - Scan server instructions from the MCP connect handshake
 - **`/health`** - Health check endpoint
 
 Documentation is available in [docs/api-reference.md](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/api-reference.md) or as interactive documentation at `http://localhost:8000/docs` when the server is running.
@@ -761,6 +831,8 @@ For detailed documentation, see the [docs/](https://github.com/cisco-ai-defense/
 - **[Architecture](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/architecture.md)** - System architecture and components
 - **[Behavioral Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/behavioral-scanning.md)** - Advanced static analysis with LLM-powered alignment checking
 - **[VirusTotal Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/virustotal-scanning.md)** - File and directory malware scanning with VirusTotal
+- **[PyPI Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/pypi-scanning.md)** - PyPI package scanning (Docker or local SDK mode)
+- **[npm Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/npm-scanning.md)** - npm package scanning with full JS/TS behavioral analysis (Docker or local SDK mode)
 - **[Vulnerable Package Scanning](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/vulnerable-package-scanning.md)** - Python dependency vulnerability scanning with pip-audit
 - **[LLM Providers](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/llm-providers.md)** - LLM configuration for all providers
 - **[MCP Threats Taxonomy](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/docs/mcp-threats-taxonomy.md)** - Complete AITech threat taxonomy
