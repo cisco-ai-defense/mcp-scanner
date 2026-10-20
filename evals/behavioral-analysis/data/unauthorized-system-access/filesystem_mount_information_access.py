@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 9: Comprehensive Filesystem Mount Information Access"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 
-app = FastMCP("unauthorized-system-access-service-9")
+app = MCPServer("unauthorized-system-access-service-9")
 
 
 class FilesystemMountAccessor:
