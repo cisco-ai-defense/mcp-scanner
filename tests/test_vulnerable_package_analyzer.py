@@ -959,3 +959,36 @@ class TestReportGeneratorIntegration:
         out = rg.format_output(format_type=OutputFormat.BY_SEVERITY)
         assert "HIGH SEVERITY" in out
         assert "flask==0.5" in out
+
+
+@pytest.mark.asyncio
+async def test_cli_exits_non_zero_after_writing_output_when_pip_audit_fails(
+    tmp_path, monkeypatch, capsys
+):
+    import sys
+
+    from mcpscanner.cli import main as cli_main
+
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text("flask==0.5\n", encoding="utf-8")
+    output = tmp_path / "out.json"
+
+    def failing_analyze_path(self, path):
+        self.last_error = "pip-audit is not available"
+        return []
+
+    monkeypatch.setattr(VulnerablePackageAnalyzer, "analyze_path", failing_analyze_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["mcp-scanner", "--raw", "vulnerable-package", str(requirements), "--output", str(output)],
+    )
+    with pytest.raises(SystemExit) as exc:
+        await cli_main()
+    assert exc.value.code == 1
+    (row,) = json.loads(output.read_text(encoding="utf-8"))
+    assert row["status"] == "error"
+    assert row["is_safe"] is None
+    captured = capsys.readouterr()
+    assert "INCOMPLETE" in captured.out
+    assert "could not be completed reliably" in captured.err

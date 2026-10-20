@@ -1052,6 +1052,27 @@ def test_every_published_build_dir_is_scanned(tmp_path: Path):
     assert set(roots) == {tmp_path / "dist", tmp_path / "build"}
 
 
+def test_entry_points_outside_build_dirs_are_scanned_too(tmp_path: Path):
+    """A dist bundle does not hide bin/, lib/ or a root entry file."""
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.js").write_text("export {}")
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "cli.js").write_text("require('child_process')")
+    (tmp_path / "index.js").write_text("module.exports = {}")
+    (tmp_path / "package.json").write_text(
+        json.dumps(
+            {
+                "main": "index.js",
+                "bin": {"pkg": "./bin/cli.js"},
+                "exports": {"import": "./dist/index.js"},
+            }
+        )
+    )
+    roots = NPMPackageScanner._published_scan_roots(tmp_path)
+    assert roots == [tmp_path / "dist", tmp_path]
+    assert sum(NPMPackageScanner._count_js_files(root) for root in roots) == 3
+
+
 def test_combined_scan_status_never_hides_a_degraded_root():
     from mcpscanner.core.npm_scanner import combined_scan_status
 

@@ -542,8 +542,9 @@ class NPMPackageScanner:
         would report the package safe without reading it. When
         ``package.json`` points its entry points into those directories,
         every one of them is scanned (for example ``import`` into ``dist``
-        and ``require`` into ``build``), even if a stray config file such as
-        ``.eslintrc.js`` sits at the package root.
+        and ``require`` into ``build``). The package root is scanned as well
+        whenever it holds JS outside the build directories, so ``bin/``,
+        ``lib/``, root entry files and install scripts are never dropped.
         """
         build_dirs = ("dist", "build", "out")
         roots: List[Path] = []
@@ -553,10 +554,10 @@ class NPMPackageScanner:
             candidate = source_root / name
             if candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0:
                 roots.append(candidate)
+        if NPMPackageScanner._count_js_files(source_root) > 0:
+            roots.append(source_root)
         if roots:
             return roots
-        if NPMPackageScanner._count_js_files(source_root) > 0:
-            return [source_root]
         for name in build_dirs:
             candidate = source_root / name
             if candidate.is_dir() and NPMPackageScanner._count_js_files(candidate) > 0:

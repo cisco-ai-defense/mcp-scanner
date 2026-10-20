@@ -2880,6 +2880,15 @@ async def main():
             results_dict = {"server_url": server_label, "scan_results": results}
             display_results(results_dict, detailed=args.detailed)
 
+    if getattr(args, "cmd", None) == "vulnerable-package" and any(
+        row.get("status") == "error" for row in results
+    ):
+        print(
+            "Scan Error: vulnerable-package scan could not be completed reliably",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 
 def cli_entry_point():
     """Entry point for the mcp-scanner CLI command."""

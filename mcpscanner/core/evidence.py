@@ -87,12 +87,14 @@ _LINE_CONTENT_TYPES = frozenset({"description", "instructions"})
 _CONTENT_LOCATORS = {
     "description": "/description",
     "parameters": "/inputSchema",
-    "prompt_content": "/messages/0/content",
-    "prompt": "/messages/0/content",
+    # prompt_content, prompt and resource join several fields into one
+    # string, so a hit cannot be tied to a single field.
+    "prompt_content": "",
+    "prompt": "",
     "arguments": "/arguments",
     "instructions": "/instructions",
     "resource_content": "/content",
-    "resource": "/content",
+    "resource": "",
     "text": "/description",
     "tool_definition": "",
     "comprehensive": "",

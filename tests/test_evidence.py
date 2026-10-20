@@ -756,3 +756,19 @@ def test_relative_file_path_is_resolved_against_the_scan_root(tmp_path, monkeypa
 @pytest.mark.parametrize("location_type", [["mcp_field"], {"mcp_field": 1}, None, 3])
 def test_non_string_location_type_is_rejected_without_raising(location_type):
     assert source_or_none(location_type, "/description", "x", None, []) is None
+
+
+@pytest.mark.parametrize(
+    ("content_type", "locator"),
+    [
+        ("prompt_content", ""),
+        ("prompt", ""),
+        ("resource", ""),
+        ("resource_content", "/content"),
+        ("description", "/description"),
+    ],
+)
+def test_combined_content_types_cite_the_document_root(content_type, locator):
+    from mcpscanner.core.evidence import locator_for_content_type
+
+    assert locator_for_content_type(content_type) == locator
