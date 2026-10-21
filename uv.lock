@@ -3,7 +3,8 @@ revision = 3
 requires-python = ">=3.11.4"
 resolution-markers = [
     "python_full_version >= '3.14'",
-    "python_full_version < '3.14'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
+    "(python_full_version < '3.14' and sys_platform != 'emscripten') or (python_full_version < '3.12' and sys_platform == 'emscripten')",
 ]
 
 [[package]]
@@ -455,7 +456,7 @@ wheels = [
 
 [[package]]
 name = "cisco-ai-mcp-scanner"
-version = "4.8.7"
+version = "4.8.8"
 source = { editable = "." }
 dependencies = [
     { name = "expandvars" },
@@ -544,55 +545,55 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "expandvars", specifier = ">=0.12.0" },
-    { name = "fastapi", specifier = ">=0.125.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "litellm", specifier = "==1.93.2" },
-    { name = "mcp", extras = ["cli"], specifier = ">=2.0.0" },
-    { name = "pip-audit", specifier = ">=2.7.0" },
-    { name = "puremagic", specifier = ">=1.28" },
-    { name = "pydantic", specifier = ">=2.6.0" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "expandvars", specifier = ">=0.12.0,<2" },
+    { name = "fastapi", specifier = ">=0.125.0,<1" },
+    { name = "httpx", specifier = ">=0.28.1,<1" },
+    { name = "litellm", specifier = ">=1.91.5,!=1.92.0,!=1.92.1,!=1.93.0,!=1.93.1,!=1.94.0,!=1.94.1,!=1.94.2,!=1.95.0,!=1.96.0,!=1.107.0,<2" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.30.0,!=2.0.*,!=2.1.*,<3" },
+    { name = "pip-audit", specifier = ">=2.7.0,<3" },
+    { name = "puremagic", specifier = ">=1.28,<3" },
+    { name = "pydantic", specifier = ">=2.6.0,<3" },
+    { name = "python-dotenv", specifier = ">=1.0.0,<2" },
     { name = "tree-sitter", specifier = ">=0.23,<0.26" },
     { name = "tree-sitter", marker = "extra == 'all-languages'", specifier = ">=0.23,<0.26" },
-    { name = "tree-sitter", marker = "extra == 'csharp'", specifier = ">=0.21.0" },
-    { name = "tree-sitter", marker = "extra == 'go'", specifier = ">=0.21.0" },
-    { name = "tree-sitter", marker = "extra == 'java'", specifier = ">=0.21.0" },
+    { name = "tree-sitter", marker = "extra == 'csharp'", specifier = ">=0.21.0,<0.26" },
+    { name = "tree-sitter", marker = "extra == 'go'", specifier = ">=0.21.0,<0.26" },
+    { name = "tree-sitter", marker = "extra == 'java'", specifier = ">=0.21.0,<0.26" },
     { name = "tree-sitter", marker = "extra == 'js'", specifier = ">=0.23,<0.26" },
-    { name = "tree-sitter", marker = "extra == 'kotlin'", specifier = ">=0.21.0" },
-    { name = "tree-sitter", marker = "extra == 'php'", specifier = ">=0.21.0" },
-    { name = "tree-sitter", marker = "extra == 'ruby'", specifier = ">=0.21.0" },
-    { name = "tree-sitter", marker = "extra == 'rust'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-c-sharp", specifier = ">=0.21.0" },
-    { name = "tree-sitter-c-sharp", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-c-sharp", marker = "extra == 'csharp'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-go", specifier = ">=0.21.0" },
-    { name = "tree-sitter-go", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-go", marker = "extra == 'go'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-java", specifier = ">=0.21.0" },
-    { name = "tree-sitter-java", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-java", marker = "extra == 'java'", specifier = ">=0.21.0" },
+    { name = "tree-sitter", marker = "extra == 'kotlin'", specifier = ">=0.21.0,<0.26" },
+    { name = "tree-sitter", marker = "extra == 'php'", specifier = ">=0.21.0,<0.26" },
+    { name = "tree-sitter", marker = "extra == 'ruby'", specifier = ">=0.21.0,<0.26" },
+    { name = "tree-sitter", marker = "extra == 'rust'", specifier = ">=0.21.0,<0.26" },
+    { name = "tree-sitter-c-sharp", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-c-sharp", marker = "extra == 'all-languages'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-c-sharp", marker = "extra == 'csharp'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-go", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-go", marker = "extra == 'all-languages'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-go", marker = "extra == 'go'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-java", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-java", marker = "extra == 'all-languages'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-java", marker = "extra == 'java'", specifier = ">=0.21.0,<1" },
     { name = "tree-sitter-javascript", specifier = ">=0.23,<0.26" },
     { name = "tree-sitter-javascript", marker = "extra == 'all-languages'", specifier = ">=0.23,<0.26" },
     { name = "tree-sitter-javascript", marker = "extra == 'js'", specifier = ">=0.23,<0.26" },
-    { name = "tree-sitter-kotlin", specifier = ">=0.21.0" },
-    { name = "tree-sitter-kotlin", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-kotlin", marker = "extra == 'kotlin'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-php", specifier = ">=0.21.0" },
-    { name = "tree-sitter-php", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-php", marker = "extra == 'php'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-python", specifier = ">=0.21.0" },
-    { name = "tree-sitter-ruby", specifier = ">=0.21.0" },
-    { name = "tree-sitter-ruby", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-ruby", marker = "extra == 'ruby'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-rust", specifier = ">=0.21.0" },
-    { name = "tree-sitter-rust", marker = "extra == 'all-languages'", specifier = ">=0.21.0" },
-    { name = "tree-sitter-rust", marker = "extra == 'rust'", specifier = ">=0.21.0" },
+    { name = "tree-sitter-kotlin", specifier = ">=0.21.0,<2" },
+    { name = "tree-sitter-kotlin", marker = "extra == 'all-languages'", specifier = ">=0.21.0,<2" },
+    { name = "tree-sitter-kotlin", marker = "extra == 'kotlin'", specifier = ">=0.21.0,<2" },
+    { name = "tree-sitter-php", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-php", marker = "extra == 'all-languages'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-php", marker = "extra == 'php'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-python", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-ruby", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-ruby", marker = "extra == 'all-languages'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-ruby", marker = "extra == 'ruby'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-rust", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-rust", marker = "extra == 'all-languages'", specifier = ">=0.21.0,<1" },
+    { name = "tree-sitter-rust", marker = "extra == 'rust'", specifier = ">=0.21.0,<1" },
     { name = "tree-sitter-typescript", specifier = ">=0.23,<0.26" },
     { name = "tree-sitter-typescript", marker = "extra == 'all-languages'", specifier = ">=0.23,<0.26" },
     { name = "tree-sitter-typescript", marker = "extra == 'js'", specifier = ">=0.23,<0.26" },
-    { name = "uvicorn", specifier = ">=0.29.0" },
-    { name = "yara-python", specifier = ">=4.5.4" },
+    { name = "uvicorn", specifier = ">=0.29.0,<1" },
+    { name = "yara-python", specifier = ">=4.5.4,<5" },
 ]
 provides-extras = ["js", "go", "java", "kotlin", "csharp", "ruby", "rust", "php", "all-languages"]
 
@@ -1088,15 +1089,15 @@ wheels = [
 
 [[package]]
 name = "httpcore2"
-version = "2.9.1"
+version = "2.16.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "h11" },
     { name = "truststore" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/39/a8/20ed1ed79cbc2ecdf5301c0968ab7c85547212e2a7bd126ddd2d986e206e/httpcore2-2.9.1.tar.gz", hash = "sha256:4d8acbf8b306f48c9d6046591fd5ba4037d1b1b1000d140fc2c3eab1e9a0c0e2", size = 67089, upload-time = "2026-07-24T09:21:03.867Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c0/61/afa9d6b7452f9eca73f73d45324eb0bb52f098fd5e6049bf6b8263be9b4e/httpcore2-2.16.0.tar.gz", hash = "sha256:c72cd0413563b17e1cd8354677dff887466f8ec2551679759e93126534428643", size = 69886, upload-time = "2026-10-21T07:09:45.31Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9f/fb/46c52b781975c335a2bcf1072c7bbc007cbdc8d674217f5ee1daba2c848b/httpcore2-2.9.1-py3-none-any.whl", hash = "sha256:6182472379e855fe4221246a2bb7ecede403bc61c6798062ae1787d051ccde26", size = 82809, upload-time = "2026-07-24T09:21:01.178Z" },
+    { url = "https://files.pythonhosted.org/packages/af/c2/ce417c397afa5181f0e3c6ff01a4d01639414e1adef08730d97571297151/httpcore2-2.16.0-py3-none-any.whl", hash = "sha256:5c4358319f2602d984ad93182c9fee5160f22e9da7babdda870a5e7c4e2dc34f", size = 85070, upload-time = "2026-10-21T07:09:42.802Z" },
 ]
 
 [[package]]
@@ -1116,18 +1117,28 @@ wheels = [
 
 [[package]]
 name = "httpx2"
-version = "2.9.1"
+version = "2.16.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio" },
-    { name = "httpcore2" },
+    { name = "anyio", marker = "sys_platform != 'emscripten'" },
+    { name = "httpcore2", marker = "sys_platform != 'emscripten'" },
+    { name = "httpx2-jsfetch", marker = "python_full_version >= '3.12' and sys_platform == 'emscripten'" },
     { name = "idna" },
-    { name = "truststore" },
+    { name = "truststore", marker = "sys_platform != 'emscripten'" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/21/14/38128fbafd7e0ed41d874df6c9a653d47c2d111cfe59e2b4ac95161b4abd/httpx2-2.9.1.tar.gz", hash = "sha256:1932a768737e3666291582833da748cc4e563c337cf96706fccc04fa6e58764a", size = 95458, upload-time = "2026-07-24T09:21:04.972Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/73/5ca2cedf5e4e50423d1c258877865a6b62793633b561c58499f8aeb33b7e/httpx2-2.16.0.tar.gz", hash = "sha256:0d54c98128e8f2ff7fbbde0fca8c359e5f032edeaaaac443cdb7f31f685bcd7f", size = 103116, upload-time = "2026-10-21T07:09:46.348Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/13/b8/cfd91c4ab9134d386d48f0b6ac662ff3d4be6efdee59ee1c67ebc3c0487c/httpx2-2.9.1-py3-none-any.whl", hash = "sha256:1820fe14a9ab1107bfeff39259987429450b070ec0ff38cc87eb0d8c97fdc71a", size = 91191, upload-time = "2026-07-24T09:21:02.6Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/3d/2e4bc4fd1ef9770871669adb348d612a6e4786b303a23f9935b81c48dd60/httpx2-2.16.0-py3-none-any.whl", hash = "sha256:fd2c5d7909e8d86fe92d53020c310ca0e4e431b838c207c5754b9bbf0308d49a", size = 97880, upload-time = "2026-10-21T07:09:44.01Z" },
+]
+
+[[package]]
+name = "httpx2-jsfetch"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/c4/0e5636363151a2a1795e0a77617168b9ca438e1748ec05fc9b5687f93d64/httpx2_jsfetch-1.0.tar.gz", hash = "sha256:70a0e3eabfef7cce5ad9c629f7d01ca05e418f586646f4ddf14782e4c1454c60", size = 6872, upload-time = "2026-08-07T00:13:07.492Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/43/832f631d32e4f1211caa2ba368317739fe71f0b8530e4c9d15dc454bac2a/httpx2_jsfetch-1.0-py3-none-any.whl", hash = "sha256:cb916b707601e69a07721aabc8f3f6659be3a6893bc1ff5c6f9e02241df2da32", size = 6382, upload-time = "2026-08-07T00:13:06.567Z" },
 ]
 
 [[package]]
@@ -1545,7 +1556,7 @@ wheels = [
 
 [[package]]
 name = "mcp"
-version = "2.0.0"
+version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1563,9 +1574,9 @@ dependencies = [
     { name = "typing-inspection" },
     { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/33/32d4dff2c95bb5d897c3ef4c83649a08996b17b58f0a326d2495d4c81179/mcp-2.0.0.tar.gz", hash = "sha256:0f440e735c13ece8bb19bc62cf0b86f4313448432fbb77d35e14034f4e050728", size = 1662284, upload-time = "2026-07-28T13:45:32.346Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/8d/e0d339616f4810e9051d4aba6887afab289ab1f81875fe908b606cdfd0e3/mcp-2.3.0.tar.gz", hash = "sha256:8b147a50441cf059dc88c684e0aeed3687f0aa0f39c6cde7b90330effd2b34d8", size = 4171955, upload-time = "2026-10-02T22:06:56.091Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/72/7d7897418912c1d12e87556630dfb7bf0eac71160e9bef8b447960804ee3/mcp-2.0.0-py3-none-any.whl", hash = "sha256:1cb4c75d2d2c7b8c1d756355e5d82a39f2822cc7f13e22a2051d7ca3592349d6", size = 349980, upload-time = "2026-07-28T13:45:28.853Z" },
+    { url = "https://files.pythonhosted.org/packages/20/d7/4a2878f128df729db3ca04e71bfce26405cc2e0c9ebe19c592feeb4c61b9/mcp-2.3.0-py3-none-any.whl", hash = "sha256:dd0c44c089d16453e8ae31a3877a0054d7a2314caaa81f5e0541b9b1734b2377", size = 368664, upload-time = "2026-10-02T22:06:52.119Z" },
 ]
 
 [package.optional-dependencies]
@@ -1576,15 +1587,15 @@ cli = [
 
 [[package]]
 name = "mcp-types"
-version = "2.0.0"
+version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bb/56/9b8e1c152f61f6c6b07c4b5896c88c7d0ae90bac6ee6306f852fcc5c1eb0/mcp_types-2.0.0.tar.gz", hash = "sha256:d7d939b9285c9961ae8866ba75ef85da34d12bafe276efbf4eb6a131786d8379", size = 66632, upload-time = "2026-07-28T13:45:33.804Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9e/2d/7c251e34207f6c51000312fc8839111ac45cfe02023f90b44e7f1051dd8e/mcp_types-2.3.0.tar.gz", hash = "sha256:d1e46549edb35ee19a94940fcee6d1addd7e589ab7ea92dda83f5d84781fc362", size = 65898, upload-time = "2026-10-02T22:06:57.863Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/4c/c78d78c3d52b0ac594ad7cc8ef5972adfe070e3597a8a4c6ce0cd39196ea/mcp_types-2.0.0-py3-none-any.whl", hash = "sha256:6b2de797ca2797f568b79529e1b25948e34de511bcc0bd82fef1039a6d1b8eb0", size = 69649, upload-time = "2026-07-28T13:45:30.713Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/48/32583066b155bb5d4507e7887dc88ee23118cc4de8e2a12870c49719e2a8/mcp_types-2.3.0-py3-none-any.whl", hash = "sha256:968efdbdaedfab06adae40d378a34395f1090c5921d4be3c9cde283aaf76d91d", size = 69108, upload-time = "2026-10-02T22:06:54.099Z" },
 ]
 
 [[package]]

@@ -30,3 +30,38 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
+
+  test-lowest:
+    # Downstream consumers install this package next to their own pins, so the
+    # dependency floors in pyproject.toml (including MCP SDK 1.x) must work.
+    name: test (lowest dependency versions)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install the latest version of uv and set Python 3.11
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install the package at its lowest allowed versions
+        # Only runtime dependencies resolve to their floors; the dev group's
+        # lowest versions pull in unrelated packages that shadow tests/.
+        run: |
+          uv venv
+          uv pip install --resolution lowest-direct -e .
+          uv pip install pytest pytest-asyncio pytest-cov respx
+
+      - name: Check the MCP SDK 1.x floor is installed
+        run: |
+          .venv/bin/python - <<'EOF'
+          import importlib.metadata as m
+          for pkg in ("mcp", "litellm", "fastapi", "httpx", "pydantic"):
+              print(f"{pkg}=={m.version(pkg)}")
+          assert m.version("mcp").startswith("1."), "expected MCP SDK 1.x"
+          EOF
+
+      - name: Run tests
+        run: .venv/bin/python -m pytest
