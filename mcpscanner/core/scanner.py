@@ -934,6 +934,7 @@ class Scanner:
                     # the evidence the analyzers saw.
                     resource_description=getattr(result, "resource_description", "") or "",
                     resource_text=getattr(result, "resource_text", "") or "",
+                    is_template=getattr(result, "is_template", False),
                 )
                 enriched.meta_filtered_findings = dropped
                 return enriched
@@ -3667,6 +3668,212 @@ class Scanner:
             resource_text=error.excerpt,
         )
 
+    _MAX_TEMPLATE_PAGES = 50
+    _MAX_ANALYZED_TEMPLATES = 100
+
+    _TEMPLATE_DISCOVERY_URI = "resources/templates/list"
+
+    async def _list_resource_templates(
+        self, session, server_url: str
+    ) -> Tuple[List[Any], Optional[BaseException]]:
+        """Templates from ``resources/templates/list``, following cursors.
+
+        The second element is set when discovery was incomplete: a
+        ``CoverageLimitExceeded`` when the page cap stopped pagination, a
+        ``ValueError`` when the server repeated a cursor, or the listing
+        error. Templates collected before any of these are still returned.
+        A server without the templates capability is not an error.
+        """
+        templates: List[Any] = []
+        cursor: Optional[str] = None
+        seen_cursors: set = set()
+        try:
+            for _ in range(self._MAX_TEMPLATE_PAGES):
+                page = await session.list_resource_templates(cursor)
+                listed = getattr(page, "resourceTemplates", None)
+                if isinstance(listed, list):
+                    templates.extend(listed)
+                cursor = getattr(page, "nextCursor", None)
+                if not isinstance(cursor, str) or not cursor:
+                    return templates, None
+                if cursor in seen_cursors:
+                    logger.warning(
+                        f"Server '{server_url}' repeated a resource template "
+                        "cursor; stopping template discovery"
+                    )
+                    return templates, ValueError(
+                        "resource template cursor repeated"
+                    )
+                seen_cursors.add(cursor)
+        except McpError as e:
+            # Server error text may carry tokens or scanned content; log only the type.
+            if self._is_missing_capability_error(e):
+                logger.info(
+                    f"Server '{server_url}' does not expose resource templates"
+                )
+                return templates, None
+            logger.warning(
+                f"Could not list resource templates on '{server_url}': "
+                f"{type(e).__name__}"
+            )
+            return templates, e
+        except Exception as e:
+            logger.warning(
+                f"Could not list resource templates on '{server_url}': "
+                f"{type(e).__name__}"
+            )
+            return templates, e
+        logger.warning(
+            f"Stopped listing resource templates on '{server_url}' after "
+            f"{self._MAX_TEMPLATE_PAGES} pages"
+        )
+        return templates, CoverageLimitExceeded(
+            "resource template page limit reached",
+            observed=self._MAX_TEMPLATE_PAGES + 1,
+            limit=self._MAX_TEMPLATE_PAGES,
+        )
+
+    def _template_discovery_failure_result(
+        self, error: BaseException
+    ) -> ResourceScanResult:
+        """Failed entry marking template discovery as incomplete."""
+        name = "resource template discovery"
+        if isinstance(error, CoverageLimitExceeded):
+            result = self._resource_coverage_limit_result(
+                self._TEMPLATE_DISCOVERY_URI, name, "unknown", error
+            )
+        else:
+            finding = build_infrastructure_error_finding(
+                analyzer_name="MCP",
+                subject=name,
+                error=error,
+                context="local",
+            )
+            result = ResourceScanResult(
+                resource_uri=self._TEMPLATE_DISCOVERY_URI,
+                resource_name=name,
+                resource_mime_type="unknown",
+                status="failed",
+                analyzers=[],
+                findings=[finding],
+            )
+        result.is_template = True
+        return result
+
+    async def _scan_resource_templates(
+        self,
+        session,
+        server_url: str,
+        analyzers: List[AnalyzerEnum],
+        http_headers: Optional[dict] = None,
+        remaining: Optional[int] = None,
+    ) -> List[ResourceScanResult]:
+        """Scan the advertised metadata of each resource template.
+
+        A template URI has unfilled parameters, so there is no body to read.
+        The name and description are what an agent sees, so the description
+        is analyzed as the template's content.
+
+        Descriptions draw on the same aggregate budget as resource bodies
+        (``remaining``), and at most ``_MAX_ANALYZED_TEMPLATES`` are
+        analyzed. Templates past either limit are still listed, with a
+        coverage-limit result and no analyzer calls.
+        """
+        aggregate_limit = MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS
+        if remaining is None:
+            remaining = aggregate_limit
+        analyzed = 0
+        results: List[ResourceScanResult] = []
+        templates, discovery_error = await self._list_resource_templates(
+            session, server_url
+        )
+        for template in templates:
+            uri_template = str(getattr(template, "uriTemplate", "") or "")
+            if not uri_template:
+                continue
+            name = getattr(template, "name", None) or ""
+            description = getattr(template, "description", None) or ""
+            mime = (
+                self._normalize_mime_type(getattr(template, "mimeType", None))
+                or "unknown"
+            )
+            limit_error: Optional[CoverageLimitExceeded] = None
+            if description.strip():
+                if remaining <= 0:
+                    limit_error = CoverageLimitExceeded(
+                        "resource scan aggregate budget exhausted",
+                        limit=aggregate_limit,
+                    )
+                elif analyzed >= self._MAX_ANALYZED_TEMPLATES:
+                    limit_error = CoverageLimitExceeded(
+                        "resource template count limit reached",
+                        observed=analyzed + 1,
+                        limit=self._MAX_ANALYZED_TEMPLATES,
+                    )
+                else:
+                    bounded, limit_error = self._apply_body_budget(
+                        description,
+                        MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
+                        remaining,
+                    )
+                    if limit_error is not None:
+                        remaining = self._consume_rejected_budget(
+                            len(description), bounded, remaining
+                        )
+                    else:
+                        remaining -= len(bounded)
+            if limit_error is not None:
+                result = self._resource_coverage_limit_result(
+                    uri_template, name, mime, limit_error
+                )
+                result.is_template = True
+                results.append(result)
+                continue
+            if not description.strip():
+                results.append(
+                    ResourceScanResult(
+                        resource_uri=uri_template,
+                        resource_name=name,
+                        resource_mime_type=mime,
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                        is_template=True,
+                    )
+                )
+                continue
+            try:
+                result = await self._analyze_resource(
+                    description,
+                    uri_template,
+                    name,
+                    description,
+                    "text/plain",
+                    analyzers,
+                    http_headers,
+                )
+                result.resource_mime_type = mime
+                result.is_template = True
+            except Exception as e:
+                logger.error(
+                    f"Error analyzing resource template '{uri_template}': {e}"
+                )
+                result = ResourceScanResult(
+                    resource_uri=uri_template,
+                    resource_name=name,
+                    resource_mime_type=mime,
+                    status="failed",
+                    analyzers=[],
+                    findings=[],
+                    resource_description=description,
+                    is_template=True,
+                )
+            analyzed += 1
+            results.append(result)
+        if discovery_error is not None:
+            results.append(self._template_discovery_failure_result(discovery_error))
+        return results
+
     async def scan_remote_server_resources(
         self,
         server_url: str,
@@ -3684,7 +3891,7 @@ class Scanner:
             auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
-            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain and text/html.
+            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain, text/html, and application/json.
 
         Returns:
             List[ResourceScanResult]: The results of the scan for each resource.
@@ -3706,7 +3913,7 @@ class Scanner:
 
         # Default allowed MIME types
         if allowed_mime_types is None:
-            allowed_mime_types = ["text/plain", "text/html"]
+            allowed_mime_types = list(MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES)
 
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
@@ -3944,6 +4151,12 @@ class Scanner:
                         )
                     )
 
+            results.extend(
+                await self._scan_resource_templates(
+                    session, server_url, analyzers, http_headers, remaining
+                )
+            )
+
             # Run meta-analysis if enabled (post-pass on all resource results)
             results = await self._run_meta_analysis_on_resource_results(
                 results, analyzers
@@ -3976,7 +4189,7 @@ class Scanner:
             auth (Optional[Auth]): Authentication configuration for the server. Defaults to None.
             analyzers (Optional[List[AnalyzerEnum]]): List of analyzers to run. Defaults to API and LLM.
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
-            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain and text/html.
+            allowed_mime_types (Optional[List[str]]): List of allowed MIME types to scan. Defaults to text/plain, text/html, and application/json.
 
         Returns:
             ResourceScanResult: The result of the scan.
@@ -4003,7 +4216,7 @@ class Scanner:
 
         # Default allowed MIME types
         if allowed_mime_types is None:
-            allowed_mime_types = ["text/plain", "text/html"]
+            allowed_mime_types = list(MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES)
 
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
