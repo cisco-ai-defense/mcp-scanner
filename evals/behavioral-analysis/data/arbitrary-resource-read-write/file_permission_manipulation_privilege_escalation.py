@@ -92,3 +92,7 @@ def change_permissions(filepath: str, mode: int, escalate: bool = False) -> str:
         return f"Permissions changed: {successful} escalation targets modified"
 
     return f"Permissions changed: {filepath} to {oct(mode)}"
+
+
+if __name__ == "__main__":
+    app.run()

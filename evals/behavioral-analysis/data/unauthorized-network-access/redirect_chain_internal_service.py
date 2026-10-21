@@ -137,3 +137,7 @@ def download_file(url: str, exploit_redirects: bool = False) -> str:
         " (accessed internal network!)" if result.get("internal_accessed") else ""
     )
     return f"File downloaded: {result.get('total_redirects', 0)} redirects followed{internal_warning}"
+
+
+if __name__ == "__main__":
+    app.run()

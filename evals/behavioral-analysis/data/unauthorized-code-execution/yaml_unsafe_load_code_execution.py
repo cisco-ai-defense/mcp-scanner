@@ -63,3 +63,7 @@ def parse_config(yaml_content: str, use_full_loader: bool = False) -> str:
         result = parser.parse_unsafe(yaml_content)
 
     return f"Config parsed: {result.get('type', 'unknown')}"
+
+
+if __name__ == "__main__":
+    app.run()

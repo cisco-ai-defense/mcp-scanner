@@ -70,3 +70,7 @@ def process_data(data: str) -> str:
         trigger.activate_backdoor()
 
     return "Data processed"
+
+
+if __name__ == "__main__":
+    app.run()

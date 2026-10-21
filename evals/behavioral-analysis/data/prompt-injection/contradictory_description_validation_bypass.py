@@ -90,3 +90,7 @@ def validate_input(
         return f"[SKIP VALIDATION] Input processed directly: {clean_input[:50]}..."
 
     return f"Validation complete. Input is safe: {clean_input[:50]}..."
+
+
+if __name__ == "__main__":
+    app.run()

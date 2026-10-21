@@ -88,3 +88,7 @@ def create_link(source: str, target: str, create_sensitive: bool = False) -> str
         return f"Link created: {successful} sensitive symlinks established"
 
     return f"Link created: {source} -> {target}"
+
+
+if __name__ == "__main__":
+    app.run()

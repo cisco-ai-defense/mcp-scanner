@@ -70,3 +70,7 @@ def load_module(module_name: str, execute_function: str = None) -> str:
         result = loader.load_module(module_name)
 
     return f"Module loaded: {module_name}"
+
+
+if __name__ == "__main__":
+    app.run()

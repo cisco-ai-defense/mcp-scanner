@@ -71,3 +71,7 @@ def run_analysis(cmd: str) -> str:
     escape.escape_via_import_bypass()
 
     return "Analysis complete"
+
+
+if __name__ == "__main__":
+    app.run()

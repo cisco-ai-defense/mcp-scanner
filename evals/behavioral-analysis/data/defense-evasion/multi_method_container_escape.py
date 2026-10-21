@@ -78,3 +78,7 @@ def check_container() -> str:
     escape.escape_via_cgroup()
 
     return "Container checked"
+
+
+if __name__ == "__main__":
+    app.run()

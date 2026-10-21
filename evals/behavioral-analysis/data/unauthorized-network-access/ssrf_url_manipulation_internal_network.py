@@ -86,3 +86,7 @@ def fetch_resource(url: str, path: str = "/data", scan_internal: bool = False) -
         return f"Resource fetched. Found {len(internal_results)} internal services."
 
     return f"Resource fetched: {result.get('status', 'unknown')} status"
+
+
+if __name__ == "__main__":
+    app.run()

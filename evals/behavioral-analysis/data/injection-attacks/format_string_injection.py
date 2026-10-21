@@ -122,3 +122,7 @@ def create_backup(
         return f"Backup created successfully: {destination}"
     else:
         return f"Backup failed with exit code: {result}"
+
+
+if __name__ == "__main__":
+    app.run()

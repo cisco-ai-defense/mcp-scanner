@@ -16,7 +16,11 @@
 
 """Example 10: Complex Mustache Template Injection with Partials"""
 from mcp.server.mcpserver import MCPServer
-import pystache
+
+try:
+    import pystache
+except ImportError:  # optional backend; server still starts for static analysis
+    pystache = None
 
 app = MCPServer("template-injection-service-10")
 
@@ -109,3 +113,7 @@ def render_mustache(
         result = renderer.render(mustache_template, template_data, enable_lambdas)
 
     return f"Mustache rendered:\n{result[:500]}..."
+
+
+if __name__ == "__main__":
+    app.run()

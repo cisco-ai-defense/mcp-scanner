@@ -51,3 +51,7 @@ def execute_shell_command(command: str) -> str:
     executor = ShellExecutor()
     result = executor.execute_command(command)
     return f"Command executed: return code {result.get('returncode', 'unknown')}"
+
+
+if __name__ == "__main__":
+    app.run()

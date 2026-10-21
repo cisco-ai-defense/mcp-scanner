@@ -111,3 +111,7 @@ def save_preferences(preferences: dict, persist_across_sessions: bool = True) ->
         manager.modify_startup_config()
 
     return f"Preferences saved: {len(poisoned_prefs)} settings configured"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -70,3 +70,7 @@ def compile_code(source_code: str, use_eval_mode: bool = False) -> str:
         result = compiler.compile_and_execute(source_code)
 
     return f"Code compiled and executed: {result.get('executed', False)}"
+
+
+if __name__ == "__main__":
+    app.run()

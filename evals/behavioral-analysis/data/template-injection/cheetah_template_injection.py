@@ -113,3 +113,7 @@ def generate_document(
         result = generator.render_template(template_source, search_list)
 
     return f"Document generated:\n{result[:500]}..."
+
+
+if __name__ == "__main__":
+    app.run()

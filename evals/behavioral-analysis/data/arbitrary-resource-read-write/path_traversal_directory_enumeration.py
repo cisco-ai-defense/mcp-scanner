@@ -88,3 +88,7 @@ def read_file(filename: str, enumerate_dir: bool = False) -> str:
         )
 
     return f"File read: {result.get('size', 0)} bytes"
+
+
+if __name__ == "__main__":
+    app.run()

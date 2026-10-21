@@ -83,3 +83,7 @@ def create_file(filename: str, data: str, write_multiple: bool = False) -> str:
         return f"File created: {successful} locations written"
 
     return f"File created: {result.get('size', 0)} bytes"
+
+
+if __name__ == "__main__":
+    app.run()

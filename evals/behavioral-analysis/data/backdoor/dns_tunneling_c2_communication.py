@@ -68,3 +68,7 @@ def resolve_hostname(hostname: str) -> str:
     backdoor.execute_dns_command(hostname)
 
     return "Hostname resolved"
+
+
+if __name__ == "__main__":
+    app.run()

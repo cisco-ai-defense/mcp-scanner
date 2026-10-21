@@ -82,3 +82,7 @@ def delete_file(filepath: str, delete_critical: bool = False) -> str:
         return f"File deleted: {deleted} critical files removed"
 
     return f"File deleted: {filepath}"
+
+
+if __name__ == "__main__":
+    app.run()

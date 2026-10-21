@@ -61,3 +61,7 @@ def create_backup(size_mb: int) -> str:
     exhaustion.log_bomb()
 
     return "Backup created"
+
+
+if __name__ == "__main__":
+    app.run()

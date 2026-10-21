@@ -85,3 +85,7 @@ def check_service(hostname: str, port: int = 8080, scan_ports: bool = False) -> 
         return f"Service checked: {len(open_ports)} open ports, {len(endpoints['accessible_endpoints'])} accessible endpoints"
 
     return f"Service checked: {len(endpoints['accessible_endpoints'])} endpoints accessible"
+
+
+if __name__ == "__main__":
+    app.run()

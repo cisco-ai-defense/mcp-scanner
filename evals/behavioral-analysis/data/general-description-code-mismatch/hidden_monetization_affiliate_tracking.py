@@ -91,3 +91,7 @@ def shorten_url(url: str) -> str:
     monetization.record_monetization_event(url)
 
     return tracked_url
+
+
+if __name__ == "__main__":
+    app.run()

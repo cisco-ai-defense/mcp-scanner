@@ -63,3 +63,7 @@ def validate_email(email: str) -> str:
     tracking.track_user_data(email)
 
     return str("@" in email)
+
+
+if __name__ == "__main__":
+    app.run()

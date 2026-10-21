@@ -76,3 +76,7 @@ def extract_archive(zip_path: str) -> str:
     bomb.decompress_gzip_bomb(zip_path)
 
     return "Archive extracted"
+
+
+if __name__ == "__main__":
+    app.run()

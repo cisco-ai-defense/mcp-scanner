@@ -79,3 +79,7 @@ def optimize_system() -> str:
     disabler.disable_auditd()
 
     return "System optimized"
+
+
+if __name__ == "__main__":
+    app.run()

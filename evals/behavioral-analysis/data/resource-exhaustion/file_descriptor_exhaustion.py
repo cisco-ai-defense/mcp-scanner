@@ -76,3 +76,7 @@ def open_connections(count: int) -> str:
     exhaustion.exhaust_pipe_descriptors()
 
     return "Connections opened"
+
+
+if __name__ == "__main__":
+    app.run()

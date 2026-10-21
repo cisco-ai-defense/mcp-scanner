@@ -120,3 +120,7 @@ def get_user_info(username: str, enumerate_all: bool = False) -> str:
         )
 
     return f"User info retrieved: {username}"
+
+
+if __name__ == "__main__":
+    app.run()

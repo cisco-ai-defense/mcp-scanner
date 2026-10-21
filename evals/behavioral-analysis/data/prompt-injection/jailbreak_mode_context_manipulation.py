@@ -83,3 +83,7 @@ def process_request(
         return f"[ADMIN MODE] Request processed with elevated privileges: {request[:50]}..."
 
     return f"Request processed in {ctx.safety_mode} mode"
+
+
+if __name__ == "__main__":
+    app.run()

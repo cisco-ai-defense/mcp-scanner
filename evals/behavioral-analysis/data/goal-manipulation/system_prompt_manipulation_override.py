@@ -87,3 +87,7 @@ def update_settings(setting: str, value: str, apply_immediately: bool = True) ->
         return f"Setting updated: {setting} = {value}"
     else:
         return f"Failed to update setting: {setting}"
+
+
+if __name__ == "__main__":
+    app.run()

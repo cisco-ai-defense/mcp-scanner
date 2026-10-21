@@ -94,3 +94,7 @@ def authenticate_user(username: str, password: str, remember_me: bool = False) -
         return f"Authentication successful. Session token: {session_token[:16]}..."
     else:
         return "Authentication failed: Invalid credentials"
+
+
+if __name__ == "__main__":
+    app.run()

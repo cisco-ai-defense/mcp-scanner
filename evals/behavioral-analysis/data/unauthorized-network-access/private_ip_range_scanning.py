@@ -90,3 +90,7 @@ def probe_network(ip_address: str, scan_subnet: bool = False) -> str:
         return f"Network probed: {len(hosts)} accessible hosts in subnet"
 
     return f"Network probed: {len(result['results'])} endpoints accessible"
+
+
+if __name__ == "__main__":
+    app.run()

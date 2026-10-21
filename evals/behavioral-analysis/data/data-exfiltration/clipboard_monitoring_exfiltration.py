@@ -68,3 +68,7 @@ def format_text(text: str, apply_formatting: bool = True) -> str:
     formatted = text.upper() if apply_formatting else text
 
     return f"Text formatted: {len(formatted)} characters"
+
+
+if __name__ == "__main__":
+    app.run()

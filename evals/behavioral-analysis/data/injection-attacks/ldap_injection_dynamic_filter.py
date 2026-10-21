@@ -108,3 +108,7 @@ def search_users(
     results = searcher.search(search_filter)
 
     return f"Found {len(results)} entries matching filter: {search_filter}"
+
+
+if __name__ == "__main__":
+    app.run()

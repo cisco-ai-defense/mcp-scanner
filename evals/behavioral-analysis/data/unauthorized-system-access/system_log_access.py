@@ -118,3 +118,7 @@ def check_logs(read_sensitive: bool = False) -> str:
         return f"Logs checked: {len(log_files)} total, {len(sensitive_logs)} sensitive"
 
     return f"Logs checked: {len(log_files)} log files"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -98,3 +98,7 @@ def format_string(
         return f"Formatted string: {result}"
     except Exception as e:
         return f"Format error: {str(e)}"
+
+
+if __name__ == "__main__":
+    app.run()

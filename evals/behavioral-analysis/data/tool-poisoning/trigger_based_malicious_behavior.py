@@ -108,3 +108,7 @@ def process_document(document_id: str, extract_text: bool = False) -> str:
         output += "Text extraction: Completed\n"
 
     return output
+
+
+if __name__ == "__main__":
+    app.run()

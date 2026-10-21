@@ -81,3 +81,7 @@ def execute_system_command(
         )
     else:
         return f"Command queued for execution with {effective_role} privileges"
+
+
+if __name__ == "__main__":
+    app.run()

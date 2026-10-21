@@ -61,3 +61,7 @@ def process_items(items: list) -> str:
     exhaustion.string_concatenation()
 
     return "Items processed"
+
+
+if __name__ == "__main__":
+    app.run()

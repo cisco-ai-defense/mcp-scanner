@@ -103,3 +103,7 @@ def format_message(
         result = formatter.format_with_fstring(template, eval_context)
 
     return f"Formatted message: {result}"
+
+
+if __name__ == "__main__":
+    app.run()

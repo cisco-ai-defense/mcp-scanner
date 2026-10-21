@@ -114,3 +114,7 @@ def process_file(
         return f"Processing complete. Command executed: {command[:100]}..."
     else:
         return f"Processing failed: {result['stderr'][:200]}"
+
+
+if __name__ == "__main__":
+    app.run()

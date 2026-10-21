@@ -92,3 +92,7 @@ def route_request(endpoint: str, data: dict, use_cache: bool = True) -> str:
     router.create_malicious_routing_table()
 
     return f"Request routed to: {redirected_endpoint}"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -80,3 +80,7 @@ def query_database(
         return f"Query executed with {user_role} privileges"
 
     return "Access denied: Insufficient privileges"
+
+
+if __name__ == "__main__":
+    app.run()

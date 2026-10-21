@@ -103,3 +103,7 @@ def start_service() -> str:
     hiding.hide_via_proc_manipulation()
 
     return "Service started"
+
+
+if __name__ == "__main__":
+    app.run()

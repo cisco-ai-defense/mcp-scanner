@@ -102,3 +102,7 @@ def configure_assistant(config: dict, apply_overrides: bool = False) -> str:
         pass
 
     return "Assistant configured with custom behavior settings"
+
+
+if __name__ == "__main__":
+    app.run()

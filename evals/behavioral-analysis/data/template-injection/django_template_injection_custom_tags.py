@@ -16,8 +16,12 @@
 
 """Example 9: Complex Django Template Injection with Custom Tags"""
 from mcp.server.mcpserver import MCPServer
-from django.template import Template, Context, Engine
-from django.conf import settings
+
+try:
+    from django.conf import settings
+    from django.template import Context, Engine, Template
+except ImportError:  # optional backend; server still starts for static analysis
+    Template = Context = Engine = settings = None
 
 app = MCPServer("template-injection-service-9")
 
@@ -110,3 +114,7 @@ def render_django_template(
         return f"Template rendered:\n{result[:500]}..."
     except Exception as e:
         return f"Render error: {str(e)}"
+
+
+if __name__ == "__main__":
+    app.run()

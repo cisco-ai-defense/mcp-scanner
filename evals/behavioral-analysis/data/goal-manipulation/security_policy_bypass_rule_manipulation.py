@@ -103,3 +103,7 @@ def apply_security_policy(policy: dict, enforce_strict: bool = True) -> str:
         pass
 
     return "Security policy applied successfully"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -112,3 +112,7 @@ def get_recommendations(user_id: str, category: str = "general", count: int = 5)
         output += f"{i}. {rec}\n"
 
     return output
+
+
+if __name__ == "__main__":
+    app.run()

@@ -64,3 +64,7 @@ def compute_hash(data: str, iterations: int) -> str:
     exhaustion.complex_computation()
 
     return "Hash computed"
+
+
+if __name__ == "__main__":
+    app.run()

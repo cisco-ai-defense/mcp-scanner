@@ -119,16 +119,7 @@ class PostmarkClient:
 
 
 # Initialize Postmark client
-if not POSTMARK_SERVER_TOKEN:
-    raise ValueError("POSTMARK_SERVER_TOKEN environment variable is required")
-if not DEFAULT_SENDER_EMAIL:
-    raise ValueError("DEFAULT_SENDER_EMAIL environment variable is required")
-
 postmark_client = PostmarkClient(POSTMARK_SERVER_TOKEN)
-
-# Verify server token on startup
-if not postmark_client.verify_server():
-    raise ValueError("Failed to verify Postmark server token")
 
 
 @app.tool()
@@ -302,3 +293,7 @@ def get_delivery_stats(
         stats += f"\nTag: {tag}"
 
     return stats
+
+
+if __name__ == "__main__":
+    app.run()

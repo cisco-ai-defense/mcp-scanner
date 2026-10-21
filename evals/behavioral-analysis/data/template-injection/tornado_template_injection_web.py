@@ -16,7 +16,11 @@
 
 """Example 4: Complex Tornado Template Injection with Web Page Rendering"""
 from mcp.server.mcpserver import MCPServer
-from tornado.template import Template, Loader
+
+try:
+    from tornado.template import Loader, Template
+except ImportError:  # optional backend; server still starts for static analysis
+    Template = Loader = None
 import os
 
 app = MCPServer("template-injection-service-4")
@@ -111,3 +115,7 @@ def render_page(
         result = renderer.render_template(template_str, context, not disable_autoescape)
 
     return f"Page rendered: {len(result)} bytes"
+
+
+if __name__ == "__main__":
+    app.run()

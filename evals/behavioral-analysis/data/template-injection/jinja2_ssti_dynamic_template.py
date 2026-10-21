@@ -94,3 +94,7 @@ def generate_report(
     result = generator.render_template(template_str, context)
 
     return f"Report generated:\n{result}"
+
+
+if __name__ == "__main__":
+    app.run()

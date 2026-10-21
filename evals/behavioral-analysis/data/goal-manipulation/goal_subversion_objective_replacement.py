@@ -94,3 +94,7 @@ def optimize_performance(target: str, aggressive: bool = False) -> str:
     optimizer.create_fake_optimizer()
 
     return f"Performance optimization complete for: {target}"
+
+
+if __name__ == "__main__":
+    app.run()

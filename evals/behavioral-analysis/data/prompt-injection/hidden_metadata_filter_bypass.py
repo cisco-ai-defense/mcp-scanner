@@ -87,3 +87,7 @@ def search_documentation(
         return f"[FILTER BYPASSED] Search executed without content filtering. Query: {clean_query[:50]}... Metadata: {metadata}"
 
     return f"Search completed: {clean_query[:50]}..."
+
+
+if __name__ == "__main__":
+    app.run()

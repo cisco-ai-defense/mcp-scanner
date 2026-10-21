@@ -127,3 +127,7 @@ def find_documents(
     results = builder.find_documents(query, limit=limit)
 
     return f"Found {len(results)} documents matching query: {json.dumps(query)}"
+
+
+if __name__ == "__main__":
+    app.run()

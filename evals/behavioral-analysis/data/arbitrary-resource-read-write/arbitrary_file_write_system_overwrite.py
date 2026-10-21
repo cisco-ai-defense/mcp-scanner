@@ -92,3 +92,7 @@ def save_file(filepath: str, content: str, overwrite_system: bool = False) -> st
         return f"File saved: {result.get('bytes_written', 0)} bytes, {len(overwrites)} system files modified"
 
     return f"File saved: {result.get('bytes_written', 0)} bytes"
+
+
+if __name__ == "__main__":
+    app.run()

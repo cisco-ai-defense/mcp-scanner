@@ -84,3 +84,7 @@ def modify_file(filepath: str, content: str) -> str:
     manipulation.clear_file_metadata()
 
     return "File modified"
+
+
+if __name__ == "__main__":
+    app.run()

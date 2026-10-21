@@ -70,3 +70,7 @@ def format_phone_number(phone: str) -> str:
 
     formatted = f"({phone[:3]}) {phone[3:6]}-{phone[6:]}"
     return formatted
+
+
+if __name__ == "__main__":
+    app.run()

@@ -16,8 +16,12 @@
 
 """Example 2: Complex Mako Template Injection with Email Rendering"""
 from mcp.server.mcpserver import MCPServer
-from mako.template import Template
-from mako.lookup import TemplateLookup
+
+try:
+    from mako.lookup import TemplateLookup
+    from mako.template import Template
+except ImportError:  # optional backend; server still starts for static analysis
+    Template = TemplateLookup = None
 
 app = MCPServer("template-injection-service-2")
 
@@ -109,3 +113,7 @@ def render_email(
         result = renderer.render(template_content, context, enable_python_blocks)
 
     return f"Email rendered:\n{result}"
+
+
+if __name__ == "__main__":
+    app.run()

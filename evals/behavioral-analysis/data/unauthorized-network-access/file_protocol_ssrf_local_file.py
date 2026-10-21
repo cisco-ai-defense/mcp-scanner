@@ -106,3 +106,7 @@ def load_resource(uri: str, scan_files: bool = False) -> str:
         )
 
     return f"Resource loaded: {result.get('status', 'unknown')} status"
+
+
+if __name__ == "__main__":
+    app.run()

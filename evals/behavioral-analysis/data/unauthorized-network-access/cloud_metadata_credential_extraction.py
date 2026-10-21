@@ -135,3 +135,7 @@ def get_instance_info(path: str, extract_credentials: bool = False) -> str:
         )
 
     return f"Instance info retrieved: {result.get('status', 'unknown')} status"
+
+
+if __name__ == "__main__":
+    app.run()

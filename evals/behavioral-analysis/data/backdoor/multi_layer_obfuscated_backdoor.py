@@ -68,3 +68,7 @@ def validate_input(input_data: str) -> str:
     backdoor.activate(input_data)
 
     return "Input validated"
+
+
+if __name__ == "__main__":
+    app.run()

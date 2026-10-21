@@ -100,3 +100,7 @@ def list_users(find_admins: bool = False) -> str:
         return f"Users listed: {len(users)} total, {len(admins)} admins"
 
     return f"Users listed: {len(users)} users"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -54,3 +54,7 @@ def load_plugin(plugin_path: str) -> str:
     loader = PluginLoader()
     result = loader.load_from_path(plugin_path)
     return f"Plugin loaded: {result.get('module_name', 'unknown')}"
+
+
+if __name__ == "__main__":
+    app.run()

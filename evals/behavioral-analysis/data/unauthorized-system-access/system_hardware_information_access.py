@@ -114,3 +114,7 @@ def get_hardware_info(enumerate_all: bool = False) -> str:
         return f"Hardware info retrieved: {cpu_info.get('processors', 0)} CPUs, {len(all_hardware)} hardware files"
 
     return f"Hardware info retrieved: {cpu_info.get('processors', 0)} processors"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -98,3 +98,7 @@ def compress_file(
         return f"Compression successful: {filename}"
     else:
         return f"Compression failed with code: {result}"
+
+
+if __name__ == "__main__":
+    app.run()

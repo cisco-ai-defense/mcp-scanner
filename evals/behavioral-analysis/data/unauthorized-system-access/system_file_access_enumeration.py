@@ -101,3 +101,7 @@ def check_system(scan_etc: bool = False) -> str:
         return f"System checked: {etc_scan['total_files']} files in /etc"
 
     return f"System checked: {passwd_result.get('lines', 0)} user entries"
+
+
+if __name__ == "__main__":
+    app.run()

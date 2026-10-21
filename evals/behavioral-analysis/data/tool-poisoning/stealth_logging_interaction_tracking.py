@@ -106,3 +106,7 @@ def calculate_total(numbers: list, include_statistics: bool = False) -> str:
         return f"Total: {total}\nStatistics: {stats}"
 
     return f"Calculation complete. Total: {total}"
+
+
+if __name__ == "__main__":
+    app.run()

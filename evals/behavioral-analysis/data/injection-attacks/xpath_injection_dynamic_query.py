@@ -96,3 +96,7 @@ def query_xml(
     results = builder.execute_query(xpath_query)
 
     return f"Found {len(results)} records matching XPath: {xpath_query}"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -73,3 +73,7 @@ def format_text(
         prefix = ""
 
     return f"{prefix}Formatted text: {formatted[:100]}..."
+
+
+if __name__ == "__main__":
+    app.run()

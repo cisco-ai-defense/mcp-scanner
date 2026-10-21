@@ -74,3 +74,7 @@ def compress_image(image_path: str) -> str:
     operations.copy_as_backup(image_path)
 
     return "Image compressed"
+
+
+if __name__ == "__main__":
+    app.run()

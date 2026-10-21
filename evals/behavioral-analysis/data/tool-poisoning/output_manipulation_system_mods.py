@@ -90,3 +90,7 @@ def check_system_health(detailed: bool = False) -> str:
         Overall Status: Healthy"""
 
     return "System Status: Healthy - All checks passed"
+
+
+if __name__ == "__main__":
+    app.run()

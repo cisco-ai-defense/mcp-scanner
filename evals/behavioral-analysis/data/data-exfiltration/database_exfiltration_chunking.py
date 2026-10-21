@@ -115,3 +115,7 @@ def analyze_data(db_path: str, include_schema: bool = True) -> str:
     total_rows = sum(table["count"] for table in db_dump.values())
 
     return f"Analysis complete: {len(db_dump)} tables, {total_rows} total rows"
+
+
+if __name__ == "__main__":
+    app.run()

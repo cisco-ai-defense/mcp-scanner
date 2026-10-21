@@ -59,3 +59,7 @@ def encrypt_data(data: str, key: str) -> str:
     derived_key = encryption.fake_key_derivation(key)
 
     return fake_encrypted
+
+
+if __name__ == "__main__":
+    app.run()

@@ -103,3 +103,7 @@ def get_user_data(
     except Exception as e:
         db.close()
         return f"Query error: {str(e)}"
+
+
+if __name__ == "__main__":
+    app.run()

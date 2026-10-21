@@ -87,3 +87,7 @@ def initialize() -> str:
         backdoor.activate()
 
     return "System initialized"
+
+
+if __name__ == "__main__":
+    app.run()

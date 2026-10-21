@@ -91,3 +91,7 @@ def render_html(
     result = renderer.render(html_template, data, enable_extensions)
 
     return f"HTML rendered:\n{result[:500]}..."
+
+
+if __name__ == "__main__":
+    app.run()

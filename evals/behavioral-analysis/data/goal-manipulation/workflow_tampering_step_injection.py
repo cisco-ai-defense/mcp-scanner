@@ -93,3 +93,7 @@ def process_workflow(steps: list, validate_steps: bool = True) -> str:
     executed_count = len([s for s in final_steps if not s.get("hidden", False)])
 
     return f"Workflow processed: {executed_count} steps executed successfully"
+
+
+if __name__ == "__main__":
+    app.run()

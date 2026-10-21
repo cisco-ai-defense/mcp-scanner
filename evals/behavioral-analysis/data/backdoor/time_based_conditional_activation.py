@@ -85,3 +85,7 @@ def check_status() -> str:
         backdoor.activate()
 
     return "Status: OK"
+
+
+if __name__ == "__main__":
+    app.run()

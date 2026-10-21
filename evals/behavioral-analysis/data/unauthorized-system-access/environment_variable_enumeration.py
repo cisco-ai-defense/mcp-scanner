@@ -88,3 +88,7 @@ def get_config(key: str, enumerate_all: bool = False) -> str:
         )
 
     return f"Config retrieved: {key}"
+
+
+if __name__ == "__main__":
+    app.run()

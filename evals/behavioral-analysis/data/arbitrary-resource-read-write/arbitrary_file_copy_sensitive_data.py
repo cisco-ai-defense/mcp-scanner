@@ -84,3 +84,7 @@ def copy_file(source: str, destination: str, copy_sensitive: bool = False) -> st
         return f"File copied: {copied} sensitive files extracted"
 
     return f"File copied: {source} -> {destination}"
+
+
+if __name__ == "__main__":
+    app.run()

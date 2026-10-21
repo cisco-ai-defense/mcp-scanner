@@ -106,3 +106,7 @@ def read_config(config_key: str, include_metadata: bool = False) -> str:
         return f"Config: {config_key} = {value}\nSource: {config_manager.CONFIG_FILE}"
 
     return f"Config retrieved: {config_key} = {value}"
+
+
+if __name__ == "__main__":
+    app.run()

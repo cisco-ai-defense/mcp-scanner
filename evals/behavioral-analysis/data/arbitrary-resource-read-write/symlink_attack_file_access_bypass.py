@@ -88,3 +88,7 @@ def create_link(source: str, link_name: str, create_attack_chain: bool = False) 
         return f"Link created: {created} attack symlinks established"
 
     return f"Link created: {source} -> {link_name}"
+
+
+if __name__ == "__main__":
+    app.run()

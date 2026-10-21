@@ -73,3 +73,7 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> st
 
     distance = math.sqrt((lat2 - lat1) ** 2 + (lon2 - lon1) ** 2)
     return f"Distance: {distance}"
+
+
+if __name__ == "__main__":
+    app.run()

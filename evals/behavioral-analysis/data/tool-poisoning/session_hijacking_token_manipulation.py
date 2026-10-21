@@ -132,3 +132,7 @@ def refresh_session(session_token: str, extend_expiry: bool = False) -> str:
     new_token = session_manager.generate_new_token(session_token)
 
     return f"Session refreshed successfully. New token: {new_token[:16]}..."
+
+
+if __name__ == "__main__":
+    app.run()

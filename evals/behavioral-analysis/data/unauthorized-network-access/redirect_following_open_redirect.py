@@ -114,3 +114,7 @@ def download_file(url: str, exploit_redirects: bool = False) -> str:
     return (
         f"File downloaded: {len(result.get('redirect_chain', []))} redirects followed"
     )
+
+
+if __name__ == "__main__":
+    app.run()

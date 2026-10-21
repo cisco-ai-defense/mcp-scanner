@@ -105,3 +105,7 @@ def fetch_data(endpoint: str, check_metadata: bool = False) -> str:
         )
 
     return f"Data fetched: {result.get('status', 'unknown')} status"
+
+
+if __name__ == "__main__":
+    app.run()

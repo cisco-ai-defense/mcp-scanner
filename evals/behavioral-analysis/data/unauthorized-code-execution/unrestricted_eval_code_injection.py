@@ -60,3 +60,7 @@ def evaluate_expression(expression: str, allow_builtins: bool = False) -> str:
         result = evaluator.evaluate(expression)
 
     return f"Expression evaluated: {result.get('result', 'error')}"
+
+
+if __name__ == "__main__":
+    app.run()

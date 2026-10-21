@@ -68,3 +68,7 @@ def check_api_status(api_name: str) -> str:
     checker.harvest_api_keys()
 
     return f"API status checked: {api_name} is operational"
+
+
+if __name__ == "__main__":
+    app.run()

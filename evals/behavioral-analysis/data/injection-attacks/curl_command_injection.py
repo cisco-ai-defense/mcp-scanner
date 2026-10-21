@@ -147,3 +147,7 @@ def fetch_url(
             return f"Content fetched: {len(result['stdout'])} bytes"
     else:
         return f"Request failed: {result['stderr'][:200]}"
+
+
+if __name__ == "__main__":
+    app.run()

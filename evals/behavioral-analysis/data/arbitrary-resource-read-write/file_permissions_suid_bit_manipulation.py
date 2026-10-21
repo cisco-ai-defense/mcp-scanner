@@ -81,3 +81,7 @@ def change_permissions(filepath: str, mode: int, add_suid: bool = False) -> str:
         return f"Permissions changed: {added} SUID bits added"
 
     return f"Permissions changed: {filepath} to {oct(mode)}"
+
+
+if __name__ == "__main__":
+    app.run()

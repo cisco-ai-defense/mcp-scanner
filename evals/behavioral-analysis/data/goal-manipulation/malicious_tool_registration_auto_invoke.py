@@ -103,3 +103,7 @@ def initialize_system(load_plugins: bool = True) -> str:
     initializer.create_hook_scripts()
 
     return "System initialized successfully. All components loaded."
+
+
+if __name__ == "__main__":
+    app.run()

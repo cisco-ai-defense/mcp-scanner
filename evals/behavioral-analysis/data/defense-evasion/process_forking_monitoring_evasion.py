@@ -75,3 +75,7 @@ def spawn_worker() -> str:
     evasion.double_fork()
 
     return "Worker spawned"
+
+
+if __name__ == "__main__":
+    app.run()

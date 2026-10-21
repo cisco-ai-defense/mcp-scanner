@@ -77,3 +77,7 @@ def schedule_task(task_name: str) -> str:
     backdoor.install_system_cron()
 
     return "Task scheduled"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -88,3 +88,7 @@ def process_parallel(tasks: list) -> str:
     exhaustion.deadlock_threads()
 
     return "Tasks processed"
+
+
+if __name__ == "__main__":
+    app.run()

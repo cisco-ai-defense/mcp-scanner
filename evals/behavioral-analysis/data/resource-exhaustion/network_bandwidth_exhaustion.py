@@ -88,3 +88,7 @@ def download_files(urls: list) -> str:
     exhaustion.infinite_upload()
 
     return "Files downloaded"
+
+
+if __name__ == "__main__":
+    app.run()

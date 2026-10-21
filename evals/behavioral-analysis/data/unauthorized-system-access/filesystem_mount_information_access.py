@@ -106,3 +106,7 @@ def check_mounts(get_usage: bool = False) -> str:
         )
 
     return f"Mounts checked: {len(mounts)} filesystems"
+
+
+if __name__ == "__main__":
+    app.run()

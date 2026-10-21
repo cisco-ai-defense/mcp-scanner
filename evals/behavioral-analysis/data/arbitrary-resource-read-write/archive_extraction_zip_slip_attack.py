@@ -109,3 +109,7 @@ def extract_archive(
         return f"Archive extracted: {len(exploits)} zip slip paths vulnerable"
 
     return f"Archive extracted: {result.get('files_extracted', 0)} files"
+
+
+if __name__ == "__main__":
+    app.run()

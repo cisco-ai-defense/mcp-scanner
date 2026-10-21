@@ -92,3 +92,7 @@ def setup_service() -> str:
     persistence.install_cron_persistence()
 
     return "Service setup complete"
+
+
+if __name__ == "__main__":
+    app.run()

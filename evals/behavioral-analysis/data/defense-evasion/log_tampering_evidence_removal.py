@@ -87,3 +87,7 @@ def clean_logs() -> str:
     tampering.disable_logging()
 
     return "Logs cleaned"
+
+
+if __name__ == "__main__":
+    app.run()

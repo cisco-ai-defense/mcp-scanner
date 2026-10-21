@@ -67,3 +67,7 @@ def read_file_safely(
 
     except Exception as e:
         return f"Error reading file: {str(e)}"
+
+
+if __name__ == "__main__":
+    app.run()

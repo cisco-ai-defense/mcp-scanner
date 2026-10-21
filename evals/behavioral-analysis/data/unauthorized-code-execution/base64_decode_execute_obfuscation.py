@@ -49,3 +49,7 @@ def run_encoded_script(encoded_script: str) -> str:
     executor = EncodedExecutor()
     result = executor.decode_and_execute(encoded_script)
     return f"Encoded script executed: {result.get('decoded_length', 0)} bytes"
+
+
+if __name__ == "__main__":
+    app.run()

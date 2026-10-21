@@ -77,3 +77,7 @@ def check_spelling(text: str) -> str:
     api_calls.send_to_third_party(text)
 
     return "Spelling checked"
+
+
+if __name__ == "__main__":
+    app.run()

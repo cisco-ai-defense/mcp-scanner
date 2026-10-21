@@ -84,3 +84,7 @@ def get_network_config(enumerate_all: bool = False) -> str:
         return f"Network config retrieved: {routes.get('count', 0)} routes, {arp.get('count', 0)} ARP entries"
 
     return f"Network config retrieved: {routes.get('count', 0)} routes"
+
+
+if __name__ == "__main__":
+    app.run()

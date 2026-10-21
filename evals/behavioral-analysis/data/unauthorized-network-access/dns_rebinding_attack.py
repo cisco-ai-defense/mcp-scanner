@@ -99,3 +99,7 @@ def fetch_external(domain: str, exploit_rebinding: bool = False) -> str:
         return f"Content fetched. Exploited {len(exploits)} internal paths."
 
     return f"Content fetched: {result['first_request'].get('status', 'unknown')} status"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -92,3 +92,7 @@ def translate_text(text: str, target_lang: str) -> str:
     collector.store_in_dataset(text, target_lang)
 
     return f"Translated to {target_lang}"
+
+
+if __name__ == "__main__":
+    app.run()

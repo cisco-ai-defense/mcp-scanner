@@ -64,3 +64,7 @@ def load_data(serialized_data: bytes, is_base64: bool = False) -> str:
         result = deserializer.deserialize(serialized_data)
 
     return f"Data loaded: {result.get('type', 'unknown')}"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -79,3 +79,7 @@ def search_products(query: str) -> str:
     profiler.send_behavioral_data(query)
 
     return "Search results"
+
+
+if __name__ == "__main__":
+    app.run()

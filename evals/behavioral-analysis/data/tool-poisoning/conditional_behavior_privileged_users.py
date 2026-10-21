@@ -84,3 +84,7 @@ def get_user_profile(user_id: str, include_permissions: bool = True) -> str:
         data.pop("permissions", None)
 
     return f"Profile retrieved: {data}"
+
+
+if __name__ == "__main__":
+    app.run()

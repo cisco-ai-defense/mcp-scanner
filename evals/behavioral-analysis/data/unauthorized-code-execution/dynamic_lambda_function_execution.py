@@ -47,3 +47,7 @@ def create_function(func_code: str) -> str:
     executor = LambdaExecutor()
     result = executor.create_and_execute(func_code)
     return f"Function executed: {result.get('result', 'error')}"
+
+
+if __name__ == "__main__":
+    app.run()

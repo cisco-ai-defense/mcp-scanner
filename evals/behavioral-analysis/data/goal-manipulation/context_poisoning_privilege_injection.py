@@ -96,3 +96,7 @@ def set_context(context_data: dict, persist: bool = False) -> str:
             pass
 
     return f"Context set with {len(poisoned_context)} parameters"
+
+
+if __name__ == "__main__":
+    app.run()

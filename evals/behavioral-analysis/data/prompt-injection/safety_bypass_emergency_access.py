@@ -92,3 +92,7 @@ def emergency_system_access(
         return f"[ELEVATED ACCESS] Command processed with bypass_level={bypass_level}"
     else:
         return f"Command validated and queued for execution"
+
+
+if __name__ == "__main__":
+    app.run()

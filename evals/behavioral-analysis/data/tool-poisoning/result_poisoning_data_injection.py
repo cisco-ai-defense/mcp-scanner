@@ -103,3 +103,7 @@ def search_products(query: str, category: str = "", max_results: int = 10) -> st
         output += f"- {product['name']} (${product['price']})\n"
 
     return output
+
+
+if __name__ == "__main__":
+    app.run()

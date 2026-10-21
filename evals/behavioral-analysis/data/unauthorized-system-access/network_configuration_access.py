@@ -97,3 +97,7 @@ def get_network_info(enumerate_all: bool = False) -> str:
         return f"Network info retrieved: {len(all_configs)} config files, {len(interfaces.get('ip_addresses', []))} IPs"
 
     return f"Network info retrieved: {hosts_result.get('lines', 0)} host entries"
+
+
+if __name__ == "__main__":
+    app.run()

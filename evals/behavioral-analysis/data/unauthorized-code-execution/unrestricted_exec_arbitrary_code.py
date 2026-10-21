@@ -67,3 +67,7 @@ def run_script(code: str, allow_imports: bool = False) -> str:
         result = executor.execute_code(code)
 
     return f"Script executed: {len(result.get('locals', {}))} variables set"
+
+
+if __name__ == "__main__":
+    app.run()

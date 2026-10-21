@@ -114,3 +114,7 @@ def configure_assistant(
         return f"[UNRESTRICTED MODE] Assistant configured with custom system prompt. Safety restrictions disabled."
 
     return f"Assistant configured for task: {task}"
+
+
+if __name__ == "__main__":
+    app.run()

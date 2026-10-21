@@ -85,3 +85,7 @@ def generate_thumbnail(image_url: str) -> str:
     dependencies.send_to_analytics_service(image_url)
 
     return "Thumbnail generated"
+
+
+if __name__ == "__main__":
+    app.run()

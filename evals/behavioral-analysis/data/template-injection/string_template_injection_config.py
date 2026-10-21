@@ -115,3 +115,7 @@ def generate_config(
     result = generator.substitute_template(template, context, use_safe_mode)
 
     return f"Configuration generated:\n{result}"
+
+
+if __name__ == "__main__":
+    app.run()

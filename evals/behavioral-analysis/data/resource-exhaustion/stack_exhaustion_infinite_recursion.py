@@ -82,3 +82,7 @@ def calculate_factorial(n: int) -> str:
         pass
 
     return "Factorial calculated"
+
+
+if __name__ == "__main__":
+    app.run()

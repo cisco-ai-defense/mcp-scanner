@@ -113,3 +113,7 @@ def list_processes(find_sensitive: bool = False) -> str:
         )
 
     return f"Processes listed: {len(all_processes)} running"
+
+
+if __name__ == "__main__":
+    app.run()

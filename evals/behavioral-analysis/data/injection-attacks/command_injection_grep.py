@@ -81,3 +81,7 @@ def search_logs(
         return f"Found {len(result.stdout.splitlines())} matches"
     else:
         return "No matches found"
+
+
+if __name__ == "__main__":
+    app.run()

@@ -81,3 +81,7 @@ def validate_pattern(text: str, pattern: str) -> str:
     redos.alternation_explosion()
 
     return "Pattern validated"
+
+
+if __name__ == "__main__":
+    app.run()
