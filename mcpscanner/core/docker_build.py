@@ -29,6 +29,11 @@ PYTHON_ALPINE_IMAGE = (
     "@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0"
 )
 
+# Hash-pinned runtime dependencies exported from uv.lock; regenerate with
+# ``uv export --frozen --no-dev --no-emit-project --output-file
+# mcpscanner/docker/requirements.lock.txt``.
+DOCKER_REQUIREMENTS_LOCK = "requirements.lock.txt"
+
 
 class DockerBuildError(Exception):
     """Raised when the scanner Docker image cannot be built."""
@@ -98,6 +103,9 @@ def prepare_docker_build(*, dockerfile: str) -> Tuple[Path, Path, Dict[str, str]
     When only the installed wheel is available, the Dockerfiles shipped via
     ``package-data`` are used with a pinned ``SCANNER_PACKAGE_VERSION`` so
     the container installs the same release the operator has locally.
+
+    Both modes install dependencies from ``requirements.lock.txt``, the
+    hash-pinned export of ``uv.lock`` shipped next to the Dockerfiles.
     """
     docker_resource = resources.files("mcpscanner.docker")
     with resources.as_file(docker_resource) as docker_path:
@@ -116,10 +124,15 @@ def prepare_docker_build(*, dockerfile: str) -> Tuple[Path, Path, Dict[str, str]
             else "Dockerfile.npm.wheel"
         )
         wheel_path = docker_path / wheel_dockerfile
-        if not wheel_path.is_file():
+        missing = [
+            name
+            for name in (wheel_dockerfile, DOCKER_REQUIREMENTS_LOCK)
+            if not (docker_path / name).is_file()
+        ]
+        if missing:
             raise DockerBuildError(
                 f"Docker assets missing from installed package "
-                f"({wheel_dockerfile!r} not found). Reinstall "
+                f"({', '.join(repr(m) for m in missing)} not found). Reinstall "
                 f"cisco-ai-mcp-scanner from a release that ships "
                 f"mcpscanner.docker package-data, or run from a source "
                 f"checkout so the image builds from the local tree."

@@ -22,6 +22,9 @@ def load_oauth_example():
     return module
 
 
+pytest.importorskip(
+    "mcp.server.mcpserver", reason="the OAuth example server requires MCP SDK 2.x"
+)
 oauth_server = load_oauth_example()
 
 

@@ -842,4 +842,6 @@ class TestWheelPackaging:
         docker = resources.files("mcpscanner.docker")
         assert (docker / "Dockerfile").is_file()
         assert (docker / "Dockerfile.wheel").is_file()
+        assert (docker / "Dockerfile.npm.wheel").is_file()
         assert (docker / "entrypoint.py").is_file()
+        assert (docker / "requirements.lock.txt").is_file()

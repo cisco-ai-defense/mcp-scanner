@@ -45,7 +45,7 @@ The SDK is designed to be easy to use while providing powerful scanning capabili
 
 - Python 3.11+
 - uv (Python package manager)
-- **MCP Python SDK** (`mcp>=2.0.0`, bundled with this package). Live scans negotiate `2026-07-28` when the server supports it and fall back to legacy handshake versions automatically.
+- **MCP Python SDK** (`mcp>=1.30.0,<3`, installed as a dependency; 2.0.x and 2.1.x are excluded for GHSA-84m7-p3x7-pcfv). With SDK 2.2 or later, live scans negotiate `2026-07-28` when the server supports it and fall back to legacy handshake versions automatically. SDK 1.x is supported for applications that pin `mcp<2`; it uses the legacy handshake only. The OAuth example servers under `examples/` require SDK 2.x.
 - A valid Cisco AI Defense API Key (optional)
 - LLM Provider API Key (optional)
 - VirusTotal API Key (optional, for binary file malware scanning)

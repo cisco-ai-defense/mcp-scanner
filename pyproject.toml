@@ -7,7 +7,7 @@ required-version = ">=0.8.17"
 
 [project]
 name = "cisco-ai-mcp-scanner"
-version = "4.8.7"
+version = "4.8.8"
 description = "A tool to scan MCP servers and tools for security findings"
 authors = [
     {name = "Cisco"},
@@ -21,33 +21,46 @@ classifiers = [
     "Operating System :: OS Independent",
     "Intended Audience :: Developers"
 ]
+# Abstract dependency constraints for downstream consumers (for example
+# DefenseClaw, which installs this package next to skill-scanner). Use floor
+# pins plus next-major ceilings, never exact pins. Reproducibility for our own
+# CI comes from the committed uv.lock; the scanner's Docker images install
+# mcpscanner/docker/requirements.lock.txt, its hash-pinned export.
 dependencies = [
-    "mcp[cli]>=2.0.0",
-    "httpx>=0.28.1",
-    "yara-python>=4.5.4",
-    "fastapi>=0.125.0",
-    "uvicorn>=0.29.0",
-    "pydantic>=2.6.0",
-    "python-dotenv>=1.0.0",
-    # Exact pin. 1.93.2 is the first 1.93 release that fixes CVE-2026-84377.
-    "litellm==1.93.2",
-    "expandvars>=0.12.0",
+    # 1.30.0 is the first 1.x release without GHSA-84m7-p3x7-pcfv,
+    # PYSEC-2026-3481/3482/3483 and GHSA-hvrp-rf83-w775, GHSA-jpw9-pfvf-9f58,
+    # GHSA-vj7q-gjh5-988w. 2.0.0 through 2.1.1 still carry GHSA-84m7-p3x7-pcfv.
+    # SDK 1.x stays supported so consumers on mcp<2 can install this package.
+    "mcp[cli]>=1.30.0,<3,!=2.0.*,!=2.1.*",
+    "httpx>=0.28.1,<1",
+    "yara-python>=4.5.4,<5",
+    "fastapi>=0.125.0,<1",
+    "uvicorn>=0.29.0,<1",
+    "pydantic>=2.6.0,<3",
+    "python-dotenv>=1.0.0,<2",
+    # CVE-2026-84377 (GHSA-3cv6-jpf6-8222) is fixed in 1.91.5, 1.92.2,
+    # 1.93.2, 1.94.3, 1.95.1 and 1.96.2; exclude the affected releases on the
+    # later lines, including 1.96.1, which is in the advisory range but not
+    # currently on PyPI. Exclude 1.107.0: hijacked PyPI wheels with a .pth
+    # credential stealer (BerriAI/litellm#47826).
+    "litellm>=1.91.5,<2,!=1.92.0,!=1.92.1,!=1.93.0,!=1.93.1,!=1.94.0,!=1.94.1,!=1.94.2,!=1.95.0,!=1.96.0,!=1.96.1,!=1.107.0",
+    "expandvars>=0.12.0,<2",
     # JS/TS parsing for npm behavioral analysis pins the shared tree-sitter
     # runtime to a tested ABI range (other language packs stay >=0.21.0,
     # which the <0.26 ceiling still satisfies).
     "tree-sitter>=0.23,<0.26",
-    "tree-sitter-python>=0.21.0",
+    "tree-sitter-python>=0.21.0,<1",
     "tree-sitter-javascript>=0.23,<0.26",
     "tree-sitter-typescript>=0.23,<0.26",
-    "tree-sitter-go>=0.21.0",
-    "tree-sitter-java>=0.21.0",
-    "tree-sitter-kotlin>=0.21.0",
-    "tree-sitter-c-sharp>=0.21.0",
-    "tree-sitter-ruby>=0.21.0",
-    "tree-sitter-rust>=0.21.0",
-    "tree-sitter-php>=0.21.0",
-    "puremagic>=1.28",
-    "pip-audit>=2.7.0",
+    "tree-sitter-go>=0.21.0,<1",
+    "tree-sitter-java>=0.21.0,<1",
+    "tree-sitter-kotlin>=0.21.0,<2",
+    "tree-sitter-c-sharp>=0.21.0,<1",
+    "tree-sitter-ruby>=0.21.0,<1",
+    "tree-sitter-rust>=0.21.0,<1",
+    "tree-sitter-php>=0.21.0,<1",
+    "puremagic>=1.28,<3",
+    "pip-audit>=2.7.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -57,44 +70,44 @@ js = [
     "tree-sitter-typescript>=0.23,<0.26",
 ]
 go = [
-    "tree-sitter>=0.21.0",
-    "tree-sitter-go>=0.21.0",
+    "tree-sitter>=0.21.0,<0.26",
+    "tree-sitter-go>=0.21.0,<1",
 ]
 java = [
-    "tree-sitter>=0.21.0",
-    "tree-sitter-java>=0.21.0",
+    "tree-sitter>=0.21.0,<0.26",
+    "tree-sitter-java>=0.21.0,<1",
 ]
 kotlin = [
-    "tree-sitter>=0.21.0",
-    "tree-sitter-kotlin>=0.21.0",
+    "tree-sitter>=0.21.0,<0.26",
+    "tree-sitter-kotlin>=0.21.0,<2",
 ]
 csharp = [
-    "tree-sitter>=0.21.0",
-    "tree-sitter-c-sharp>=0.21.0",
+    "tree-sitter>=0.21.0,<0.26",
+    "tree-sitter-c-sharp>=0.21.0,<1",
 ]
 ruby = [
-    "tree-sitter>=0.21.0",
-    "tree-sitter-ruby>=0.21.0",
+    "tree-sitter>=0.21.0,<0.26",
+    "tree-sitter-ruby>=0.21.0,<1",
 ]
 rust = [
-    "tree-sitter>=0.21.0",
-    "tree-sitter-rust>=0.21.0",
+    "tree-sitter>=0.21.0,<0.26",
+    "tree-sitter-rust>=0.21.0,<1",
 ]
 php = [
-    "tree-sitter>=0.21.0",
-    "tree-sitter-php>=0.21.0",
+    "tree-sitter>=0.21.0,<0.26",
+    "tree-sitter-php>=0.21.0,<1",
 ]
 all-languages = [
     "tree-sitter>=0.23,<0.26",
     "tree-sitter-javascript>=0.23,<0.26",
     "tree-sitter-typescript>=0.23,<0.26",
-    "tree-sitter-go>=0.21.0",
-    "tree-sitter-java>=0.21.0",
-    "tree-sitter-kotlin>=0.21.0",
-    "tree-sitter-c-sharp>=0.21.0",
-    "tree-sitter-ruby>=0.21.0",
-    "tree-sitter-rust>=0.21.0",
-    "tree-sitter-php>=0.21.0",
+    "tree-sitter-go>=0.21.0,<1",
+    "tree-sitter-java>=0.21.0,<1",
+    "tree-sitter-kotlin>=0.21.0,<2",
+    "tree-sitter-c-sharp>=0.21.0,<1",
+    "tree-sitter-ruby>=0.21.0,<1",
+    "tree-sitter-rust>=0.21.0,<1",
+    "tree-sitter-php>=0.21.0,<1",
 ]
 
 [dependency-groups]
@@ -151,6 +164,7 @@ exclude = ["examples*", "evals*"]
     "Dockerfile.npm.wheel",
     "entrypoint.py",
     "entrypoint_npm.py",
+    "requirements.lock.txt",
 ]
 
 # Code formatting and linting configuration

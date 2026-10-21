@@ -1,13 +1,21 @@
 # PyPI scanner image for wheel-only installs (no source checkout).
-# Installs a pinned cisco-ai-mcp-scanner release from PyPI.
+# Installs a pinned cisco-ai-mcp-scanner release from PyPI. Its dependencies
+# come from the requirements.lock.txt shipped in that release (the
+# hash-pinned export of uv.lock), and the scanner is installed with --no-deps
+# so pip cannot re-resolve them.
 
 ARG PYTHON_BASE_IMAGE=python:3.13-alpine@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0
 FROM ${PYTHON_BASE_IMAGE}
 
 ARG SCANNER_PACKAGE_VERSION
 
+COPY requirements.lock.txt /tmp/requirements.lock.txt
+
 RUN apk add --no-cache gcc musl-dev libffi-dev \
- && pip install --no-cache-dir "cisco-ai-mcp-scanner==${SCANNER_PACKAGE_VERSION}" \
+ && pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock.txt \
+ && pip install --no-cache-dir --no-deps "cisco-ai-mcp-scanner==${SCANNER_PACKAGE_VERSION}" \
+ && pip check \
+ && rm /tmp/requirements.lock.txt \
  && apk del gcc musl-dev libffi-dev
 
 COPY entrypoint.py /entrypoint.py
