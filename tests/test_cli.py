@@ -833,6 +833,7 @@ class TestMainGlobalEnvFlags:
 
         from mcpscanner.cli import main
 
+        monkeypatch.setenv("MCP_SCANNER_API_KEY", "")
         monkeypatch.delenv("MCP_SCANNER_API_KEY", raising=False)
         test_args = [
             "mcp-scanner",
