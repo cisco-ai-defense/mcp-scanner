@@ -24,7 +24,8 @@ classifiers = [
 # Abstract dependency constraints for downstream consumers (for example
 # DefenseClaw, which installs this package next to skill-scanner). Use floor
 # pins plus next-major ceilings, never exact pins. Reproducibility for our own
-# CI and Docker builds comes from the committed uv.lock.
+# CI comes from the committed uv.lock; the scanner's Docker images install
+# mcpscanner/docker/requirements.lock.txt, its hash-pinned export.
 dependencies = [
     # 1.30.0 is the first 1.x release without GHSA-84m7-p3x7-pcfv,
     # PYSEC-2026-3481/3482/3483 and GHSA-hvrp-rf83-w775, GHSA-jpw9-pfvf-9f58,
@@ -39,9 +40,10 @@ dependencies = [
     "python-dotenv>=1.0.0,<2",
     # CVE-2026-84377 (GHSA-3cv6-jpf6-8222) is fixed in 1.91.5, 1.92.2,
     # 1.93.2, 1.94.3, 1.95.1 and 1.96.2; exclude the affected releases on the
-    # later lines. Exclude 1.107.0: hijacked PyPI wheels with a .pth credential
-    # stealer (BerriAI/litellm#47826).
-    "litellm>=1.91.5,<2,!=1.92.0,!=1.92.1,!=1.93.0,!=1.93.1,!=1.94.0,!=1.94.1,!=1.94.2,!=1.95.0,!=1.96.0,!=1.107.0",
+    # later lines, including 1.96.1, which is in the advisory range but not
+    # currently on PyPI. Exclude 1.107.0: hijacked PyPI wheels with a .pth
+    # credential stealer (BerriAI/litellm#47826).
+    "litellm>=1.91.5,<2,!=1.92.0,!=1.92.1,!=1.93.0,!=1.93.1,!=1.94.0,!=1.94.1,!=1.94.2,!=1.95.0,!=1.96.0,!=1.96.1,!=1.107.0",
     "expandvars>=0.12.0,<2",
     # JS/TS parsing for npm behavioral analysis pins the shared tree-sitter
     # runtime to a tested ABI range (other language packs stay >=0.21.0,
@@ -162,6 +164,7 @@ exclude = ["examples*", "evals*"]
     "Dockerfile.npm.wheel",
     "entrypoint.py",
     "entrypoint_npm.py",
+    "requirements.lock.txt",
 ]
 
 # Code formatting and linting configuration

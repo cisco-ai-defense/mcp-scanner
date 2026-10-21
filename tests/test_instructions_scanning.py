@@ -357,15 +357,13 @@ async def test_scan_remote_server_instructions_error_handling(config):
 async def test_scan_instructions_api_endpoint():
     """Test the /scan-instructions API endpoint."""
     from mcpscanner.api.router import router
-    from mcpscanner.core.models import SpecificInstructionsScanRequest
-    from fastapi.testclient import TestClient
     from fastapi import FastAPI
 
     app = FastAPI()
     app.include_router(router)
 
-    # This is a basic structure test - full integration test would require more setup
-    assert any(route.path == "/scan-instructions" for route in app.routes)
+    # app.routes holds router wrappers on newer FastAPI; check the public surface.
+    assert "post" in app.openapi()["paths"]["/scan-instructions"]
 
 
 # --- Test Result Formatting ---

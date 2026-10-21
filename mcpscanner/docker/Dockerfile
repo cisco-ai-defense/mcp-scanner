@@ -2,7 +2,9 @@
 #
 # ``INSTALL_FROM_SOURCE=1`` builds from the checkout (recommended while
 # developing this branch). Otherwise ``SCANNER_PACKAGE_VERSION`` pins the
-# PyPI release installed inside the container.
+# PyPI release installed inside the container. Either way, dependencies come
+# from requirements.lock.txt (the hash-pinned export of uv.lock) and the
+# scanner is installed with --no-deps so pip cannot re-resolve them.
 
 ARG PYTHON_BASE_IMAGE=python:3.13-alpine@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0
 FROM ${PYTHON_BASE_IMAGE}
@@ -14,16 +16,19 @@ RUN apk add --no-cache gcc musl-dev libffi-dev
 
 WORKDIR /build
 
-COPY pyproject.toml README.md uv.lock ./
+COPY pyproject.toml README.md ./
 COPY mcpscanner ./mcpscanner
 
-RUN if [ "$INSTALL_FROM_SOURCE" = "1" ]; then \
-      pip install --no-cache-dir .; \
+RUN pip install --no-cache-dir --require-hashes \
+      -r mcpscanner/docker/requirements.lock.txt \
+ && if [ "$INSTALL_FROM_SOURCE" = "1" ]; then \
+      pip install --no-cache-dir --no-deps .; \
     elif [ -n "$SCANNER_PACKAGE_VERSION" ]; then \
-      pip install --no-cache-dir "cisco-ai-mcp-scanner==${SCANNER_PACKAGE_VERSION}"; \
+      pip install --no-cache-dir --no-deps "cisco-ai-mcp-scanner==${SCANNER_PACKAGE_VERSION}"; \
     else \
-      pip install --no-cache-dir cisco-ai-mcp-scanner; \
+      pip install --no-cache-dir --no-deps cisco-ai-mcp-scanner; \
     fi \
+ && pip check \
  && apk del gcc musl-dev libffi-dev
 
 COPY mcpscanner/docker/entrypoint.py /entrypoint.py
