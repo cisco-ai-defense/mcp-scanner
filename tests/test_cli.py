@@ -740,3 +740,116 @@ class TestStaticSubcommandCLI:
             # Static subcommand uses unified output format - resources appear as scanned items
             assert "Total tools scanned: 1" in captured.out
             assert "Safe items: 1" in captured.out
+
+
+class TestMainGlobalEnvFlags:
+    """Regression tests for issue #251.
+
+    A local ``import os`` inside the ``vulnerable-package`` branch of
+    ``main()`` made ``os`` function-local for the whole of ``main()``, so
+    every global flag that writes ``os.environ`` (e.g. ``--api-key``) crashed
+    with ``UnboundLocalError`` before the local import was ever reached.
+    """
+
+    @pytest.fixture
+    def issue_251_tools_file(self, tmp_path):
+        """Create a temporary tools JSON file for the static subcommand."""
+        tools_data = {
+            "tools": [
+                {
+                    "name": "test_tool",
+                    "description": "A test tool",
+                    "inputSchema": {"type": "object"},
+                }
+            ]
+        }
+        file_path = tmp_path / "tools.json"
+        with open(file_path, "w") as f:
+            json.dump(tools_data, f)
+        return str(file_path)
+
+    @staticmethod
+    def _shadowed_module_imports():
+        """Module-level import names that ``main()`` rebinds with a local
+        ``import`` placed after their first use in ``main()``.
+
+        Returns a dict of ``name -> (module_import_line, local_import_line,
+        first_use_line)``. Any entry here is an ``UnboundLocalError`` waiting
+        to happen for every use before the local import.
+        """
+        import ast
+        from pathlib import Path
+
+        cli_path = Path(__file__).resolve().parent.parent / "mcpscanner" / "cli.py"
+        tree = ast.parse(cli_path.read_text())
+
+        def imported_names(nodes):
+            names = {}
+            for node in nodes:
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        names[alias.asname or alias.name.split(".")[0]] = node.lineno
+                elif isinstance(node, ast.ImportFrom):
+                    for alias in node.names:
+                        names[alias.asname or alias.name] = node.lineno
+            return names
+
+        module_imports = imported_names(tree.body)
+        main_fn = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "main"
+        )
+        local_imports = imported_names(ast.walk(main_fn))
+        first_use = {}
+        for node in ast.walk(main_fn):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                first_use.setdefault(node.id, node.lineno)
+
+        return {
+            name: (module_imports[name], local_imports[name], first_use[name])
+            for name in local_imports
+            if name in module_imports
+            and name in first_use
+            and first_use[name] < local_imports[name]
+        }
+
+    def test_main_does_not_shadow_module_imports(self):
+        """No local import inside main() may shadow a module-level name that
+        main() already uses (issue #251)."""
+        shadowed = self._shadowed_module_imports()
+        assert not shadowed, (
+            "main() locally re-imports module-level names after their first "
+            f"use, making them unbound locals: {shadowed}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_api_key_flag_does_not_raise_unbound_local_error(
+        self, issue_251_tools_file, capsys, monkeypatch
+    ):
+        """End-to-end repro of #251: ``--api-key`` must set the env var and
+        the scan must proceed instead of raising ``UnboundLocalError``."""
+        import os
+
+        from mcpscanner.cli import main
+
+        monkeypatch.setenv("MCP_SCANNER_API_KEY", "")
+        monkeypatch.delenv("MCP_SCANNER_API_KEY", raising=False)
+        test_args = [
+            "mcp-scanner",
+            "--api-key",
+            "test-key-251",
+            "--analyzers",
+            "yara",
+            "static",
+            "--tools",
+            issue_251_tools_file,
+        ]
+        with patch("sys.argv", test_args):
+            await main()
+
+        captured = capsys.readouterr()
+        assert "UnboundLocalError" not in captured.out
+        assert "UnboundLocalError" not in captured.err
+        assert os.environ.get("MCP_SCANNER_API_KEY") == "test-key-251"
+        assert "Total tools scanned: 1" in captured.out
