@@ -175,6 +175,39 @@ def _family_for_empty_mime(name: str) -> str:
     return "application"
 
 
+def _is_bare_uuencode_match(mime: str, name: str) -> bool:
+    """True for puremagic's malformed ``begin`` hit.
+
+    The byte string ``begin`` with no following space is reported as
+    ``UUencoded file`` and an empty MIME. A real header (``begin 644 ``)
+    is a different match, ``text/x-uuencode``, and must not be folded into
+    this one.
+    """
+    return not mime and name.lower() == "uuencoded file"
+
+
+def file_has_uuencode_header(file_path: str) -> bool:
+    """Return True when the file starts with ``begin <octal-mode> ``.
+
+    Mode is 3 or 4 octal digits. A bare ``begin`` or ``begin the …`` does
+    not match, so ordinary prose is not selected for upload.
+    """
+    try:
+        with open(file_path, "rb") as handle:
+            header = handle.read(16)
+    except OSError:
+        return False
+    if not header.startswith(b"begin "):
+        return False
+    rest = header[6:]
+    mode_len = 0
+    while mode_len < len(rest) and rest[mode_len : mode_len + 1] in b"01234567":
+        mode_len += 1
+    if mode_len not in (3, 4):
+        return False
+    return mode_len < len(rest) and rest[mode_len : mode_len + 1] == b" "
+
+
 def file_contains_executable_signature(
     file_path: str, limit: int = _EMBEDDED_SCAN_BYTES
 ) -> bool:
@@ -206,22 +239,26 @@ def _result_from_matches(matches) -> Optional[MagicResult]:
     mime = best.mime_type or ""
     ext = best.extension or ""
     name = best.name or ""
-    if not mime and (name or ext):
+    # The bare ``begin`` hit has a name and no MIME. Keeping it would mark
+    # a .txt file as a binary. Drop only that hit; a later text/x-uuencode
+    # match, when present, still describes a real uuencode header.
+    if not mime and (name or ext) and not _is_bare_uuencode_match(mime, name):
         return MagicResult(
             mime_type="",
             extension=ext,
             name=name,
             content_family=_family_for_empty_mime(name),
         )
-    if not mime:
+    if not mime or _is_bare_uuencode_match(mime, name):
         for later in matches[1:]:
             later_mime = later.mime_type or ""
-            if not later_mime:
+            later_name = later.name or ""
+            if not later_mime or _is_bare_uuencode_match(later_mime, later_name):
                 continue
             return MagicResult(
                 mime_type=later_mime,
                 extension=later.extension or "",
-                name=later.name or "",
+                name=later_name,
                 content_family=_classify_family(later_mime),
             )
         return None

@@ -40,7 +40,11 @@ import httpx
 
 from ...threats.threats import ThreatMapping
 from .base import SecurityFinding
-from ...utils.file_magic import detect_magic, file_contains_executable_signature
+from ...utils.file_magic import (
+    detect_magic,
+    file_contains_executable_signature,
+    file_has_uuencode_header,
+)
 from ...utils.path_safety import filter_safe_paths, safe_resolve_root
 
 logger = logging.getLogger(__name__)
@@ -593,6 +597,10 @@ class VirusTotalAnalyzer:
                     an ELF/Mach-O signature in that window.
         """
         try:
+            # A complete ``begin 644 name`` header is text/x-uuencode, which
+            # would otherwise be skipped. A bare ``begin`` is not this header.
+            if file_has_uuencode_header(file_path):
+                return True
             result = detect_magic(file_path)
             if result is not None and result.content_family not in _TEXT_ONLY_FAMILIES:
                 return True  # Magic disagrees — non-text content

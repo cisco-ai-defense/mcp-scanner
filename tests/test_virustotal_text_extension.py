@@ -91,6 +91,38 @@ def test_bom_text_is_not_scanned(tmp_path):
     assert analyzer._should_scan_file(str(path)) is False
 
 
+def test_bare_begin_is_not_scanned(tmp_path):
+    """``begin`` with no mode is puremagic's empty-MIME uuencode hit."""
+    pytest.importorskip("puremagic")
+    path = tmp_path / "notes.txt"
+    path.write_bytes(b"begin\nthis is a sentence about the beginning.\n")
+
+    result = file_magic.detect_magic(str(path))
+    assert result is None or result.content_family == "text"
+
+    analyzer = VirusTotalAnalyzer()
+    assert analyzer._should_scan_file(str(path)) is False
+
+
+def test_uuencode_header_is_scanned(tmp_path):
+    """A real ``begin <mode> <name>`` header is still selected."""
+    pytest.importorskip("puremagic")
+    path = tmp_path / "payload.txt"
+    path.write_bytes(b"begin 644 payload.bin\nM5&AE(&AA\n`\nend\n")
+
+    analyzer = VirusTotalAnalyzer()
+    assert analyzer._should_scan_file(str(path)) is True
+
+
+def test_begin_prose_is_not_scanned(tmp_path):
+    pytest.importorskip("puremagic")
+    path = tmp_path / "notes.txt"
+    path.write_bytes(b"begin the report with a summary.\n")
+
+    analyzer = VirusTotalAnalyzer()
+    assert analyzer._should_scan_file(str(path)) is False
+
+
 def test_elf_past_the_scan_window_is_not_scanned(tmp_path):
     pytest.importorskip("puremagic")
     path = tmp_path / "payload.txt"
