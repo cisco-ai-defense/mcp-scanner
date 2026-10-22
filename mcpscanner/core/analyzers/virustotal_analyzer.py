@@ -585,7 +585,8 @@ class VirusTotalAnalyzer:
         Check if magic bytes indicate the file is NOT text.
 
         Returns:
-            True  → magic says non-text (scan it).
+            True  → magic says non-text (scan it). A named signature with an
+                    empty MIME counts as non-text.
             False → magic says text, no signature, or puremagic unavailable.
         """
         try:

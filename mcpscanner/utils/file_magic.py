@@ -46,8 +46,9 @@ try:
 
     _PUREMAGIC_AVAILABLE = True
 except ImportError:
-    logger.debug(
+    logger.warning(
         "puremagic is not installed — magic-byte detection disabled. "
+        "Files with a text extension will be skipped without a content check. "
         "Install with: pip install puremagic"
     )
 
@@ -138,6 +139,48 @@ class MagicResult:
     content_family: str  # "text", "image", "audio", "video", "application", "unknown"
 
 
+def _result_from_matches(matches) -> Optional[MagicResult]:
+    """Turn puremagic matches into a MagicResult.
+
+    A best match that has a name or extension but no MIME is kept and
+    classified as non-text. puremagic reports ELF that way ("ELF executable",
+    empty MIME). Discarding it made ``detect_magic`` return None, and the
+    VirusTotal selector then treated a ``.txt`` file as confirmed text.
+    """
+    if not matches:
+        return None
+
+    best = matches[0]
+    mime = best.mime_type or ""
+    ext = best.extension or ""
+    name = best.name or ""
+    if not mime and (name or ext):
+        return MagicResult(
+            mime_type="",
+            extension=ext,
+            name=name,
+            content_family="application",
+        )
+    if not mime:
+        for later in matches[1:]:
+            later_mime = later.mime_type or ""
+            if not later_mime:
+                continue
+            return MagicResult(
+                mime_type=later_mime,
+                extension=later.extension or "",
+                name=later.name or "",
+                content_family=_classify_family(later_mime),
+            )
+        return None
+    return MagicResult(
+        mime_type=mime,
+        extension=ext,
+        name=name,
+        content_family=_classify_family(mime),
+    )
+
+
 def detect_magic(file_path: str) -> Optional[MagicResult]:
     """
     Detect file type using magic bytes via puremagic.
@@ -148,31 +191,14 @@ def detect_magic(file_path: str) -> Optional[MagicResult]:
     Returns:
         MagicResult if a signature was found, None otherwise.
         Returns None when puremagic is not installed (graceful fallback).
+        A named signature with an empty MIME is still a result, classified
+        as non-text.
     """
     if not _PUREMAGIC_AVAILABLE:
         return None
 
     try:
-        matches = puremagic.magic_file(file_path)
-        if not matches:
-            return None
-
-        # puremagic returns a list of matches sorted by confidence; take the best
-        best = matches[0]
-        mime = best.mime_type or ""
-        ext = best.extension or ""
-        name = best.name or ""
-
-        # If MIME is empty, the match is low-confidence — treat as no match
-        if not mime:
-            return None
-
-        return MagicResult(
-            mime_type=mime,
-            extension=ext,
-            name=name,
-            content_family=_classify_family(mime),
-        )
+        return _result_from_matches(puremagic.magic_file(file_path))
     except Exception as exc:
         logger.debug("Magic-byte detection failed for %s: %s", file_path, exc)
         return None
@@ -192,21 +218,7 @@ def detect_magic_bytes(data: bytes) -> Optional[MagicResult]:
         return None
 
     try:
-        matches = puremagic.magic_string(data)
-        if not matches:
-            return None
-
-        best = matches[0]
-        mime = best.mime_type or ""
-        ext = best.extension or ""
-        name = best.name or ""
-
-        return MagicResult(
-            mime_type=mime,
-            extension=ext,
-            name=name,
-            content_family=_classify_family(mime),
-        )
+        return _result_from_matches(puremagic.magic_string(data))
     except Exception as exc:
         logger.debug("Magic-byte detection failed for bytes: %s", exc)
         return None
