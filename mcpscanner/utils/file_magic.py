@@ -189,9 +189,10 @@ def _is_bare_uuencode_match(mime: str, name: str) -> bool:
 def file_has_uuencode_header(file_path: str) -> bool:
     """Return True when the file starts with ``begin <octal-mode> <name>``.
 
-    Mode is 3 or 4 octal digits, and at least one filename byte is required
-    before the newline. ``begin``, ``begin the …``, and ``begin 644`` with
-    no name do not match, so ordinary prose is not selected for upload.
+    Mode is 3 or 4 octal digits. The filename must be non-empty and the
+    header line must end with a newline inside the bytes read. ``begin``,
+    ``begin the …``, ``begin 644`` with no name, and ``begin 644 name``
+    with no newline do not match.
     """
     try:
         with open(file_path, "rb") as handle:
@@ -208,7 +209,10 @@ def file_has_uuencode_header(file_path: str) -> bool:
         return False
     if mode_len >= len(rest) or rest[mode_len : mode_len + 1] != b" ":
         return False
-    name = rest[mode_len + 1 :].split(b"\n", 1)[0]
+    remainder = rest[mode_len + 1 :]
+    if b"\n" not in remainder:
+        return False
+    name = remainder.split(b"\n", 1)[0]
     return bool(name.strip(b" \t"))
 
 

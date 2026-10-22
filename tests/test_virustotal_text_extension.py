@@ -125,6 +125,17 @@ def test_uuencode_header_without_filename_is_not_scanned(tmp_path):
     assert analyzer._should_scan_file(str(path)) is False
 
 
+def test_uuencode_header_without_newline_is_not_scanned(tmp_path):
+    """``begin 644 payload.bin`` with no newline is not a complete header."""
+    pytest.importorskip("puremagic")
+    path = tmp_path / "notes.txt"
+    path.write_bytes(b"begin 644 payload.bin")
+
+    assert file_magic.file_has_uuencode_header(str(path)) is False
+    analyzer = VirusTotalAnalyzer()
+    assert analyzer._should_scan_file(str(path)) is False
+
+
 def test_begin_prose_is_not_scanned(tmp_path):
     pytest.importorskip("puremagic")
     path = tmp_path / "notes.txt"
