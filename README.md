@@ -108,6 +108,8 @@ Add MCP Scanner as a dependency using uv. From your project root (initialize wit
 ```bash
 uv init --python 3.13 #if not already done
 uv add cisco-ai-mcp-scanner
+# LLM, meta, and behavioral alignment analyzers:
+# uv add cisco-ai-mcp-scanner[llm]
 # then activate the virtual environment:
 ## macOS and Linux: source .venv/bin/activate
 ## Windows CMD: .venv\Scripts\activate

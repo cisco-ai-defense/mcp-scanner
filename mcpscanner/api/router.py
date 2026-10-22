@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..core.analyzers.meta_analyzer import build_meta_audit_payload
+from ..utils.optional_litellm import LiteLLMNotInstalledError
 from ..core.auth import Auth
 from ..core.exceptions import (
     MCPAuthenticationError,
@@ -53,6 +54,18 @@ from ..core.auth import AuthType
 
 router = APIRouter()
 logger = get_logger(__name__)
+
+
+def _http_exception_for_scan_failure(exc: Exception) -> HTTPException:
+    """Map a scan failure to an HTTP error.
+
+    A missing tool or server stays 404. A missing LiteLLM install is a
+    client configuration error, so it is 400.
+    """
+    detail = str(exc)
+    if isinstance(exc, LiteLLMNotInstalledError):
+        return HTTPException(status_code=400, detail=detail)
+    return HTTPException(status_code=404, detail=detail)
 
 
 def _hybrid_routing_kwargs(request: APIScanRequest) -> Dict[str, Optional[str]]:
@@ -471,7 +484,7 @@ async def scan_tool_endpoint(
 
     except ValueError as e:
         logger.error(f"ValueError in tool scan: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
+        raise _http_exception_for_scan_failure(e)
     except MCPAuthenticationError as e:
         logger.error(f"Authentication error in tool scan: {str(e)}")
         raise HTTPException(status_code=401, detail=str(e))
@@ -566,7 +579,7 @@ async def scan_all_tools_endpoint(
 
     except ValueError as e:
         logger.error(f"ValueError in full server scan: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
+        raise _http_exception_for_scan_failure(e)
     except MCPAuthenticationError as e:
         logger.error(f"Authentication error in full server scan: {str(e)}")
         raise HTTPException(status_code=401, detail=str(e))
@@ -647,7 +660,7 @@ async def scan_prompt_endpoint(
 
     except ValueError as e:
         logger.error(f"ValueError in prompt scan: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
+        raise _http_exception_for_scan_failure(e)
     except MCPAuthenticationError as e:
         logger.error(f"Authentication error in prompt scan: {str(e)}")
         raise HTTPException(status_code=401, detail=str(e))
@@ -739,7 +752,7 @@ async def scan_all_prompts_endpoint(
 
     except ValueError as e:
         logger.error(f"ValueError in prompt scan: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
+        raise _http_exception_for_scan_failure(e)
     except MCPAuthenticationError as e:
         logger.error(f"Authentication error in prompt scan: {str(e)}")
         raise HTTPException(status_code=401, detail=str(e))
@@ -825,7 +838,7 @@ async def scan_resource_endpoint(
 
     except ValueError as e:
         logger.error(f"ValueError in resource scan: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
+        raise _http_exception_for_scan_failure(e)
     except MCPAuthenticationError as e:
         logger.error(f"Authentication error in resource scan: {str(e)}")
         raise HTTPException(status_code=401, detail=str(e))
@@ -944,7 +957,7 @@ async def scan_all_resources_endpoint(
 
     except ValueError as e:
         logger.error(f"ValueError in resource scan: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
+        raise _http_exception_for_scan_failure(e)
     except MCPAuthenticationError as e:
         logger.error(f"Authentication error in resource scan: {str(e)}")
         raise HTTPException(status_code=401, detail=str(e))
@@ -1019,7 +1032,7 @@ async def scan_instructions_endpoint(
 
     except ValueError as e:
         logger.error(f"ValueError in instructions scan: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
+        raise _http_exception_for_scan_failure(e)
     except MCPAuthenticationError as e:
         logger.error(f"Authentication error in instructions scan: {str(e)}")
         raise HTTPException(status_code=401, detail=str(e))

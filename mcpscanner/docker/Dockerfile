@@ -18,11 +18,11 @@ COPY pyproject.toml README.md uv.lock ./
 COPY mcpscanner ./mcpscanner
 
 RUN if [ "$INSTALL_FROM_SOURCE" = "1" ]; then \
-      pip install --no-cache-dir .; \
+      pip install --no-cache-dir ".[llm]"; \
     elif [ -n "$SCANNER_PACKAGE_VERSION" ]; then \
-      pip install --no-cache-dir "cisco-ai-mcp-scanner==${SCANNER_PACKAGE_VERSION}"; \
+      pip install --no-cache-dir "cisco-ai-mcp-scanner[llm]==${SCANNER_PACKAGE_VERSION}"; \
     else \
-      pip install --no-cache-dir cisco-ai-mcp-scanner; \
+      pip install --no-cache-dir "cisco-ai-mcp-scanner[llm]"; \
     fi \
  && apk del gcc musl-dev libffi-dev
 

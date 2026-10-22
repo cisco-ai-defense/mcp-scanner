@@ -22,7 +22,6 @@ Provides both a programmatic API and a REST API server.
 
 from .core.analyzers.api_analyzer import ApiAnalyzer
 from .core.analyzers.base import BaseAnalyzer, SecurityFinding
-from .core.analyzers.llm_analyzer import LLMAnalyzer
 from .core.analyzers.yara_analyzer import YaraAnalyzer
 from .core.auth import (
     InMemoryTokenStorage,
@@ -81,3 +80,12 @@ __all__ = [
     "set_log_level",
     "set_verbose_logging",
 ]
+
+
+def __getattr__(name: str):
+    """Import the LLM analyzer only when a caller asks for it."""
+    if name == "LLMAnalyzer":
+        from .core.analyzers.llm_analyzer import LLMAnalyzer
+
+        return LLMAnalyzer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

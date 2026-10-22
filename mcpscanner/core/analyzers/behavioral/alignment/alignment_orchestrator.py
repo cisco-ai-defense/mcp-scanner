@@ -43,7 +43,6 @@ from .....utils.analyzer_errors import (
 from .....utils.log_format import sanitize_log_value, truncate
 from ....static_analysis.context_extractor import FunctionContext
 from .alignment_prompt_builder import AlignmentPromptBuilder
-from .alignment_llm_client import AlignmentLLMClient
 from .alignment_response_validator import AlignmentResponseValidator, is_unanalysed
 from .threat_vulnerability_classifier import ThreatVulnerabilityClassifier
 
@@ -70,6 +69,9 @@ class AlignmentOrchestrator:
             ValueError: If LLM configuration is missing
         """
         self.logger = logging.getLogger(__name__)
+
+        # Imported here so loading the orchestrator module does not import LiteLLM.
+        from .alignment_llm_client import AlignmentLLMClient
 
         # Initialize alignment verification components
         self.prompt_builder = AlignmentPromptBuilder()

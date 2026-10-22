@@ -55,7 +55,6 @@ from mcpscanner.core.auth import Auth
 from mcpscanner.core.mcp_models import StdioServer
 from mcpscanner.core.analyzers.static_analyzer import StaticAnalyzer
 from mcpscanner.core.analyzers.yara_analyzer import YaraAnalyzer
-from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
 from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.virustotal_analyzer import VirusTotalAnalyzer
 from mcpscanner.core.analyzers.protocol_analyzer import ProtocolAnalyzer
@@ -461,6 +460,18 @@ def _build_behavioral_results(
     return results
 
 
+def _load_behavioral_analyzer(config):
+    """Construct the behavioral analyzer, or exit if LiteLLM is not installed."""
+    from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
+    from mcpscanner.utils.optional_litellm import LiteLLMNotInstalledError
+
+    try:
+        return BehavioralCodeAnalyzer(config)
+    except LiteLLMNotInstalledError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+
 async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
     """Run behavioral analyzer on source code and format results.
 
@@ -472,10 +483,8 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
         analyzer visited, regardless of whether it produced a finding. Tools
         with no behavioral mismatch are included with ``is_safe=True``.
     """
-    from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
-
     cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
-    analyzer = BehavioralCodeAnalyzer(cfg)
+    analyzer = _load_behavioral_analyzer(cfg)
 
     findings = await analyzer.analyze(source_path, context={"file_path": source_path})
 
@@ -1928,13 +1937,26 @@ async def main():
             if AnalyzerEnum.YARA in selected_analyzers:
                 analyzers.append(YaraAnalyzer(rules_dir=args.rules_path))
             if AnalyzerEnum.LLM in selected_analyzers:
-                if cfg.llm_provider_api_key:
-                    analyzers.append(LLMAnalyzer(cfg))
-                else:
+                from mcpscanner.utils.optional_litellm import (
+                    LITELLM_REQUIRED_MESSAGE,
+                    litellm_importable,
+                )
+
+                if not cfg.llm_provider_api_key:
+                    # A Bedrock model name alone does not count. Without an
+                    # API key the LLM analyzer does not run, and a combined
+                    # YARA scan must still finish.
                     print(
                         "Warning: LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not set",
                         file=sys.stderr,
                     )
+                elif not litellm_importable():
+                    print(f"Error: {LITELLM_REQUIRED_MESSAGE}", file=sys.stderr)
+                    sys.exit(1)
+                else:
+                    from mcpscanner.core.analyzers.llm_analyzer import LLMAnalyzer
+
+                    analyzers.append(LLMAnalyzer(cfg))
             if AnalyzerEnum.API in selected_analyzers:
                 if cfg.api_key:
                     analyzers.append(ApiAnalyzer(cfg))
@@ -2061,6 +2083,23 @@ async def main():
                 # is intentionally dropped here — the meta-only path
                 # never touches Yara.
                 meta_scanner = Scanner.for_meta_only(cfg)
+                if meta_scanner._meta_analyzer is None:
+                    # for_meta_only swallows a missing LiteLLM install so
+                    # YARA-only construction can stay quiet. Meta was
+                    # requested here, so that miss has to fail the command
+                    # instead of returning the primary findings unchanged.
+                    try:
+                        meta_scanner._validate_analyzer_requirements(
+                            [AnalyzerEnum.META]
+                        )
+                    except ValueError as exc:
+                        print(f"Error: {exc}", file=sys.stderr)
+                        sys.exit(1)
+                    print(
+                        "Error: Meta analyzer requested but failed to initialize",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
                 all_results = await meta_scanner.apply_meta_to_results(
                     all_results, [AnalyzerEnum.META]
                 )
@@ -2447,9 +2486,7 @@ async def main():
             # This follows the same pattern as other analyzers but operates on source files
             cfg = _build_config([AnalyzerEnum.BEHAVIORAL])
 
-            from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
-
-            analyzer = BehavioralCodeAnalyzer(cfg)
+            analyzer = _load_behavioral_analyzer(cfg)
 
             source_path = args.source_path
 

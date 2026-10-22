@@ -24,7 +24,6 @@ import asyncio
 import json
 import secrets
 from typing import Any, Dict, List, Optional
-from litellm import acompletion
 
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
@@ -35,7 +34,19 @@ from ...utils.analyzer_errors import (
     classify_analyzer_error,
     retry_transient_async,
 )
+from ...utils.optional_litellm import require_acompletion
 from .base import BaseAnalyzer, SecurityFinding
+
+# Tests patch this name. It stays unset until an analyzer is constructed
+# so importing this module does not import LiteLLM.
+acompletion = None
+
+
+def _bind_acompletion() -> None:
+    """Import LiteLLM the first time an LLM analyzer is constructed."""
+    global acompletion
+    if acompletion is None:
+        acompletion = require_acompletion()
 
 
 class SecurityError(Exception):
@@ -70,6 +81,7 @@ class LLMAnalyzer(BaseAnalyzer):
             config (Config): The configuration for the analyzer.
         """
         super().__init__("LLMAnalyzer")
+        _bind_acompletion()
         self._config = config
 
         # Get model configuration from config

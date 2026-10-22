@@ -30,8 +30,6 @@ import itertools
 import logging
 import time
 
-from litellm import acompletion
-
 from .....config.config import Config
 from .....config.constants import MCPScannerConstants
 from .....utils.analyzer_errors import (
@@ -42,6 +40,18 @@ from .....utils.analyzer_errors import (
     retry_transient_async,
 )
 from .....utils.log_format import ERROR_TRUNCATE, RESPONSE_DEBUG_MAX, truncate
+from .....utils.optional_litellm import require_acompletion
+
+# Tests patch this name. It stays unset until a client is constructed
+# so importing this module does not import LiteLLM.
+acompletion = None
+
+
+def _bind_acompletion() -> None:
+    """Import LiteLLM the first time an alignment client is constructed."""
+    global acompletion
+    if acompletion is None:
+        acompletion = require_acompletion()
 
 
 # Process-wide, monotonically increasing counters used for log
@@ -106,9 +116,12 @@ class AlignmentLLMClient:
             config: Configuration containing LLM credentials and settings
 
         Raises:
+            ImportError: If LiteLLM is not installed. Install
+                ``cisco-ai-mcp-scanner[llm]``.
             ValueError: If a non-Bedrock provider is configured but no
                 ``llm_provider_api_key`` is set.
         """
+        _bind_acompletion()
         self._model = config.llm_model
         self._max_tokens = config.llm_max_tokens
         self._temperature = config.llm_temperature
