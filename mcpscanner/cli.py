@@ -513,12 +513,21 @@ def _display_scan_error(
                 "  - Verify the URL is correct (including protocol and port)\n"
                 "  - Check if the server is accessible from your network"
             )
+        # soft_wrap=False here, overriding the shared console's default:
+        # a Panel can't let content overflow its border, so with soft
+        # wrapping on, Rich crops the message after the first line
+        # instead of wrapping it -- silently dropping the rest of the
+        # error. Wrapping (not cropping) is what we actually want inside
+        # a bordered box; soft_wrap=True on the console is there for
+        # plain text and table cells, where the alternative is a forced
+        # line break instead of narrower-than-necessary cropping.
         out.print(
             Panel(
                 f"{escape(str(exc))}{tips}",
                 title="[bold red]Connection Error[/bold red]",
                 border_style="red",
-            )
+            ),
+            soft_wrap=False,
         )
         return
     out.print(
@@ -526,7 +535,8 @@ def _display_scan_error(
             escape(str(exc)),
             title="[bold red]Error scanning server[/bold red]",
             border_style="red",
-        )
+        ),
+        soft_wrap=False,
     )
 
 

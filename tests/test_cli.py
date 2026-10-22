@@ -438,6 +438,49 @@ class TestScanMcpServerDirect:
                 assert "Connection failed" in captured.err
 
     @pytest.mark.asyncio
+    async def test_main_scan_error_panel_does_not_crop_long_messages(self, capsys):
+        """The shared console's soft_wrap=True is for plain text and table
+        cells (don't force a line break). Panel enforces a fixed width and
+        can't let content overflow its border, so with soft wrapping on,
+        Rich crops the message after the first line instead of wrapping
+        it -- silently dropping everything past that point. The end of a
+        long message is what proves this: a test that only checks the
+        message is "present somewhere" in the output still passes even
+        when most of it got cropped off."""
+        from mcpscanner.cli import main
+
+        long_message = (
+            "Connection to MCP server at "
+            + "http://127.0.0.1:9/mcp/" + "segment" * 10
+            + " was cancelled. This may indicate the server is not "
+            "reachable, not responding, or requires authentication."
+        )
+
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
+                long_message
+            )
+            mock_scanner_class.return_value = mock_scanner
+
+            test_args = [
+                "mcp-scanner",
+                "--analyzers",
+                "yara",
+                "--server-url",
+                "https://test.com",
+            ]
+            with (
+                patch("sys.argv", test_args),
+                patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}),
+            ):
+                with pytest.raises(SystemExit):
+                    await main()
+
+                captured = capsys.readouterr()
+                assert "requires authentication." in captured.err
+
+    @pytest.mark.asyncio
     async def test_scan_mcp_server_direct_with_endpoint_url(self, mock_scan_results):
         """Test scan_mcp_server_direct with custom endpoint URL."""
         with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
