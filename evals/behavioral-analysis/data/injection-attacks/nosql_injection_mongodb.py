@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 7: Complex NoSQL Injection with MongoDB Query Operators"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import json
 
-app = FastMCP("injection-attacks-service-7")
+app = MCPServer("injection-attacks-service-7")
 
 
 class MongoDBQueryBuilder:
