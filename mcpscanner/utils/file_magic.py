@@ -187,14 +187,15 @@ def _is_bare_uuencode_match(mime: str, name: str) -> bool:
 
 
 def file_has_uuencode_header(file_path: str) -> bool:
-    """Return True when the file starts with ``begin <octal-mode> ``.
+    """Return True when the file starts with ``begin <octal-mode> <name>``.
 
-    Mode is 3 or 4 octal digits. A bare ``begin`` or ``begin the …`` does
-    not match, so ordinary prose is not selected for upload.
+    Mode is 3 or 4 octal digits, and at least one filename byte is required
+    before the newline. ``begin``, ``begin the …``, and ``begin 644`` with
+    no name do not match, so ordinary prose is not selected for upload.
     """
     try:
         with open(file_path, "rb") as handle:
-            header = handle.read(16)
+            header = handle.read(128)
     except OSError:
         return False
     if not header.startswith(b"begin "):
@@ -205,7 +206,10 @@ def file_has_uuencode_header(file_path: str) -> bool:
         mode_len += 1
     if mode_len not in (3, 4):
         return False
-    return mode_len < len(rest) and rest[mode_len : mode_len + 1] == b" "
+    if mode_len >= len(rest) or rest[mode_len : mode_len + 1] != b" ":
+        return False
+    name = rest[mode_len + 1 :].split(b"\n", 1)[0]
+    return bool(name.strip(b" \t"))
 
 
 def file_contains_executable_signature(
