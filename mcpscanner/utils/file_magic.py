@@ -139,6 +139,58 @@ class MagicResult:
     content_family: str  # "text", "image", "audio", "video", "application", "unknown"
 
 
+# Names puremagic gives text files when it leaves the MIME empty.
+# "UTF8 file" is one of these; treating every empty-MIME name as a binary
+# made a normal BOM text file look like an executable.
+_TEXT_MAGIC_NAMES = frozenset(
+    {
+        "utf8 file",
+        "utf-8 file",
+        "text file",
+        "ascii file",
+        "unicode text file",
+    }
+)
+
+# Signatures that stay distinctive inside a text prefix. MZ/PK are not here:
+# those two-byte values show up in ordinary prose.
+_EMBEDDED_EXECUTABLE_SIGNATURES = (
+    b"\x7fELF",  # ELF
+    b"\xfe\xed\xfa\xce",  # Mach-O 32-bit
+    b"\xfe\xed\xfa\xcf",  # Mach-O 64-bit
+    b"\xce\xfa\xed\xfe",  # Mach-O 32-bit, reversed
+    b"\xcf\xfa\xed\xfe",  # Mach-O 64-bit, reversed
+    b"\xca\xfe\xba\xbe",  # Mach-O fat / Java class
+    b"\xbe\xba\xfe\xca",  # Mach-O fat, reversed
+)
+# How far past the start a text prefix can hide one of those signatures.
+_EMBEDDED_SCAN_BYTES = 65536
+
+
+def _family_for_empty_mime(name: str) -> str:
+    """Classify a named puremagic hit that did not include a MIME type."""
+    lowered = name.lower()
+    if lowered in _TEXT_MAGIC_NAMES or lowered.startswith("utf"):
+        return "text"
+    return "application"
+
+
+def file_contains_executable_signature(
+    file_path: str, limit: int = _EMBEDDED_SCAN_BYTES
+) -> bool:
+    """Return True if a binary signature appears in the first ``limit`` bytes.
+
+    puremagic stops at the text prefix and reports ``text/plain``, so an ELF
+    or Mach-O header a few bytes in is invisible to ``detect_magic``.
+    """
+    try:
+        with open(file_path, "rb") as handle:
+            blob = handle.read(limit)
+    except OSError:
+        return False
+    return any(signature in blob for signature in _EMBEDDED_EXECUTABLE_SIGNATURES)
+
+
 def _result_from_matches(matches) -> Optional[MagicResult]:
     """Turn puremagic matches into a MagicResult.
 
@@ -159,7 +211,7 @@ def _result_from_matches(matches) -> Optional[MagicResult]:
             mime_type="",
             extension=ext,
             name=name,
-            content_family="application",
+            content_family=_family_for_empty_mime(name),
         )
     if not mime:
         for later in matches[1:]:

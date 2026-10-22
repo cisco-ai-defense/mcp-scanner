@@ -53,11 +53,48 @@ def test_plain_txt_is_not_scanned(tmp_path):
     assert analyzer._should_scan_file(str(path)) is False
 
 
-def test_elf_txt_is_skipped_when_puremagic_is_unavailable(tmp_path, monkeypatch):
+def test_elf_txt_is_scanned_when_puremagic_is_unavailable(tmp_path, monkeypatch):
+    """The embedded ELF check does not depend on puremagic."""
     monkeypatch.setattr(file_magic, "_PUREMAGIC_AVAILABLE", False)
     path = tmp_path / "payload.txt"
     path.write_bytes(_ELF_HEADER)
 
     assert file_magic.detect_magic(str(path)) is None
+    analyzer = VirusTotalAnalyzer()
+    assert analyzer._should_scan_file(str(path)) is True
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [b"\n", b" ", b"hello\n", b"\xef\xbb\xbf"],
+)
+def test_elf_after_a_text_prefix_is_scanned(tmp_path, prefix):
+    pytest.importorskip("puremagic")
+    path = tmp_path / "payload.txt"
+    path.write_bytes(prefix + _ELF_HEADER)
+
+    analyzer = VirusTotalAnalyzer()
+    assert analyzer._should_scan_file(str(path)) is True
+
+
+def test_bom_text_is_not_scanned(tmp_path):
+    """A UTF-8 BOM is a named empty-MIME match and must stay text."""
+    pytest.importorskip("puremagic")
+    path = tmp_path / "notes.txt"
+    path.write_bytes(b"\xef\xbb\xbfhello\n")
+
+    result = file_magic.detect_magic(str(path))
+    assert result is not None
+    assert result.content_family == "text"
+
+    analyzer = VirusTotalAnalyzer()
+    assert analyzer._should_scan_file(str(path)) is False
+
+
+def test_elf_past_the_scan_window_is_not_scanned(tmp_path):
+    pytest.importorskip("puremagic")
+    path = tmp_path / "payload.txt"
+    path.write_bytes(b" " * file_magic._EMBEDDED_SCAN_BYTES + _ELF_HEADER)
+
     analyzer = VirusTotalAnalyzer()
     assert analyzer._should_scan_file(str(path)) is False
