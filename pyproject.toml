@@ -48,6 +48,7 @@ dependencies = [
     "tree-sitter-php>=0.21.0",
     "puremagic>=1.28",
     "pip-audit>=2.7.0",
+    "rich>=13.7.0",
 ]
 
 [project.optional-dependencies]
