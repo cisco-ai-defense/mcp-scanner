@@ -34,6 +34,12 @@ import sys
 import time
 import traceback
 from typing import Any, Dict, List, Optional
+
+from rich.console import Console
+from rich.markup import escape
+from rich.panel import Panel
+from rich.table import Table
+
 from mcpscanner.utils.logging_config import get_logger
 
 from mcpscanner import Config, Scanner
@@ -60,6 +66,30 @@ logger = get_logger(__name__)
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Shared console for all CLI output. A single instance (rather than one per
+# function) keeps terminal-width detection and color/markup behavior
+# consistent across the whole run.
+#
+# soft_wrap=True: a scan result (tool names, URLs, threat descriptions) is
+# security-relevant text a user may grep, copy, or pipe through `tee`/a log
+# collector. Rich's default hard-wraps at the console width, which breaks a
+# long indicator (e.g. a URL in a threat summary) across lines in piped/CI
+# output and corrupts grepping and copy-paste.
+#
+# emoji=False: rich.markup.escape() only escapes `[...]` markup, not `:name:`
+# emoji shortcodes, which Rich still converts by default. A scan-derived
+# string containing something like `:warning:` or `:x:` would otherwise
+# render as the actual emoji glyph instead of literal text -- on some
+# terminals (observed: Windows' legacy console codepage) that glyph isn't
+# encodable at all and crashes the write. Disabling emoji conversion keeps
+# all scan-derived text literal.
+console = Console(soft_wrap=True, emoji=False, highlight=False)
+# Dedicated stderr console for main()'s top-level scan error handler, which
+# wrote to stderr (not stdout) before this PR -- conventional for a CLI
+# tool's own diagnostics, and relied on by callers that separate stdout
+# (scan results) from stderr (errors), e.g. in a CI pipeline.
+error_console = Console(stderr=True, soft_wrap=True, emoji=False, highlight=False)
 
 
 def _get_endpoint_from_env() -> str:
@@ -452,6 +482,67 @@ async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str,
     return _build_behavioral_results(analyzer, findings, source_path)
 
 
+def _display_scan_error(
+    exc: Exception,
+    *,
+    server_url: Optional[str] = None,
+    verbose: bool = False,
+    out: Optional[Console] = None,
+) -> None:
+    """Render a scan-time exception as a Rich panel.
+
+    Shared by scan_mcp_server_direct and main()'s own top-level scan
+    try/except -- the latter is the handler real `mcp-scanner scan ...`
+    invocations actually hit on a connection failure, so it needs the
+    same styling and escaping as scan_mcp_server_direct's, not a
+    separate plain print().
+
+    `out` lets each call site keep its own pre-existing output stream
+    (scan_mcp_server_direct always printed to stdout; main()'s top-level
+    handler always printed to stderr, the conventional stream for a CLI
+    tool's own errors) -- defaults to the shared stdout `console`.
+    """
+    out = out or console
+    if exc.__class__.__name__ in (
+        "MCPConnectionError",
+        "MCPAuthenticationError",
+        "MCPServerNotFoundError",
+    ):
+        tips = ""
+        if verbose and server_url:
+            tips = (
+                "\n\n[bold]Troubleshooting tips:[/bold]\n"
+                f"  - Make sure an MCP server is running at {escape(server_url)}\n"
+                "  - Verify the URL is correct (including protocol and port)\n"
+                "  - Check if the server is accessible from your network"
+            )
+        # soft_wrap=False here, overriding the shared console's default:
+        # a Panel can't let content overflow its border, so with soft
+        # wrapping on, Rich crops the message after the first line
+        # instead of wrapping it -- silently dropping the rest of the
+        # error. Wrapping (not cropping) is what we actually want inside
+        # a bordered box; soft_wrap=True on the console is there for
+        # plain text and table cells, where the alternative is a forced
+        # line break instead of narrower-than-necessary cropping.
+        out.print(
+            Panel(
+                f"{escape(str(exc))}{tips}",
+                title="[bold red]Connection Error[/bold red]",
+                border_style="red",
+            ),
+            soft_wrap=False,
+        )
+        return
+    out.print(
+        Panel(
+            escape(str(exc)),
+            title="[bold red]Error scanning server[/bold red]",
+            border_style="red",
+        ),
+        soft_wrap=False,
+    )
+
+
 async def scan_mcp_server_direct(
     server_url: str,
     analyzers: List[AnalyzerEnum],
@@ -510,24 +601,26 @@ async def scan_mcp_server_direct(
         return json_results
 
     except Exception as e:
-        # Handle MCP-specific exceptions gracefully
-        if e.__class__.__name__ in (
+        _display_scan_error(e, server_url=server_url, verbose=verbose)
+        if verbose and e.__class__.__name__ not in (
             "MCPConnectionError",
             "MCPAuthenticationError",
             "MCPServerNotFoundError",
         ):
-            print(f"❌ Connection Error: {e}")
-            if verbose:
-                print("💡 Troubleshooting tips:")
-                print(f"   • Make sure an MCP server is running at {server_url}")
-                print("   • Verify the URL is correct (including protocol and port)")
-                print("   • Check if the server is accessible from your network")
-            return []
-        # All other exceptions
-        print(f"❌ Error scanning server: {e}")
-        if verbose:
             traceback.print_exc()
         return []
+
+
+_SEVERITY_STYLES = {
+    "CRITICAL": "bold white on red",
+    "HIGH": "bold red",
+    "MEDIUM": "bold yellow",
+    "LOW": "bold cyan",
+}
+
+
+def _severity_style(severity: str) -> str:
+    return _SEVERITY_STYLES.get(str(severity).upper(), "bold")
 
 
 def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
@@ -538,36 +631,69 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
         results: Scan results from the MCP Scanner API
         detailed: Whether to show detailed results
     """
-    print("\n=== MCP Scanner Results ===\n")
+    console.print()
+    console.rule("[bold]MCP Scanner Results[/bold]")
+    console.print()
 
-    print(f"Server URL: {results.get('server_url', 'N/A')}")
+    console.print(f"Server URL: {escape(str(results.get('server_url', 'N/A')))}")
 
     # Display scan results
     scan_results = results.get("scan_results", [])
-    print(f"Tools scanned: {len(scan_results)}")
+    console.print(f"Tools scanned: {len(scan_results)}")
 
     safe_tools = [tool for tool in scan_results if tool.get("is_safe") is True]
     unsafe_tools = [tool for tool in scan_results if tool.get("is_safe") is False]
     incomplete_tools = [tool for tool in scan_results if tool.get("is_safe") is None]
 
-    print(f"Safe tools: {len(safe_tools)}")
-    print(f"Unsafe tools: {len(unsafe_tools)}")
-    print(f"Incomplete tools: {len(incomplete_tools)}")
+    console.print(f"[green]Safe tools: {len(safe_tools)}[/green]")
+    console.print(
+        f"[red]Unsafe tools: {len(unsafe_tools)}[/red]"
+        if unsafe_tools
+        else f"Unsafe tools: {len(unsafe_tools)}"
+    )
+    console.print(f"Incomplete tools: {len(incomplete_tools)}")
 
     if incomplete_tools:
-        print("\n=== Incomplete Tools ===\n")
+        console.print()
+        console.rule("[bold yellow]Incomplete Tools[/bold yellow]")
+        console.print()
         for tool in incomplete_tools:
-            print(
-                f"{tool.get('tool_name', 'Unknown')}: {tool.get('status', 'unknown')}"
+            console.print(
+                f"{escape(str(tool.get('tool_name', 'Unknown')))}: "
+                f"{escape(str(tool.get('status', 'unknown')))}"
             )
             for error in tool.get("analyzer_errors", []):
-                print(f"   {error.get('analyzer', 'Unknown')} analyzer failed")
+                console.print(
+                    f"   {escape(str(error.get('analyzer', 'Unknown')))} analyzer failed"
+                )
 
     # Display unsafe tools
     if unsafe_tools:
-        print("\n=== Unsafe Tools ===\n")
+        console.print()
+        console.rule("[bold red]Unsafe Tools[/bold red]")
+        console.print()
+
+        summary_table = Table(show_header=True, header_style="bold")
+        summary_table.add_column("#", justify="right")
+        summary_table.add_column("Tool")
+        summary_table.add_column("Findings", justify="right")
         for i, tool in enumerate(unsafe_tools, 1):
-            print(f"{i}. {tool.get('tool_name', 'Unknown')}")
+            findings = tool.get("findings", {})
+            total_findings = sum(
+                analyzer_data.get("total_findings", 0)
+                for analyzer_data in findings.values()
+                if isinstance(analyzer_data, dict)
+            )
+            summary_table.add_row(
+                str(i),
+                escape(str(tool.get("tool_name", "Unknown"))),
+                str(total_findings),
+            )
+        console.print(summary_table)
+        console.print()
+
+        for i, tool in enumerate(unsafe_tools, 1):
+            console.print(f"{i}. {escape(str(tool.get('tool_name', 'Unknown')))}")
             findings = tool.get("findings", {})
 
             # Count total findings across all analyzers
@@ -576,7 +702,7 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                 for analyzer_data in findings.values()
                 if isinstance(analyzer_data, dict)
             )
-            print(f"   Findings: {total_findings}")
+            console.print(f"   Findings: {total_findings}")
 
             if detailed and findings:
                 finding_num = 1
@@ -590,21 +716,26 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                             "_analyzer", ""
                         ).upper()
 
-                        print(
-                            f"   {finding_num}. {analyzer_data.get('threat_summary', 'No summary')}"
+                        threat_summary = escape(
+                            str(analyzer_data.get("threat_summary", "No summary"))
                         )
-                        print(
-                            f"      Severity: {analyzer_data.get('severity', 'Unknown')}"
+                        console.print(f"   {finding_num}. {threat_summary}")
+                        severity = analyzer_data.get("severity", "Unknown")
+                        console.print(
+                            f"      Severity: [{_severity_style(severity)}]"
+                            f"{escape(str(severity))}[/]"
                         )
-                        print(f"      Analyzer: {clean_analyzer_name}")
+                        console.print(f"      Analyzer: {escape(clean_analyzer_name)}")
 
                         # Display threat types if available
                         threat_names = analyzer_data.get("threat_names", [])
                         if threat_names:
-                            threat_display = ", ".join(
-                                [t.replace("_", " ").title() for t in threat_names]
+                            threat_display = escape(
+                                ", ".join(
+                                    t.replace("_", " ").title() for t in threat_names
+                                )
                             )
-                            print(f"      Threats: {threat_display}")
+                            console.print(f"      Threats: {threat_display}")
 
                         # Display MCP Taxonomy if available
                         mcp_taxonomy = analyzer_data.get("mcp_taxonomy")
@@ -616,17 +747,23 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                             description = mcp_taxonomy.get("description")
 
                             if aitech:
-                                print(f"      Technique: {aitech} - {aitech_name}")
+                                console.print(
+                                    f"      Technique: {escape(str(aitech))} - "
+                                    f"{escape(str(aitech_name))}"
+                                )
                             if aisubtech:
-                                print(
-                                    f"      Sub-Technique: {aisubtech} - {aisubtech_name}"
+                                console.print(
+                                    f"      Sub-Technique: {escape(str(aisubtech))} - "
+                                    f"{escape(str(aisubtech_name))}"
                                 )
                             if description:
-                                print(f"      Description: {description}")
+                                console.print(
+                                    f"      Description: {escape(str(description))}"
+                                )
 
-                        print()
+                        console.print()
                         finding_num += 1
-            print()
+            console.print()
 
 
 def display_prompt_results_table(
@@ -2690,7 +2827,12 @@ async def main():
                     results = await results_to_json(results_raw)
 
     except Exception as e:
-        print(f"Error during scanning: {e}", file=sys.stderr)
+        _display_scan_error(
+            e,
+            server_url=getattr(args, "server_url", None),
+            verbose=getattr(args, "verbose", False),
+            out=error_console,
+        )
         sys.exit(1)
 
     # Display the results using the new report generator

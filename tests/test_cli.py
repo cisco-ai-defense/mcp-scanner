@@ -23,6 +23,9 @@ from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 from typing import List, Dict, Any
 
+from rich.panel import Panel
+from rich.table import Table
+
 from mcpscanner.cli import (
     _get_endpoint_from_env,
     _build_config,
@@ -373,6 +376,111 @@ class TestScanMcpServerDirect:
                 assert "Error scanning server" in captured.out
 
     @pytest.mark.asyncio
+    async def test_scan_mcp_server_direct_connection_error_uses_rich_panel(self):
+        """Connection errors render as a real rich.panel.Panel."""
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
+                "Connection failed"
+            )
+            mock_scanner_class.return_value = mock_scanner
+
+            with (
+                patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}),
+                patch("mcpscanner.cli.console.print") as mock_print,
+            ):
+                await scan_mcp_server_direct(
+                    "https://test.com", [AnalyzerEnum.API], verbose=True
+                )
+
+                panels = [
+                    call.args[0]
+                    for call in mock_print.call_args_list
+                    if call.args and isinstance(call.args[0], Panel)
+                ]
+                assert len(panels) == 1
+
+    @pytest.mark.asyncio
+    async def test_main_scan_error_uses_rich_panel_on_stderr(self, capsys):
+        """main()'s own top-level scan try/except is what a real
+        `mcp-scanner --server-url ...` invocation hits on a connection
+        failure -- scan_mcp_server_direct has no callers outside its own
+        tests, so its Panel never reaches a real user on its own. This
+        must render the same Rich panel, and (matching the pre-existing
+        stderr convention main() used before this PR) still write to
+        stderr, not stdout."""
+        from mcpscanner.cli import main
+
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
+                "Connection failed"
+            )
+            mock_scanner_class.return_value = mock_scanner
+
+            test_args = [
+                "mcp-scanner",
+                "--analyzers",
+                "yara",
+                "--server-url",
+                "https://test.com",
+            ]
+            with (
+                patch("sys.argv", test_args),
+                patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}),
+            ):
+                with pytest.raises(SystemExit):
+                    await main()
+
+                captured = capsys.readouterr()
+                assert captured.out == ""
+                assert "Connection Error" in captured.err
+                assert "Connection failed" in captured.err
+
+    @pytest.mark.asyncio
+    async def test_main_scan_error_panel_does_not_crop_long_messages(self, capsys):
+        """The shared console's soft_wrap=True is for plain text and table
+        cells (don't force a line break). Panel enforces a fixed width and
+        can't let content overflow its border, so with soft wrapping on,
+        Rich crops the message after the first line instead of wrapping
+        it -- silently dropping everything past that point. The end of a
+        long message is what proves this: a test that only checks the
+        message is "present somewhere" in the output still passes even
+        when most of it got cropped off."""
+        from mcpscanner.cli import main
+
+        long_message = (
+            "Connection to MCP server at "
+            + "http://127.0.0.1:9/mcp/" + "segment" * 10
+            + " was cancelled. This may indicate the server is not "
+            "reachable, not responding, or requires authentication."
+        )
+
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
+                long_message
+            )
+            mock_scanner_class.return_value = mock_scanner
+
+            test_args = [
+                "mcp-scanner",
+                "--analyzers",
+                "yara",
+                "--server-url",
+                "https://test.com",
+            ]
+            with (
+                patch("sys.argv", test_args),
+                patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}),
+            ):
+                with pytest.raises(SystemExit):
+                    await main()
+
+                captured = capsys.readouterr()
+                assert "requires authentication." in captured.err
+
+    @pytest.mark.asyncio
     async def test_scan_mcp_server_direct_with_endpoint_url(self, mock_scan_results):
         """Test scan_mcp_server_direct with custom endpoint URL."""
         with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
@@ -536,6 +644,125 @@ class TestDisplayResults:
         assert "Valid finding" in captured.out
         assert "Severity: LOW" in captured.out
         # Should handle invalid analyzer gracefully
+
+    def test_display_results_unsafe_tools_use_rich_table(self, sample_results):
+        """The unsafe-tools summary must be a real rich.table.Table, not a
+        styled string -- this is what distinguishes the Rich UX from just
+        adding ANSI color codes to the old print() calls."""
+        with patch("mcpscanner.cli.console.print") as mock_print:
+            display_results(sample_results)
+
+            tables = [
+                call.args[0]
+                for call in mock_print.call_args_list
+                if call.args and isinstance(call.args[0], Table)
+            ]
+            assert len(tables) == 1
+            columns = [col.header for col in tables[0].columns]
+            assert columns == ["#", "Tool", "Findings"]
+            # Table.rows holds Row objects with no .cells attribute in Rich
+            # 13.7.0; cell values live on each column instead. The fixture
+            # has two API findings and one YARA finding -> 3 total.
+            assert [list(column.cells) for column in tables[0].columns] == [
+                ["1"],
+                ["unsafe_tool"],
+                ["3"],
+            ]
+
+    def test_display_results_escapes_rich_markup_in_tool_name(self, capsys):
+        """A server-controlled tool name containing Rich markup syntax must
+        not be interpreted as formatting -- an unmatched closing tag like
+        `[/red]` would otherwise raise MarkupError and cut the report short
+        before later findings are rendered, and valid markup could forge
+        styling in the terminal output."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "tool_name": "evil[/red][bold]tool",
+                    "is_safe": False,
+                    "findings": {},
+                }
+            ],
+        }
+
+        # Must not raise MarkupError, and the literal brackets must survive
+        # into the rendered output rather than being swallowed as markup.
+        display_results(results)
+
+        captured = capsys.readouterr()
+        assert "evil[/red][bold]tool" in captured.out
+
+    def test_display_results_does_not_convert_emoji_shortcodes(self, capsys):
+        """rich.markup.escape() only escapes `[...]` markup, not `:name:`
+        emoji shortcodes -- Rich still converts those by default. A
+        server-controlled tool name containing a shortcode must display as
+        the literal text, not the emoji glyph: the glyph is a different
+        string than what the server actually sent, and on some terminals
+        (observed: Windows legacy console codepage) isn't even encodable,
+        crashing the write entirely."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "tool_name": "exfil:warning:tool",
+                    "is_safe": False,
+                    "findings": {},
+                }
+            ],
+        }
+
+        display_results(results)
+
+        captured = capsys.readouterr()
+        assert "exfil:warning:tool" in captured.out
+        assert "⚠" not in captured.out
+
+    def test_display_results_does_not_hard_wrap_long_lines(self, capsys):
+        """A threat summary or URL is an indicator a user may grep or copy
+        out of CI logs. Rich's default hard-wraps long lines at the console
+        width, splitting an indicator across multiple lines in piped
+        output and breaking exactly that grep/copy use case."""
+        long_summary = "Exfiltrates data to http://evil.example.com/" + "a" * 150
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "tool_name": "unsafe_tool",
+                    "is_safe": False,
+                    "findings": {
+                        "api_analyzer": {
+                            "total_findings": 1,
+                            "threat_summary": long_summary,
+                            "severity": "HIGH",
+                        }
+                    },
+                }
+            ],
+        }
+
+        display_results(results, detailed=True)
+
+        captured = capsys.readouterr()
+        assert long_summary in captured.out
+
+    def test_display_results_no_table_when_no_unsafe_tools(self):
+        """No unsafe tools means nothing to summarize in a table."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {"tool_name": "safe_tool", "is_safe": True, "findings": {}}
+            ],
+        }
+        with patch("mcpscanner.cli.console.print") as mock_print:
+            display_results(results)
+
+            tables = [
+                call.args[0]
+                for call in mock_print.call_args_list
+                if call.args and isinstance(call.args[0], Table)
+            ]
+            assert tables == []
 
 
 class TestStaticSubcommandCLI:
