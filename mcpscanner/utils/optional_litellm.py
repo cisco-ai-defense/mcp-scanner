@@ -18,7 +18,7 @@
 
 YARA and the other non-LLM analyzers never import LiteLLM. The LLM, meta,
 behavioral-alignment, and readiness judges do, and they are installed with
-``pip install cisco-ai-mcp-scanner[llm]``.
+``pip install "cisco-ai-mcp-scanner[llm]"``.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from typing import Any
 LITELLM_EXTRA = "llm"
 LITELLM_REQUIRED_MESSAGE = (
     "LiteLLM is required for the LLM analyzer. "
-    "Install it with: pip install cisco-ai-mcp-scanner[llm]"
+    'Install it with: pip install "cisco-ai-mcp-scanner[llm]"'
 )
 
 
@@ -43,26 +43,45 @@ class LiteLLMNotInstalledError(ImportError, ValueError):
     """
 
 
+def _is_missing_litellm_package(exc: BaseException) -> bool:
+    """True when the top-level ``litellm`` distribution itself is absent.
+
+    A missing dependency of an installed LiteLLM is a different failure and
+    must not be reported as "install the extra".
+    """
+    return isinstance(exc, ModuleNotFoundError) and exc.name == "litellm"
+
+
 def litellm_importable() -> bool:
     """Return whether the ``litellm`` module can be imported.
 
     A ``None`` entry in ``sys.modules`` is treated as missing. That is the
     same stand-in used to prove a YARA-only import does not need LiteLLM.
+    An ``ImportError`` from a dependency of an installed LiteLLM is re-raised.
     """
     if sys.modules.get("litellm", "missing") is None:
         return False
     try:
         import litellm
-    except ImportError:
-        return False
+    except ImportError as exc:
+        if _is_missing_litellm_package(exc):
+            return False
+        raise
     return litellm is not None
 
 
 def require_acompletion() -> Any:
-    """Return ``litellm.acompletion`` or raise an error that names the extra."""
+    """Return ``litellm.acompletion`` or raise an error that names the extra.
+
+    Only a missing top-level ``litellm`` package becomes
+    ``LiteLLMNotInstalledError``. Failures inside an installed LiteLLM
+    propagate unchanged.
+    """
     try:
         from litellm import acompletion
     except ImportError as exc:
+        if not _is_missing_litellm_package(exc):
+            raise
         raise LiteLLMNotInstalledError(LITELLM_REQUIRED_MESSAGE) from exc
     if acompletion is None:
         raise LiteLLMNotInstalledError(LITELLM_REQUIRED_MESSAGE)

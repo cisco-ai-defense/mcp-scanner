@@ -16,11 +16,14 @@
 
 """YARA and other non-LLM analyzers must import when LiteLLM is absent."""
 
+import builtins
 import os
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -42,6 +45,62 @@ def _run_without_litellm(code: str) -> subprocess.CompletedProcess[str]:
         check=False,
         env=env,
     )
+
+
+def _import_raising(monkeypatch, make_exc) -> None:
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "litellm" or name.startswith("litellm."):
+            raise make_exc()
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+
+def test_missing_litellm_package_is_the_extra(monkeypatch):
+    from mcpscanner.utils.optional_litellm import (
+        litellm_importable,
+        require_acompletion,
+    )
+
+    saved = sys.modules.pop("litellm", None)
+    _import_raising(
+        monkeypatch,
+        lambda: ModuleNotFoundError("No module named 'litellm'", name="litellm"),
+    )
+    try:
+        assert litellm_importable() is False
+        sys.modules.pop("litellm", None)
+        with pytest.raises(ImportError, match="cisco-ai-mcp-scanner\\[llm\\]"):
+            require_acompletion()
+    finally:
+        if saved is not None:
+            sys.modules["litellm"] = saved
+
+
+def test_litellm_dependency_error_is_not_a_missing_extra(monkeypatch):
+    from mcpscanner.utils.optional_litellm import (
+        litellm_importable,
+        require_acompletion,
+    )
+
+    saved = sys.modules.pop("litellm", None)
+    _import_raising(
+        monkeypatch,
+        lambda: ModuleNotFoundError("No module named 'httpx'", name="httpx"),
+    )
+    try:
+        with pytest.raises(ModuleNotFoundError) as imported:
+            litellm_importable()
+        assert imported.value.name == "httpx"
+        sys.modules.pop("litellm", None)
+        with pytest.raises(ModuleNotFoundError) as required:
+            require_acompletion()
+        assert required.value.name == "httpx"
+    finally:
+        if saved is not None:
+            sys.modules["litellm"] = saved
 
 
 def test_cli_imports_when_litellm_is_missing():
