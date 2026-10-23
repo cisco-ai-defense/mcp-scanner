@@ -4931,7 +4931,18 @@ class NativeAnalyzer:
         file_patterns = {"open", "read", "write", "close", "os.remove", "os.unlink", "shutil", "pathlib"}
         network_patterns = {"requests", "urllib", "http", "httpx", "aiohttp", "socket"}
         subprocess_patterns = {"subprocess", "os.system", "os.popen", "os.exec"}
-        eval_patterns = {"eval", "exec", "compile", "__import__"}
+        eval_exact = {
+            "eval",
+            "exec",
+            "compile",
+            "__import__",
+            "importlib.import_module",
+            "importlib.util.spec_from_file_location",
+            "importlib.util.module_from_spec",
+        }
+        # importlib loader method. Matched by leaf so ``spec.loader.exec_module``
+        # counts, without treating an arbitrary ``.execute`` method as eval.
+        eval_methods = {"exec_module"}
         
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
@@ -4943,7 +4954,8 @@ class NativeAnalyzer:
                     has_network = True
                 if any(p in call_name for p in subprocess_patterns):
                     has_subprocess = True
-                if call_name in eval_patterns:
+                eval_leaf = call_name.rsplit(".", 1)[-1]
+                if call_name in eval_exact or eval_leaf in eval_methods:
                     has_eval = True
         
         return {
@@ -5653,22 +5665,152 @@ class NativeAnalyzer:
         return store.get(cache_key, set())
 
     def _ts_resolve_indexed_function(
-        self, ref: str, index: Dict[str, "Node"], ambiguous_bare: Set[str]
+        self,
+        ref: str,
+        index: Dict[str, "Node"],
+        ambiguous_bare: Set[str],
+        enclosing_type: str = "",
     ) -> Optional[Tuple[str, "Node"]]:
-        """Resolve a call reference, preferring qualified names."""
+        """Resolve a call reference, preferring qualified names.
+
+        ``Self::foo`` / ``self.foo`` are rewritten to the enclosing impl or
+        class before lookup. A bare name that is also stored under its
+        qualified key (``execute_command`` and ``Svc.execute_command``) is
+        one function, not an ambiguous pair.
+        """
         normalized = self._ts_normalize_call_ref(ref)
         if not normalized:
             return None
+        normalized = self._ts_rewrite_self_call(normalized, enclosing_type)
         if normalized in index:
             return normalized, index[normalized]
         leaf = normalized.rsplit(".", 1)[-1]
-        if leaf in ambiguous_bare:
+        if not leaf or leaf in ambiguous_bare:
             return None
         matches = [k for k in index if k == leaf or k.endswith("." + leaf)]
-        if len(matches) == 1:
-            key = matches[0]
-            return key, index[key]
-        return None
+        nodes = {index[k].start_byte for k in matches}
+        if len(nodes) != 1:
+            return None
+        key = max(matches, key=lambda k: (k.count("."), len(k)))
+        return key, index[key]
+
+    @staticmethod
+    def _ts_rewrite_self_call(normalized: str, enclosing_type: str) -> str:
+        """Map ``Self`` / ``self`` receivers onto the enclosing type name."""
+        if not enclosing_type:
+            return normalized
+        if normalized in {"Self", "self"}:
+            return enclosing_type
+        for prefix in ("Self.", "self."):
+            if normalized.startswith(prefix):
+                rest = normalized[len(prefix) :]
+                return f"{enclosing_type}.{rest}" if rest else enclosing_type
+        return normalized
+
+    def _ts_rust_use_bindings(self, root: "Node") -> Dict[str, str]:
+        """Map a Rust ``use`` name to the path it imports.
+
+        ``use libloading::Library`` makes ``Library::new`` the same call as
+        ``libloading::Library::new``. Grouped and renamed imports are
+        included. Globs (``model::*``) bind no name.
+        """
+        cache_key = (id(root), self.language)
+        store = getattr(self, "_rust_use_binding_cache", None)
+        if store is None:
+            store = {}
+            self._rust_use_binding_cache = store
+        if cache_key in store:
+            return store[cache_key]
+        if self.language != "rust":
+            store[cache_key] = {}
+            return store[cache_key]
+
+        bindings: Dict[str, str] = {}
+
+        def add(local: str, path: str) -> None:
+            local = local.strip()
+            path = path.strip()
+            if local and path and local not in bindings:
+                bindings[local] = path
+
+        def walk(node: "Node", prefix: str) -> None:
+            kind = node.type
+            if kind == "scoped_identifier":
+                path = self._ts_get_node_text(node)
+                add(path.split("::")[-1], path)
+                return
+            if kind == "use_as_clause":
+                path_node = None
+                alias = None
+                for child in node.children:
+                    if child.type in (
+                        "scoped_identifier",
+                        "identifier",
+                        "type_identifier",
+                    ):
+                        if path_node is None:
+                            path_node = child
+                        else:
+                            alias = child
+                if path_node is None or alias is None:
+                    return
+                path = self._ts_get_node_text(path_node)
+                if prefix and path_node.type in ("identifier", "type_identifier"):
+                    path = f"{prefix}::{path}"
+                add(self._ts_get_node_text(alias), path)
+                return
+            if kind == "use_wildcard":
+                return
+            if kind == "scoped_use_list":
+                head = None
+                names = None
+                for child in node.children:
+                    if child.type == "use_list":
+                        names = child
+                    elif child.type in (
+                        "identifier",
+                        "scoped_identifier",
+                        "type_identifier",
+                    ):
+                        head = child
+                if head is None or names is None:
+                    return
+                head_text = self._ts_get_node_text(head)
+                new_prefix = f"{prefix}::{head_text}" if prefix else head_text
+                for child in names.children:
+                    if child.type in ("identifier", "type_identifier"):
+                        name = self._ts_get_node_text(child)
+                        add(name, f"{new_prefix}::{name}")
+                    else:
+                        walk(child, new_prefix)
+                return
+            if kind in ("use_declaration", "use_list"):
+                for child in node.children:
+                    walk(child, prefix if kind == "use_list" else "")
+
+        def visit(node: "Node") -> None:
+            if node.type == "use_declaration":
+                walk(node, "")
+                return
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        store[cache_key] = bindings
+        return bindings
+
+    def _ts_qualify_rust_call(self, func_text: str, root: "Node") -> str:
+        """Expand the first segment of a Rust path through ``use`` bindings."""
+        text = func_text.strip()
+        if self.language != "rust" or "::" not in text:
+            return text
+        head, rest = text.split("::", 1)
+        if not head.isidentifier() or head in {"Self", "self", "super", "crate"}:
+            return text
+        full = self._ts_rust_use_bindings(root).get(head)
+        if not full:
+            return text
+        return f"{full}::{rest}"
 
     def _ts_enclosing_function(self, node: "Node") -> Optional["Node"]:
         """Return the innermost enclosing function node, if any."""
@@ -5930,6 +6072,10 @@ class NativeAnalyzer:
                             cat = sink_category_for(self._ts_get_node_text(a))
                             if cat:
                                 return cat
+                # ``const requireModule = createRequire(import.meta.url)``
+                # returns a function that loads a module from an arbitrary path.
+                if leaf == "createRequire":
+                    return "eval"
         return None
 
     def _ts_enrich_capability_with_callees(
@@ -5983,9 +6129,10 @@ class NativeAnalyzer:
             node, depth, caller_key = frontier.pop()
             if depth >= 3:
                 continue
+            enclosing = self._ts_find_enclosing_class_name(node)
             for ref in callee_refs(node):
                 resolved = self._ts_resolve_indexed_function(
-                    ref, index, ambiguous_bare
+                    ref, index, ambiguous_bare, enclosing
                 )
                 if resolved is None:
                     continue
@@ -6048,10 +6195,19 @@ class NativeAnalyzer:
         # lives in the callee. Reflect that so downstream analysis sees the
         # parameter -> sink data flow.
         if dangerous:
+            handler_type = self._ts_find_enclosing_class_name(handler_node)
             for flow in ctx.parameter_flows:
                 reaches = flow.get("reaches_calls") or []
                 for call in reaches:
-                    norm = self._ts_normalize_call_ref(str(call))
+                    norm = self._ts_rewrite_self_call(
+                        self._ts_normalize_call_ref(str(call)), handler_type
+                    )
+                    resolved = self._ts_resolve_indexed_function(
+                        norm, index, ambiguous_bare, handler_type
+                    )
+                    if resolved is not None and resolved[0] in dangerous:
+                        flow["reaches_external"] = True
+                        break
                     if norm in dangerous:
                         flow["reaches_external"] = True
                         break
@@ -6473,6 +6629,25 @@ class NativeAnalyzer:
         
         return visit(node)
 
+    @staticmethod
+    def _unqualified_call_matches_qualified_sink(
+        normalized: str, sink_normalized: str, sink_set: set
+    ) -> bool:
+        """Match ``exec()`` to ``child_process.exec`` only when ``exec`` is a sink.
+
+        ``plugin.Open`` must not make a bare ``Open()`` call dynamic loading.
+        ``child_process.exec`` still matches bare ``exec()`` because ``exec``
+        is registered on its own.
+        """
+        leaf = sink_normalized.rsplit(".", 1)[-1]
+        if normalized != leaf:
+            return False
+        return any(
+            "." not in other.replace("::", ".").replace("->", ".")
+            and other.replace("::", ".").replace("->", ".") == leaf
+            for other in sink_set
+        )
+
     def _ts_detect_security_ops(self, node: "Node") -> Dict[str, bool]:
         """Detect security-relevant operations via AST traversal."""
         from .taint.patterns import get_all_sinks_for_language
@@ -6492,6 +6667,7 @@ class NativeAnalyzer:
         file_sinks = sinks.get("file", set())
         network_sinks = sinks.get("network", set())
         deser_sinks = sinks.get("deserialization", set())
+        call_root = self._ts_root(node)
 
         def matches_sink(func_text: str, sink_set: set) -> bool:
             """Check if function text matches any sink pattern.
@@ -6503,7 +6679,8 @@ class NativeAnalyzer:
             imported names (``exec(cmd)`` after destructuring) still resolve;
             aliases that rebind a sink are handled by the caller.
             """
-            normalized = func_text.replace("::", ".").replace("->", ".")
+            qualified_text = self._ts_qualify_rust_call(func_text, call_root)
+            normalized = qualified_text.replace("::", ".").replace("->", ".")
             qualified = "." in normalized
 
             for sink in sink_set:
@@ -6513,7 +6690,12 @@ class NativeAnalyzer:
                 if qualified:
                     if normalized.endswith("." + sink_normalized):
                         return True
-                elif normalized == sink_normalized.rsplit(".", 1)[-1]:
+                elif "." not in sink_normalized:
+                    if normalized == sink_normalized:
+                        return True
+                elif self._unqualified_call_matches_qualified_sink(
+                    normalized, sink_normalized, sink_set
+                ):
                     return True
             return False
         

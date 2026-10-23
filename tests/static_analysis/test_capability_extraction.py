@@ -28,6 +28,8 @@ and the comment-style annotation pattern used by community Ruby SDKs).
 Whenever the SDK examples evolve, update the fixtures in lockstep.
 """
 
+from pathlib import Path
+
 import pytest
 
 from mcpscanner.core.static_analysis import NativeAnalyzer
@@ -1247,6 +1249,164 @@ def test_rust_handler_inherits_delegated_shell_sink() -> None:
     assert ctx.docstring == "Execute shell command with full shell capabilities."
     flow = _flow_for(ctx, "command")
     assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+_RUST_CODE_FIXTURES = (
+    Path(__file__).resolve().parents[2]
+    / "evals"
+    / "mcp-scanner-analysis-data"
+    / "code-scanning-determinism"
+    / "data"
+    / "unauthorized-code-execution"
+)
+
+
+def test_rust_fixture_self_call_reaches_shell_sink() -> None:
+    """The Rust shell fixture calls ``Self::execute_command``.
+
+    That name is stored both bare and qualified, and the tool impl is
+    missing its closing brace. The handler must still inherit the
+    ``Command::new`` sink and the parameter flow.
+    """
+    path = _RUST_CODE_FIXTURES / "subprocess_shell_command_injection.rs"
+    analyzer = NativeAnalyzer(path.read_text(), path.name)
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.name == "execute_shell_command"
+    assert ctx.has_subprocess_calls is True
+    assert "ShellExecutorService.execute_command" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "importlib_dynamic_module_loading.py",
+        "importlib_dynamic_module_loading.js",
+        "importlib_dynamic_module_loading.ts",
+        "importlib_dynamic_module_loading.go",
+        "importlib_dynamic_module_loading.rs",
+    ],
+)
+def test_dynamic_module_load_fixture_flags_eval(filename: str) -> None:
+    """Each language port of the plugin loader must surface dynamic loading.
+
+    Python loads via ``importlib.util``, JS/TS via ``createRequire``, Go via
+    ``plugin.Open``, and Rust via ``libloading``.
+    """
+    path = _RUST_CODE_FIXTURES / filename
+    analyzer = NativeAnalyzer(path.read_text(), path.name)
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, filename
+    ctx = caps[0]
+    assert ctx.name == "load_plugin", filename
+    assert ctx.has_eval_exec is True, filename
+    assert ctx.has_subprocess_calls is False, filename
+    assert ctx.reachable_functions, filename
+    assert any(flow.get("reaches_external") for flow in ctx.parameter_flows), (
+        filename,
+        ctx.parameter_flows,
+    )
+
+
+def test_rust_fixture_self_call_reaches_imported_library_sink() -> None:
+    """``use libloading::Library`` then ``Library::new`` is dynamic loading.
+
+    The fixture reaches that call through ``Self::load_from_path``.
+    """
+    path = _RUST_CODE_FIXTURES / "importlib_dynamic_module_loading.rs"
+    analyzer = NativeAnalyzer(path.read_text(), path.name)
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.name == "load_plugin"
+    assert ctx.has_eval_exec is True
+    assert ctx.has_subprocess_calls is False
+    assert "PluginLoaderService.load_from_path" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "plugin_path")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_SELF_AMONG_SAME_LEAF = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Other;
+
+impl Other {
+    fn execute_command(command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    fn execute_command(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+
+    #[tool(description = "Execute a shell command for automation tasks.")]
+    fn execute_shell_command(&self, command: String) -> i32 {
+        Self::execute_command(&command)
+    }
+}
+"""
+
+
+def test_rust_self_call_resolves_inside_its_own_impl() -> None:
+    """``Self::`` must not give up when another impl defines the same leaf."""
+    analyzer = NativeAnalyzer(RUST_SELF_AMONG_SAME_LEAF, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.execute_command" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_RENAMED_LIBRARY_IMPORT = """\
+use libloading::Library as PluginLib;
+use rmcp::{tool, tool_router};
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    fn open(path: &str) -> String {
+        unsafe { PluginLib::new(path).unwrap(); }
+        path.to_string()
+    }
+
+    #[tool(description = "Load a plugin module from the plugins directory.")]
+    fn load_plugin(&self, plugin_path: String) -> String {
+        Self::open(&plugin_path)
+    }
+}
+"""
+
+
+def test_rust_renamed_libloading_import_is_dynamic_loading() -> None:
+    """``use libloading::Library as PluginLib`` keeps ``PluginLib::new`` a sink."""
+    analyzer = NativeAnalyzer(RUST_RENAMED_LIBRARY_IMPORT, "lib.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_eval_exec is True
+    assert ctx.has_subprocess_calls is False
+    flow = _flow_for(ctx, "plugin_path")
+    assert flow is not None
     assert flow["reaches_external"] is True, flow
 
 

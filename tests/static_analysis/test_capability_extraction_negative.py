@@ -211,6 +211,131 @@ def test_shared_constructor_leaf_is_not_a_subprocess_sink() -> None:
     assert not label.has_eval_exec, "CString::new flagged as dynamic code load"
 
 
+RUST_SELF_CALLS_THE_SAFE_IMPL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Other;
+
+impl Other {
+    fn execute_command(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    fn execute_command(command: &str) -> i32 {
+        command.len() as i32
+    }
+
+    #[tool(description = "Measure a command string.")]
+    fn execute_shell_command(&self, command: String) -> i32 {
+        Self::execute_command(&command)
+    }
+}
+"""
+
+
+RUST_LIBRARY_NEW_WITHOUT_IMPORT = """\
+use rmcp::{tool, tool_router};
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Load a plugin module from the plugins directory.")]
+    fn load_plugin(&self, plugin_path: String) -> String {
+        unsafe { Library::new(plugin_path).unwrap(); }
+        plugin_path
+    }
+}
+"""
+
+
+def test_rust_self_does_not_inherit_another_impls_shell_sink() -> None:
+    """A same-named helper on a different type is not this tool's callee."""
+    analyzer = NativeAnalyzer(RUST_SELF_CALLS_THE_SAFE_IMPL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is False
+    assert "Svc.execute_command" in (ctx.reachable_functions or [])
+    assert "Other.execute_command" not in (ctx.reachable_functions or [])
+
+
+def test_python_execute_method_is_not_dynamic_import() -> None:
+    """A method named ``execute`` is not ``exec`` or ``exec_module``."""
+    source = "def run(loader, data):\n    return loader.execute(data)\n"
+    analyzer = NativeAnalyzer(source, "run.py")
+    func = analyzer.analyze().functions[0]
+    assert func.has_eval_exec is False
+
+
+def test_go_os_open_is_not_plugin_open() -> None:
+    """``os.Open`` is file I/O. Only ``plugin.Open`` is dynamic loading."""
+    source = """\
+package main
+
+import "os"
+
+func readFile(path string) error {
+    f, err := os.Open(path)
+    if err != nil {
+        return err
+    }
+    f.Close()
+    return nil
+}
+"""
+    analyzer = NativeAnalyzer(source, "read.go")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["readFile"].has_eval_exec is False
+
+
+def test_go_bare_open_is_not_plugin_open() -> None:
+    """``plugin.Open`` must not flag an unqualified ``Open()`` call."""
+    source = """\
+package main
+
+func Open(path string) {}
+
+func readFile(path string) {
+    Open(path)
+}
+"""
+    analyzer = NativeAnalyzer(source, "open.go")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["readFile"].has_eval_exec is False
+
+
+def test_js_plain_loader_alias_is_not_create_require() -> None:
+    """Only an alias of ``createRequire(...)`` is a dynamic module load."""
+    source = """\
+const requireModule = (p) => p;
+function load_plugin(plugin_path) {
+  return requireModule(plugin_path);
+}
+"""
+    analyzer = NativeAnalyzer(source, "load.js")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["load_plugin"].has_eval_exec is False
+
+
+def test_unimported_library_new_is_not_dynamic_loading() -> None:
+    """``Library::new`` is only the libloading sink after that type is imported."""
+    analyzer = NativeAnalyzer(RUST_LIBRARY_NEW_WITHOUT_IMPORT, "lib.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    assert caps[0].has_eval_exec is False
+    assert caps[0].has_subprocess_calls is False
+
+
 def test_qualified_rust_sinks_still_detected() -> None:
     """Tightening the matcher must not lose the real sinks it guards."""
     analyzer = NativeAnalyzer(RUST_REAL_SINKS, "lib.rs")

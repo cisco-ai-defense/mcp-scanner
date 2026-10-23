@@ -241,7 +241,9 @@ class TaintPatterns:
             "setTimeout", "setInterval",  # when passed strings
             "vm.runInContext", "vm.runInNewContext", "vm.runInThisContext",
         },
-        "go": {},  # Go doesn't have eval
+        "go": {
+            "plugin.Open",
+        },
         "java": {
             "ScriptEngine.eval", "Interpreter.eval",
             "GroovyShell.evaluate", "GroovyShell.parse",
