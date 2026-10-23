@@ -38,7 +38,8 @@ def _fixture_can_start() -> bool:
     except OSError:
         return False
     try:
-        proc.stdin.close()
+        # communicate() closes stdin itself. Closing it first makes 3.11
+        # flush the closed pipe and raise ValueError, which is not an OSError.
         try:
             _, err = proc.communicate(timeout=5)
         except subprocess.TimeoutExpired:
