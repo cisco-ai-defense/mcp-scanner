@@ -23,7 +23,6 @@ This package contains analyzers for production readiness issues:
 """
 
 from .readiness_analyzer import ReadinessAnalyzer
-from .llm_judge import ReadinessLLMJudge
 from .opa_provider import OpaProvider
 
 __all__ = [
@@ -31,3 +30,12 @@ __all__ = [
     "ReadinessLLMJudge",
     "OpaProvider",
 ]
+
+
+def __getattr__(name: str):
+    """Import the readiness LLM judge only when a caller asks for it."""
+    if name == "ReadinessLLMJudge":
+        from .llm_judge import ReadinessLLMJudge
+
+        return ReadinessLLMJudge
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

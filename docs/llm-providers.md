@@ -2,6 +2,12 @@
 
 The MCP Scanner SDK supports multiple LLM providers through the [LiteLLM](https://github.com/BerriAI/litellm) library, enabling you to use various language models for security analysis. This document provides comprehensive guidance on configuring different LLM providers.
 
+LiteLLM is an optional extra. YARA and the other non-LLM analyzers run without it. Install the extra when you use the LLM, meta, or behavioral alignment analyzers:
+
+```bash
+pip install "cisco-ai-mcp-scanner[llm]"
+```
+
 ## Supported Providers
 
 Thanks to LiteLLM integration, the MCP Scanner supports 100+ LLM providers including:

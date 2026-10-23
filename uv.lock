@@ -461,7 +461,6 @@ dependencies = [
     { name = "expandvars" },
     { name = "fastapi" },
     { name = "httpx" },
-    { name = "litellm" },
     { name = "mcp", extra = ["cli"] },
     { name = "pip-audit" },
     { name = "puremagic" },
@@ -517,6 +516,9 @@ kotlin = [
     { name = "tree-sitter" },
     { name = "tree-sitter-kotlin" },
 ]
+llm = [
+    { name = "litellm" },
+]
 php = [
     { name = "tree-sitter" },
     { name = "tree-sitter-php" },
@@ -535,6 +537,7 @@ dev = [
     { name = "black" },
     { name = "flake8" },
     { name = "isort" },
+    { name = "litellm" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -548,7 +551,7 @@ requires-dist = [
     { name = "expandvars", specifier = ">=0.12.0" },
     { name = "fastapi", specifier = ">=0.125.0" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "litellm", specifier = "==1.93.2" },
+    { name = "litellm", marker = "extra == 'llm'", specifier = "==1.93.2" },
     { name = "mcp", extras = ["cli"], specifier = ">=2.0.0" },
     { name = "pip-audit", specifier = ">=2.7.0" },
     { name = "puremagic", specifier = ">=1.28" },
@@ -596,13 +599,14 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.29.0" },
     { name = "yara-python", specifier = ">=4.5.4" },
 ]
-provides-extras = ["js", "go", "java", "kotlin", "csharp", "ruby", "rust", "php", "all-languages"]
+provides-extras = ["llm", "js", "go", "java", "kotlin", "csharp", "ruby", "rust", "php", "all-languages"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=24.0.0" },
     { name = "flake8", specifier = ">=7.0.0" },
     { name = "isort", specifier = ">=5.13.0" },
+    { name = "litellm", specifier = "==1.93.2" },
     { name = "mypy", specifier = ">=1.8.0" },
     { name = "pre-commit", specifier = ">=3.6.0" },
     { name = "pytest", specifier = ">=8.4.1" },

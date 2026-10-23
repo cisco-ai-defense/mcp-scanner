@@ -22,17 +22,28 @@ This package contains different analyzers for scanning MCP tools:
 - Behavioral code analyzers (static analysis + semantic alignment)
 """
 
+import importlib
+
 from .api_analyzer import ApiAnalyzer
 from .base import BaseAnalyzer, SecurityFinding
-from .behavioral import BehavioralCodeAnalyzer, AlignmentOrchestrator
-from .llm_analyzer import LLMAnalyzer
-from .meta_analyzer import MetaAnalyzer, MetaAnalysisResult, apply_meta_analysis
 from .yara_analyzer import YaraAnalyzer
 from .virustotal_analyzer import VirusTotalAnalyzer
 from .prompt_defense_analyzer import PromptDefenseAnalyzer
 from .vulnerable_package_analyzer import VulnerablePackageAnalyzer
-from .readiness import ReadinessAnalyzer, ReadinessLLMJudge, OpaProvider
+from .readiness import ReadinessAnalyzer, OpaProvider
 from .schema_reference_analyzer import SchemaReferenceAnalyzer
+
+# LLM-backed analyzers import LiteLLM when constructed. Keep them off the
+# import path of YARA and the other non-LLM analyzers.
+_LAZY_EXPORTS = {
+    "LLMAnalyzer": (".llm_analyzer", "LLMAnalyzer"),
+    "MetaAnalyzer": (".meta_analyzer", "MetaAnalyzer"),
+    "MetaAnalysisResult": (".meta_analyzer", "MetaAnalysisResult"),
+    "apply_meta_analysis": (".meta_analyzer", "apply_meta_analysis"),
+    "BehavioralCodeAnalyzer": (".behavioral", "BehavioralCodeAnalyzer"),
+    "AlignmentOrchestrator": (".behavioral", "AlignmentOrchestrator"),
+    "ReadinessLLMJudge": (".readiness", "ReadinessLLMJudge"),
+}
 
 __all__ = [
     "BaseAnalyzer",
@@ -53,3 +64,15 @@ __all__ = [
     "OpaProvider",
     "SchemaReferenceAnalyzer",
 ]
+
+
+def __getattr__(name: str):
+    """Import LLM-backed analyzers only when a caller asks for them."""
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attr = target
+    module = importlib.import_module(module_name, __name__)
+    value = getattr(module, attr)
+    globals()[name] = value
+    return value
