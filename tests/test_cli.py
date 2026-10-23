@@ -1080,3 +1080,99 @@ class TestMainGlobalEnvFlags:
         assert "UnboundLocalError" not in captured.err
         assert os.environ.get("MCP_SCANNER_API_KEY") == "test-key-251"
         assert "Total tools scanned: 1" in captured.out
+
+
+class TestStderrFileConfigScans:
+    """--stderr-file must reach the stdio servers spawned by config scans."""
+
+    @pytest.fixture
+    def config_file(self, tmp_path):
+        path = tmp_path / "mcp.json"
+        path.write_text(json.dumps({"mcpServers": {}}))
+        return str(path)
+
+    @staticmethod
+    async def _run_main(argv, method_name, return_value):
+        from mcpscanner.cli import main
+
+        calls = []
+
+        async def fake_scan(*args, **kwargs):
+            errlog = kwargs.get("errlog")
+            calls.append(errlog)
+            if errlog is not None:
+                errlog.write("server banner\n")
+            return return_value
+
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            setattr(mock_scanner, method_name, AsyncMock(side_effect=fake_scan))
+            mock_scanner_class.return_value = mock_scanner
+            with patch("sys.argv", ["mcp-scanner", "--analyzers", "yara", *argv]):
+                await main()
+
+        assert len(calls) == 1
+        return calls[0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "argv_template",
+        [
+            ["config", "--config-path", "{cfg}", "--stderr-file", "{log}"],
+            ["--stderr-file", "{log}", "config", "--config-path", "{cfg}"],
+            ["--config-path", "{cfg}", "--stderr-file", "{log}"],
+        ],
+        ids=["subcommand", "top-level-flag-before-subcommand", "legacy"],
+    )
+    async def test_config_file_scan_uses_stderr_file(
+        self, argv_template, config_file, tmp_path
+    ):
+        log = tmp_path / "server-stderr.log"
+        argv = [a.format(cfg=config_file, log=log) for a in argv_template]
+
+        errlog = await self._run_main(argv, "scan_mcp_config_file", [])
+
+        assert errlog is not None
+        assert errlog.name == str(log)
+        assert errlog.closed
+        assert log.read_text() == "server banner\n"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "argv_template",
+        [
+            ["known-configs", "--stderr-file", "{log}"],
+            ["--stderr-file", "{log}", "known-configs"],
+            ["--scan-known-configs", "--stderr-file", "{log}"],
+        ],
+        ids=["subcommand", "top-level-flag-before-subcommand", "legacy"],
+    )
+    async def test_known_configs_scan_uses_stderr_file(self, argv_template, tmp_path):
+        log = tmp_path / "server-stderr.log"
+        argv = [a.format(log=log) for a in argv_template]
+
+        errlog = await self._run_main(argv, "scan_well_known_mcp_configs", {})
+
+        assert errlog is not None
+        assert errlog.name == str(log)
+        assert errlog.closed
+        assert log.read_text() == "server banner\n"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "argv, method_name, return_value",
+        [
+            (["config", "--config-path", "{cfg}"], "scan_mcp_config_file", []),
+            (["known-configs"], "scan_well_known_mcp_configs", {}),
+            (["--scan-known-configs"], "scan_well_known_mcp_configs", {}),
+        ],
+        ids=["config", "known-configs", "legacy-known-configs"],
+    )
+    async def test_config_scans_default_to_no_errlog(
+        self, argv, method_name, return_value, config_file
+    ):
+        argv = [a.format(cfg=config_file) for a in argv]
+
+        errlog = await self._run_main(argv, method_name, return_value)
+
+        assert errlog is None

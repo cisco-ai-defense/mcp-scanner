@@ -1643,6 +1643,12 @@ async def main():
         "--bearer-token",
         help="Bearer token for authentication",
     )
+    p_config.add_argument(
+        "--stderr-file",
+        # SUPPRESS keeps a top-level --stderr-file given before the subcommand
+        default=argparse.SUPPRESS,
+        help="Redirect stderr of stdio servers in the config to this file",
+    )
 
     # Known-configs subcommand
     p_known_configs = subparsers.add_parser(
@@ -1652,6 +1658,12 @@ async def main():
     p_known_configs.add_argument(
         "--bearer-token",
         help="Bearer token for authentication",
+    )
+    p_known_configs.add_argument(
+        "--stderr-file",
+        # SUPPRESS keeps a top-level --stderr-file given before the subcommand
+        default=argparse.SUPPRESS,
+        help="Redirect stderr of stdio servers in the configs to this file",
     )
 
     # API key and endpoint configuration
@@ -2126,23 +2138,37 @@ async def main():
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-            scan_results = await scanner.scan_mcp_config_file(
-                args.config_path,
-                analyzers=selected_analyzers,
-                auth=auth,
-                expand_vars_default=args.expand_vars,
-            )
+            stderr_file = getattr(args, "stderr_file", None)
+            errlog = open(stderr_file, "w") if stderr_file else None
+            try:
+                scan_results = await scanner.scan_mcp_config_file(
+                    args.config_path,
+                    analyzers=selected_analyzers,
+                    auth=auth,
+                    expand_vars_default=args.expand_vars,
+                    errlog=errlog,
+                )
+            finally:
+                if errlog:
+                    errlog.close()
             results = await results_to_json(scan_results)
 
         elif args.cmd == "known-configs":
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
             auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-            results_by_cfg = await scanner.scan_well_known_mcp_configs(
-                analyzers=selected_analyzers,
-                auth=auth,
-                expand_vars_default=args.expand_vars,
-            )
+            stderr_file = getattr(args, "stderr_file", None)
+            errlog = open(stderr_file, "w") if stderr_file else None
+            try:
+                results_by_cfg = await scanner.scan_well_known_mcp_configs(
+                    analyzers=selected_analyzers,
+                    auth=auth,
+                    expand_vars_default=args.expand_vars,
+                    errlog=errlog,
+                )
+            finally:
+                if errlog:
+                    errlog.close()
             if args.raw:
                 output = {}
                 for cfg_path, scan_results in results_by_cfg.items():
@@ -2765,22 +2791,34 @@ async def main():
         elif args.scan_known_configs or args.config_path:
             cfg = _build_config(selected_analyzers)
             scanner = Scanner(cfg, rules_dir=args.rules_path)
+            stderr_file = getattr(args, "stderr_file", None)
+            errlog = open(stderr_file, "w") if stderr_file else None
             if args.config_path:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-                scan_results = await scanner.scan_mcp_config_file(
-                    args.config_path,
-                    analyzers=selected_analyzers,
-                    auth=auth,
-                    expand_vars_default=args.expand_vars,
-                )
+                try:
+                    scan_results = await scanner.scan_mcp_config_file(
+                        args.config_path,
+                        analyzers=selected_analyzers,
+                        auth=auth,
+                        expand_vars_default=args.expand_vars,
+                        errlog=errlog,
+                    )
+                finally:
+                    if errlog:
+                        errlog.close()
                 results = await results_to_json(scan_results)
             else:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
-                results_by_cfg = await scanner.scan_well_known_mcp_configs(
-                    analyzers=selected_analyzers,
-                    auth=auth,
-                    expand_vars_default=args.expand_vars,
-                )
+                try:
+                    results_by_cfg = await scanner.scan_well_known_mcp_configs(
+                        analyzers=selected_analyzers,
+                        auth=auth,
+                        expand_vars_default=args.expand_vars,
+                        errlog=errlog,
+                    )
+                finally:
+                    if errlog:
+                        errlog.close()
                 if args.raw:
                     output = {}
                     for cfg_path, scan_results in results_by_cfg.items():
