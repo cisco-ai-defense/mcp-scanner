@@ -32,6 +32,7 @@ from httpx import ASGITransport, AsyncClient
 from mcpscanner import Config, Scanner
 from mcpscanner.api.router import get_scanner, router
 from mcpscanner.config.constants import MCPScannerConstants
+from mcpscanner.core.exceptions import MCPConfigurationError
 from mcpscanner.core.mcp_models import StdioServer
 from mcpscanner.core.models import AnalyzerEnum
 from mcpscanner.core.pagination import MCPPaginationError
@@ -101,7 +102,7 @@ async def test_missing_cursor_field_is_not_accepted_as_complete():
 async def test_invalid_list_timeout_fails_before_request(value):
     """Reject unbounded or nonsensical timeout settings without making a call."""
     list_page = AsyncMock(return_value=page())
-    with pytest.raises(ValueError, match="finite, positive"):
+    with pytest.raises(MCPConfigurationError, match="finite, positive"):
         await collect(list_page, page_timeout=value)
     list_page.assert_not_awaited()
 
@@ -274,10 +275,16 @@ async def test_real_api_maps_pagination_failure_to_502(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("collection", ["tools", "prompts"])
 @pytest.mark.parametrize("single", [False, True], ids=["bulk", "single"])
-async def test_real_stdio_sdk2_follows_legacy_wire_pagination(collection, single):
+@pytest.mark.parametrize("protocol", ["legacy", "modern"])
+async def test_real_stdio_sdk2_follows_wire_pagination(collection, single, protocol):
     """Use the actual SDK client, subprocess transport, and local YARA analyzer."""
     scanner = Scanner(Config())
-    fixture = Path(__file__).parent / "fixtures" / "stdio_paginated_server.py"
+    fixture_name = (
+        "stdio_modern_paginated_server.py"
+        if protocol == "modern"
+        else "stdio_paginated_server.py"
+    )
+    fixture = Path(__file__).parent / "fixtures" / fixture_name
     server = StdioServer(command=sys.executable, args=[str(fixture)])
     entity = collection[:-1] if single else collection
     method = getattr(scanner, f"scan_stdio_server_{entity}")
@@ -295,10 +302,16 @@ async def test_real_stdio_sdk2_follows_legacy_wire_pagination(collection, single
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("collection", ["tools", "prompts"])
-async def test_real_stdio_named_scan_rejects_later_duplicate(collection):
+@pytest.mark.parametrize("protocol", ["legacy", "modern"])
+async def test_real_stdio_named_scan_rejects_later_duplicate(collection, protocol):
     """Verify duplicate rejection across empty pages with an actual SDK session."""
     scanner = Scanner(Config())
-    fixture = Path(__file__).parent / "fixtures" / "stdio_paginated_server.py"
+    fixture_name = (
+        "stdio_modern_paginated_server.py"
+        if protocol == "modern"
+        else "stdio_paginated_server.py"
+    )
+    fixture = Path(__file__).parent / "fixtures" / fixture_name
     server = StdioServer(command=sys.executable, args=[str(fixture), "--duplicates"])
     method = getattr(scanner, f"scan_stdio_server_{collection[:-1]}")
     with pytest.raises(MCPPaginationError, match="duplicate name"):

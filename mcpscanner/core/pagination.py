@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - matches the scanner's SDK compatibilit
 from mcp.types import PaginatedRequestParams
 
 from ..config.constants import MCPScannerConstants
-from .exceptions import MCPConnectionError
+from .exceptions import MCPConfigurationError, MCPConnectionError
 
 
 class MCPPaginationError(MCPConnectionError):
@@ -49,8 +49,9 @@ async def iter_mcp_items(
     Defaults come from the scanner's configurable inventory limits. The timeout
     applies to every page, including the first, not to the complete operation.
     First-page MCP errors retain their type for existing capability handling;
-    subsequent errors must not be mistaken for an absent capability. Cancellation
-    propagates unchanged. Cursor values are never included in error messages.
+    subsequent errors must not be mistaken for an absent capability. Classified
+    connection errors and cancellation propagate unchanged. Invalid local limits
+    raise MCPConfigurationError. Cursor values are never included in error messages.
     A caller that stops early must explicitly close this iterator.
     """
     if max_pages is None:
@@ -60,13 +61,17 @@ async def iter_mcp_items(
     if page_timeout is None:
         page_timeout = MCPScannerConstants.MCP_LIST_PAGE_TIMEOUT_SECONDS
     if any(type(limit) is not int or limit < 1 for limit in (max_pages, max_items)):
-        raise ValueError("MCP discovery page and item limits must be positive integers")
+        raise MCPConfigurationError(
+            "MCP discovery page and item limits must be positive integers"
+        )
     if (
         type(page_timeout) not in (int, float)
         or not math.isfinite(page_timeout)
         or page_timeout <= 0
     ):
-        raise ValueError("MCP list-page timeout must be a finite, positive number")
+        raise MCPConfigurationError(
+            "MCP list-page timeout must be a finite, positive number"
+        )
 
     cursor: str | None = None
     seen_cursors: set[str] = set()
@@ -98,6 +103,10 @@ async def iter_mcp_items(
             raise MCPPaginationError(
                 f"MCP {items_attribute} discovery failed on page {page_count + 1}"
             ) from error
+        except MCPConnectionError:
+            # Preserve classifications such as authentication and endpoint-not-found
+            # so callers retain their existing HTTP status and recovery behavior.
+            raise
         except Exception as error:
             # Only wrap errors raised while requesting a page, not local item
             # processing. CancelledError and GeneratorExit are BaseExceptions.

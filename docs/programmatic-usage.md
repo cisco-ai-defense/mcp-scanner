@@ -98,13 +98,21 @@ now inspect subsequent pages and are subject to the same discovery limits.
 Repeated cursors, missing/invalid cursor fields, exceeded limits, request
 timeouts, and later-page request failures raise `MCPPaginationError`. First-page
 MCP protocol errors retain their existing unsupported-capability handling;
-other request errors are wrapped with their original cause. Cancellation
+already classified `MCPConnectionError` exceptions (including authentication
+and endpoint-not-found subclasses) retain their type on every page. Other
+request errors are wrapped with their original cause. Cancellation
 propagates unchanged, and named-scan iterators are explicitly closed.
 
 These errors propagate from individual server scan methods instead of returning
-a successful partial result. As connection/discovery errors, they map to HTTP
-**502** in the REST API. Configuration scans retain their existing behavior of
+a successful partial result. `MCPPaginationError` maps to HTTP **502** in the
+REST API. Configuration scans retain their existing behavior of
 recording a server error and continuing with the other servers.
+
+Invalid page/item limits or list-page timeouts raise `MCPConfigurationError`
+before the first list request. These local configuration failures map to HTTP
+**500**, rather than the **404** reserved for missing items. Classified
+authentication failures retain HTTP **401**, and endpoint-not-found failures
+retain HTTP **404**.
 
 ## Advanced Examples
 

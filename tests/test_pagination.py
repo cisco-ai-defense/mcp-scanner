@@ -24,6 +24,7 @@ from mcp.shared.exceptions import MCPError as McpError
 from mcp.types import ListToolsResult, PaginatedRequestParams, Tool
 
 from mcpscanner.config.constants import MCPScannerConstants
+from mcpscanner.core.exceptions import MCPConfigurationError
 from mcpscanner.core.pagination import MCPPaginationError, iter_mcp_items
 
 
@@ -151,7 +152,7 @@ async def test_early_consumer_does_not_request_or_validate_unneeded_pages():
 async def test_invalid_limits_fail_without_starting_discovery(field, value):
     list_page = AsyncMock(return_value=page())
 
-    with pytest.raises(ValueError, match="positive integers"):
+    with pytest.raises(MCPConfigurationError, match="positive integers"):
         await collect(list_page, **{field: value})
 
     list_page.assert_not_awaited()
