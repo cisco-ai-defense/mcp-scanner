@@ -1617,6 +1617,8 @@ async def main():
     )
     p_stdio.add_argument(
         "--stderr-file",
+        # SUPPRESS keeps a top-level --stderr-file given before the subcommand
+        default=argparse.SUPPRESS,
         help="Redirect server stderr to this file (useful for debugging startup messages that may corrupt JSON output)",
     )
     p_stdio.add_argument(

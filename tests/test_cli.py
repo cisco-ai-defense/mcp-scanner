@@ -1176,3 +1176,39 @@ class TestStderrFileConfigScans:
         errlog = await self._run_main(argv, method_name, return_value)
 
         assert errlog is None
+
+
+class TestStderrFileStdioSubcommand:
+    """A top-level --stderr-file must survive the stdio subparser default."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "argv_template",
+        [
+            ["--stderr-file", "{log}", "stdio", "--stdio-command", "python"],
+            ["stdio", "--stdio-command", "python", "--stderr-file", "{log}"],
+        ],
+        ids=["top-level-flag-before-subcommand", "subcommand"],
+    )
+    async def test_stdio_subcommand_keeps_stderr_file(self, argv_template, tmp_path):
+        log = tmp_path / "server-stderr.log"
+        argv = [a.format(log=log) for a in argv_template]
+
+        errlog = await TestStderrFileConfigScans._run_main(
+            argv, "scan_stdio_server_tools", []
+        )
+
+        assert errlog is not None
+        assert errlog.name == str(log)
+        assert errlog.closed
+        assert log.read_text() == "server banner\n"
+
+    @pytest.mark.asyncio
+    async def test_stdio_subcommand_without_flag_passes_no_errlog(self):
+        errlog = await TestStderrFileConfigScans._run_main(
+            ["stdio", "--stdio-command", "python"],
+            "scan_stdio_server_tools",
+            [],
+        )
+
+        assert errlog is None
