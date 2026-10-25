@@ -30,13 +30,18 @@ dependencies = [
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
     # Floor, not exact: 1.93.2 is the first 1.93 release that fixes
-    # CVE-2026-84377, so the fix stays guaranteed. An exact pin here forced
-    # litellm's own exact python-dotenv pin on consumers too, which made
-    # mcp-scanner uninstallable alongside anything needing a newer
-    # python-dotenv (e.g. fastmcp>=3.0). Leaving the upper bound open lets
-    # the resolver pick a later litellm with a compatible python-dotenv
-    # range instead.
-    "litellm>=1.93.2",
+    # CVE-2026-84377 / GHSA-3cv6-jpf6-8222 (authenticated SSRF and
+    # provider-credential exfiltration). An exact pin here forced litellm's
+    # own exact python-dotenv pin on consumers too, which made mcp-scanner
+    # uninstallable alongside anything needing a newer python-dotenv (e.g.
+    # fastmcp>=3.0). Leaving the upper bound open lets the resolver pick a
+    # later litellm with a compatible python-dotenv range instead.
+    #
+    # The same CVE was reintroduced in later minors and re-patched each
+    # time (per the advisory): 1.94.0-1.94.2 (fixed 1.94.3), 1.95.0 (fixed
+    # 1.95.1), 1.96.0-1.96.1 (fixed 1.96.2). Excluding those exact
+    # vulnerable releases so a floor-only resolver can't land on one.
+    "litellm>=1.93.2,!=1.94.0,!=1.94.1,!=1.94.2,!=1.95.0,!=1.96.0,!=1.96.1",
     "expandvars>=0.12.0",
     # JS/TS parsing for npm behavioral analysis pins the shared tree-sitter
     # runtime to a tested ABI range (other language packs stay >=0.21.0,
