@@ -28,8 +28,6 @@ and the comment-style annotation pattern used by community Ruby SDKs).
 Whenever the SDK examples evolve, update the fixtures in lockstep.
 """
 
-from pathlib import Path
-
 import pytest
 
 from mcpscanner.core.static_analysis import NativeAnalyzer
@@ -1252,14 +1250,180 @@ def test_rust_handler_inherits_delegated_shell_sink() -> None:
     assert flow["reaches_external"] is True, flow
 
 
-_RUST_CODE_FIXTURES = (
-    Path(__file__).resolve().parents[2]
-    / "evals"
-    / "mcp-scanner-analysis-data"
-    / "code-scanning-determinism"
-    / "data"
-    / "unauthorized-code-execution"
+# Inlined from the code-scanning fixtures. Those files live outside this
+# repo, and CI runs with ``--maxfail=1``, so a missing path fails the job
+# before the later cases run. The Rust tool impl is still missing its
+# closing brace, which is what the scanner has to tolerate.
+RUST_SHELL_FIXTURE = """\
+use rmcp::{tool, tool_router, ErrorData as McpError, model::*};
+use std::process::Command;
+
+#[derive(Clone)]
+struct ShellExecutorService;
+
+impl ShellExecutorService {
+    fn execute_command(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+#[tool_router]
+impl ShellExecutorService {
+	#[tool(description = "Execute a shell command for automation tasks.")]
+	async fn execute_shell_command(&self, command: String) -> Result<CallToolResult, McpError> {
+        let rc = Self::execute_command(&command);
+        Ok(CallToolResult::success(vec![Content::text(format!("Command executed: return code {rc}"))]))
+
+}
+
+fn main() {
+	let _service = ShellExecutorService;
+}
+"""
+
+DYNAMIC_MODULE_LOAD_SOURCES = {
+    "importlib_dynamic_module_loading.py": """\
+from mcp import FastMCP
+import importlib.util
+
+app = FastMCP("unauthorized-code-execution-service-10")
+
+
+class PluginLoader:
+    @staticmethod
+    def load_from_path(plugin_path: str) -> dict:
+        spec = importlib.util.spec_from_file_location("plugin", plugin_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return {"path": plugin_path, "module_name": module.__name__}
+
+
+@app.tool()
+def load_plugin(plugin_path: str) -> str:
+    \"\"\"Load a plugin module from the plugins directory.\"\"\"
+    loader = PluginLoader()
+    result = loader.load_from_path(plugin_path)
+    return f"Plugin loaded: {result.get('module_name', 'unknown')}"
+""",
+    "importlib_dynamic_module_loading.js": """\
+import { createRequire } from "node:module";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "unauthorized-code-execution-service-10", version: "1.0.0" });
+const requireModule = createRequire(import.meta.url);
+
+class PluginLoader {
+  static loadFromPath(pluginPath) {
+    const module = requireModule(pluginPath);
+    return { path: pluginPath, module_name: pluginPath, loaded: true, module };
+  }
+}
+
+server.tool(
+  "load_plugin",
+  "Load a plugin module from the plugins directory.",
+  { plugin_path: z.string() },
+  async ({ plugin_path }) => {
+    const result = PluginLoader.loadFromPath(plugin_path);
+    return { content: [{ type: "text", text: `Plugin loaded: ${result.module_name}` }] };
+  },
+);
+""",
+    "importlib_dynamic_module_loading.ts": """\
+import { createRequire } from "node:module";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "unauthorized-code-execution-service-10", version: "1.0.0" });
+const requireModule = createRequire(import.meta.url);
+
+class PluginLoader {
+  static loadFromPath(pluginPath: string): Record<string, unknown> {
+    const module = requireModule(pluginPath);
+    return { path: pluginPath, module_name: pluginPath, loaded: true, module };
+  }
+}
+
+server.tool(
+  "load_plugin",
+  "Load a plugin module from the plugins directory.",
+  { plugin_path: z.string() },
+  async ({ plugin_path }) => {
+    const result = PluginLoader.loadFromPath(plugin_path);
+    return { content: [{ type: "text", text: `Plugin loaded: ${result.module_name}` }] };
+  },
+);
+""",
+    "importlib_dynamic_module_loading.go": """\
+package main
+
+import (
+	"context"
+	"fmt"
+	"plugin"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+type Input struct {
+	PluginPath string `json:"plugin_path"`
+}
+
+type PluginLoader struct{}
+
+func (PluginLoader) loadFromPath(pluginPath string) string {
+	p, err := plugin.Open(pluginPath)
+	if err != nil { return err.Error() }
+	_, err = p.Lookup("Init")
+	if err != nil { return err.Error() }
+	return pluginPath
+}
+
+func load_pluginHandler(ctx context.Context, req *mcp.CallToolRequest, in Input) (*mcp.CallToolResult, any, error) {
+	result := PluginLoader{}.loadFromPath(in.PluginPath)
+	out := fmt.Sprintf("Plugin loaded: %s", result)
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
+}
+
+func main() {
+	server := mcp.NewServer(&mcp.Implementation{Name: "unauthorized-code-execution-service-10", Version: "1.0.0"}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "load_plugin", Description: "Load a plugin module from the plugins directory."}, load_pluginHandler)
+}
+""",
+    "importlib_dynamic_module_loading.rs": """\
+use rmcp::{tool, tool_router, ErrorData as McpError, model::*};
+use libloading::Library;
+
+#[derive(Clone)]
+struct PluginLoaderService;
+
+impl PluginLoaderService {
+    fn load_from_path(plugin_path: &str) -> String {
+        match unsafe { Library::new(plugin_path) } {
+            Ok(_) => plugin_path.to_string(),
+            Err(e) => e.to_string(),
+        }
+    }
+}
+
+#[tool_router]
+impl PluginLoaderService {
+	#[tool(description = "Load a plugin module from the plugins directory.")]
+	async fn load_plugin(&self, plugin_path: String) -> Result<CallToolResult, McpError> {
+        let result = Self::load_from_path(&plugin_path);
+        Ok(CallToolResult::success(vec![Content::text(format!("Plugin loaded: {result}"))]))
+
+}
+
+fn main() {
+	let _service = PluginLoaderService;
+}
+""",
+}
 
 
 def test_rust_fixture_self_call_reaches_shell_sink() -> None:
@@ -1269,8 +1433,9 @@ def test_rust_fixture_self_call_reaches_shell_sink() -> None:
     missing its closing brace. The handler must still inherit the
     ``Command::new`` sink and the parameter flow.
     """
-    path = _RUST_CODE_FIXTURES / "subprocess_shell_command_injection.rs"
-    analyzer = NativeAnalyzer(path.read_text(), path.name)
+    analyzer = NativeAnalyzer(
+        RUST_SHELL_FIXTURE, "subprocess_shell_command_injection.rs"
+    )
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1
     ctx = caps[0]
@@ -1298,8 +1463,7 @@ def test_dynamic_module_load_fixture_flags_eval(filename: str) -> None:
     Python loads via ``importlib.util``, JS/TS via ``createRequire``, Go via
     ``plugin.Open``, and Rust via ``libloading``.
     """
-    path = _RUST_CODE_FIXTURES / filename
-    analyzer = NativeAnalyzer(path.read_text(), path.name)
+    analyzer = NativeAnalyzer(DYNAMIC_MODULE_LOAD_SOURCES[filename], filename)
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1, filename
     ctx = caps[0]
@@ -1318,8 +1482,8 @@ def test_rust_fixture_self_call_reaches_imported_library_sink() -> None:
 
     The fixture reaches that call through ``Self::load_from_path``.
     """
-    path = _RUST_CODE_FIXTURES / "importlib_dynamic_module_loading.rs"
-    analyzer = NativeAnalyzer(path.read_text(), path.name)
+    source = DYNAMIC_MODULE_LOAD_SOURCES["importlib_dynamic_module_loading.rs"]
+    analyzer = NativeAnalyzer(source, "importlib_dynamic_module_loading.rs")
     caps = analyzer.extract_mcp_capability_contexts()
     assert len(caps) == 1
     ctx = caps[0]
