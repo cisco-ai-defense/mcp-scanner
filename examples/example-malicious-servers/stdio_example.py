@@ -25,16 +25,11 @@ import asyncio
 import json
 from typing import Any, Sequence
 from mcp.server import Server
-from mcp.types import Tool, TextContent
+from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 import mcp.server.stdio
 
 
-# Initialize the MCP server
-server = Server("litellm-test-server")
-
-
-@server.list_tools()
-async def list_tools() -> list[Tool]:
+async def _list_tools() -> list[Tool]:
     """List all available tools with varying risk levels."""
     return [
         Tool(
@@ -204,8 +199,7 @@ async def list_tools() -> list[Tool]:
     ]
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
+async def _call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextContent]:
     """Handle tool calls - all tools return safe responses for testing purposes."""
 
     if name == "innocent_calculator":
@@ -280,6 +274,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
 
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
+
+
+# mcp 2.x: the low-level Server takes its handlers as constructor arguments
+async def list_tools(ctx, params) -> ListToolsResult:
+    return ListToolsResult(tools=await _list_tools())
+
+
+async def call_tool(ctx, params) -> CallToolResult:
+    return CallToolResult(content=list(await _call_tool(params.name, params.arguments or {})))
+
+
+# Initialize the MCP server
+server = Server("litellm-test-server", on_list_tools=list_tools, on_call_tool=call_tool)
 
 
 async def main():
