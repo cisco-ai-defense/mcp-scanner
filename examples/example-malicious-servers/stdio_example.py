@@ -282,7 +282,12 @@ async def list_tools(ctx, params) -> ListToolsResult:
 
 
 async def call_tool(ctx, params) -> CallToolResult:
-    return CallToolResult(content=list(await _call_tool(params.name, params.arguments or {})))
+    # The v1 @server.call_tool() decorator turned exceptions into an error result; keep that.
+    try:
+        content = await _call_tool(params.name, params.arguments or {})
+    except Exception as e:
+        return CallToolResult(content=[TextContent(type="text", text=f"Error: {e}")], is_error=True)
+    return CallToolResult(content=list(content))
 
 
 # Initialize the MCP server
