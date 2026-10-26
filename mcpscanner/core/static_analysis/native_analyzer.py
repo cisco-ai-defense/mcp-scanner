@@ -4937,12 +4937,13 @@ class NativeAnalyzer:
             "compile",
             "__import__",
             "importlib.import_module",
-            "importlib.util.spec_from_file_location",
-            "importlib.util.module_from_spec",
         }
-        # importlib loader method. Matched by leaf so ``spec.loader.exec_module``
-        # counts, without treating an arbitrary ``.execute`` method as eval.
-        eval_methods = {"exec_module"}
+        # ``exec_module`` and the deprecated ``load_module`` run the module.
+        # ``spec_from_file_location`` and ``module_from_spec`` only build the
+        # module object, so they are not execution. Matched by leaf so
+        # ``spec.loader.exec_module`` counts, without treating an arbitrary
+        # ``.execute`` method as eval.
+        eval_methods = {"exec_module", "load_module"}
         
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
@@ -5707,12 +5708,16 @@ class NativeAnalyzer:
                 return f"{enclosing_type}.{rest}" if rest else enclosing_type
         return normalized
 
-    def _ts_rust_use_bindings(self, root: "Node") -> Dict[str, str]:
-        """Map a Rust ``use`` name to the path it imports.
+    def _ts_rust_use_bindings(
+        self, root: "Node"
+    ) -> List[Tuple[str, str, "Node"]]:
+        """Map each Rust ``use`` name to its path and the scope that sees it.
 
         ``use libloading::Library`` makes ``Library::new`` the same call as
-        ``libloading::Library::new``. Grouped and renamed imports are
-        included. Globs (``model::*``) bind no name.
+        ``libloading::Library::new`` inside that block or module only.
+        Grouped and renamed imports are included. Glob prefixes are stored
+        the same way and apply when the expanded path is a sink, including
+        the ``std::`` form of a recorded sink.
         """
         cache_key = (id(root), self.language)
         store = getattr(self, "_rust_use_binding_cache", None)
@@ -5720,24 +5725,39 @@ class NativeAnalyzer:
             store = {}
             self._rust_use_binding_cache = store
         if cache_key in store:
-            return store[cache_key]
+            return store[cache_key][0]
         if self.language != "rust":
-            store[cache_key] = {}
-            return store[cache_key]
+            store[cache_key] = ([], ())
+            return []
 
-        bindings: Dict[str, str] = {}
+        bindings: List[Tuple[str, str, "Node"]] = []
+        globs: List[Tuple[str, "Node"]] = []
 
-        def add(local: str, path: str) -> None:
+        def add(local: str, path: str, node: "Node") -> None:
             local = local.strip()
+            # Keep a leading ``::``. ``use ::libloading::Library`` is the
+            # extern crate even beside ``mod libloading``; stripping it
+            # here would make the import look like that local module.
             path = path.strip()
-            if local and path and local not in bindings:
-                bindings[local] = path
+            if not local or not path:
+                return
+            scope = self._ts_rust_use_scope(node)
+            if any(
+                local == name
+                and path == existing
+                and _is_same_ts_node(scope, existing_scope)
+                for name, existing, existing_scope in bindings
+            ):
+                return
+            bindings.append((local, path, scope))
 
         def walk(node: "Node", prefix: str) -> None:
             kind = node.type
             if kind == "scoped_identifier":
                 path = self._ts_get_node_text(node)
-                add(path.split("::")[-1], path)
+                if prefix:
+                    path = f"{prefix}::{path}"
+                add(path.split("::")[-1], path, node)
                 return
             if kind == "use_as_clause":
                 path_node = None
@@ -5755,11 +5775,32 @@ class NativeAnalyzer:
                 if path_node is None or alias is None:
                     return
                 path = self._ts_get_node_text(path_node)
-                if prefix and path_node.type in ("identifier", "type_identifier"):
+                if prefix:
                     path = f"{prefix}::{path}"
-                add(self._ts_get_node_text(alias), path)
+                add(self._ts_get_node_text(alias), path, node)
                 return
             if kind == "use_wildcard":
+                path_node = None
+                for child in node.children:
+                    if child.type in (
+                        "identifier",
+                        "scoped_identifier",
+                        "type_identifier",
+                    ):
+                        path_node = child
+                        break
+                if path_node is None:
+                    return
+                path = self._ts_get_node_text(path_node)
+                if prefix:
+                    path = f"{prefix}::{path}"
+                path = path.strip()
+                scope = self._ts_rust_use_scope(node)
+                if path and not any(
+                    path == existing and _is_same_ts_node(scope, existing_scope)
+                    for existing, existing_scope in globs
+                ):
+                    globs.append((path, scope))
                 return
             if kind == "scoped_use_list":
                 head = None
@@ -5780,7 +5821,7 @@ class NativeAnalyzer:
                 for child in names.children:
                     if child.type in ("identifier", "type_identifier"):
                         name = self._ts_get_node_text(child)
-                        add(name, f"{new_prefix}::{name}")
+                        add(name, f"{new_prefix}::{name}", child)
                     else:
                         walk(child, new_prefix)
                 return
@@ -5796,21 +5837,398 @@ class NativeAnalyzer:
                 visit(child)
 
         visit(root)
-        store[cache_key] = bindings
+        store[cache_key] = (bindings, tuple(globs))
         return bindings
 
-    def _ts_qualify_rust_call(self, func_text: str, root: "Node") -> str:
-        """Expand the first segment of a Rust path through ``use`` bindings."""
+    def _ts_rust_use_globs(self, root: "Node") -> Tuple[Tuple[str, "Node"], ...]:
+        """``use path::*`` prefixes paired with the scope that can see them."""
+        self._ts_rust_use_bindings(root)
+        store = self._rust_use_binding_cache
+        return store[(id(root), self.language)][1]
+
+    def _ts_rust_use_scope(self, use_node: "Node") -> "Node":
+        """Block, module, or file whose names include this ``use``."""
+        cur = use_node.parent
+        while cur is not None:
+            if cur.type in ("block", "mod_item", "source_file"):
+                return cur
+            cur = cur.parent
+        return use_node
+
+    def _ts_rust_nearest_mod(self, node: "Node") -> "Node":
+        """Innermost module or file that contains ``node``."""
+        cur = node
+        while cur is not None:
+            if cur.type in ("mod_item", "source_file"):
+                return cur
+            cur = cur.parent
+        return node
+
+    def _ts_rust_glob_visible(self, scope: "Node", call_node: "Node") -> bool:
+        """True when a glob in ``scope`` is in name-resolution scope at the call.
+
+        A nested ``mod`` does not inherit names from the enclosing function.
+        A nested ``fn`` does.
+        """
+        if not self._ts_node_contains(scope, call_node):
+            return False
+        if scope.type == "block":
+            cur = call_node
+            while cur is not None and not _is_same_ts_node(cur, scope):
+                if cur.type == "mod_item":
+                    return False
+                cur = cur.parent
+            return True
+        return _is_same_ts_node(self._ts_rust_nearest_mod(call_node), scope)
+
+    def _ts_rust_type_names_by_scope(
+        self, root: "Node"
+    ) -> Dict[Tuple[str, int, int], Set[str]]:
+        """Type names defined directly in each block, module, or file."""
+        cache_key = (id(root), self.language)
+        store = getattr(self, "_rust_type_name_cache", None)
+        if store is None:
+            store = {}
+            self._rust_type_name_cache = store
+        if cache_key in store:
+            return store[cache_key]
+        type_items = {
+            "struct_item",
+            "enum_item",
+            "union_item",
+            "trait_item",
+            "type_item",
+        }
+        names: Dict[Tuple[str, int, int], Set[str]] = {}
+
+        def item_name(item: "Node") -> str:
+            name_node = item.child_by_field_name("name")
+            if name_node is None:
+                return ""
+            return self._ts_get_node_text(name_node).strip()
+
+        def walk(node: "Node") -> None:
+            if node.type in type_items:
+                defined = item_name(node)
+                scope = self._ts_rust_use_scope(node)
+                if defined:
+                    key = (scope.type, scope.start_byte, scope.end_byte)
+                    names.setdefault(key, set()).add(defined)
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        store[cache_key] = names
+        return names
+
+    def _ts_rust_explicit_name_shadows_glob(
+        self, head: str, glob_scope: "Node", call_node: "Node", root: "Node"
+    ) -> bool:
+        """True when a struct, enum, trait, or alias hides this glob name."""
+        names = self._ts_rust_type_names_by_scope(root)
+        cur: Optional["Node"] = call_node
+        while cur is not None:
+            key = (cur.type, cur.start_byte, cur.end_byte)
+            in_glob = _is_same_ts_node(cur, glob_scope) or self._ts_node_contains(
+                glob_scope, cur
+            )
+            if in_glob and head in names.get(key, set()):
+                return True
+            if _is_same_ts_node(cur, glob_scope):
+                break
+            cur = cur.parent
+        return False
+
+    def _ts_rust_module_names_by_scope(
+        self, root: "Node"
+    ) -> Dict[Tuple[str, int, int], Set[str]]:
+        """Module names defined directly in each block, module, or file."""
+        cache_key = (id(root), self.language)
+        store = getattr(self, "_rust_module_name_cache", None)
+        if store is None:
+            store = {}
+            self._rust_module_name_cache = store
+        if cache_key in store:
+            return store[cache_key]
+        names: Dict[Tuple[str, int, int], Set[str]] = {}
+
+        def walk(node: "Node") -> None:
+            if node.type == "mod_item":
+                name_node = node.child_by_field_name("name")
+                defined = ""
+                if name_node is not None:
+                    defined = self._ts_get_node_text(name_node).strip()
+                scope = self._ts_rust_use_scope(node)
+                if defined:
+                    key = (scope.type, scope.start_byte, scope.end_byte)
+                    names.setdefault(key, set()).add(defined)
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        store[cache_key] = names
+        return names
+
+    def _ts_rust_visible_module_scopes(
+        self, head: str, at_node: "Node", root: "Node"
+    ) -> List["Node"]:
+        """Scopes that define ``head`` and are visible at ``at_node``."""
+        names = self._ts_rust_module_names_by_scope(root)
+        nearest = self._ts_rust_nearest_mod(at_node)
+        found: List["Node"] = []
+        cur: Optional["Node"] = at_node
+        while cur is not None:
+            key = (cur.type, cur.start_byte, cur.end_byte)
+            if head in names.get(key, set()) and self._ts_rust_glob_visible(
+                cur, at_node
+            ):
+                found.append(cur)
+            if _is_same_ts_node(cur, nearest):
+                break
+            cur = cur.parent
+        return found
+
+    def _ts_rust_relative_module_shadows(
+        self, func_text: str, at_node: "Node", root: "Node"
+    ) -> bool:
+        """True when a local ``mod`` owns the first segment of a relative path.
+
+        ``mod libloading`` makes ``libloading::Library::new`` that module.
+        ``::libloading::Library::new`` is still the extern crate.
+        """
+        if self.language != "rust":
+            return False
         text = func_text.strip()
+        if text.startswith("::") or "::" not in text:
+            return False
+        head = text.split("::", 1)[0]
+        if not head.isidentifier() or head in {"Self", "self", "super", "crate"}:
+            return False
+        return bool(self._ts_rust_visible_module_scopes(head, at_node, root))
+
+    def _ts_rust_module_hides_call_head(
+        self, func_text: str, at_node: "Node", root: "Node"
+    ) -> bool:
+        """True when a local module owns this call, ahead of any ``use``.
+
+        An inner ``use std::fs::File`` beats an outer ``mod File``.
+        A module in the function still beats an outer ``use``.
+        A glob strictly inside the module's scope beats that module too.
+        """
+        if not self._ts_rust_relative_module_shadows(func_text, at_node, root):
+            return False
+        text = func_text.strip()
+        head, rest = text.split("::", 1)
+        module_scopes = self._ts_rust_visible_module_scopes(head, at_node, root)
+        if not module_scopes:
+            return False
+        kind, _path, scope = self._ts_rust_resolve_explicit_use(
+            head, root, at_node
+        )
+
+        def inside(outer: "Node", inner: "Node") -> bool:
+            return self._ts_node_contains(outer, inner) and not _is_same_ts_node(
+                outer, inner
+            )
+
+        if (
+            kind == "use"
+            and scope is not None
+            and any(inside(mod_scope, scope) for mod_scope in module_scopes)
+            and not any(inside(scope, mod_scope) for mod_scope in module_scopes)
+        ):
+            return False
+        winner = module_scopes[0]
+        for mod_scope in module_scopes[1:]:
+            if inside(winner, mod_scope):
+                winner = mod_scope
+        expanded = self._ts_rust_glob_expansion(
+            head, rest, root, at_node, inside=winner
+        )
+        return expanded is None
+
+    def _ts_rust_sink_paths(self) -> Set[str]:
+        """Normalized Rust sink paths, cached for glob expansion."""
+        cached = getattr(self, "_rust_sink_paths_cache", None)
+        if cached is not None:
+            return cached
+        from .taint.patterns import get_all_sinks_for_language
+
+        paths: Set[str] = set()
+        for names in get_all_sinks_for_language("rust").values():
+            for name in names:
+                paths.add(name.replace("::", ".").replace("->", "."))
+        self._rust_sink_paths_cache = paths
+        return paths
+
+    def _ts_rust_glob_sink_key(self, normalized: str, sinks: Set[str]) -> Optional[str]:
+        """Return the recorded sink a glob expansion names.
+
+        ``std::fs::File::open`` matches ``fs::File::open``. A leading
+        ``::`` is the crate root, so ``::libloading::Library::new`` matches
+        ``libloading::Library::new``. A different prefix, such as
+        ``foo::libloading::Library::new``, does not.
+        """
+        while normalized.startswith("."):
+            normalized = normalized[1:]
+        if normalized in sinks:
+            return normalized
+        if normalized.startswith("std.") and normalized[4:] in sinks:
+            return normalized[4:]
+        return None
+
+    def _ts_rust_resolve_explicit_use(
+        self, head: str, root: "Node", at_node: "Node"
+    ) -> Tuple[str, str, Optional["Node"]]:
+        """Resolve ``head`` through explicit ``use`` bindings visible here.
+
+        Returns ``("use", path, scope)`` when an import wins,
+        ``("shadow", "", scope)`` when a type hides every import
+        (``scope`` is the block that defines that type, so a glob
+        nested inside it can still apply), and ``("none", "", None)``
+        when glob expansion may run.
+        """
+        visible: List[Tuple["Node", str, Optional[str]]] = []
+        for name, path, scope in self._ts_rust_use_bindings(root):
+            if name != head:
+                continue
+            if self._ts_rust_glob_visible(scope, at_node):
+                visible.append((scope, "use", path))
+        if not visible:
+            return ("none", "", None)
+
+        names = self._ts_rust_type_names_by_scope(root)
+        nearest = self._ts_rust_nearest_mod(at_node)
+        cur: Optional["Node"] = at_node
+        while cur is not None:
+            key = (cur.type, cur.start_byte, cur.end_byte)
+            if head in names.get(key, set()):
+                visible.append((cur, "type", None))
+            if _is_same_ts_node(cur, nearest):
+                break
+            cur = cur.parent
+
+        scopes = [scope for scope, _kind, _path in visible]
+
+        def is_outer(scope: "Node") -> bool:
+            return any(
+                self._ts_node_contains(scope, other)
+                and not _is_same_ts_node(scope, other)
+                for other in scopes
+            )
+
+        inner = [item for item in visible if not is_outer(item[0])]
+
+        def innermost(nodes: List["Node"]) -> "Node":
+            winner = nodes[0]
+            for scope in nodes[1:]:
+                if self._ts_node_contains(winner, scope) and not _is_same_ts_node(
+                    winner, scope
+                ):
+                    winner = scope
+            return winner
+
+        type_scopes = [scope for scope, kind, _path in inner if kind == "type"]
+        if type_scopes:
+            return ("shadow", "", innermost(type_scopes))
+        paths = list(dict.fromkeys(path for _scope, _kind, path in inner if path))
+        if len(paths) != 1:
+            return ("shadow", "", None)
+        use_scopes = [scope for scope, _kind, path in inner if path == paths[0]]
+        return ("use", paths[0], innermost(use_scopes))
+
+    def _ts_rust_glob_expansion(
+        self,
+        head: str,
+        rest: str,
+        root: "Node",
+        at_node: "Node",
+        inside: Optional["Node"] = None,
+    ) -> Optional[Tuple[str, "Node"]]:
+        """Expand ``Library::new`` through a visible ``use libloading::*``.
+
+        The expanded path must name one known sink. ``std::fs::File::open``
+        names ``fs::File::open``. A suffix such as
+        ``foo::libloading::Library::new`` does not count, and a glob inside
+        another function or module does not apply here. A local type of the
+        same name hides the glob. The scope is the block that wrote the glob.
+        """
+        globs = self._ts_rust_use_globs(root)
+        if not globs:
+            return None
+        sinks = self._ts_rust_sink_paths()
+        matched: Dict[str, Tuple[str, "Node"]] = {}
+        for prefix, scope in globs:
+            if inside is not None and (
+                _is_same_ts_node(inside, scope)
+                or not self._ts_node_contains(inside, scope)
+            ):
+                continue
+            if not self._ts_rust_glob_visible(scope, at_node):
+                continue
+            if self._ts_rust_explicit_name_shadows_glob(head, scope, at_node, root):
+                continue
+            candidate = f"{prefix}::{head}::{rest}"
+            normalized = candidate.replace("::", ".")
+            key = self._ts_rust_glob_sink_key(normalized, sinks)
+            if key is not None and key not in matched:
+                matched[key] = (candidate, scope)
+        if len(matched) == 1:
+            return next(iter(matched.values()))
+        return None
+
+    @staticmethod
+    def _ts_strip_rust_crate_root(text: str) -> str:
+        """Drop a leading ``::`` from a path that still has more segments.
+
+        ``::std::fs::File::open`` is ``std::fs::File::open``. A one-segment
+        crate-root call such as ``::read`` stays unchanged, so it does not
+        match the bare leaf ``fs::read``.
+        """
+        stripped = text.strip()
+        while stripped.startswith("::"):
+            rest = stripped[2:]
+            if "::" not in rest:
+                break
+            stripped = rest
+        return stripped
+
+    def _ts_qualify_rust_call(
+        self, func_text: str, root: "Node", at_node: Optional["Node"] = None
+    ) -> Tuple[str, Optional["Node"]]:
+        """Expand the first segment of a Rust path through ``use`` bindings.
+
+        A path that already starts with ``::`` is the crate root and is
+        not rewritten by a local ``use``. The scope is the block that
+        wrote the winning ``use`` or glob, so a module nested around the
+        call does not rewrite an import resolved outside it.
+        """
+        raw = func_text.strip()
+        crate_root = raw.startswith("::")
+        text = self._ts_strip_rust_crate_root(raw)
         if self.language != "rust" or "::" not in text:
-            return text
+            return text, None
         head, rest = text.split("::", 1)
         if not head.isidentifier() or head in {"Self", "self", "super", "crate"}:
-            return text
-        full = self._ts_rust_use_bindings(root).get(head)
-        if not full:
-            return text
-        return f"{full}::{rest}"
+            return text, None
+        if at_node is None or crate_root:
+            return text, None
+        kind, path, scope = self._ts_rust_resolve_explicit_use(head, root, at_node)
+        # A glob in a narrower block shadows an explicit import or a
+        # local type. A glob in the same scope does not, and a glob
+        # that names no sink (``use std::io::*``) does not either.
+        if kind in {"shadow", "use"} and scope is not None:
+            inner = self._ts_rust_glob_expansion(
+                head, rest, root, at_node, inside=scope
+            )
+            if inner:
+                return inner
+        if kind == "shadow":
+            return text, None
+        if kind == "use":
+            return f"{path}::{rest}", scope
+        expanded = self._ts_rust_glob_expansion(head, rest, root, at_node)
+        return expanded if expanded else (text, None)
 
     def _ts_enclosing_function(self, node: "Node") -> Optional["Node"]:
         """Return the innermost enclosing function node, if any."""
@@ -6056,15 +6474,54 @@ class NativeAnalyzer:
         store[cache_key] = alias_map
         return alias_map
 
+    @staticmethod
+    def _ts_unwrap_parens(node: "Node") -> "Node":
+        """Strip parentheses around an expression."""
+        cur = node
+        while cur is not None and cur.type == "parenthesized_expression":
+            inner = None
+            for child in cur.children:
+                if child.type not in ("(", ")"):
+                    inner = child
+                    break
+            if inner is None:
+                break
+            cur = inner
+        return cur
+
+    def _ts_is_create_require_factory(self, node: "Node") -> bool:
+        """True for ``createRequire`` or ``module.createRequire``."""
+        node = self._ts_unwrap_parens(node)
+        if node is None:
+            return False
+        if node.type == "identifier":
+            return self._ts_get_node_text(node).strip() == "createRequire"
+        if node.type != "member_expression":
+            return False
+        prop = node.child_by_field_name("property")
+        obj = node.child_by_field_name("object")
+        if prop is None or obj is None:
+            return False
+        return (
+            self._ts_get_node_text(prop).strip() == "createRequire"
+            and self._ts_get_node_text(obj).strip() == "module"
+        )
+
     def _ts_alias_value_category(self, value: "Node", sink_category_for) -> Optional[str]:
         """Return the sink category an assignment's right-hand side aliases."""
+        value = self._ts_unwrap_parens(value)
         t = value.type
+        # ``const req = createRequire`` aliases the factory. Calling ``req``
+        # does not load a module; ``req(url)(path)`` does.
+        if self._ts_is_create_require_factory(value):
+            return "create_require_factory"
         if t in ("identifier", "member_expression"):
             return sink_category_for(self._ts_get_node_text(value))
         if t in ("call_expression", "new_expression"):
             callee = value.child_by_field_name("function")
             args = value.child_by_field_name("arguments")
             if callee is not None:
+                callee = self._ts_unwrap_parens(callee)
                 leaf = self._ts_get_node_text(callee).split(".")[-1].strip()
                 if leaf == "promisify" and args is not None:
                     for a in args.children:
@@ -6074,9 +6531,36 @@ class NativeAnalyzer:
                                 return cat
                 # ``const requireModule = createRequire(import.meta.url)``
                 # returns a function that loads a module from an arbitrary path.
-                if leaf == "createRequire":
+                if self._ts_is_create_require_factory(callee):
                     return "eval"
         return None
+
+    def _ts_invokes_create_require(self, func: "Node", at_node: "Node") -> bool:
+        """True when ``func`` is a call of the ``createRequire`` factory.
+
+        ``createRequire(url)(path)`` and ``(createRequire(url))(path)`` load
+        a module. ``const req = createRequire; req(url)(path)`` does too.
+        ``other.createRequire(url)(path)`` does not. The factory call itself
+        does not.
+        """
+        func = self._ts_unwrap_parens(func)
+        if func is None or func.type != "call_expression":
+            return False
+        inner = func.child_by_field_name("function")
+        if inner is None:
+            return False
+        inner = self._ts_unwrap_parens(inner)
+        if inner.type == "identifier":
+            name = self._ts_get_node_text(inner).strip()
+            if name in self._ts_shadowed_names_at(at_node):
+                return False
+            if name == "createRequire":
+                return True
+            return (
+                self._ts_visible_sink_aliases_at(at_node).get(name)
+                == "create_require_factory"
+            )
+        return self._ts_is_create_require_factory(inner)
 
     def _ts_enrich_capability_with_callees(
         self, ctx: FunctionContext, handler_node: "Node"
@@ -6630,23 +7114,69 @@ class NativeAnalyzer:
         return visit(node)
 
     @staticmethod
-    def _unqualified_call_matches_qualified_sink(
-        normalized: str, sink_normalized: str, sink_set: set
-    ) -> bool:
-        """Match ``exec()`` to ``child_process.exec`` only when ``exec`` is a sink.
+    def _ambiguous_unqualified_leaves(language: str) -> frozenset:
+        """Leaves that are an eval sink and also a sink in another category.
 
-        ``plugin.Open`` must not make a bare ``Open()`` call dynamic loading.
-        ``child_process.exec`` still matches bare ``exec()`` because ``exec``
-        is registered on its own.
+        ``Open`` is both ``os.Open`` (file) and ``plugin.Open`` (eval).
+        ``new`` is both ``Command::new`` (command) and
+        ``libloading::Library::new`` (eval). A bare call of either name is
+        not evidence of dynamic loading or of the other sink.
         """
-        leaf = sink_normalized.rsplit(".", 1)[-1]
-        if normalized != leaf:
-            return False
-        return any(
-            "." not in other.replace("::", ".").replace("->", ".")
-            and other.replace("::", ".").replace("->", ".") == leaf
-            for other in sink_set
+        from .taint.patterns import get_all_sinks_for_language
+
+        categories_by_leaf: Dict[str, Set[str]] = {}
+        for category, names in get_all_sinks_for_language(language).items():
+            for name in names:
+                leaf = (
+                    name.replace("::", ".").replace("->", ".").rsplit(".", 1)[-1]
+                )
+                categories_by_leaf.setdefault(leaf, set()).add(category)
+        return frozenset(
+            leaf
+            for leaf, categories in categories_by_leaf.items()
+            if "eval" in categories and len(categories) > 1
         )
+
+    @staticmethod
+    def _unqualified_call_matches_qualified_sink(
+        normalized: str,
+        sink_normalized: str,
+        ambiguous_leaves: frozenset,
+    ) -> bool:
+        """Match a bare call to the leaf of a qualified sink.
+
+        ``fork()`` matches ``child_process.fork``. ``Command()`` matches
+        ``exec.Command``. Leaves in ``ambiguous_leaves`` stay unmatched,
+        so ``Open()`` is not ``plugin.Open`` and ``new()`` is not
+        ``Command::new``.
+        """
+        if "." not in sink_normalized:
+            return False
+        leaf = sink_normalized.rsplit(".", 1)[-1]
+        if normalized != leaf or leaf in ambiguous_leaves:
+            return False
+        return True
+
+    def _ts_qualified_suffix_matches(
+        self, normalized: str, sink_normalized: str
+    ) -> bool:
+        """Match a longer path to a sink on a component boundary.
+
+        ``tokio::process::Command::new`` still matches ``Command::new``.
+        A crate-qualified sink matches a longer path only when the extra
+        prefix is ``std``: ``std::fs::File::open`` matches ``fs::File::open``,
+        and ``foo::libloading::Library::new`` does not match
+        ``libloading::Library::new``. A leading ``::`` on a longer path is
+        removed, so ``::libloading::Library::new`` still matches.
+        ``::read`` is left unchanged. ``tokio::fs`` and ``smol::fs``
+        ``File::open`` are their own sinks.
+        """
+        suffix = "." + sink_normalized
+        if not normalized.endswith(suffix):
+            return False
+        if self.language != "rust" or sink_normalized.count(".") < 2:
+            return True
+        return normalized[: -len(suffix)] == "std"
 
     def _ts_detect_security_ops(self, node: "Node") -> Dict[str, bool]:
         """Detect security-relevant operations via AST traversal."""
@@ -6668,18 +7198,46 @@ class NativeAnalyzer:
         network_sinks = sinks.get("network", set())
         deser_sinks = sinks.get("deserialization", set())
         call_root = self._ts_root(node)
+        ambiguous_leaves = self._ambiguous_unqualified_leaves(self.language)
 
-        def matches_sink(func_text: str, sink_set: set) -> bool:
+        def matches_sink(
+            func_text: str, sink_set: set, at_node: "Node"
+        ) -> bool:
             """Check if function text matches any sink pattern.
 
             A qualified call must match a sink on a path-component boundary.
             Comparing leaf names alone collides whenever unrelated types share
             a method name: ``CString::new`` would match ``Command::new``.
-            Unqualified calls are matched against the sink leaf so that
-            imported names (``exec(cmd)`` after destructuring) still resolve;
-            aliases that rebind a sink are handled by the caller.
+            Unqualified calls match the sink leaf so destructured imports
+            (``fork(cmd)``, ``Command(cmd)``) still resolve. A leaf that is
+            an eval sink and also another category does not, so ``Open()``
+            is not ``plugin.Open``. Aliases are handled by the caller.
             """
-            qualified_text = self._ts_qualify_rust_call(func_text, call_root)
+            raw_call = func_text.strip()
+            crate_root_call = raw_call.startswith("::")
+            # A narrower ``use`` rebinds the name, so the module check
+            # runs on the call first and again on the resolved path.
+            # ``use libloading::Library`` beside ``mod libloading``
+            # resolves to that module, not the extern crate. The second
+            # check uses the import's scope: a ``mod`` nested around the
+            # call does not change an import written outside it.
+            if not crate_root_call and self._ts_rust_module_hides_call_head(
+                func_text, at_node, call_root
+            ):
+                return False
+            qualified_text, resolved_at = self._ts_qualify_rust_call(
+                func_text, call_root, at_node
+            )
+            if (
+                resolved_at is not None
+                and not crate_root_call
+                and not qualified_text.strip().startswith("::")
+                and self._ts_rust_relative_module_shadows(
+                    qualified_text, resolved_at, call_root
+                )
+            ):
+                return False
+            qualified_text = self._ts_strip_rust_crate_root(qualified_text)
             normalized = qualified_text.replace("::", ".").replace("->", ".")
             qualified = "." in normalized
 
@@ -6687,14 +7245,15 @@ class NativeAnalyzer:
                 sink_normalized = sink.replace("::", ".").replace("->", ".")
                 if normalized == sink_normalized:
                     return True
-                if qualified:
-                    if normalized.endswith("." + sink_normalized):
-                        return True
-                elif "." not in sink_normalized:
-                    if normalized == sink_normalized:
-                        return True
-                elif self._unqualified_call_matches_qualified_sink(
-                    normalized, sink_normalized, sink_set
+                if qualified and self._ts_qualified_suffix_matches(
+                    normalized, sink_normalized
+                ):
+                    return True
+                if (
+                    not qualified
+                    and self._unqualified_call_matches_qualified_sink(
+                        normalized, sink_normalized, ambiguous_leaves
+                    )
                 ):
                     return True
             return False
@@ -6707,23 +7266,29 @@ class NativeAnalyzer:
                          "member_call_expression", "scoped_call_expression", "call", "method_call",
                          "invocation_expression", "object_creation_expression", "new_expression"):
                 func = n.child_by_field_name("function") or n.child_by_field_name("name") or n.child_by_field_name("method")
+                if func is not None:
+                    func = self._ts_unwrap_parens(func)
                 if func:
                     func_text = self._ts_get_node_text(func)
                 else:
                     func_text = self._ts_get_node_text(n)
-                
-                # Check against sink patterns
-                if matches_sink(func_text, command_sinks):
-                    has_subprocess = True
-                if matches_sink(func_text, sql_sinks):
-                    has_sql = True
-                if matches_sink(func_text, eval_sinks):
+
+                at_node = func if func is not None else n
+                if func is not None and self._ts_invokes_create_require(func, n):
                     has_eval = True
-                if matches_sink(func_text, file_sinks):
+
+                # Check against sink patterns
+                if matches_sink(func_text, command_sinks, at_node):
+                    has_subprocess = True
+                if matches_sink(func_text, sql_sinks, at_node):
+                    has_sql = True
+                if matches_sink(func_text, eval_sinks, at_node):
+                    has_eval = True
+                if matches_sink(func_text, file_sinks, at_node):
                     has_file = True
-                if matches_sink(func_text, network_sinks):
+                if matches_sink(func_text, network_sinks, at_node):
                     has_network = True
-                if matches_sink(func_text, deser_sinks):
+                if matches_sink(func_text, deser_sinks, at_node):
                     has_deserialization = True
 
                 visible_aliases = self._ts_visible_sink_aliases_at(n)

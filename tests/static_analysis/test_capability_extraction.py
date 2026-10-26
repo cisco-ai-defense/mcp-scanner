@@ -1618,3 +1618,635 @@ def test_direct_execute_field_in_descriptor_object() -> None:
     assert cap.name == "run", cap.name
     call_names = {c.get("name") for c in cap.function_calls or []}
     assert "execSync" in call_names, call_names
+
+
+def _function(source: str, filename: str, func_name: str):
+    analyzer = NativeAnalyzer(source, filename)
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    return funcs[func_name]
+
+
+@pytest.mark.parametrize(
+    ("source", "filename", "func_name", "flag"),
+    [
+        (
+            "function run(cmd) {\n  fork(cmd);\n}\n",
+            "run.js",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "function run(cmd) {\n  exec(cmd);\n}\n",
+            "run.js",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "function run(cmd) {\n  spawn(cmd);\n}\n",
+            "run.js",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "function run(code) {\n  runInContext(code);\n}\n",
+            "run.js",
+            "run",
+            "has_eval_exec",
+        ),
+        (
+            "package main\nfunc run(cmd string) {\n\tCommand(cmd)\n}\n",
+            "run.go",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "package main\nfunc run(cmd string) {\n\tStartProcess(cmd)\n}\n",
+            "run.go",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "package main\nfunc run(cmd string) {\n\tExec(cmd)\n}\n",
+            "run.go",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "class T {\n  void run(String cmd) {\n    exec(cmd);\n  }\n}\n",
+            "T.java",
+            "T.run",
+            "has_subprocess_calls",
+        ),
+        (
+            "class T {\n  void launch() {\n    start();\n  }\n}\n",
+            "T.java",
+            "T.launch",
+            "has_subprocess_calls",
+        ),
+        (
+            "function load(pluginPath) {\n"
+            "  return createRequire(import.meta.url)(pluginPath);\n"
+            "}\n",
+            "load.js",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "function load(pluginPath) {\n"
+            "  return module.createRequire(import.meta.url)(pluginPath);\n"
+            "}\n",
+            "load.js",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "use libloading::*;\n"
+            "fn load_plugin(path: &str) {\n"
+            "    unsafe { Library::new(path); }\n"
+            "}\n",
+            "lib.rs",
+            "load_plugin",
+            "has_eval_exec",
+        ),
+        (
+            "use libloading::*;\n"
+            "use serde::*;\n"
+            "fn load_plugin(path: &str) {\n"
+            "    unsafe { Library::new(path); }\n"
+            "}\n",
+            "lib.rs",
+            "load_plugin",
+            "has_eval_exec",
+        ),
+        (
+            "import importlib\n"
+            "def load(name):\n"
+            "    return importlib.import_module(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "def load(loader, module):\n"
+            "    loader.exec_module(module)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "def load(loader, name):\n"
+            "    return loader.load_module(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "function load(pluginPath) {\n"
+            "  return (createRequire(import.meta.url))(pluginPath);\n"
+            "}\n",
+            "load.js",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "function load(pluginPath) {\n"
+            "  const req = createRequire;\n"
+            "  return req(import.meta.url)(pluginPath);\n"
+            "}\n",
+            "load.js",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "use libloading::*;\n"
+            "use foo::libloading::*;\n"
+            "fn load_plugin(path: &str) {\n"
+            "    unsafe { Library::new(path); }\n"
+            "}\n",
+            "lib.rs",
+            "load_plugin",
+            "has_eval_exec",
+        ),
+    ],
+)
+def test_destructured_and_loader_shapes_still_match(
+    source: str, filename: str, func_name: str, flag: str
+) -> None:
+    """Bare sink leaves, glob imports, and inline createRequire stay sinks."""
+    func = _function(source, filename, func_name)
+    assert getattr(func, flag) is True, (filename, func_name, flag)
+
+
+def test_inner_libloading_glob_shadows_outer_use() -> None:
+    """A narrower ``use libloading::*`` hides an outer ``use other::Library``."""
+    shadowed = """\
+use other::Library;
+
+fn load_plugin(path: &str) {
+    use libloading::*;
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(shadowed, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+    assert func.has_subprocess_calls is False
+
+    kept = """\
+use libloading::Library;
+
+fn load_plugin(path: &str) {
+    use std::io::*;
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(kept, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+
+def test_grouped_std_paths_still_match_sinks() -> None:
+    """Grouped ``std`` imports keep their prefix and still hit the sinks."""
+    command = """\
+use std::{process::Command};
+
+fn run_shell(cmd: &str) {
+    let _ = Command::new(cmd);
+}
+"""
+    func = _function(command, "lib.rs", "run_shell")
+    assert func.has_subprocess_calls is True
+
+    opened = """\
+use std::{fs::File};
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(opened, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    tokio = """\
+fn run_shell(cmd: &str) {
+    let _ = tokio::process::Command::new(cmd);
+}
+"""
+    func = _function(tokio, "lib.rs", "run_shell")
+    assert func.has_subprocess_calls is True
+
+
+def test_rust_std_fs_glob_open_is_a_file_operation() -> None:
+    """``use std::fs::*;`` then ``File::open`` is the ``fs::File::open`` sink."""
+    source = """\
+use std::fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(source, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+    assert func.has_eval_exec is False
+
+    both = """\
+use std::fs::*;
+use fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(both, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_async_fs_file_apis_are_file_operations() -> None:
+    """tokio and async-std ``File::open`` / ``File::create`` are file sinks."""
+    written = """\
+fn read_it(path: &str) {
+    let _ = tokio::fs::File::open(path);
+}
+"""
+    func = _function(written, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    imported = """\
+use tokio::fs::File;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(imported, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    grouped = """\
+use tokio::fs::{File};
+
+fn read_it(path: &str) {
+    let _ = File::create(path);
+}
+"""
+    func = _function(grouped, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    globbed = """\
+use tokio::fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(globbed, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    async_std = """\
+use async_std::fs::File;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(async_std, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    async_std_create = """\
+fn read_it(path: &str) {
+    let _ = async_std::fs::File::create(path);
+}
+"""
+    func = _function(async_std_create, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_inner_glob_beats_type_that_hides_outer_use() -> None:
+    """A glob inside a local type's block is the name Rust resolves."""
+    source = """\
+use other::Library;
+
+fn load_plugin(path: &str) {
+    struct Library;
+    {
+        use libloading::*;
+        unsafe { Library::new(path); }
+    }
+}
+"""
+    func = _function(source, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+    assert func.has_subprocess_calls is False
+
+    opened = """\
+use other::File;
+
+fn read_it(path: &str) {
+    struct File;
+    {
+        use std::fs::*;
+        let _ = File::open(path);
+    }
+}
+"""
+    func = _function(opened, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+    assert func.has_eval_exec is False
+
+
+def test_crate_root_paths_match_the_same_sinks() -> None:
+    """A leading ``::`` is the crate root, not a foreign prefix."""
+    written_lib = """\
+fn load_plugin(path: &str) {
+    unsafe { ::libloading::Library::new(path); }
+}
+"""
+    func = _function(written_lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    imported_lib = """\
+use ::libloading::Library;
+
+fn load_plugin(path: &str) {
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(imported_lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    glob_lib = """\
+use ::libloading::*;
+
+fn load_plugin(path: &str) {
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(glob_lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    std_file = """\
+fn read_it(path: &str) {
+    let _ = ::std::fs::File::open(path);
+}
+"""
+    func = _function(std_file, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    use_std_file = """\
+use ::std::fs::File;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(use_std_file, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    tokio_file = """\
+fn read_it(path: &str) {
+    let _ = ::tokio::fs::File::open(path);
+}
+"""
+    func = _function(tokio_file, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    tokio_glob = """\
+use ::tokio::fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(tokio_glob, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    command = """\
+fn run_shell(cmd: &str) {
+    let _ = ::std::process::Command::new(cmd);
+}
+"""
+    func = _function(command, "lib.rs", "run_shell")
+    assert func.has_subprocess_calls is True
+
+
+def test_smol_fs_file_open_is_a_file_operation() -> None:
+    """``smol::fs::File::open`` and ``File::create`` are file operations."""
+    written = """\
+fn read_it(path: &str) {
+    let _ = smol::fs::File::open(path);
+}
+"""
+    func = _function(written, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    created = """\
+use smol::fs::File;
+
+fn read_it(path: &str) {
+    let _ = File::create(path);
+}
+"""
+    func = _function(created, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    globbed = """\
+use smol::fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(globbed, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    absolute = """\
+fn read_it(path: &str) {
+    let _ = ::smol::fs::File::create(path);
+}
+"""
+    func = _function(absolute, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_crate_root_path_ignores_a_local_use() -> None:
+    """``::libloading`` stays that crate when a ``use`` binds the same name."""
+    lib = """\
+use other::libloading;
+
+fn load_plugin(path: &str) {
+    unsafe { ::libloading::Library::new(path); }
+}
+"""
+    func = _function(lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    opened = """\
+use other::std;
+
+fn read_it(path: &str) {
+    let _ = ::std::fs::File::open(path);
+}
+"""
+    func = _function(opened, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    tokio = """\
+use other::tokio;
+
+fn read_it(path: &str) {
+    let _ = ::tokio::fs::File::open(path);
+}
+"""
+    func = _function(tokio, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_parenthesized_rust_paths_still_match_sinks() -> None:
+    """Parentheses around a path do not hide the sink."""
+    lib = """\
+fn load_plugin(path: &str) {
+    unsafe { (::libloading::Library::new)(path); }
+}
+"""
+    func = _function(lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    relative = """\
+fn load_plugin(path: &str) {
+    unsafe { (libloading::Library::new)(path); }
+}
+"""
+    func = _function(relative, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    opened = """\
+fn read_it(path: &str) {
+    let _ = (std::fs::File::open)(path);
+}
+"""
+    func = _function(opened, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_absolute_libloading_stays_a_sink_beside_a_local_module() -> None:
+    """``::libloading`` is the extern crate when a local module has that name."""
+    source = """\
+mod libloading {
+    pub struct Library;
+    impl Library {
+        pub fn new(_path: &str) -> Self { Library }
+    }
+}
+
+fn load_plugin(path: &str) {
+    unsafe { ::libloading::Library::new(path); }
+}
+"""
+    func = _function(source, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    imported = """\
+mod libloading {
+    pub struct Library;
+    impl Library {
+        pub fn new(_path: &str) -> Self { Library }
+    }
+}
+
+fn load_plugin(path: &str) {
+    use ::libloading::Library;
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(imported, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+
+def test_inner_use_beats_an_outer_module() -> None:
+    """A narrower ``use`` rebinds a name an outer ``mod`` would own."""
+    source = """\
+mod File {
+    pub struct X;
+}
+
+fn read_it(path: &str) {
+    use std::fs::File;
+    let _ = File::open(path);
+}
+
+fn read_glob(path: &str) {
+    use std::fs::*;
+    let _ = File::open(path);
+}
+"""
+    analyzer = NativeAnalyzer(source, "lib.rs")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["read_it"].has_file_operations is True
+    assert funcs["read_glob"].has_file_operations is True
+
+
+def test_inner_module_does_not_hide_an_outer_import() -> None:
+    """A nested ``mod`` does not rebind an import written outside it."""
+    source = """\
+fn read_it(path: &str) {
+    use std::fs::File;
+    {
+        mod std { pub struct X; }
+        let _ = File::open(path);
+    }
+}
+
+fn read_glob(path: &str) {
+    use std::fs::*;
+    {
+        mod std { pub struct X; }
+        let _ = File::open(path);
+    }
+}
+
+fn load_plugin(path: &str) {
+    use libloading::Library;
+    {
+        mod libloading { pub struct X; }
+        unsafe { Library::new(path); }
+    }
+}
+
+fn read_after(path: &str) {
+    use std::fs::File;
+    {
+        mod std { pub struct X; }
+    }
+    let _ = File::open(path);
+}
+"""
+    analyzer = NativeAnalyzer(source, "lib.rs")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["read_it"].has_file_operations is True
+    assert funcs["read_glob"].has_file_operations is True
+    assert funcs["load_plugin"].has_eval_exec is True
+    assert funcs["read_after"].has_file_operations is True
+
+
+def test_nested_function_still_sees_the_parent_import() -> None:
+    """A nested ``fn`` inherits the parent import. A nested ``mod`` does not."""
+    source = """\
+fn read_it(path: &str) {
+    use std::fs::File;
+    fn inner(path: &str) {
+        let _ = File::open(path);
+    }
+    let _ = File::open(path);
+}
+
+fn load_inside(path: &str) {
+    mod child {
+        pub fn load_child(path: &str) {
+            use libloading::Library;
+            unsafe { Library::new(path); }
+        }
+    }
+}
+"""
+    analyzer = NativeAnalyzer(source, "lib.rs")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["inner"].has_file_operations is True
+    assert funcs["read_it"].has_file_operations is True
+    assert funcs["load_child"].has_eval_exec is True

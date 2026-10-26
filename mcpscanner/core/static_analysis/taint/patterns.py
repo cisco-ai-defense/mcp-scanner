@@ -325,6 +325,11 @@ class TaintPatterns:
             "fs::read", "fs::read_to_string", "fs::write",
             "fs::File::open", "fs::File::create",
             "std::fs::read", "std::fs::write",
+            # Same calls as std::fs, recorded exactly so a re-export
+            # prefix such as foo:: does not match them.
+            "tokio::fs::File::open", "tokio::fs::File::create",
+            "async_std::fs::File::open", "async_std::fs::File::create",
+            "smol::fs::File::open", "smol::fs::File::create",
         },
     })
     
