@@ -194,10 +194,20 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 self.logger.info("Readiness LLM judge enabled and available")
             else:
                 reason = self._llm_judge.get_unavailable_reason()
-                self.logger.debug(f"LLM judge not available: {reason}")
+                self._llm_judge = None
+                from ....utils.optional_litellm import (
+                    LITELLM_REQUIRED_MESSAGE,
+                    LiteLLMNotInstalledError,
+                )
+
+                if reason == LITELLM_REQUIRED_MESSAGE:
+                    self.logger.error("%s", reason)
+                    raise LiteLLMNotInstalledError(reason)
+                self.logger.debug("LLM judge not available: %s", reason)
         except ImportError as e:
-            self.logger.debug(f"Could not initialize LLM judge: {e}")
+            self.logger.error("Could not initialize LLM judge: %s", e)
             self._llm_judge = None
+            raise
 
     @property
     def llm_judge_available(self) -> bool:

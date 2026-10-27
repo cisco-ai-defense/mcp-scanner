@@ -40,16 +40,15 @@ from ....utils.analyzer_errors import build_infrastructure_error_finding
 from ....utils.logging_config import get_logger
 from ..base import SecurityFinding
 
-# Try to import litellm
+# Imported only with this module. The readiness package does not import
+# this module until a caller asks for the LLM judge.
 _litellm_available = False
-_litellm_import_error: Optional[str] = None
 
 try:
     from litellm import acompletion
 
     _litellm_available = True
-except ImportError as e:
-    _litellm_import_error = str(e)
+except ImportError:
     acompletion = None  # type: ignore
 
 
@@ -155,7 +154,9 @@ class ReadinessLLMJudge:
             Human-readable explanation or None if available.
         """
         if not _litellm_available:
-            return f"litellm not installed: {_litellm_import_error}"
+            from ....utils.optional_litellm import LITELLM_REQUIRED_MESSAGE
+
+            return LITELLM_REQUIRED_MESSAGE
 
         if not self.api_key:
             return (

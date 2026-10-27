@@ -31,7 +31,6 @@ the semantic alignment verification layer.
 
 from .alignment_orchestrator import AlignmentOrchestrator
 from .alignment_prompt_builder import AlignmentPromptBuilder
-from .alignment_llm_client import AlignmentLLMClient
 from .alignment_response_validator import AlignmentResponseValidator
 
 __all__ = [
@@ -40,3 +39,12 @@ __all__ = [
     "AlignmentLLMClient",
     "AlignmentResponseValidator",
 ]
+
+
+def __getattr__(name: str):
+    """Load the LiteLLM client only when a caller asks for it."""
+    if name == "AlignmentLLMClient":
+        from .alignment_llm_client import AlignmentLLMClient
+
+        return AlignmentLLMClient
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

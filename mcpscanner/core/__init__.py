@@ -18,7 +18,6 @@
 
 from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer, SecurityFinding
-from .analyzers.llm_analyzer import LLMAnalyzer
 from .analyzers.yara_analyzer import YaraAnalyzer
 from .models import ScanRequest
 from mcp.types import Tool as MCPTool
@@ -59,3 +58,12 @@ __all__ = [
     "PackageIntegrityError",
     "analysis_scan_status",
 ]
+
+
+def __getattr__(name: str):
+    """Import the LLM analyzer only when a caller asks for it."""
+    if name == "LLMAnalyzer":
+        from .analyzers.llm_analyzer import LLMAnalyzer
+
+        return LLMAnalyzer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

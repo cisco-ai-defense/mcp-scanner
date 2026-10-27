@@ -63,12 +63,15 @@ from ..utils.command_utils import (
     split_embedded_args,
     resolve_executable_path,
 )
+from ..utils.optional_litellm import (
+    LITELLM_REQUIRED_MESSAGE,
+    LiteLLMNotInstalledError,
+    litellm_importable,
+)
 from .analyzers.api_analyzer import ApiAnalyzer
 from .analyzers.base import BaseAnalyzer
-from .analyzers.llm_analyzer import LLMAnalyzer
-from .analyzers.meta_analyzer import MetaAnalyzer, apply_meta_analysis
+from .analyzers.meta_analyzer import apply_meta_analysis
 from .analyzers.yara_analyzer import YaraAnalyzer
-from .analyzers.behavioral import BehavioralCodeAnalyzer
 from .analyzers.virustotal_analyzer import VirusTotalAnalyzer
 from .analyzers.prompt_defense_analyzer import PromptDefenseAnalyzer
 from .analyzers.readiness import ReadinessAnalyzer
@@ -121,6 +124,27 @@ class CoverageLimitExceeded(Exception):
         self.limit = limit
 
 
+def _new_llm_analyzer(config: Config):
+    """Construct the LLM analyzer. Imported here so YARA scans skip LiteLLM."""
+    from .analyzers.llm_analyzer import LLMAnalyzer
+
+    return LLMAnalyzer(config)
+
+
+def _new_meta_analyzer(config: Config):
+    """Construct the meta analyzer. Imported here so YARA scans skip LiteLLM."""
+    from .analyzers.meta_analyzer import MetaAnalyzer
+
+    return MetaAnalyzer(config)
+
+
+def _new_behavioral_analyzer(config: Config):
+    """Construct the behavioral analyzer without importing it for YARA scans."""
+    from .analyzers.behavioral.code_analyzer import BehavioralCodeAnalyzer
+
+    return BehavioralCodeAnalyzer(config)
+
+
 class Scanner:
     """Unified scanner class that combines API and YARA analyzers.
 
@@ -156,20 +180,22 @@ class Scanner:
             custom_analyzers (Optional[List[BaseAnalyzer]]): A list of custom analyzer instances.
         """
         self._config = config
+        self._litellm_missing_reason: Optional[str] = None
         self._api_analyzer = ApiAnalyzer(config) if config.api_key else None
         self._yara_analyzer = YaraAnalyzer(rules_dir=rules_dir)
 
         # LLM analyzer can be used with either API key or Bedrock (AWS credentials).
         # Behavioral analyzer follows the same gate now that AlignmentLLMClient
         # supports Bedrock auth via bearer token / AWS provider chain.
+        # Both classes import LiteLLM at construction time, so a YARA-only
+        # scan never loads it.
         is_bedrock = config.llm_model and "bedrock/" in config.llm_model
-        self._llm_analyzer = (
-            LLMAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
+        llm_configured = bool(config.llm_provider_api_key or is_bedrock)
+        self._llm_analyzer = self._construct_llm_backed(
+            _new_llm_analyzer, config, llm_configured
         )
-        self._behavioral_analyzer = (
-            BehavioralCodeAnalyzer(config)
-            if (config.llm_provider_api_key or is_bedrock)
-            else None
+        self._behavioral_analyzer = self._construct_llm_backed(
+            _new_behavioral_analyzer, config, llm_configured
         )
         self._vt_analyzer = (
             VirusTotalAnalyzer(
@@ -197,8 +223,8 @@ class Scanner:
         # second write wins. Constructing here at __init__ removes both issues
         # because Scanner instances themselves are not concurrently constructed
         # within a single request lifecycle.
-        self._meta_analyzer = (
-            MetaAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
+        self._meta_analyzer = self._construct_llm_backed(
+            _new_meta_analyzer, config, llm_configured
         )
         self._custom_analyzers = custom_analyzers or []
 
@@ -229,6 +255,41 @@ class Scanner:
         """
         return self._custom_analyzers
 
+    def _construct_llm_backed(self, factory, config: Config, enabled: bool):
+        """Build an LLM-backed analyzer, or return None when LiteLLM is absent.
+
+        A missing extra must not stop YARA or other non-LLM analyzers. The
+        reason is reported later if the caller actually requested this analyzer.
+        """
+        if not enabled:
+            return None
+        try:
+            return factory(config)
+        except LiteLLMNotInstalledError as exc:
+            self._litellm_missing_reason = str(exc)
+            logger.warning("%s", exc)
+            return None
+
+    def _llm_backed_requirement_messages(
+        self, missing_config_message: str
+    ) -> List[str]:
+        """Explain why an LLM-backed analyzer cannot run.
+
+        A missing API key on a non-Bedrock model means construction never
+        started, so the caller gets that configuration error alone. The
+        LiteLLM install message is reserved for a configured analyzer that
+        could not be built.
+        """
+        is_bedrock = bool(
+            self._config.llm_model and "bedrock/" in self._config.llm_model
+        )
+        configured = bool(self._config.llm_provider_api_key or is_bedrock)
+        if not configured:
+            return [missing_config_message]
+        if self._litellm_missing_reason or not litellm_importable():
+            return [self._litellm_missing_reason or LITELLM_REQUIRED_MESSAGE]
+        return [missing_config_message]
+
     def _validate_analyzer_requirements(
         self, requested_analyzers: List[AnalyzerEnum]
     ) -> None:
@@ -248,17 +309,21 @@ class Scanner:
             )
 
         if AnalyzerEnum.LLM in requested_analyzers and not self._llm_analyzer:
-            missing_requirements.append(
-                "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured (or AWS credentials for Bedrock models)"
+            missing_requirements.extend(
+                self._llm_backed_requirement_messages(
+                    "LLM analyzer requested but MCP_SCANNER_LLM_API_KEY not configured (or AWS credentials for Bedrock models)"
+                )
             )
 
         if (
             AnalyzerEnum.BEHAVIORAL in requested_analyzers
             and not self._behavioral_analyzer
         ):
-            missing_requirements.append(
-                "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured "
-                "(or AWS credentials for Bedrock models)"
+            missing_requirements.extend(
+                self._llm_backed_requirement_messages(
+                    "Behavioral analyzer requested but MCP_SCANNER_LLM_API_KEY not configured "
+                    "(or AWS credentials for Bedrock models)"
+                )
             )
 
         if (
@@ -293,16 +358,19 @@ class Scanner:
         if AnalyzerEnum.META in requested_analyzers and self._meta_analyzer is None:
             is_bedrock = self._config.llm_model and "bedrock/" in self._config.llm_model
             if not self._config.llm_provider_api_key and not is_bedrock:
-                missing_requirements.append(
-                    "Meta analyzer requested but MCP_SCANNER_LLM_API_KEY (or Bedrock model + AWS credentials) not configured"
+                missing_requirements.extend(
+                    self._llm_backed_requirement_messages(
+                        "Meta analyzer requested but MCP_SCANNER_LLM_API_KEY (or Bedrock model + AWS credentials) not configured"
+                    )
                 )
             else:
-                # Construction was attempted in __init__ but failed silently
-                # (e.g., MetaAnalyzer raised). This branch should be unreachable
-                # in practice because MetaAnalyzer.__init__ raises on misconfig
-                # rather than returning ``None``, but we keep it defensively.
-                missing_requirements.append(
-                    "Meta analyzer requested but failed to initialize at Scanner construction"
+                # Construction was attempted in __init__ but LiteLLM was
+                # missing, or MetaAnalyzer raised. Name the extra when
+                # that is why the analyzer is absent.
+                missing_requirements.extend(
+                    self._llm_backed_requirement_messages(
+                        "Meta analyzer requested but failed to initialize at Scanner construction"
+                    )
                 )
 
         if missing_requirements:
@@ -310,7 +378,23 @@ class Scanner:
                 "Cannot proceed with scan - missing required configuration:\n"
                 + "\n".join(f"  • {req}" for req in missing_requirements)
             )
+            if any(LITELLM_REQUIRED_MESSAGE in req for req in missing_requirements):
+                raise LiteLLMNotInstalledError(error_msg)
             raise ValueError(error_msg)
+
+    def _meta_can_run(self, analyzers: List[AnalyzerEnum]) -> bool:
+        """Return whether meta-analysis should run for ``analyzers``.
+
+        META omitted from the list is a skip. META present with no
+        analyzer is a failure: the caller asked for the pass and must
+        not receive the original findings as a successful result.
+        """
+        if AnalyzerEnum.META not in analyzers:
+            return False
+        if self._meta_analyzer is not None:
+            return True
+        self._validate_analyzer_requirements([AnalyzerEnum.META])
+        raise ValueError("Meta analyzer requested but failed to initialize")
 
     @staticmethod
     def _build_instructions_description_for_meta(
@@ -966,11 +1050,12 @@ class Scanner:
         """
         instance = cls.__new__(cls)
         instance._config = config
+        instance._litellm_missing_reason = None
         is_bedrock = bool(config.llm_model and "bedrock/" in config.llm_model)
-        instance._meta_analyzer = (
-            MetaAnalyzer(config)
-            if (config.llm_provider_api_key or is_bedrock)
-            else None
+        instance._meta_analyzer = instance._construct_llm_backed(
+            _new_meta_analyzer,
+            config,
+            bool(config.llm_provider_api_key or is_bedrock),
         )
         # Attributes apply_meta_to_results / dispatch helpers consult.
         instance._api_analyzer = None
@@ -1002,19 +1087,36 @@ class Scanner:
         Args:
             scan_results: Heterogeneous list of ScanResult subclasses.
             analyzers: Analyzer set requested for the scan. If META is not
-                in this list (or omitted) the input is returned unchanged.
-                Default: ``[META]`` so callers that already gated on
-                ``--enable-meta`` upstream don't need to re-pass it.
+                in this list the input is returned unchanged. Omitted
+                (``None``) runs meta when the analyzer is configured and
+                returns the input unchanged when it is not, so a caller
+                can enrich opportunistically. An explicit ``META`` entry
+                raises when the analyzer is unavailable.
 
         Returns:
             The same list with ``ScanResult.meta_filtered_findings``
             populated on each enriched result. Order is preserved. On
             per-result failure the original is kept (no silent drop).
+
+        Raises:
+            ValueError: If the caller passed ``META`` and the meta
+                analyzer is unavailable, including when LiteLLM is not
+                installed. The input is not returned as a successful
+                meta pass.
         """
+        explicit = analyzers is not None
         if analyzers is None:
             analyzers = [AnalyzerEnum.META]
-        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+        if AnalyzerEnum.META not in analyzers:
             return list(scan_results)
+        if self._meta_analyzer is None:
+            if not explicit:
+                return list(scan_results)
+            # An explicit meta request must not look successful. A missing
+            # LiteLLM extra used to fall through here and return the
+            # original findings with exit 0.
+            self._validate_analyzer_requirements([AnalyzerEnum.META])
+            raise ValueError("Meta analyzer requested but failed to initialize")
 
         sem = asyncio.Semaphore(self._META_CONCURRENCY)
 
@@ -1059,7 +1161,7 @@ class Scanner:
             The scan results with meta-analysis enrichments applied,
             in the same order as ``scan_results``.
         """
-        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+        if not self._meta_can_run(analyzers):
             return scan_results
 
         sem = asyncio.Semaphore(self._META_CONCURRENCY)
@@ -1075,7 +1177,7 @@ class Scanner:
         analyzers: List[AnalyzerEnum],
     ) -> List[PromptScanResult]:
         """Run meta-analysis on prompt scan results, bounded by _META_CONCURRENCY."""
-        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+        if not self._meta_can_run(analyzers):
             return scan_results
 
         sem = asyncio.Semaphore(self._META_CONCURRENCY)
@@ -1091,7 +1193,7 @@ class Scanner:
         analyzers: List[AnalyzerEnum],
     ) -> List[ResourceScanResult]:
         """Run meta-analysis on resource scan results, bounded by _META_CONCURRENCY."""
-        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+        if not self._meta_can_run(analyzers):
             return scan_results
 
         sem = asyncio.Semaphore(self._META_CONCURRENCY)
@@ -1116,7 +1218,7 @@ class Scanner:
         (asymmetric with tools/prompts/resources, which the P2-2 fix
         already covers).
         """
-        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+        if not self._meta_can_run(analyzers):
             result.meta_filtered_findings = []
             return result
 
@@ -1169,7 +1271,7 @@ class Scanner:
         analyzers: List[AnalyzerEnum],
     ) -> ToolScanResult:
         """Run meta-analysis on a single tool scan result."""
-        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+        if not self._meta_can_run(analyzers):
             return result
         results = await self._run_meta_analysis_on_results([result], analyzers)
         return results[0]
@@ -1180,7 +1282,7 @@ class Scanner:
         analyzers: List[AnalyzerEnum],
     ) -> PromptScanResult:
         """Run meta-analysis on a single prompt scan result."""
-        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+        if not self._meta_can_run(analyzers):
             return result
         results = await self._run_meta_analysis_on_prompt_results([result], analyzers)
         return results[0]
@@ -1191,7 +1293,7 @@ class Scanner:
         analyzers: List[AnalyzerEnum],
     ) -> ResourceScanResult:
         """Run meta-analysis on a single resource scan result."""
-        if AnalyzerEnum.META not in analyzers or self._meta_analyzer is None:
+        if not self._meta_can_run(analyzers):
             return result
         results = await self._run_meta_analysis_on_resource_results([result], analyzers)
         return results[0]

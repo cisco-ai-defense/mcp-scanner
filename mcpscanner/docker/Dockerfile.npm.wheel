@@ -7,7 +7,7 @@ FROM ${PYTHON_BASE_IMAGE}
 ARG SCANNER_PACKAGE_VERSION
 
 RUN apk add --no-cache --virtual .build-deps gcc musl-dev libffi-dev \
- && pip install --no-cache-dir "cisco-ai-mcp-scanner==${SCANNER_PACKAGE_VERSION}" \
+ && pip install --no-cache-dir "cisco-ai-mcp-scanner[llm]==${SCANNER_PACKAGE_VERSION}" \
  && apk del .build-deps
 
 COPY entrypoint_npm.py /entrypoint_npm.py

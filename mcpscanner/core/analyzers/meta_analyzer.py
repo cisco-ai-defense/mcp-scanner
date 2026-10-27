@@ -44,8 +44,6 @@ import secrets
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
-from litellm import acompletion
-
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
 from ...utils.analyzer_errors import (
@@ -54,7 +52,19 @@ from ...utils.analyzer_errors import (
     retry_transient_async,
 )
 from ...utils.logging_config import get_logger
+from ...utils.optional_litellm import require_acompletion
 from .base import SecurityFinding
+
+# Tests patch this name. It stays unset until an analyzer is constructed
+# so importing this module does not import LiteLLM.
+acompletion = None
+
+
+def _bind_acompletion() -> None:
+    """Import LiteLLM the first time a meta analyzer is constructed."""
+    global acompletion
+    if acompletion is None:
+        acompletion = require_acompletion()
 
 
 # Match a complete JSON string literal: opening ``"``, then zero or more
@@ -186,6 +196,7 @@ class MetaAnalyzer:
             ValueError: If LLM API key is not configured (non-Bedrock models).
         """
         self.name = "META"
+        _bind_acompletion()
         self._logger = get_logger(f"{__name__}.MetaAnalyzer")
 
         self._model = config.llm_model
