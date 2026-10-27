@@ -1639,6 +1639,7 @@ class NativeAnalyzer:
             return []
 
         module_imports = self._py_extract_imports(tree)
+        self._py_set_importlib_bindings(tree)
         wrapper_decorators = self._py_collect_wrapper_decorators(tree)
         # Identify trusted MCP server-instance names so
         # ``@<receiver>.tool`` only classifies when ``<receiver>``
@@ -4471,6 +4472,7 @@ class NativeAnalyzer:
         try:
             tree = ast.parse(self.source_code, filename=str(self.file_path))
             module_imports = self._py_extract_imports(tree)
+            self._py_set_importlib_bindings(tree)
 
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -4921,6 +4923,106 @@ class NativeAnalyzer:
             return result
         return TaintInfo()
 
+    def _py_set_importlib_bindings(self, tree: ast.AST) -> None:
+        """Remember module-level names that refer to ``importlib``."""
+        modules, functions = self._py_importlib_bindings(getattr(tree, "body", []))
+        self._py_importlib_modules = modules
+        self._py_import_module_names = functions
+
+    def _py_importlib_names_for(self, node: ast.AST) -> Tuple[Set[str], Set[str]]:
+        """Module-level importlib names plus imports local to ``node``."""
+        modules = set(getattr(self, "_py_importlib_modules", ()))
+        functions = set(getattr(self, "_py_import_module_names", ()))
+        body = getattr(node, "body", None)
+        if isinstance(body, list):
+            local_modules, local_functions = self._py_importlib_bindings(body)
+            modules.update(local_modules)
+            functions.update(local_functions)
+        return modules, functions
+
+    def _py_importlib_bindings(
+        self, stmts: List[ast.stmt]
+    ) -> Tuple[Set[str], Set[str]]:
+        """Names bound to the ``importlib`` module or to ``import_module``.
+
+        ``import importlib as il`` binds ``il``. ``from importlib import
+        import_module as load`` binds ``load``. ``import importlib.util as
+        util`` does not: that name is the util submodule, not ``importlib``.
+        Nested functions are skipped so one function's import does not leak
+        into another.
+        """
+        modules: Set[str] = set()
+        functions: Set[str] = set()
+        for stmt in self._py_iter_import_stmts(stmts):
+            if isinstance(stmt, ast.Import):
+                for alias in stmt.names:
+                    if alias.asname:
+                        if alias.name == "importlib":
+                            modules.add(alias.asname)
+                    elif alias.name == "importlib" or alias.name.startswith(
+                        "importlib."
+                    ):
+                        modules.add("importlib")
+            elif isinstance(stmt, ast.ImportFrom):
+                if (stmt.level or 0) == 0 and stmt.module == "importlib":
+                    for alias in stmt.names:
+                        if alias.name == "import_module":
+                            functions.add(alias.asname or alias.name)
+        return modules, functions
+
+    def _py_iter_import_stmts(self, stmts: List[ast.stmt]) -> Iterator[ast.stmt]:
+        """Yield imports, descending into blocks but not nested defs."""
+        for stmt in stmts:
+            if isinstance(
+                stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                continue
+            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                yield stmt
+            for block in self._py_nested_stmt_bodies(stmt):
+                yield from self._py_iter_import_stmts(block)
+
+    @staticmethod
+    def _py_nested_stmt_bodies(stmt: ast.stmt) -> List[List[ast.stmt]]:
+        bodies: List[List[ast.stmt]] = []
+        for name in ("body", "orelse", "finalbody"):
+            block = getattr(stmt, name, None)
+            if isinstance(block, list) and block and isinstance(block[0], ast.stmt):
+                bodies.append(block)
+        if isinstance(stmt, ast.Try):
+            for handler in stmt.handlers:
+                bodies.append(handler.body)
+        if isinstance(stmt, ast.Match):
+            for case in stmt.cases:
+                bodies.append(case.body)
+        return bodies
+
+    @staticmethod
+    def _py_call_is_dynamic_load(
+        call_name: str,
+        eval_exact: Set[str],
+        eval_methods: Set[str],
+        module_aliases: Set[str],
+        function_aliases: Set[str],
+    ) -> bool:
+        """True when ``call_name`` loads or executes code.
+
+        ``import_module`` matches only as a bare call, as
+        ``importlib.import_module``, or as ``alias.import_module`` when
+        ``alias`` was imported from ``importlib``. A leaf match would also
+        flag ``custom_loader.import_module``.
+        """
+        if call_name in eval_exact or call_name in function_aliases:
+            return True
+        leaf = call_name.rsplit(".", 1)[-1]
+        if leaf in eval_methods:
+            return True
+        if call_name.count(".") == 1:
+            head, attr = call_name.split(".", 1)
+            if attr == "import_module" and head in module_aliases:
+                return True
+        return False
+
     def _py_detect_security_ops(self, node: ast.AST) -> Dict[str, bool]:
         """Detect security-relevant operations via dataflow analysis."""
         has_file = False
@@ -4936,27 +5038,41 @@ class NativeAnalyzer:
             "exec",
             "compile",
             "__import__",
+            "builtins.eval",
+            "builtins.exec",
+            "builtins.compile",
+            "builtins.__import__",
             "importlib.import_module",
+            # Bare name only. It is not a leaf: ``custom_loader.import_module``
+            # is a different object.
+            "import_module",
         }
         # ``exec_module`` and the deprecated ``load_module`` run the module.
         # ``spec_from_file_location`` and ``module_from_spec`` only build the
         # module object, so they are not execution. Matched by leaf so
         # ``spec.loader.exec_module`` counts, without treating an arbitrary
-        # ``.execute`` method as eval.
+        # ``.execute`` method as eval. ``import_module`` stays out of this
+        # set for the same reason.
         eval_methods = {"exec_module", "load_module"}
-        
+        module_aliases, function_aliases = self._py_importlib_names_for(node)
+
         for child in ast.walk(node):
             if isinstance(child, ast.Call):
                 call_name = self._py_get_node_name(child.func)
-                
+
                 if any(p in call_name for p in file_patterns):
                     has_file = True
                 if any(p in call_name for p in network_patterns):
                     has_network = True
                 if any(p in call_name for p in subprocess_patterns):
                     has_subprocess = True
-                eval_leaf = call_name.rsplit(".", 1)[-1]
-                if call_name in eval_exact or eval_leaf in eval_methods:
+                if self._py_call_is_dynamic_load(
+                    call_name,
+                    eval_exact,
+                    eval_methods,
+                    module_aliases,
+                    function_aliases,
+                ):
                     has_eval = True
         
         return {

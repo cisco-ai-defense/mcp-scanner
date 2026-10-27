@@ -1891,6 +1891,43 @@ def _function(source: str, filename: str, func_name: str):
             "has_eval_exec",
         ),
         (
+            "def load(name):\n"
+            "    return import_module(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "import importlib as il\n"
+            "def load(name):\n"
+            "    return il.import_module(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "from importlib import import_module as load_mod\n"
+            "def load(name):\n"
+            "    return load_mod(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "def run(code):\n"
+            "    return builtins.eval(code)\n",
+            "run.py",
+            "run",
+            "has_eval_exec",
+        ),
+        (
+            "def run(code):\n"
+            "    return builtins.exec(code)\n",
+            "run.py",
+            "run",
+            "has_eval_exec",
+        ),
+        (
             "def load(loader, module):\n"
             "    loader.exec_module(module)\n",
             "load.py",

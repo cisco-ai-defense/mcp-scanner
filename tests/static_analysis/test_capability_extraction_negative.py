@@ -346,6 +346,41 @@ def test_qualified_rust_sinks_still_detected() -> None:
     assert not funcs["load_plugin"].has_subprocess_calls
 
 
+def test_unrelated_import_module_method_is_not_dynamic_loading() -> None:
+    """``import_module`` is not a leaf sink. Only importlib aliases count."""
+    source = (
+        "def load(custom_loader, name):\n"
+        "    return custom_loader.import_module(name)\n"
+    )
+    analyzer = NativeAnalyzer(source, "load.py")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["load"].has_eval_exec is False
+
+
+def test_import_module_alias_from_another_module_is_not_importlib() -> None:
+    """A renamed import counts only when it comes from ``importlib``."""
+    source = (
+        "from otherlib import import_module as load_mod\n"
+        "def load(name):\n"
+        "    return load_mod(name)\n"
+    )
+    analyzer = NativeAnalyzer(source, "load.py")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["load"].has_eval_exec is False
+
+
+def test_importlib_util_alias_does_not_bind_import_module() -> None:
+    """``import importlib.util as util`` does not make ``util`` importlib."""
+    source = (
+        "import importlib.util as util\n"
+        "def load(name):\n"
+        "    return util.import_module(name)\n"
+    )
+    analyzer = NativeAnalyzer(source, "load.py")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["load"].has_eval_exec is False
+
+
 def test_python_importlib_spec_construction_is_not_execution() -> None:
     """Building a module spec does not run it. ``exec_module`` does."""
     spec_only = (
