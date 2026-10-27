@@ -50,11 +50,23 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Exact pin. 1.93.2 is the first 1.93 release that fixes CVE-2026-84377.
+# Floor, not exact: 1.93.2 is the first 1.93 release that fixes
+# CVE-2026-84377 / GHSA-3cv6-jpf6-8222 (authenticated SSRF and
+# provider-credential exfiltration). An exact pin forced litellm's own
+# exact python-dotenv pin on consumers too, which made this extra
+# uninstallable alongside anything needing a newer python-dotenv (e.g.
+# fastmcp>=3.0). Leaving the upper bound open lets the resolver pick a
+# later litellm with a compatible python-dotenv range instead.
+#
+# The same CVE was reintroduced in later minors and re-patched each
+# time (per the advisory): 1.94.0-1.94.2 (fixed 1.94.3), 1.95.0 (fixed
+# 1.95.1), 1.96.0-1.96.1 (fixed 1.96.2). Excluding those exact
+# vulnerable releases so a floor-only resolver can't land on one.
+#
 # Non-LLM analyzers (YARA, API, VirusTotal, schema, readiness heuristics)
 # run without this extra.
 llm = [
-    "litellm==1.93.2",
+    "litellm>=1.93.2,!=1.94.0,!=1.94.1,!=1.94.2,!=1.95.0,!=1.96.0,!=1.96.1",
 ]
 js = [
     "tree-sitter>=0.23,<0.26",
@@ -114,8 +126,8 @@ dev = [
     "mypy>=1.8.0",
     "pre-commit>=3.6.0",
     # Tests and the macOS binary build import the LLM analyzers.
-    # Same CVE pin as the [llm] extra.
-    "litellm==1.93.2",
+    # Same CVE range as the [llm] extra.
+    "litellm>=1.93.2,!=1.94.0,!=1.94.1,!=1.94.2,!=1.95.0,!=1.96.0,!=1.96.1",
 ]
 
 [project.urls]
