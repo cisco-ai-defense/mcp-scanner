@@ -24,6 +24,8 @@ risks to demonstrate the LiteLLM analyzer's ability to detect threats using any 
 import asyncio
 import json
 from typing import Any, Sequence
+
+import jsonschema
 from mcp.server import Server
 from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 import mcp.server.stdio
@@ -282,11 +284,28 @@ async def list_tools(ctx, params) -> ListToolsResult:
 
 
 async def call_tool(ctx, params) -> CallToolResult:
-    # The v1 @server.call_tool() decorator turned exceptions into an error result; keep that.
+    arguments = params.arguments or {}
+    # The v1 @server.call_tool() decorator validated arguments against the tool's
+    # inputSchema and turned failures and exceptions into an error result; keep both.
+    tool = next((t for t in await _list_tools() if t.name == params.name), None)
+    if tool is not None:
+        try:
+            jsonschema.validate(instance=arguments, schema=tool.input_schema)
+        except jsonschema.ValidationError as e:
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text", text=f"Input validation error: {e.message}"
+                    )
+                ],
+                is_error=True,
+            )
     try:
-        content = await _call_tool(params.name, params.arguments or {})
+        content = await _call_tool(params.name, arguments)
     except Exception as e:
-        return CallToolResult(content=[TextContent(type="text", text=f"Error: {e}")], is_error=True)
+        return CallToolResult(
+            content=[TextContent(type="text", text=f"Error: {e}")], is_error=True
+        )
     return CallToolResult(content=list(content))
 
 
