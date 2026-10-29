@@ -197,6 +197,7 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
             result_dict["resource_uri"] = result.resource_uri
             result_dict["resource_name"] = result.resource_name
             result_dict["resource_mime_type"] = result.resource_mime_type
+            result_dict["is_template"] = getattr(result, "is_template", False)
             result_dict["item_type"] = "resource"
 
         # Include server_source if available
@@ -539,7 +540,8 @@ class ReportGenerator:
 
             # Add resource-specific info
             if item_type == "resource" and "resource_uri" in result:
-                output.append(f"URI: {result['resource_uri']}")
+                label = "URI Template" if result.get("is_template") else "URI"
+                output.append(f"{label}: {result['resource_uri']}")
                 if "resource_mime_type" in result:
                     output.append(f"MIME Type: {result['resource_mime_type']}")
 
