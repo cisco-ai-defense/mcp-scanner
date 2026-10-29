@@ -124,7 +124,7 @@ async def test_scan_remote_server_resources_reads_body(config):
         mimeType=None,
     )
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=[resource])
     session.read_resource.return_value = SimpleNamespace(
         contents=[
             SimpleNamespace(
@@ -178,7 +178,7 @@ async def test_mcp2_resource_mime_attribute_is_scanned(config, scan_one):
     scanner = Scanner(config)
     resource = Resource(uri="resource://modern", name="modern", mimeType="text/plain")
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=[resource])
     session.read_resource.return_value = ReadResourceResult(
         contents=[
             TextResourceContents(
@@ -216,7 +216,7 @@ async def test_read_mime_disallowed_skips_analyzer(config, scan_one):
     scanner = Scanner(config)
     resource = _listed_resource("resource://r", "text/plain")
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=[resource])
     session.read_resource.return_value = _read_body("<html>", "text/html")
     scanner._analyze_resource = AsyncMock()
     patches = _patch_resource_session(scanner, session)
@@ -246,7 +246,7 @@ async def test_list_mime_disallowed_skips_read(config, scan_one):
     scanner = Scanner(config)
     resource = _listed_resource("resource://r", "IMAGE/PNG; charset=binary", name="pic")
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=[resource])
     patches = _patch_resource_session(scanner, session)
     with patches[0], patches[1], patches[2]:
         if scan_one:
@@ -276,7 +276,7 @@ async def test_read_mime_parameters_are_normalized(config, scan_one):
     scanner = Scanner(config)
     resource = _listed_resource("resource://r", None, name="page")
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=[resource])
     session.read_resource.return_value = _read_body("hi", "TEXT/HTML; charset=utf-8")
     scanner._analyze_resource = AsyncMock()
     patches = _patch_resource_session(scanner, session)
@@ -344,7 +344,7 @@ async def test_oversized_resource_does_not_reach_analyzers(
     recorders = _install_recording_analyzers(scanner)
     resource = _listed_resource("resource://r", "text/plain", name="big")
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=[resource])
     session.read_resource.return_value = _read_body("0123456789", "text/plain")
     patches = _patch_resource_session(scanner, session)
     with patches[0], patches[1], patches[2]:
@@ -379,7 +379,7 @@ async def test_omitted_list_mime_uses_disallowed_read_mime(config, scan_one):
     scanner = Scanner(config)
     resource = _listed_resource("resource://r", None, name="page")
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=[resource])
     session.read_resource.return_value = _read_body("<html>", "text/html")
     recorders = _install_recording_analyzers(scanner)
     patches = _patch_resource_session(scanner, session)
@@ -410,7 +410,7 @@ async def test_conflicting_read_mime_skips_analyzer(config, scan_one):
     scanner = Scanner(config)
     resource = _listed_resource("resource://r", "text/plain", name="mixed")
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=[resource])
     session.read_resource.return_value = SimpleNamespace(
         contents=[
             SimpleNamespace(text="plain", mimeType="text/plain", blob=None),
@@ -446,7 +446,7 @@ async def test_within_limit_resource_keeps_name_and_body(config):
     recorders = _install_recording_analyzers(scanner)
     resource = _listed_resource("resource://r", "text/plain", name="notes")
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=[resource])
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=[resource])
     session.read_resource.return_value = _read_body("hello notes", "text/plain")
     patches = _patch_resource_session(scanner, session)
     with patches[0], patches[1], patches[2]:
@@ -471,7 +471,7 @@ async def test_aggregate_budget_stops_later_resource_reads(config, monkeypatch):
         _listed_resource("resource://b", "text/plain", name="b"),
     ]
     session = AsyncMock()
-    session.list_resources.return_value = SimpleNamespace(resources=resources)
+    session.list_resources.return_value = SimpleNamespace(next_cursor=None, resources=resources)
     session.read_resource.return_value = _read_body("hello", "text/plain")
     scanner._analyze_resource = AsyncMock()
     patches = _patch_resource_session(scanner, session)

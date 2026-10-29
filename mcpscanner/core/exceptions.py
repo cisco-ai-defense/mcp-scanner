@@ -41,6 +41,10 @@ class MCPScannerError(Exception):
     pass
 
 
+class MCPConfigurationError(MCPScannerError):
+    """Raised when local scanner configuration prevents an operation."""
+
+
 class MCPConnectionError(MCPScannerError):
     """Raised when unable to connect to an MCP server.
 

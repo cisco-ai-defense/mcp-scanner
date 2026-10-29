@@ -65,6 +65,7 @@ def mock_mcp_client():
     mock_session = AsyncMock()
 
     class MockToolList:
+        next_cursor = None
         tools = [
             MCPTool(name="safe_tool", description="This is a safe tool", parameters=[]),
             MCPTool(
@@ -136,6 +137,7 @@ async def test_scan_remote_server_tool_method(config):
 
     # Setup the mock session to return our mock tool
     class MockToolList:
+        next_cursor = None
         tools = [mock_tool]
 
     mock_session.list_tools.return_value = MockToolList()
@@ -189,6 +191,7 @@ async def test_scan_remote_server_tool_not_found(config):
 
     # Setup the mock session to return an empty tool list
     class MockToolList:
+        next_cursor = None
         tools = [MCPTool(name="other_tool", description="Some tool", parameters=[])]
 
     mock_session.list_tools.return_value = MockToolList()
@@ -233,6 +236,7 @@ async def test_scan_remote_server_tools_method(config):
 
     # Setup the mock session to return our mock tools
     class MockToolList:
+        next_cursor = None
         tools = mock_tools
 
     mock_session.list_tools.return_value = MockToolList()
@@ -600,6 +604,7 @@ async def test_scan_stdio_server_tools(config):
     ]
 
     class MockToolList:
+        next_cursor = None
         tools = mock_tools
 
     mock_session.list_tools.return_value = MockToolList()
@@ -661,6 +666,7 @@ async def test_scan_stdio_server_tool(config):
     mock_tool = MCPTool(name="target_tool", description="Target tool")
 
     class MockToolList:
+        next_cursor = None
         tools = [mock_tool]
 
     mock_session.list_tools.return_value = MockToolList()
@@ -696,6 +702,7 @@ async def test_scan_stdio_server_tool_not_found(config):
     mock_session = AsyncMock()
 
     class MockToolList:
+        next_cursor = None
         tools = [MCPTool(name="other_tool", description="Other tool")]
 
     mock_session.list_tools.return_value = MockToolList()
@@ -722,6 +729,7 @@ async def test_scan_remote_server_tool_with_auth(config):
     mock_tool = MCPTool(name="auth_tool", description="Authenticated tool")
 
     class MockToolList:
+        next_cursor = None
         tools = [mock_tool]
 
     mock_session.list_tools.return_value = MockToolList()
@@ -761,6 +769,7 @@ async def test_scan_remote_server_tools_with_http_headers(config):
     mock_tools = [MCPTool(name="header_tool", description="Tool with headers")]
 
     class MockToolList:
+        next_cursor = None
         tools = mock_tools
 
     mock_session.list_tools.return_value = MockToolList()
