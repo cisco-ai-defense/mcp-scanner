@@ -60,6 +60,10 @@ READINESS_THREAT_CATEGORIES = {
     "scope_clarity": "OVERLOADED_TOOL_SCOPE",
 }
 
+# Marks a response that could not be parsed; distinct from any field the model
+# itself may return (e.g. an "error" key next to a real analysis).
+_UNPARSEABLE_KEY = "_unparseable_response"
+
 
 class ReadinessLLMJudge:
     """
@@ -290,11 +294,16 @@ class ReadinessLLMJudge:
             self.logger.warning(
                 "Failed to parse LLM response as JSON: %s", type(e).__name__
             )
-            return {"error": "Failed to parse LLM response", "raw": content}
+            return {_UNPARSEABLE_KEY: "Failed to parse LLM response", "raw": content}
 
     @staticmethod
     def _extract_embedded_json(content: str) -> Optional[Dict[str, Any]]:
-        """Return the first JSON object embedded in surrounding text, if any."""
+        """Return the first embedded JSON object that holds the analysis, if any.
+
+        Unrelated objects in the surrounding prose (or nested objects inside a
+        truncated response) are skipped; only an object with a top-level
+        ``readiness_analysis`` key is accepted.
+        """
         decoder = json.JSONDecoder()
         start = content.find("{")
         while start != -1:
@@ -302,7 +311,7 @@ class ReadinessLLMJudge:
                 data, _ = decoder.raw_decode(content, start)
             except json.JSONDecodeError:
                 data = None
-            if isinstance(data, dict):
+            if isinstance(data, dict) and "readiness_analysis" in data:
                 return data
             start = content.find("{", start + 1)
         return None
@@ -316,13 +325,14 @@ class ReadinessLLMJudge:
         findings: List[SecurityFinding] = []
 
         # An unreadable response must not look like a clean tool
-        if "error" in result:
-            self.logger.warning(f"LLM evaluation error: {result.get('error')}")
+        if _UNPARSEABLE_KEY in result:
+            self.logger.warning(f"LLM evaluation error: {result.get(_UNPARSEABLE_KEY)}")
             return [
                 build_infrastructure_error_finding(
                     analyzer_name="READINESS-LLM",
                     subject=tool_name,
-                    error=ValueError(result.get("error")),
+                    error=ValueError(result.get(_UNPARSEABLE_KEY)),
+                    context="parse",
                     model=self.model,
                 )
             ]
