@@ -1250,6 +1250,850 @@ def test_rust_handler_inherits_delegated_shell_sink() -> None:
     assert flow["reaches_external"] is True, flow
 
 
+# Inlined from the code-scanning fixtures. Those files live outside this
+# repo, and CI runs with ``--maxfail=1``, so a missing path fails the job
+# before the later cases run. The Rust tool impl is still missing its
+# closing brace, which is what the scanner has to tolerate.
+RUST_SHELL_FIXTURE = """\
+use rmcp::{tool, tool_router, ErrorData as McpError, model::*};
+use std::process::Command;
+
+#[derive(Clone)]
+struct ShellExecutorService;
+
+impl ShellExecutorService {
+    fn execute_command(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+#[tool_router]
+impl ShellExecutorService {
+	#[tool(description = "Execute a shell command for automation tasks.")]
+	async fn execute_shell_command(&self, command: String) -> Result<CallToolResult, McpError> {
+        let rc = Self::execute_command(&command);
+        Ok(CallToolResult::success(vec![Content::text(format!("Command executed: return code {rc}"))]))
+
+}
+
+fn main() {
+	let _service = ShellExecutorService;
+}
+"""
+
+DYNAMIC_MODULE_LOAD_SOURCES = {
+    "importlib_dynamic_module_loading.py": """\
+from mcp import FastMCP
+import importlib.util
+
+app = FastMCP("unauthorized-code-execution-service-10")
+
+
+class PluginLoader:
+    @staticmethod
+    def load_from_path(plugin_path: str) -> dict:
+        spec = importlib.util.spec_from_file_location("plugin", plugin_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return {"path": plugin_path, "module_name": module.__name__}
+
+
+@app.tool()
+def load_plugin(plugin_path: str) -> str:
+    \"\"\"Load a plugin module from the plugins directory.\"\"\"
+    loader = PluginLoader()
+    result = loader.load_from_path(plugin_path)
+    return f"Plugin loaded: {result.get('module_name', 'unknown')}"
+""",
+    "importlib_dynamic_module_loading.js": """\
+import { createRequire } from "node:module";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "unauthorized-code-execution-service-10", version: "1.0.0" });
+const requireModule = createRequire(import.meta.url);
+
+class PluginLoader {
+  static loadFromPath(pluginPath) {
+    const module = requireModule(pluginPath);
+    return { path: pluginPath, module_name: pluginPath, loaded: true, module };
+  }
+}
+
+server.tool(
+  "load_plugin",
+  "Load a plugin module from the plugins directory.",
+  { plugin_path: z.string() },
+  async ({ plugin_path }) => {
+    const result = PluginLoader.loadFromPath(plugin_path);
+    return { content: [{ type: "text", text: `Plugin loaded: ${result.module_name}` }] };
+  },
+);
+""",
+    "importlib_dynamic_module_loading.ts": """\
+import { createRequire } from "node:module";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "unauthorized-code-execution-service-10", version: "1.0.0" });
+const requireModule = createRequire(import.meta.url);
+
+class PluginLoader {
+  static loadFromPath(pluginPath: string): Record<string, unknown> {
+    const module = requireModule(pluginPath);
+    return { path: pluginPath, module_name: pluginPath, loaded: true, module };
+  }
+}
+
+server.tool(
+  "load_plugin",
+  "Load a plugin module from the plugins directory.",
+  { plugin_path: z.string() },
+  async ({ plugin_path }) => {
+    const result = PluginLoader.loadFromPath(plugin_path);
+    return { content: [{ type: "text", text: `Plugin loaded: ${result.module_name}` }] };
+  },
+);
+""",
+    "importlib_dynamic_module_loading.go": """\
+package main
+
+import (
+	"context"
+	"fmt"
+	"plugin"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+type Input struct {
+	PluginPath string `json:"plugin_path"`
+}
+
+type PluginLoader struct{}
+
+func (PluginLoader) loadFromPath(pluginPath string) string {
+	p, err := plugin.Open(pluginPath)
+	if err != nil { return err.Error() }
+	_, err = p.Lookup("Init")
+	if err != nil { return err.Error() }
+	return pluginPath
+}
+
+func load_pluginHandler(ctx context.Context, req *mcp.CallToolRequest, in Input) (*mcp.CallToolResult, any, error) {
+	result := PluginLoader{}.loadFromPath(in.PluginPath)
+	out := fmt.Sprintf("Plugin loaded: %s", result)
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
+}
+
+func main() {
+	server := mcp.NewServer(&mcp.Implementation{Name: "unauthorized-code-execution-service-10", Version: "1.0.0"}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "load_plugin", Description: "Load a plugin module from the plugins directory."}, load_pluginHandler)
+}
+""",
+    "importlib_dynamic_module_loading.rs": """\
+use rmcp::{tool, tool_router, ErrorData as McpError, model::*};
+use libloading::Library;
+
+#[derive(Clone)]
+struct PluginLoaderService;
+
+impl PluginLoaderService {
+    fn load_from_path(plugin_path: &str) -> String {
+        match unsafe { Library::new(plugin_path) } {
+            Ok(_) => plugin_path.to_string(),
+            Err(e) => e.to_string(),
+        }
+    }
+}
+
+#[tool_router]
+impl PluginLoaderService {
+	#[tool(description = "Load a plugin module from the plugins directory.")]
+	async fn load_plugin(&self, plugin_path: String) -> Result<CallToolResult, McpError> {
+        let result = Self::load_from_path(&plugin_path);
+        Ok(CallToolResult::success(vec![Content::text(format!("Plugin loaded: {result}"))]))
+
+}
+
+fn main() {
+	let _service = PluginLoaderService;
+}
+""",
+}
+
+
+def test_rust_fixture_self_call_reaches_shell_sink() -> None:
+    """The Rust shell fixture calls ``Self::execute_command``.
+
+    That name is stored both bare and qualified, and the tool impl is
+    missing its closing brace. The handler must still inherit the
+    ``Command::new`` sink and the parameter flow.
+    """
+    analyzer = NativeAnalyzer(
+        RUST_SHELL_FIXTURE, "subprocess_shell_command_injection.rs"
+    )
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.name == "execute_shell_command"
+    assert ctx.has_subprocess_calls is True
+    assert "ShellExecutorService.execute_command" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "importlib_dynamic_module_loading.py",
+        "importlib_dynamic_module_loading.js",
+        "importlib_dynamic_module_loading.ts",
+        "importlib_dynamic_module_loading.go",
+        "importlib_dynamic_module_loading.rs",
+    ],
+)
+def test_dynamic_module_load_fixture_flags_eval(filename: str) -> None:
+    """Each language port of the plugin loader must surface dynamic loading.
+
+    Python loads via ``importlib.util``, JS/TS via ``createRequire``, Go via
+    ``plugin.Open``, and Rust via ``libloading``.
+    """
+    analyzer = NativeAnalyzer(DYNAMIC_MODULE_LOAD_SOURCES[filename], filename)
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, filename
+    ctx = caps[0]
+    assert ctx.name == "load_plugin", filename
+    assert ctx.has_eval_exec is True, filename
+    assert ctx.has_subprocess_calls is False, filename
+    assert ctx.reachable_functions, filename
+    assert any(flow.get("reaches_external") for flow in ctx.parameter_flows), (
+        filename,
+        ctx.parameter_flows,
+    )
+
+
+def test_rust_fixture_self_call_reaches_imported_library_sink() -> None:
+    """``use libloading::Library`` then ``Library::new`` is dynamic loading.
+
+    The fixture reaches that call through ``Self::load_from_path``.
+    """
+    source = DYNAMIC_MODULE_LOAD_SOURCES["importlib_dynamic_module_loading.rs"]
+    analyzer = NativeAnalyzer(source, "importlib_dynamic_module_loading.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.name == "load_plugin"
+    assert ctx.has_eval_exec is True
+    assert ctx.has_subprocess_calls is False
+    assert "PluginLoaderService.load_from_path" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "plugin_path")
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_SELF_AMONG_SAME_LEAF = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Other;
+
+impl Other {
+    fn execute_command(command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    fn execute_command(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+
+    #[tool(description = "Execute a shell command for automation tasks.")]
+    fn execute_shell_command(&self, command: String) -> i32 {
+        Self::execute_command(&command)
+    }
+}
+"""
+
+
+def test_rust_self_call_resolves_inside_its_own_impl() -> None:
+    """``Self::`` must not give up when another impl defines the same leaf."""
+    analyzer = NativeAnalyzer(RUST_SELF_AMONG_SAME_LEAF, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.execute_command" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_INSTANCE_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Client;
+
+impl Client {
+    fn execute(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Run a command through the client.")]
+    fn run(&self, command: String) -> i32 {
+        let client = Client;
+        client.execute(&command)
+    }
+}
+"""
+
+
+def test_rust_instance_call_reaches_indexed_method() -> None:
+    """``client.execute`` still targets ``Client.execute``."""
+    analyzer = NativeAnalyzer(RUST_INSTANCE_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "Client.execute" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_TRAIT_IMPL_SELF = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+trait ServerHandler {}
+
+struct Svc;
+struct Other;
+
+impl ServerHandler for Svc {
+    fn helper(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+
+    #[tool(description = "Run a command through the trait impl.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(self, &command)
+    }
+}
+
+impl ServerHandler for Other {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+"""
+
+
+def test_rust_trait_impl_self_uses_the_implementing_type() -> None:
+    """``impl ServerHandler for Svc`` indexes the type, not the trait alone."""
+    analyzer = NativeAnalyzer(RUST_TRAIT_IMPL_SELF, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.ServerHandler.helper" in reachable
+    assert "ServerHandler.helper" not in reachable
+    assert "Other.helper" not in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_GENERIC_IMPL_SELF = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Svc<T> {
+    _marker: std::marker::PhantomData<T>,
+}
+
+struct Other;
+
+impl Other {
+    fn helper(command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+
+impl<T> Svc<T> {
+    fn helper(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+#[tool_router]
+impl Svc<String> {
+    #[tool(description = "Run a command through the generic impl.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(&command)
+    }
+}
+"""
+
+
+def test_rust_generic_impl_self_uses_the_type_name() -> None:
+    """``impl<T> Svc<T>`` indexes ``Svc.helper`` so ``Self::helper`` resolves."""
+    analyzer = NativeAnalyzer(RUST_GENERIC_IMPL_SELF, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.helper" in reachable
+    assert "Other.helper" not in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_TRAIT_IMPL_DOES_NOT_REPLACE_INHERENT = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+trait ServerHandler {}
+
+struct Svc;
+
+impl ServerHandler for Svc {
+    fn helper(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+#[tool_router]
+impl Svc {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+
+    #[tool(description = "Measure a command string.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(self, &command)
+    }
+}
+"""
+
+
+def test_rust_self_in_inherent_impl_ignores_later_trait_impl() -> None:
+    """A later trait impl must not replace this impl's ``Self::helper``."""
+    analyzer = NativeAnalyzer(RUST_TRAIT_IMPL_DOES_NOT_REPLACE_INHERENT, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is False
+    assert "Svc.helper" in reachable
+    assert "Svc.ServerHandler.helper" not in reachable
+
+
+RUST_INHERENT_IMPL_DOES_NOT_REPLACE_TRAIT = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+trait ServerHandler {}
+
+struct Svc;
+
+#[tool_router]
+impl ServerHandler for Svc {
+    fn helper(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+
+    #[tool(description = "Run a command through the trait impl.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(self, &command)
+    }
+}
+
+impl Svc {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+"""
+
+
+def test_rust_self_in_trait_impl_ignores_later_inherent_impl() -> None:
+    """A later inherent impl must not hide this trait impl's shell call."""
+    analyzer = NativeAnalyzer(RUST_INHERENT_IMPL_DOES_NOT_REPLACE_TRAIT, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.ServerHandler.helper" in reachable
+    assert "Svc.helper" not in reachable
+
+
+RUST_BOX_IMPLS_STAY_DISTINCT = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+trait ServerHandler {}
+
+struct Svc;
+struct Other;
+
+#[tool_router]
+impl ServerHandler for Box<Svc> {
+    fn helper(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+
+    #[tool(description = "Run a command through the boxed impl.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(&command)
+    }
+}
+
+impl ServerHandler for Box<Other> {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+"""
+
+
+def test_rust_box_impls_do_not_share_a_method_key() -> None:
+    """``Box<Svc>`` and ``Box<Other>`` do not overwrite one ``helper``."""
+    analyzer = NativeAnalyzer(RUST_BOX_IMPLS_STAY_DISTINCT, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Box<Svc>.ServerHandler.helper" in reachable
+    assert "Box<Other>.ServerHandler.helper" not in reachable
+
+
+RUST_CRATE_PATH_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Plugin;
+
+impl Plugin {
+    fn new(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Run a command through the local plugin.")]
+    fn run(&self, command: String) -> i32 {
+        crate::Plugin::new(&command)
+    }
+}
+"""
+
+
+def test_rust_crate_path_reaches_local_method() -> None:
+    """``crate::Plugin::new`` reaches the local ``Plugin::new``."""
+    analyzer = NativeAnalyzer(RUST_CRATE_PATH_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "Plugin.new" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_TURBOFISH_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Svc<T> {
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Svc<T> {
+    fn helper(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct App;
+
+#[tool_router]
+impl App {
+    #[tool(description = "Run a command through the generic helper.")]
+    fn run(&self, command: String) -> i32 {
+        Svc::<String>::helper(&command)
+    }
+}
+"""
+
+
+def test_rust_turbofish_reaches_blanket_impl() -> None:
+    """``Svc::<String>::helper`` reaches ``impl<T> Svc<T>``."""
+    analyzer = NativeAnalyzer(RUST_TURBOFISH_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.helper" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_SELF_MODULE_PATH = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+fn helper(command: &str) -> i32 {
+    match Command::new("sh").arg("-c").arg(command).status() {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(_) => 1,
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+
+    #[tool(description = "Run a command through the module helper.")]
+    fn run(&self, command: String) -> i32 {
+        self::helper(&command)
+    }
+}
+"""
+
+
+def test_rust_self_module_path_reaches_free_function() -> None:
+    """``self::helper`` is the free function, not ``Svc::helper``."""
+    analyzer = NativeAnalyzer(RUST_SELF_MODULE_PATH, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "helper" in reachable
+    assert "Svc.helper" not in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_MODULE_FUNCTION_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+mod helpers {
+    use std::process::Command;
+
+    pub fn run(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Run a command through the helpers module.")]
+    fn run(&self, command: String) -> i32 {
+        helpers::run(&command)
+    }
+}
+"""
+
+
+def test_rust_module_path_reaches_free_function() -> None:
+    """``helpers::run`` reaches the function inside ``mod helpers``."""
+    analyzer = NativeAnalyzer(RUST_MODULE_FUNCTION_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "helpers.run" in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_CRATE_MODULE_FUNCTION_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+mod helpers {
+    use std::process::Command;
+
+    pub fn run(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Run a command through the crate path.")]
+    fn run(&self, command: String) -> i32 {
+        crate::helpers::run(&command)
+    }
+}
+"""
+
+
+def test_rust_crate_module_path_reaches_free_function() -> None:
+    """``crate::helpers::run`` reaches ``mod helpers``."""
+    analyzer = NativeAnalyzer(RUST_CRATE_MODULE_FUNCTION_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "helpers.run" in reachable
+
+
+RUST_CONCRETE_AND_BLANKET_IMPL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Svc<T> {
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Svc<T> {
+    fn helper(command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+
+impl Svc<String> {
+    fn helper(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct App;
+
+#[tool_router]
+impl App {
+    #[tool(description = "Run a command through the concrete impl.")]
+    fn run(&self, command: String) -> i32 {
+        Svc::<String>::helper(&command)
+    }
+}
+"""
+
+
+def test_rust_turbofish_prefers_concrete_impl() -> None:
+    """``Svc::<String>::helper`` reaches ``impl Svc<String>``."""
+    analyzer = NativeAnalyzer(RUST_CONCRETE_AND_BLANKET_IMPL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Svc<String>.helper" in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_RENAMED_LIBRARY_IMPORT = """\
+use libloading::Library as PluginLib;
+use rmcp::{tool, tool_router};
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    fn open(path: &str) -> String {
+        unsafe { PluginLib::new(path).unwrap(); }
+        path.to_string()
+    }
+
+    #[tool(description = "Load a plugin module from the plugins directory.")]
+    fn load_plugin(&self, plugin_path: String) -> String {
+        Self::open(&plugin_path)
+    }
+}
+"""
+
+
+def test_rust_renamed_libloading_import_is_dynamic_loading() -> None:
+    """``use libloading::Library as PluginLib`` keeps ``PluginLib::new`` a sink."""
+    analyzer = NativeAnalyzer(RUST_RENAMED_LIBRARY_IMPORT, "lib.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_eval_exec is True
+    assert ctx.has_subprocess_calls is False
+    flow = _flow_for(ctx, "plugin_path")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
 PYTHON_DELEGATED_SHELL = """\
 from mcp import FastMCP
 import subprocess
@@ -1458,3 +2302,672 @@ def test_direct_execute_field_in_descriptor_object() -> None:
     assert cap.name == "run", cap.name
     call_names = {c.get("name") for c in cap.function_calls or []}
     assert "execSync" in call_names, call_names
+
+
+def _function(source: str, filename: str, func_name: str):
+    analyzer = NativeAnalyzer(source, filename)
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    return funcs[func_name]
+
+
+@pytest.mark.parametrize(
+    ("source", "filename", "func_name", "flag"),
+    [
+        (
+            "function run(cmd) {\n  fork(cmd);\n}\n",
+            "run.js",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "function run(cmd) {\n  exec(cmd);\n}\n",
+            "run.js",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "function run(cmd) {\n  spawn(cmd);\n}\n",
+            "run.js",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "function run(code) {\n  runInContext(code);\n}\n",
+            "run.js",
+            "run",
+            "has_eval_exec",
+        ),
+        (
+            "package main\nfunc run(cmd string) {\n\tCommand(cmd)\n}\n",
+            "run.go",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "package main\nfunc run(cmd string) {\n\tStartProcess(cmd)\n}\n",
+            "run.go",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "package main\nfunc run(cmd string) {\n\tExec(cmd)\n}\n",
+            "run.go",
+            "run",
+            "has_subprocess_calls",
+        ),
+        (
+            "class T {\n  void run(String cmd) {\n    exec(cmd);\n  }\n}\n",
+            "T.java",
+            "T.run",
+            "has_subprocess_calls",
+        ),
+        (
+            "class T {\n  void launch() {\n    start();\n  }\n}\n",
+            "T.java",
+            "T.launch",
+            "has_subprocess_calls",
+        ),
+        (
+            "function load(pluginPath) {\n"
+            "  return createRequire(import.meta.url)(pluginPath);\n"
+            "}\n",
+            "load.js",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "function load(pluginPath) {\n"
+            "  return module.createRequire(import.meta.url)(pluginPath);\n"
+            "}\n",
+            "load.js",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "use libloading::*;\n"
+            "fn load_plugin(path: &str) {\n"
+            "    unsafe { Library::new(path); }\n"
+            "}\n",
+            "lib.rs",
+            "load_plugin",
+            "has_eval_exec",
+        ),
+        (
+            "use libloading::*;\n"
+            "use serde::*;\n"
+            "fn load_plugin(path: &str) {\n"
+            "    unsafe { Library::new(path); }\n"
+            "}\n",
+            "lib.rs",
+            "load_plugin",
+            "has_eval_exec",
+        ),
+        (
+            "import importlib\n"
+            "def load(name):\n"
+            "    return importlib.import_module(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "def load(name):\n"
+            "    return import_module(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "import importlib as il\n"
+            "def load(name):\n"
+            "    return il.import_module(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "from importlib import import_module as load_mod\n"
+            "def load(name):\n"
+            "    return load_mod(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "def run(code):\n"
+            "    return builtins.eval(code)\n",
+            "run.py",
+            "run",
+            "has_eval_exec",
+        ),
+        (
+            "def run(code):\n"
+            "    return builtins.exec(code)\n",
+            "run.py",
+            "run",
+            "has_eval_exec",
+        ),
+        (
+            "def load(loader, module):\n"
+            "    loader.exec_module(module)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "def load(loader, name):\n"
+            "    return loader.load_module(name)\n",
+            "load.py",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "function load(pluginPath) {\n"
+            "  return (createRequire(import.meta.url))(pluginPath);\n"
+            "}\n",
+            "load.js",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "function load(pluginPath) {\n"
+            "  const req = createRequire;\n"
+            "  return req(import.meta.url)(pluginPath);\n"
+            "}\n",
+            "load.js",
+            "load",
+            "has_eval_exec",
+        ),
+        (
+            "use libloading::*;\n"
+            "use foo::libloading::*;\n"
+            "fn load_plugin(path: &str) {\n"
+            "    unsafe { Library::new(path); }\n"
+            "}\n",
+            "lib.rs",
+            "load_plugin",
+            "has_eval_exec",
+        ),
+    ],
+)
+def test_destructured_and_loader_shapes_still_match(
+    source: str, filename: str, func_name: str, flag: str
+) -> None:
+    """Bare sink leaves, glob imports, and inline createRequire stay sinks."""
+    func = _function(source, filename, func_name)
+    assert getattr(func, flag) is True, (filename, func_name, flag)
+
+
+def test_inner_libloading_glob_shadows_outer_use() -> None:
+    """A narrower ``use libloading::*`` hides an outer ``use other::Library``."""
+    shadowed = """\
+use other::Library;
+
+fn load_plugin(path: &str) {
+    use libloading::*;
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(shadowed, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+    assert func.has_subprocess_calls is False
+
+    kept = """\
+use libloading::Library;
+
+fn load_plugin(path: &str) {
+    use std::io::*;
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(kept, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+
+def test_grouped_std_paths_still_match_sinks() -> None:
+    """Grouped ``std`` imports keep their prefix and still hit the sinks."""
+    command = """\
+use std::{process::Command};
+
+fn run_shell(cmd: &str) {
+    let _ = Command::new(cmd);
+}
+"""
+    func = _function(command, "lib.rs", "run_shell")
+    assert func.has_subprocess_calls is True
+
+    opened = """\
+use std::{fs::File};
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(opened, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    tokio = """\
+fn run_shell(cmd: &str) {
+    let _ = tokio::process::Command::new(cmd);
+}
+"""
+    func = _function(tokio, "lib.rs", "run_shell")
+    assert func.has_subprocess_calls is True
+
+
+def test_rust_std_fs_glob_open_is_a_file_operation() -> None:
+    """``use std::fs::*;`` then ``File::open`` is the ``fs::File::open`` sink."""
+    source = """\
+use std::fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(source, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+    assert func.has_eval_exec is False
+
+    both = """\
+use std::fs::*;
+use fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(both, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_async_fs_file_apis_are_file_operations() -> None:
+    """tokio and async-std ``File::open`` / ``File::create`` are file sinks."""
+    written = """\
+fn read_it(path: &str) {
+    let _ = tokio::fs::File::open(path);
+}
+"""
+    func = _function(written, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    imported = """\
+use tokio::fs::File;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(imported, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    grouped = """\
+use tokio::fs::{File};
+
+fn read_it(path: &str) {
+    let _ = File::create(path);
+}
+"""
+    func = _function(grouped, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    globbed = """\
+use tokio::fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(globbed, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    async_std = """\
+use async_std::fs::File;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(async_std, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    async_std_create = """\
+fn read_it(path: &str) {
+    let _ = async_std::fs::File::create(path);
+}
+"""
+    func = _function(async_std_create, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_inner_glob_beats_type_that_hides_outer_use() -> None:
+    """A glob inside a local type's block is the name Rust resolves."""
+    source = """\
+use other::Library;
+
+fn load_plugin(path: &str) {
+    struct Library;
+    {
+        use libloading::*;
+        unsafe { Library::new(path); }
+    }
+}
+"""
+    func = _function(source, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+    assert func.has_subprocess_calls is False
+
+    opened = """\
+use other::File;
+
+fn read_it(path: &str) {
+    struct File;
+    {
+        use std::fs::*;
+        let _ = File::open(path);
+    }
+}
+"""
+    func = _function(opened, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+    assert func.has_eval_exec is False
+
+
+def test_crate_root_paths_match_the_same_sinks() -> None:
+    """A leading ``::`` is the crate root, not a foreign prefix."""
+    written_lib = """\
+fn load_plugin(path: &str) {
+    unsafe { ::libloading::Library::new(path); }
+}
+"""
+    func = _function(written_lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    imported_lib = """\
+use ::libloading::Library;
+
+fn load_plugin(path: &str) {
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(imported_lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    glob_lib = """\
+use ::libloading::*;
+
+fn load_plugin(path: &str) {
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(glob_lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    std_file = """\
+fn read_it(path: &str) {
+    let _ = ::std::fs::File::open(path);
+}
+"""
+    func = _function(std_file, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    use_std_file = """\
+use ::std::fs::File;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(use_std_file, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    tokio_file = """\
+fn read_it(path: &str) {
+    let _ = ::tokio::fs::File::open(path);
+}
+"""
+    func = _function(tokio_file, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    tokio_glob = """\
+use ::tokio::fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(tokio_glob, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    command = """\
+fn run_shell(cmd: &str) {
+    let _ = ::std::process::Command::new(cmd);
+}
+"""
+    func = _function(command, "lib.rs", "run_shell")
+    assert func.has_subprocess_calls is True
+
+
+def test_smol_fs_file_open_is_a_file_operation() -> None:
+    """``smol::fs::File::open`` and ``File::create`` are file operations."""
+    written = """\
+fn read_it(path: &str) {
+    let _ = smol::fs::File::open(path);
+}
+"""
+    func = _function(written, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    created = """\
+use smol::fs::File;
+
+fn read_it(path: &str) {
+    let _ = File::create(path);
+}
+"""
+    func = _function(created, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    globbed = """\
+use smol::fs::*;
+
+fn read_it(path: &str) {
+    let _ = File::open(path);
+}
+"""
+    func = _function(globbed, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    absolute = """\
+fn read_it(path: &str) {
+    let _ = ::smol::fs::File::create(path);
+}
+"""
+    func = _function(absolute, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_crate_root_path_ignores_a_local_use() -> None:
+    """``::libloading`` stays that crate when a ``use`` binds the same name."""
+    lib = """\
+use other::libloading;
+
+fn load_plugin(path: &str) {
+    unsafe { ::libloading::Library::new(path); }
+}
+"""
+    func = _function(lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    opened = """\
+use other::std;
+
+fn read_it(path: &str) {
+    let _ = ::std::fs::File::open(path);
+}
+"""
+    func = _function(opened, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+    tokio = """\
+use other::tokio;
+
+fn read_it(path: &str) {
+    let _ = ::tokio::fs::File::open(path);
+}
+"""
+    func = _function(tokio, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_parenthesized_rust_paths_still_match_sinks() -> None:
+    """Parentheses around a path do not hide the sink."""
+    lib = """\
+fn load_plugin(path: &str) {
+    unsafe { (::libloading::Library::new)(path); }
+}
+"""
+    func = _function(lib, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    relative = """\
+fn load_plugin(path: &str) {
+    unsafe { (libloading::Library::new)(path); }
+}
+"""
+    func = _function(relative, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    opened = """\
+fn read_it(path: &str) {
+    let _ = (std::fs::File::open)(path);
+}
+"""
+    func = _function(opened, "lib.rs", "read_it")
+    assert func.has_file_operations is True
+
+
+def test_absolute_libloading_stays_a_sink_beside_a_local_module() -> None:
+    """``::libloading`` is the extern crate when a local module has that name."""
+    source = """\
+mod libloading {
+    pub struct Library;
+    impl Library {
+        pub fn new(_path: &str) -> Self { Library }
+    }
+}
+
+fn load_plugin(path: &str) {
+    unsafe { ::libloading::Library::new(path); }
+}
+"""
+    func = _function(source, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+    imported = """\
+mod libloading {
+    pub struct Library;
+    impl Library {
+        pub fn new(_path: &str) -> Self { Library }
+    }
+}
+
+fn load_plugin(path: &str) {
+    use ::libloading::Library;
+    unsafe { Library::new(path); }
+}
+"""
+    func = _function(imported, "lib.rs", "load_plugin")
+    assert func.has_eval_exec is True
+
+
+def test_inner_use_beats_an_outer_module() -> None:
+    """A narrower ``use`` rebinds a name an outer ``mod`` would own."""
+    source = """\
+mod File {
+    pub struct X;
+}
+
+fn read_it(path: &str) {
+    use std::fs::File;
+    let _ = File::open(path);
+}
+
+fn read_glob(path: &str) {
+    use std::fs::*;
+    let _ = File::open(path);
+}
+"""
+    analyzer = NativeAnalyzer(source, "lib.rs")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["read_it"].has_file_operations is True
+    assert funcs["read_glob"].has_file_operations is True
+
+
+def test_inner_module_does_not_hide_an_outer_import() -> None:
+    """A nested ``mod`` does not rebind an import written outside it."""
+    source = """\
+fn read_it(path: &str) {
+    use std::fs::File;
+    {
+        mod std { pub struct X; }
+        let _ = File::open(path);
+    }
+}
+
+fn read_glob(path: &str) {
+    use std::fs::*;
+    {
+        mod std { pub struct X; }
+        let _ = File::open(path);
+    }
+}
+
+fn load_plugin(path: &str) {
+    use libloading::Library;
+    {
+        mod libloading { pub struct X; }
+        unsafe { Library::new(path); }
+    }
+}
+
+fn read_after(path: &str) {
+    use std::fs::File;
+    {
+        mod std { pub struct X; }
+    }
+    let _ = File::open(path);
+}
+"""
+    analyzer = NativeAnalyzer(source, "lib.rs")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["read_it"].has_file_operations is True
+    assert funcs["read_glob"].has_file_operations is True
+    assert funcs["load_plugin"].has_eval_exec is True
+    assert funcs["read_after"].has_file_operations is True
+
+
+def test_nested_function_still_sees_the_parent_import() -> None:
+    """A nested ``fn`` inherits the parent import. A nested ``mod`` does not."""
+    source = """\
+fn read_it(path: &str) {
+    use std::fs::File;
+    fn inner(path: &str) {
+        let _ = File::open(path);
+    }
+    let _ = File::open(path);
+}
+
+fn load_inside(path: &str) {
+    mod child {
+        pub fn load_child(path: &str) {
+            use libloading::Library;
+            unsafe { Library::new(path); }
+        }
+    }
+}
+"""
+    analyzer = NativeAnalyzer(source, "lib.rs")
+    funcs = {f.name: f for f in analyzer.analyze().functions}
+    assert funcs["inner"].has_file_operations is True
+    assert funcs["read_it"].has_file_operations is True
+    assert funcs["load_child"].has_eval_exec is True
