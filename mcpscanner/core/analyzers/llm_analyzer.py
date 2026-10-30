@@ -330,6 +330,19 @@ class LLMAnalyzer(BaseAnalyzer):
                 "LLM response 'threat_analysis.primary_threats' "
                 f"must be a list of strings (got {type(threats).__name__})"
             )
+        # A true flag with an empty list, or a false flag with threats,
+        # is not a verdict. The finding builder would return no findings
+        # and the tool would look clean.
+        if detected and not threats:
+            raise ValueError(
+                "LLM response sets malicious_content_detected true "
+                "but primary_threats is empty"
+            )
+        if not detected and threats:
+            raise ValueError(
+                "LLM response sets malicious_content_detected false "
+                "but primary_threats is non-empty"
+            )
 
     @staticmethod
     def _completion_text(response: Any) -> str:

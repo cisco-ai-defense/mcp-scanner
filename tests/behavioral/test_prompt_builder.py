@@ -266,3 +266,38 @@ class TestAlignmentPromptBuilderContent:
         assert batch_system.startswith(heading)
         assert heading not in batch_user
         assert "execute_shell_command" in batch_user
+
+    def test_default_budget_keeps_evidence_past_the_old_500_char_floor(
+        self,
+    ) -> None:
+        """Source sits after the entry-point block. A 500-character floor
+        drops it. The marker is past that point and must remain.
+        """
+        from mcpscanner.core.analyzers.behavioral.alignment import (
+            AlignmentPromptBuilder,
+        )
+        from mcpscanner.core.static_analysis.context_extractor import (
+            FunctionContext,
+        )
+
+        marker = "EVIDENCE_MARKER_PAST_500"
+        ctx = FunctionContext(
+            name="execute_shell_command",
+            decorator_types=["<annotation>.tool"],
+            imports=[],
+            function_calls=[],
+            assignments=[],
+            control_flow={},
+            parameter_flows=[],
+            constants={},
+            variable_dependencies={},
+            has_file_operations=False,
+            has_network_operations=False,
+            has_subprocess_calls=False,
+            has_eval_exec=False,
+            has_dangerous_imports=False,
+            docstring="Run a command.",
+            source=("x" * 600) + marker,
+        )
+        _system, user = AlignmentPromptBuilder().build_prompt_parts(ctx)
+        assert marker in user

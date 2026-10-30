@@ -351,12 +351,12 @@ def _build_behavioral_results(
         findings_by_key.setdefault((src_file, func_name), []).append(finding)
 
     severity_order = {
-        "HIGH": 4,
-        "MEDIUM": 3,
-        "LOW": 2,
-        "ERROR": 1,
+        "HIGH": 5,
+        "MEDIUM": 4,
+        "LOW": 3,
+        "ERROR": 2,
+        "UNKNOWN": 1,
         "SAFE": 0,
-        "UNKNOWN": 0,
     }
     results: List[Dict[str, Any]] = []
 
@@ -466,6 +466,26 @@ def _build_behavioral_results(
         )
 
     return results
+
+
+def _behavioral_result_visible(result: Dict[str, Any]) -> bool:
+    """Decide whether a behavioral CLI row survives the threat filter.
+
+    Safe rows and THREAT rows stay. UNKNOWN and ERROR rows stay too:
+    those are inconclusive verification results, and dropping them makes
+    a failed check disappear from formatted and ``--raw`` output.
+    VULNERABILITY-only rows stay hidden.
+    """
+    if result.get("is_safe", False):
+        return True
+    analyzer_data = result.get("findings", {}).get("behavioral_analyzer", {})
+    severity = str(analyzer_data.get("severity") or "").upper()
+    if severity in {"UNKNOWN", "ERROR"}:
+        return True
+    classification = (
+        analyzer_data.get("threat_vulnerability_classification") or ""
+    ).upper()
+    return classification == "THREAT"
 
 
 async def _run_behavioral_analyzer_on_source(source_path: str) -> List[Dict[str, Any]]:
@@ -2499,26 +2519,10 @@ async def main():
             # tools flagged as malicious.
             results = _build_behavioral_results(analyzer, findings, source_path)
 
-            # Filter out VULNERABILITY findings — only surface THREATS — while
-            # always keeping safe results so every analyzed tool remains visible.
-            # Applies to both formatted and ``--raw`` JSON output.
-            filtered_results = []
-            for result in results:
-                if result.get("is_safe", False):
-                    filtered_results.append(result)
-                    continue
-
-                analyzer_data = result.get("findings", {}).get(
-                    "behavioral_analyzer", {}
-                )
-                classification = (
-                    analyzer_data.get("threat_vulnerability_classification") or ""
-                ).upper()
-
-                if classification == "THREAT":
-                    filtered_results.append(result)
-
-            results = filtered_results
+            # Hide VULNERABILITY-only rows. Keep safe rows, threats, and
+            # inconclusive UNKNOWN/ERROR rows. Applies to formatted output
+            # and ``--raw`` JSON.
+            results = [row for row in results if _behavioral_result_visible(row)]
 
             # Save output if requested
             if args.output:

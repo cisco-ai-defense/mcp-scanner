@@ -41,7 +41,10 @@ _ANALYSIS_TRUNCATION_SUFFIX = (
 _TEMPLATE_TRUNCATION_SUFFIX = (
     "\n\n... (alignment instructions truncated to fit model context budget)\n"
 )
-_MIN_ANALYSIS_CHARS = 500
+# The entry-point block is written before source and dataflow. A 500
+# character floor kept the header and dropped the code. 8000 leaves room
+# for that header plus the 2000-character source cap and some dataflow.
+_MIN_ANALYSIS_CHARS = 8000
 # Newlines joining template, prefix, delimiter tags, and analysis body.
 _PROMPT_FRAME_CHARS = 5
 _SOURCE_TRUNCATION_LIMIT = 2000
@@ -699,8 +702,20 @@ For functions with no issues, just include function_index, function_name, and mi
                 joined_len,
                 max_total,
             )
-            allow = max(0, max_total - len(template_used) - separator_len)
-            user_payload = user_payload[:allow]
+            # Shrink the framework text first. Cutting the user payload
+            # here would drop the evidence the budget just reserved.
+            overflow = joined_len - max_total
+            if template_used and overflow < len(template_used):
+                keep = len(template_used) - overflow
+                suffix = _TEMPLATE_TRUNCATION_SUFFIX
+                if keep > len(suffix):
+                    template_used = template_used[: keep - len(suffix)] + suffix
+                else:
+                    template_used = template_used[:keep]
+            else:
+                template_used = ""
+                if len(user_payload) > max_total:
+                    user_payload = user_payload[:max_total]
 
         self.logger.debug(
             "prompt built label=%s prompt_length=%d analysis_content_length=%d",

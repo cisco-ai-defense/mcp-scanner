@@ -142,6 +142,16 @@ class TestGarbageResponseEmitsErrorFinding:
                 '"primary_threats": []}}',
                 "string_false_flag",
             ),
+            (
+                '{"threat_analysis": {"malicious_content_detected": true, '
+                '"primary_threats": []}}',
+                "malicious_with_empty_threats",
+            ),
+            (
+                '{"threat_analysis": {"malicious_content_detected": false, '
+                '"primary_threats": ["DATA EXFILTRATION"]}}',
+                "clean_flag_with_threats",
+            ),
             ("[]", "non_dict_root_array"),
             ('"just a string"', "non_dict_root_string"),
         ],
@@ -554,6 +564,24 @@ class TestValidateThreatAnalysisShape:
                     }
                 },
                 "string_false_flag",
+            ),
+            (
+                {
+                    "threat_analysis": {
+                        "malicious_content_detected": True,
+                        "primary_threats": [],
+                    }
+                },
+                "malicious_with_empty_threats",
+            ),
+            (
+                {
+                    "threat_analysis": {
+                        "malicious_content_detected": False,
+                        "primary_threats": ["DATA EXFILTRATION"],
+                    }
+                },
+                "clean_flag_with_threats",
             ),
             ([], "root_is_list"),
             ("string", "root_is_string"),
