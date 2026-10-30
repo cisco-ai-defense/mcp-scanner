@@ -38,3 +38,54 @@ class TestReadinessLLMJudgeRequestShape:
         assert kwargs["temperature"] == 1
         assert "max_completion_tokens" in kwargs
         assert "max_tokens" not in kwargs
+
+
+_FAILING_ANALYSIS = {
+    "readiness_analysis": {
+        "actionable_errors": {
+            "is_actionable": False,
+            "confidence": 0.9,
+            "reasoning": "Errors give no hint",
+            "suggestions": ["Return error codes"],
+        }
+    }
+}
+
+
+def _mock_text_response(text: str) -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = text
+    return mock_response
+
+
+class TestReadinessLLMJudgeUnreadableResponse:
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.readiness.llm_judge.acompletion")
+    async def test_json_wrapped_in_prose_is_parsed(self, mock_completion):
+        mock_completion.return_value = _mock_text_response(
+            "Here is my analysis:\n"
+            + json.dumps(_FAILING_ANALYSIS)
+            + "\nHope that helps!"
+        )
+        judge = ReadinessLLMJudge(model="openai/gpt-4o", api_key="test-key")
+
+        findings = await judge.analyze({"name": "demo_tool"})
+
+        assert len(findings) == 1
+        assert findings[0].details["rule_id"] == "LLM-READINESS-ACTIONABLE-ERRORS"
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.readiness.llm_judge.acompletion")
+    async def test_unparseable_response_is_not_reported_as_clean(
+        self, mock_completion
+    ):
+        mock_completion.return_value = _mock_text_response("I cannot evaluate this.")
+        judge = ReadinessLLMJudge(model="openai/gpt-4o", api_key="test-key")
+
+        findings = await judge.analyze({"name": "demo_tool"})
+
+        assert len(findings) == 1
+        assert findings[0].analyzer == "READINESS-LLM"
+        assert findings[0].details["subject"] == "demo_tool"
+        assert findings[0].details["error_kind"]

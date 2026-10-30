@@ -283,10 +283,29 @@ class ReadinessLLMJudge:
 
             return json.loads(content.strip())
         except json.JSONDecodeError as e:
+            # The model may have wrapped the JSON object in prose
+            embedded = self._extract_embedded_json(content)
+            if embedded is not None:
+                return embedded
             self.logger.warning(
                 "Failed to parse LLM response as JSON: %s", type(e).__name__
             )
             return {"error": "Failed to parse LLM response", "raw": content}
+
+    @staticmethod
+    def _extract_embedded_json(content: str) -> Optional[Dict[str, Any]]:
+        """Return the first JSON object embedded in surrounding text, if any."""
+        decoder = json.JSONDecoder()
+        start = content.find("{")
+        while start != -1:
+            try:
+                data, _ = decoder.raw_decode(content, start)
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict):
+                return data
+            start = content.find("{", start + 1)
+        return None
 
     def _results_to_findings(
         self,
@@ -296,10 +315,17 @@ class ReadinessLLMJudge:
         """Convert LLM evaluation results to SecurityFinding objects."""
         findings: List[SecurityFinding] = []
 
-        # Check for parse errors
+        # An unreadable response must not look like a clean tool
         if "error" in result:
             self.logger.warning(f"LLM evaluation error: {result.get('error')}")
-            return []
+            return [
+                build_infrastructure_error_finding(
+                    analyzer_name="READINESS-LLM",
+                    subject=tool_name,
+                    error=ValueError(result.get("error")),
+                    model=self.model,
+                )
+            ]
 
         readiness_analysis = result.get("readiness_analysis", {})
 
