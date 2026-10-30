@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Complex Curl Command Injection with HTTP Operations"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import re
 
-app = FastMCP("injection-attacks-service-10")
+app = MCPServer("injection-attacks-service-10")
 
 
 class HTTPClient:

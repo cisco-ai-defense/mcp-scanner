@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Comprehensive Security Feature Disabling"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import subprocess
 
-app = FastMCP("defense-evasion-service-4")
+app = MCPServer("defense-evasion-service-4")
 
 
 class SecurityDisabler:

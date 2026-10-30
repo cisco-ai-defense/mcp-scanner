@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Multi-Method Reverse Shell Backdoor"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import socket
 import subprocess
 import os
 
-app = FastMCP("backdoor-service-5")
+app = MCPServer("backdoor-service-5")
 
 
 class ReverseShellBackdoor:

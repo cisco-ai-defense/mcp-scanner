@@ -267,7 +267,9 @@ class MetaAnalyzer:
             with open(str(prompt_file), encoding="utf-8") as f:
                 return f.read()
         except Exception as e:
-            self._logger.warning("Failed to load meta-analysis prompt: %s", e)
+            self._logger.warning(
+                "Failed to load meta-analysis prompt: %s", type(e).__name__
+            )
             return (
                 "You are a senior security analyst performing meta-analysis on MCP security findings. "
                 "Review findings from multiple analyzers, identify false positives, "
@@ -329,12 +331,16 @@ class MetaAnalyzer:
             # On failure we deliberately do nothing: no FP suggestions means
             # apply_meta_analysis will keep every analyzer finding as-is.
             self._logger.error(
-                "Meta-analysis failed (%s); keeping all original findings.", e
+                "Meta-analysis failed (%s); keeping all original findings.",
+                type(e).__name__,
             )
             return MetaAnalysisResult(
                 overall_risk_assessment={
                     "risk_level": "UNKNOWN",
-                    "summary": f"Meta-analysis failed: {e}. Original findings preserved.",
+                    "summary": (
+                        f"Meta-analysis failed: {type(e).__name__}. "
+                        "Original findings preserved."
+                    ),
                 },
             )
 
@@ -473,6 +479,20 @@ Respond with ONLY a JSON object with a single `false_positives` list. Indices no
 
 If no findings are false positives, return `{{"false_positives": []}}`."""
 
+    @staticmethod
+    def _supports_temperature(model: str) -> bool:
+        """Return whether ``temperature`` may be sent for this model.
+
+        Bedrock Opus 4.7 rejects ``temperature`` with
+        ``temperature is deprecated for this model``. When meta-analysis
+        fails the analyzer fails open (keeps every finding), so omit the
+        knob for models known to reject it.
+        """
+        normalized = (model or "").lower()
+        if normalized.startswith("bedrock/") and "opus-4-7" in normalized:
+            return False
+        return True
+
     async def _make_llm_request(self, system_prompt: str, user_prompt: str) -> str:
         """Make a request to the LLM API with retry logic."""
         messages = [
@@ -483,10 +503,11 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
         api_params: Dict[str, Any] = {
             "model": self._model,
             "messages": messages,
-            "temperature": self._temperature,
             "max_tokens": self._max_tokens,
             "timeout": float(self._timeout),
         }
+        if self._supports_temperature(self._model):
+            api_params["temperature"] = self._temperature
 
         if self._api_key:
             api_params["api_key"] = self._api_key
@@ -517,7 +538,7 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
                 "Meta-analysis LLM request failed (transient, attempt %d): %s; "
                 "retrying in %.1fs",
                 attempt,
-                exc,
+                type(exc).__name__,
                 delay,
             )
 
@@ -533,7 +554,8 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
             kind = classify_analyzer_error(e, context="llm", model=self._model)
             if kind is ErrorKind.FINAL:
                 self._logger.error(
-                    "Meta-analysis LLM request failed (final error): %s", e
+                    "Meta-analysis LLM request failed (final error): %s",
+                    type(e).__name__,
                 )
             raise
 
@@ -554,7 +576,7 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
             # On parse failure, return an empty result so no findings are filtered.
             self._logger.error(
                 "Failed to parse meta-analysis response (%s); keeping all findings.",
-                e,
+                type(e).__name__,
             )
             return MetaAnalysisResult(
                 overall_risk_assessment={

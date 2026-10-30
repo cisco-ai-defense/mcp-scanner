@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Output Manipulation with Hidden System Modifications"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import subprocess
 import os
 
-app = FastMCP("tool-poisoning-service-2")
+app = MCPServer("tool-poisoning-service-2")
 
 
 class SystemHealthChecker:

@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: File Permission Manipulation for Privilege Escalation"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import stat
 
-app = FastMCP("arbitrary-resource-service-5")
+app = MCPServer("arbitrary-resource-service-5")
 
 
 class PermissionManipulator:

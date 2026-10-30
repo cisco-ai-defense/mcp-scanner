@@ -23,12 +23,17 @@ from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 from typing import List, Dict, Any
 
+from rich.panel import Panel
+from rich.table import Table
+
 from mcpscanner.cli import (
     _get_endpoint_from_env,
     _build_config,
     scan_mcp_server_direct,
     display_results,
+    _build_behavioral_results,
 )
+from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner import Config, ToolScanResult
 from mcpscanner.core.models import AnalyzerEnum
 from mcpscanner.core.exceptions import MCPConnectionError
@@ -36,6 +41,73 @@ from mcpscanner.core.exceptions import MCPConnectionError
 
 class TestCliHelperFunctions:
     """Test cases for CLI helper functions."""
+
+    def test_build_behavioral_results_from_findings_when_analyzed_functions_empty(
+        self,
+    ):
+        """CLI --raw must not drop real findings when analyzed_functions is empty."""
+        finding = SecurityFinding(
+            severity="HIGH",
+            summary="Line 1: DATA EXFILTRATION - mismatch",
+            threat_category="DATA EXFILTRATION",
+            analyzer="Behavioral",
+            details={
+                "function_name": "leaky_tool",
+                "source_file": "/repo/tools.py",
+                "decorator_type": "@mcp.tool",
+                "line_number": 1,
+            },
+        )
+        analyzer = MagicMock()
+        analyzer.analyzed_functions = []
+
+        results = _build_behavioral_results(
+            analyzer, [finding], source_path="/repo"
+        )
+
+        assert len(results) == 1
+        assert results[0]["tool_name"] == "leaky_tool"
+        assert results[0]["is_safe"] is False
+        behavioral = results[0]["findings"]["behavioral_analyzer"]
+        assert behavioral["severity"] == "HIGH"
+        assert behavioral.get("threat_vulnerability_classification") == "THREAT"
+
+    def test_infer_classification_prefers_threat_over_vulnerability(self):
+        """Non-raw THREAT filter must not drop a tool that has both classes."""
+        vuln = SecurityFinding(
+            severity="MEDIUM",
+            summary="Vulnerability finding",
+            threat_category="",
+            analyzer="Behavioral",
+            details={
+                "function_name": "mixed_tool",
+                "source_file": "/repo/tools.py",
+                "threat_vulnerability_classification": "VULNERABILITY",
+            },
+        )
+        threat = SecurityFinding(
+            severity="HIGH",
+            summary="Threat finding",
+            threat_category="DATA EXFILTRATION",
+            analyzer="Behavioral",
+            details={
+                "function_name": "mixed_tool",
+                "source_file": "/repo/tools.py",
+                "threat_vulnerability_classification": "THREAT",
+            },
+        )
+        analyzer = MagicMock()
+        analyzer.analyzed_functions = []
+
+        results = _build_behavioral_results(
+            analyzer, [vuln, threat], source_path="/repo"
+        )
+        assert len(results) == 1
+        behavioral = results[0]["findings"]["behavioral_analyzer"]
+        assert behavioral["threat_vulnerability_classification"] == "THREAT"
+        assert behavioral["total_findings"] == 1
+        assert behavioral["threat_summary"] == "Threat finding"
+        assert behavioral["severity"] == "HIGH"
 
     def test_get_endpoint_from_env_with_value(self):
         """Test _get_endpoint_from_env with environment variable set."""
@@ -304,6 +376,111 @@ class TestScanMcpServerDirect:
                 assert "Error scanning server" in captured.out
 
     @pytest.mark.asyncio
+    async def test_scan_mcp_server_direct_connection_error_uses_rich_panel(self):
+        """Connection errors render as a real rich.panel.Panel."""
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
+                "Connection failed"
+            )
+            mock_scanner_class.return_value = mock_scanner
+
+            with (
+                patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}),
+                patch("mcpscanner.cli.console.print") as mock_print,
+            ):
+                await scan_mcp_server_direct(
+                    "https://test.com", [AnalyzerEnum.API], verbose=True
+                )
+
+                panels = [
+                    call.args[0]
+                    for call in mock_print.call_args_list
+                    if call.args and isinstance(call.args[0], Panel)
+                ]
+                assert len(panels) == 1
+
+    @pytest.mark.asyncio
+    async def test_main_scan_error_uses_rich_panel_on_stderr(self, capsys):
+        """main()'s own top-level scan try/except is what a real
+        `mcp-scanner --server-url ...` invocation hits on a connection
+        failure -- scan_mcp_server_direct has no callers outside its own
+        tests, so its Panel never reaches a real user on its own. This
+        must render the same Rich panel, and (matching the pre-existing
+        stderr convention main() used before this PR) still write to
+        stderr, not stdout."""
+        from mcpscanner.cli import main
+
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
+                "Connection failed"
+            )
+            mock_scanner_class.return_value = mock_scanner
+
+            test_args = [
+                "mcp-scanner",
+                "--analyzers",
+                "yara",
+                "--server-url",
+                "https://test.com",
+            ]
+            with (
+                patch("sys.argv", test_args),
+                patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}),
+            ):
+                with pytest.raises(SystemExit):
+                    await main()
+
+                captured = capsys.readouterr()
+                assert captured.out == ""
+                assert "Connection Error" in captured.err
+                assert "Connection failed" in captured.err
+
+    @pytest.mark.asyncio
+    async def test_main_scan_error_panel_does_not_crop_long_messages(self, capsys):
+        """The shared console's soft_wrap=True is for plain text and table
+        cells (don't force a line break). Panel enforces a fixed width and
+        can't let content overflow its border, so with soft wrapping on,
+        Rich crops the message after the first line instead of wrapping
+        it -- silently dropping everything past that point. The end of a
+        long message is what proves this: a test that only checks the
+        message is "present somewhere" in the output still passes even
+        when most of it got cropped off."""
+        from mcpscanner.cli import main
+
+        long_message = (
+            "Connection to MCP server at "
+            + "http://127.0.0.1:9/mcp/" + "segment" * 10
+            + " was cancelled. This may indicate the server is not "
+            "reachable, not responding, or requires authentication."
+        )
+
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            mock_scanner.scan_remote_server_tools.side_effect = MCPConnectionError(
+                long_message
+            )
+            mock_scanner_class.return_value = mock_scanner
+
+            test_args = [
+                "mcp-scanner",
+                "--analyzers",
+                "yara",
+                "--server-url",
+                "https://test.com",
+            ]
+            with (
+                patch("sys.argv", test_args),
+                patch.dict("os.environ", {"MCP_SCANNER_API_KEY": "test_key"}),
+            ):
+                with pytest.raises(SystemExit):
+                    await main()
+
+                captured = capsys.readouterr()
+                assert "requires authentication." in captured.err
+
+    @pytest.mark.asyncio
     async def test_scan_mcp_server_direct_with_endpoint_url(self, mock_scan_results):
         """Test scan_mcp_server_direct with custom endpoint URL."""
         with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
@@ -467,6 +644,125 @@ class TestDisplayResults:
         assert "Valid finding" in captured.out
         assert "Severity: LOW" in captured.out
         # Should handle invalid analyzer gracefully
+
+    def test_display_results_unsafe_tools_use_rich_table(self, sample_results):
+        """The unsafe-tools summary must be a real rich.table.Table, not a
+        styled string -- this is what distinguishes the Rich UX from just
+        adding ANSI color codes to the old print() calls."""
+        with patch("mcpscanner.cli.console.print") as mock_print:
+            display_results(sample_results)
+
+            tables = [
+                call.args[0]
+                for call in mock_print.call_args_list
+                if call.args and isinstance(call.args[0], Table)
+            ]
+            assert len(tables) == 1
+            columns = [col.header for col in tables[0].columns]
+            assert columns == ["#", "Tool", "Findings"]
+            # Table.rows holds Row objects with no .cells attribute in Rich
+            # 13.7.0; cell values live on each column instead. The fixture
+            # has two API findings and one YARA finding -> 3 total.
+            assert [list(column.cells) for column in tables[0].columns] == [
+                ["1"],
+                ["unsafe_tool"],
+                ["3"],
+            ]
+
+    def test_display_results_escapes_rich_markup_in_tool_name(self, capsys):
+        """A server-controlled tool name containing Rich markup syntax must
+        not be interpreted as formatting -- an unmatched closing tag like
+        `[/red]` would otherwise raise MarkupError and cut the report short
+        before later findings are rendered, and valid markup could forge
+        styling in the terminal output."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "tool_name": "evil[/red][bold]tool",
+                    "is_safe": False,
+                    "findings": {},
+                }
+            ],
+        }
+
+        # Must not raise MarkupError, and the literal brackets must survive
+        # into the rendered output rather than being swallowed as markup.
+        display_results(results)
+
+        captured = capsys.readouterr()
+        assert "evil[/red][bold]tool" in captured.out
+
+    def test_display_results_does_not_convert_emoji_shortcodes(self, capsys):
+        """rich.markup.escape() only escapes `[...]` markup, not `:name:`
+        emoji shortcodes -- Rich still converts those by default. A
+        server-controlled tool name containing a shortcode must display as
+        the literal text, not the emoji glyph: the glyph is a different
+        string than what the server actually sent, and on some terminals
+        (observed: Windows legacy console codepage) isn't even encodable,
+        crashing the write entirely."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "tool_name": "exfil:warning:tool",
+                    "is_safe": False,
+                    "findings": {},
+                }
+            ],
+        }
+
+        display_results(results)
+
+        captured = capsys.readouterr()
+        assert "exfil:warning:tool" in captured.out
+        assert "⚠" not in captured.out
+
+    def test_display_results_does_not_hard_wrap_long_lines(self, capsys):
+        """A threat summary or URL is an indicator a user may grep or copy
+        out of CI logs. Rich's default hard-wraps long lines at the console
+        width, splitting an indicator across multiple lines in piped
+        output and breaking exactly that grep/copy use case."""
+        long_summary = "Exfiltrates data to http://evil.example.com/" + "a" * 150
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "tool_name": "unsafe_tool",
+                    "is_safe": False,
+                    "findings": {
+                        "api_analyzer": {
+                            "total_findings": 1,
+                            "threat_summary": long_summary,
+                            "severity": "HIGH",
+                        }
+                    },
+                }
+            ],
+        }
+
+        display_results(results, detailed=True)
+
+        captured = capsys.readouterr()
+        assert long_summary in captured.out
+
+    def test_display_results_no_table_when_no_unsafe_tools(self):
+        """No unsafe tools means nothing to summarize in a table."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {"tool_name": "safe_tool", "is_safe": True, "findings": {}}
+            ],
+        }
+        with patch("mcpscanner.cli.console.print") as mock_print:
+            display_results(results)
+
+            tables = [
+                call.args[0]
+                for call in mock_print.call_args_list
+                if call.args and isinstance(call.args[0], Table)
+            ]
+            assert tables == []
 
 
 class TestStaticSubcommandCLI:
@@ -671,3 +967,248 @@ class TestStaticSubcommandCLI:
             # Static subcommand uses unified output format - resources appear as scanned items
             assert "Total tools scanned: 1" in captured.out
             assert "Safe items: 1" in captured.out
+
+
+class TestMainGlobalEnvFlags:
+    """Regression tests for issue #251.
+
+    A local ``import os`` inside the ``vulnerable-package`` branch of
+    ``main()`` made ``os`` function-local for the whole of ``main()``, so
+    every global flag that writes ``os.environ`` (e.g. ``--api-key``) crashed
+    with ``UnboundLocalError`` before the local import was ever reached.
+    """
+
+    @pytest.fixture
+    def issue_251_tools_file(self, tmp_path):
+        """Create a temporary tools JSON file for the static subcommand."""
+        tools_data = {
+            "tools": [
+                {
+                    "name": "test_tool",
+                    "description": "A test tool",
+                    "inputSchema": {"type": "object"},
+                }
+            ]
+        }
+        file_path = tmp_path / "tools.json"
+        with open(file_path, "w") as f:
+            json.dump(tools_data, f)
+        return str(file_path)
+
+    @staticmethod
+    def _shadowed_module_imports():
+        """Module-level import names that ``main()`` rebinds with a local
+        ``import`` placed after their first use in ``main()``.
+
+        Returns a dict of ``name -> (module_import_line, local_import_line,
+        first_use_line)``. Any entry here is an ``UnboundLocalError`` waiting
+        to happen for every use before the local import.
+        """
+        import ast
+        from pathlib import Path
+
+        cli_path = Path(__file__).resolve().parent.parent / "mcpscanner" / "cli.py"
+        tree = ast.parse(cli_path.read_text())
+
+        def imported_names(nodes):
+            names = {}
+            for node in nodes:
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        names[alias.asname or alias.name.split(".")[0]] = node.lineno
+                elif isinstance(node, ast.ImportFrom):
+                    for alias in node.names:
+                        names[alias.asname or alias.name] = node.lineno
+            return names
+
+        module_imports = imported_names(tree.body)
+        main_fn = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "main"
+        )
+        local_imports = imported_names(ast.walk(main_fn))
+        first_use = {}
+        for node in ast.walk(main_fn):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                first_use.setdefault(node.id, node.lineno)
+
+        return {
+            name: (module_imports[name], local_imports[name], first_use[name])
+            for name in local_imports
+            if name in module_imports
+            and name in first_use
+            and first_use[name] < local_imports[name]
+        }
+
+    def test_main_does_not_shadow_module_imports(self):
+        """No local import inside main() may shadow a module-level name that
+        main() already uses (issue #251)."""
+        shadowed = self._shadowed_module_imports()
+        assert not shadowed, (
+            "main() locally re-imports module-level names after their first "
+            f"use, making them unbound locals: {shadowed}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_api_key_flag_does_not_raise_unbound_local_error(
+        self, issue_251_tools_file, capsys, monkeypatch
+    ):
+        """End-to-end repro of #251: ``--api-key`` must set the env var and
+        the scan must proceed instead of raising ``UnboundLocalError``."""
+        import os
+
+        from mcpscanner.cli import main
+
+        monkeypatch.setenv("MCP_SCANNER_API_KEY", "")
+        monkeypatch.delenv("MCP_SCANNER_API_KEY", raising=False)
+        test_args = [
+            "mcp-scanner",
+            "--api-key",
+            "test-key-251",
+            "--analyzers",
+            "yara",
+            "static",
+            "--tools",
+            issue_251_tools_file,
+        ]
+        with patch("sys.argv", test_args):
+            await main()
+
+        captured = capsys.readouterr()
+        assert "UnboundLocalError" not in captured.out
+        assert "UnboundLocalError" not in captured.err
+        assert os.environ.get("MCP_SCANNER_API_KEY") == "test-key-251"
+        assert "Total tools scanned: 1" in captured.out
+
+
+class TestStderrFileConfigScans:
+    """--stderr-file must reach the stdio servers spawned by config scans."""
+
+    @pytest.fixture
+    def config_file(self, tmp_path):
+        path = tmp_path / "mcp.json"
+        path.write_text(json.dumps({"mcpServers": {}}))
+        return str(path)
+
+    @staticmethod
+    async def _run_main(argv, method_name, return_value):
+        from mcpscanner.cli import main
+
+        calls = []
+
+        async def fake_scan(*args, **kwargs):
+            errlog = kwargs.get("errlog")
+            calls.append(errlog)
+            if errlog is not None:
+                errlog.write("server banner\n")
+            return return_value
+
+        with patch("mcpscanner.cli.Scanner") as mock_scanner_class:
+            mock_scanner = AsyncMock()
+            setattr(mock_scanner, method_name, AsyncMock(side_effect=fake_scan))
+            mock_scanner_class.return_value = mock_scanner
+            with patch("sys.argv", ["mcp-scanner", "--analyzers", "yara", *argv]):
+                await main()
+
+        assert len(calls) == 1
+        return calls[0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "argv_template",
+        [
+            ["config", "--config-path", "{cfg}", "--stderr-file", "{log}"],
+            ["--stderr-file", "{log}", "config", "--config-path", "{cfg}"],
+            ["--config-path", "{cfg}", "--stderr-file", "{log}"],
+        ],
+        ids=["subcommand", "top-level-flag-before-subcommand", "legacy"],
+    )
+    async def test_config_file_scan_uses_stderr_file(
+        self, argv_template, config_file, tmp_path
+    ):
+        log = tmp_path / "server-stderr.log"
+        argv = [a.format(cfg=config_file, log=log) for a in argv_template]
+
+        errlog = await self._run_main(argv, "scan_mcp_config_file", [])
+
+        assert errlog is not None
+        assert errlog.name == str(log)
+        assert errlog.closed
+        assert log.read_text() == "server banner\n"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "argv_template",
+        [
+            ["known-configs", "--stderr-file", "{log}"],
+            ["--stderr-file", "{log}", "known-configs"],
+            ["--scan-known-configs", "--stderr-file", "{log}"],
+        ],
+        ids=["subcommand", "top-level-flag-before-subcommand", "legacy"],
+    )
+    async def test_known_configs_scan_uses_stderr_file(self, argv_template, tmp_path):
+        log = tmp_path / "server-stderr.log"
+        argv = [a.format(log=log) for a in argv_template]
+
+        errlog = await self._run_main(argv, "scan_well_known_mcp_configs", {})
+
+        assert errlog is not None
+        assert errlog.name == str(log)
+        assert errlog.closed
+        assert log.read_text() == "server banner\n"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "argv, method_name, return_value",
+        [
+            (["config", "--config-path", "{cfg}"], "scan_mcp_config_file", []),
+            (["known-configs"], "scan_well_known_mcp_configs", {}),
+            (["--scan-known-configs"], "scan_well_known_mcp_configs", {}),
+        ],
+        ids=["config", "known-configs", "legacy-known-configs"],
+    )
+    async def test_config_scans_default_to_no_errlog(
+        self, argv, method_name, return_value, config_file
+    ):
+        argv = [a.format(cfg=config_file) for a in argv]
+
+        errlog = await self._run_main(argv, method_name, return_value)
+
+        assert errlog is None
+
+
+class TestStderrFileStdioSubcommand:
+    """A top-level --stderr-file must survive the stdio subparser default."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "argv_template",
+        [
+            ["--stderr-file", "{log}", "stdio", "--stdio-command", "python"],
+            ["stdio", "--stdio-command", "python", "--stderr-file", "{log}"],
+        ],
+        ids=["top-level-flag-before-subcommand", "subcommand"],
+    )
+    async def test_stdio_subcommand_keeps_stderr_file(self, argv_template, tmp_path):
+        log = tmp_path / "server-stderr.log"
+        argv = [a.format(log=log) for a in argv_template]
+
+        errlog = await TestStderrFileConfigScans._run_main(
+            argv, "scan_stdio_server_tools", []
+        )
+
+        assert errlog is not None
+        assert errlog.name == str(log)
+        assert errlog.closed
+        assert log.read_text() == "server banner\n"
+
+    @pytest.mark.asyncio
+    async def test_stdio_subcommand_without_flag_passes_no_errlog(self):
+        errlog = await TestStderrFileConfigScans._run_main(
+            ["stdio", "--stdio-command", "python"],
+            "scan_stdio_server_tools",
+            [],
+        )
+
+        assert errlog is None

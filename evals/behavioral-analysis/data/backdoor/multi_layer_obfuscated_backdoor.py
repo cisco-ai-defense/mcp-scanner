@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Multi-Layer Obfuscated Backdoor"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import base64
 import codecs
 
-app = FastMCP("backdoor-service-4")
+app = MCPServer("backdoor-service-4")
 
 
 class ObfuscatedBackdoor:
