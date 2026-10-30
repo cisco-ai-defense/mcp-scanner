@@ -45,7 +45,9 @@ dependencies = [
     #   max_tokens to GPT-6 reasoning models.
     # The advisories target the LiteLLM proxy server, which mcp-scanner does
     # not run, but the floor keeps known-vulnerable releases out of installs.
-    "litellm>=1.106.5",
+    # 1.107.0 was a malicious release (compromised release pipeline,
+    # 2026-10-21); PyPI pulled it, the exclusion also covers mirrors and caches.
+    "litellm>=1.106.5,!=1.107.0",
     "expandvars>=0.12.0",
     # JS/TS parsing for npm behavioral analysis pins the shared tree-sitter
     # runtime to a tested ABI range (other language packs stay >=0.21.0,
