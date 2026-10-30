@@ -168,16 +168,38 @@ class AlignmentLLMClient:
                 self._llm_timeout,
             )
 
+    # Short security-expert preamble that lives in the system role
+    # alongside the (much larger) framework template. Kept tight on
+    # purpose — Anthropic-on-Bedrock penalises long, instruction-heavy
+    # system messages with empty ``{}`` responses, so the bulk of the
+    # framework guidance is appended via ``system_prompt`` from the
+    # prompt builder rather than being baked in here.
+    _BASE_SYSTEM_PREAMBLE = (
+        "You are a security expert analyzing MCP tools. "
+        "You receive complete dataflow, taint analysis, and code context. "
+        "Analyze if the docstring accurately describes what the code "
+        "actually does. "
+        "Respond ONLY with valid JSON. Do not include any markdown formatting or code blocks."
+    )
+
     async def verify_alignment(
-        self, prompt: str, *, max_retries: int | None = None
+        self,
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        max_retries: int | None = None,
     ) -> str:
         """Send alignment verification prompt to LLM with retry logic.
 
         Args:
-            prompt: Comprehensive prompt with alignment verification evidence
-            max_retries: Override ``LLM_MAX_RETRIES`` (minimum 1). Use ``1`` for
-                parse re-prompts so batch parse retries do not multiply API
-                retry budgets.
+            prompt: User-role payload with the per-function or per-batch
+                evidence the model should analyse.
+            system_prompt: Optional system-role content (typically the
+                framework template). Concatenated after
+                ``_BASE_SYSTEM_PREAMBLE`` when set.
+            max_retries: Override ``LLM_MAX_RETRIES`` (minimum 1). Use ``1``
+                for parse re-prompts so batch parse retries do not multiply
+                API retry budgets.
 
         Returns:
             LLM response (JSON string)
@@ -187,26 +209,27 @@ class AlignmentLLMClient:
         """
         request_id = next(_PROCESS_REQUEST_IDS)
 
-        # Log prompt length for debugging
         prompt_length = len(prompt)
+        system_length = len(system_prompt) if system_prompt else 0
+        total_length = prompt_length + system_length
         self.logger.debug(
-            "LLM request_id=%d prompt_length=%d model=%s",
+            "LLM request_id=%d prompt_length=%d system_length=%d model=%s",
             request_id,
             prompt_length,
+            system_length,
             self._model,
         )
 
-        # Alignment prompts are hard-capped by the prompt builder; warn if we
-        # still exceed the alignment budget (builder bug or manual prompt).
-        alignment_cap = MCPScannerConstants.ALIGNMENT_MAX_PROMPT_CHARS
-        if prompt_length > alignment_cap:
+        # The model sees both messages, so the warning uses the combined
+        # length against PROMPT_LENGTH_THRESHOLD.
+        if total_length > MCPScannerConstants.PROMPT_LENGTH_THRESHOLD:
             self.logger.warning(
-                "LLM request_id=%d large_prompt prompt_length=%d threshold=%d model=%s "
-                "-- may be truncated by the model",
-                request_id,
+                "Large prompt detected: total=%d characters (user=%d, system=%d) "
+                "exceeds threshold %d - may be truncated by LLM",
+                total_length,
                 prompt_length,
-                alignment_cap,
-                self._model,
+                system_length,
+                MCPScannerConstants.PROMPT_LENGTH_THRESHOLD,
             )
 
         configured = MCPScannerConstants.LLM_MAX_RETRIES
@@ -222,7 +245,12 @@ class AlignmentLLMClient:
         async def operation() -> str:
             nonlocal attempts_used
             attempts_used += 1
-            return await self._make_llm_request(prompt, request_id, attempts_used)
+            return await self._make_llm_request(
+                prompt,
+                request_id,
+                attempts_used,
+                system_prompt=system_prompt,
+            )
 
         async def on_retry(
             exc: BaseException, attempt: int, delay: float
@@ -264,7 +292,9 @@ class AlignmentLLMClient:
         except Exception as e:
             kind = classify_analyzer_error(e, context="llm", model=self._model)
             total_ms = int((time.perf_counter() - verify_start) * 1000)
-            error_kind = ERROR_KIND_FINAL if kind is ErrorKind.FINAL else ERROR_KIND_TRANSIENT
+            error_kind = (
+                ERROR_KIND_FINAL if kind is ErrorKind.FINAL else ERROR_KIND_TRANSIENT
+            )
             self.logger.error(
                 "LLM request_id=%d failed%s attempts=%d duration_ms=%d "
                 "error_kind=%s error_type=%s error=%s model=%s",
@@ -279,17 +309,43 @@ class AlignmentLLMClient:
             )
             raise
 
+    def _supports_native_json_mode(self) -> bool:
+        """Return True only for OpenAI models that honour json_object mode.
+
+        Bedrock Anthropic returns ``{}`` when the flag is set on a long
+        prompt. Azure older API versions reject it. Allowlisting OpenAI
+        keeps both of those providers off the flag.
+        """
+        if not self._model:
+            return False
+        model = self._model.lower()
+        openai_prefixes = (
+            "openai/",
+            "gpt-",
+            "o1-",
+            "o1",
+            "o3-",
+            "o3",
+            "chatgpt-",
+        )
+        return model.startswith(openai_prefixes)
+
     async def _make_llm_request(
-        self, prompt: str, request_id: int = 0, attempt: int = 1
+        self,
+        prompt: str,
+        request_id: int = 0,
+        attempt: int = 1,
+        *,
+        system_prompt: str | None = None,
     ) -> str:
         """Make a single LLM API request.
 
         Args:
-            prompt: Prompt to send
-            request_id: Caller-supplied id so retries share a correlation
-                key. Defaults to 0 for direct callers (rare in practice;
-                ``verify_alignment`` always supplies a real id).
+            prompt: User-role payload (per-function evidence).
+            request_id: Correlation id shared across retries.
             attempt: 1-based attempt number for retry visibility.
+            system_prompt: Optional framework template appended to the
+                system preamble.
 
         Returns:
             LLM response content
@@ -299,18 +355,22 @@ class AlignmentLLMClient:
         """
         attempt_start = time.perf_counter()
         try:
+            # Compose the system message. When the caller provides the
+            # framework template via ``system_prompt`` we concat it after
+            # the short security-expert preamble so models see the
+            # response-format expectations *before* the lengthy template.
+            # When ``system_prompt`` is None we keep the legacy single
+            # short system message — preserves behaviour for any caller
+            # that hasn't migrated to the build_prompt_parts API yet.
+            if system_prompt:
+                system_content = f"{self._BASE_SYSTEM_PREAMBLE}\n\n{system_prompt}"
+            else:
+                system_content = self._BASE_SYSTEM_PREAMBLE
+
             request_params = {
                 "model": self._model,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a security expert analyzing MCP tools. "
-                            "You receive complete dataflow, taint analysis, and code context. "
-                            "Analyze if the docstring accurately describes what the code actually does. "
-                            "Respond ONLY with valid JSON. Do not include any markdown formatting or code blocks."
-                        ),
-                    },
+                    {"role": "system", "content": system_content},
                     {"role": "user", "content": prompt},
                 ],
                 "max_tokens": self._max_tokens,
@@ -324,12 +384,7 @@ class AlignmentLLMClient:
             if self._api_key:
                 request_params["api_key"] = self._api_key
 
-            # JSON-object response mode is only safe on providers that honour it.
-            # Bedrock via litellm returns an empty ``{}`` when this is set
-            # (observed on Claude Haiku 4.5 cross-region profiles); Azure
-            # older API versions also reject it. Rely on the prompt + validator
-            # markdown fallbacks instead.
-            if not self._model.startswith(("azure/", "bedrock/")):
+            if self._supports_native_json_mode():
                 request_params["response_format"] = {"type": "json_object"}
 
             # Add optional parameters if configured

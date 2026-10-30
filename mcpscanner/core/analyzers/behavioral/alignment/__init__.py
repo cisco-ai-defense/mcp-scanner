@@ -29,7 +29,10 @@ All components use the 'alignment_' prefix to indicate they are part of
 the semantic alignment verification layer.
 """
 
-from .alignment_orchestrator import AlignmentOrchestrator
+from .alignment_orchestrator import (
+    LLM_UNAVAILABLE_KEY,
+    AlignmentOrchestrator,
+)
 from .alignment_prompt_builder import AlignmentPromptBuilder
 from .alignment_llm_client import AlignmentLLMClient
 from .alignment_response_validator import AlignmentResponseValidator
@@ -39,4 +42,8 @@ __all__ = [
     "AlignmentPromptBuilder",
     "AlignmentLLMClient",
     "AlignmentResponseValidator",
+    # Legacy marker. The orchestrator records failures on
+    # ``errored_function_names`` and returns None. It does not put
+    # this key on result dicts. A missing result is not a sentinel.
+    "LLM_UNAVAILABLE_KEY",
 ]
