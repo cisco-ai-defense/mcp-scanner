@@ -1890,6 +1890,176 @@ def test_rust_turbofish_reaches_blanket_impl() -> None:
     assert flow["reaches_external"] is True, flow
 
 
+RUST_SELF_MODULE_PATH = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+fn helper(command: &str) -> i32 {
+    match Command::new("sh").arg("-c").arg(command).status() {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(_) => 1,
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+
+    #[tool(description = "Run a command through the module helper.")]
+    fn run(&self, command: String) -> i32 {
+        self::helper(&command)
+    }
+}
+"""
+
+
+def test_rust_self_module_path_reaches_free_function() -> None:
+    """``self::helper`` is the free function, not ``Svc::helper``."""
+    analyzer = NativeAnalyzer(RUST_SELF_MODULE_PATH, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "helper" in reachable
+    assert "Svc.helper" not in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_MODULE_FUNCTION_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+mod helpers {
+    use std::process::Command;
+
+    pub fn run(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Run a command through the helpers module.")]
+    fn run(&self, command: String) -> i32 {
+        helpers::run(&command)
+    }
+}
+"""
+
+
+def test_rust_module_path_reaches_free_function() -> None:
+    """``helpers::run`` reaches the function inside ``mod helpers``."""
+    analyzer = NativeAnalyzer(RUST_MODULE_FUNCTION_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "helpers.run" in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_CRATE_MODULE_FUNCTION_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+mod helpers {
+    use std::process::Command;
+
+    pub fn run(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Run a command through the crate path.")]
+    fn run(&self, command: String) -> i32 {
+        crate::helpers::run(&command)
+    }
+}
+"""
+
+
+def test_rust_crate_module_path_reaches_free_function() -> None:
+    """``crate::helpers::run`` reaches ``mod helpers``."""
+    analyzer = NativeAnalyzer(RUST_CRATE_MODULE_FUNCTION_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "helpers.run" in reachable
+
+
+RUST_CONCRETE_AND_BLANKET_IMPL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Svc<T> {
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Svc<T> {
+    fn helper(command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+
+impl Svc<String> {
+    fn helper(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct App;
+
+#[tool_router]
+impl App {
+    #[tool(description = "Run a command through the concrete impl.")]
+    fn run(&self, command: String) -> i32 {
+        Svc::<String>::helper(&command)
+    }
+}
+"""
+
+
+def test_rust_turbofish_prefers_concrete_impl() -> None:
+    """``Svc::<String>::helper`` reaches ``impl Svc<String>``."""
+    analyzer = NativeAnalyzer(RUST_CONCRETE_AND_BLANKET_IMPL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Svc<String>.helper" in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
 RUST_RENAMED_LIBRARY_IMPORT = """\
 use libloading::Library as PluginLib;
 use rmcp::{tool, tool_router};

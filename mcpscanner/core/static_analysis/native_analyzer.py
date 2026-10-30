@@ -2424,6 +2424,34 @@ class NativeAnalyzer:
             cur = cur.parent
         return None
 
+    def _ts_rust_module_path(self, node: "Node") -> str:
+        """Return the ``mod`` path that contains ``node``, without the crate root."""
+        names: List[str] = []
+        cur = node.parent
+        while cur is not None:
+            if cur.type == "mod_item":
+                name = cur.child_by_field_name("name")
+                if name is not None:
+                    names.append(self._ts_get_node_text(name))
+            cur = cur.parent
+        names.reverse()
+        return ".".join(names)
+
+    def _ts_rust_module_functions(
+        self, root: "Node"
+    ) -> Tuple[Dict[str, "Node"], Set[str]]:
+        """Return same-file free functions keyed by ``module.func``."""
+        func_types = self.FUNCTION_NODE_TYPES.get(self.language, set())
+        if func_types:
+            self._ts_build_function_index(root, func_types)
+        store = getattr(self, "_func_index_module_cache", None)
+        if not store:
+            return {}, set()
+        found = store.get((id(root), self.language))
+        if found is None:
+            return {}, set()
+        return found
+
     def _ts_index_rust_impl_method(
         self,
         impl: "Node",
@@ -4546,6 +4574,8 @@ class NativeAnalyzer:
         index: Dict[str, "Node"] = {}
         ambiguous_bare: Set[str] = set()
         ambiguous_qualified: Set[str] = set()
+        module_fns: Dict[str, "Node"] = {}
+        module_ambiguous: Set[str] = set()
 
         def _index_bare(bare: str, node: "Node") -> None:
             if bare in index and index[bare].start_byte != node.start_byte:
@@ -4572,6 +4602,12 @@ class NativeAnalyzer:
                         class_name = self._ts_find_enclosing_class_name(node)
                         if class_name:
                             index[f"{class_name}.{bare}"] = node
+                        elif self.language == "rust":
+                            mod_path = self._ts_rust_module_path(node)
+                            mod_key = f"{mod_path}.{bare}" if mod_path else bare
+                            self._ts_index_qualified(
+                                module_fns, module_ambiguous, mod_key, node
+                            )
                 # ``const handler = async (args) => { ... };``
                 # ``handler = async (args) => { ... };``
                 if node.type in ("arrow_function", "function_expression"):
@@ -4601,6 +4637,11 @@ class NativeAnalyzer:
             qual_store = {}
             self._func_index_ambiguous_qualified_cache = qual_store
         qual_store[cache_key] = ambiguous_qualified
+        mod_store = getattr(self, "_func_index_module_cache", None)
+        if mod_store is None:
+            mod_store = {}
+            self._func_index_module_cache = mod_store
+        mod_store[cache_key] = (module_fns, module_ambiguous)
         return index
 
     # =========================================================================
@@ -5941,14 +5982,18 @@ class NativeAnalyzer:
         enclosing_type: str = "",
         enclosing_impl: Optional["Node"] = None,
         ambiguous_qualified: Optional[Set[str]] = None,
+        caller_module: str = "",
+        module_fns: Optional[Dict[str, "Node"]] = None,
+        module_ambiguous: Optional[Set[str]] = None,
     ) -> Optional[Tuple[str, "Node"]]:
         """Resolve a call reference, preferring qualified names.
 
-        ``Self::foo`` resolves to the enclosing impl block, then to an
-        inherent method of that type. A value receiver (``client.execute``)
-        may use a unique leaf. A Rust ``::`` path resolves only when its
-        type matches an indexed owner: ``crate::Plugin::new`` and
-        ``Svc::<String>::helper`` match, and ``String::new`` does not.
+        ``Self::foo`` resolves to the enclosing impl. ``self::foo`` is a
+        free function in the current module. A value receiver
+        (``client.execute``) may use a unique leaf. A Rust ``::`` path
+        matches an indexed type, a same-file module function, or a
+        turbofish such as ``Svc::<String>::helper``. ``String::new`` does
+        not inherit another type's ``new``.
         """
         qualified_ambiguous = ambiguous_qualified or set()
         type_path = "::" in ref.split("(", 1)[0]
@@ -5963,14 +6008,22 @@ class NativeAnalyzer:
             return self._ts_resolve_rust_self_call(
                 normalized, enclosing_impl, index, qualified_ambiguous
             )
-        normalized = self._ts_rewrite_self_call(normalized, enclosing_type)
+        # ``self::item`` is a module path. Only a real ``self.`` / ``Self::``
+        # receiver should be rewritten onto the enclosing type.
+        if self._ts_ref_is_self(ref):
+            normalized = self._ts_rewrite_self_call(normalized, enclosing_type)
         if normalized in qualified_ambiguous:
             return None
         if normalized in index:
             return normalized, index[normalized]
         if type_path:
             return self._ts_resolve_rust_type_path(
-                normalized, index, qualified_ambiguous
+                normalized,
+                index,
+                qualified_ambiguous,
+                caller_module,
+                module_fns,
+                module_ambiguous,
             )
         leaf = normalized.rsplit(".", 1)[-1]
         if not leaf or leaf in ambiguous_bare:
@@ -5990,9 +6043,19 @@ class NativeAnalyzer:
 
     @staticmethod
     def _ts_ref_is_self(ref: str) -> bool:
-        """Return whether ``ref`` is ``Self::...`` or ``self.``."""
-        head = ref.split("(", 1)[0].strip().replace("::", ".")
-        return head in {"Self", "self"} or head.startswith(("Self.", "self."))
+        """Return whether ``ref`` is ``Self::`` or the method call ``self.``.
+
+        ``self::helper`` is a path in the current module. Rewriting ``::``
+        to ``.`` first would make that path look like ``self.helper``.
+        """
+        head = ref.split("(", 1)[0].strip()
+        if head in {"Self", "self"}:
+            return True
+        if head.startswith(("Self::", "Self.")):
+            return True
+        if "::" in head:
+            return False
+        return head.startswith("self.")
 
     def _ts_resolve_rust_self_call(
         self,
@@ -6027,49 +6090,97 @@ class NativeAnalyzer:
         normalized: str,
         index: Dict[str, "Node"],
         ambiguous: Set[str],
+        caller_module: str = "",
+        module_fns: Optional[Dict[str, "Node"]] = None,
+        module_ambiguous: Optional[Set[str]] = None,
     ) -> Optional[Tuple[str, "Node"]]:
-        """Resolve ``Type::method`` without binding a different type's leaf."""
+        """Resolve a Rust path without borrowing another type's leaf.
+
+        ``self::helper`` is the free function in the caller's module.
+        ``helpers::run`` and ``crate::helpers::run`` use the module index.
+        ``Svc::<String>::helper`` prefers ``Svc<String>.helper``, then the
+        blanket ``Svc.helper``. ``String::new`` and ``libloading::Library::new``
+        stay unresolved when those owners are not in this file.
+        """
         if "." not in normalized:
             return None
         qualifier, leaf = normalized.rsplit(".", 1)
         parsed = self._ts_rust_path_type(qualifier)
         if parsed is None or not leaf:
             return None
-        base, args = parsed
-        if args:
-            specific = f"{base}<{''.join(args.split())}>.{leaf}"
-            if specific in index and specific not in ambiguous:
-                return specific, index[specific]
-        key = f"{base}.{leaf}"
-        if key in index and key not in ambiguous:
-            return key, index[key]
-        return None
+        path, args = parsed
+        parts = path.split(".")
+        owner_parts, free_module, rooted = self._ts_rust_resolved_owner(
+            parts, caller_module
+        )
+        mod_fns = module_fns or {}
+        mod_amb = module_ambiguous or set()
+        compact = "".join(args.split()) if args else ""
+
+        def take(
+            key: str, table: Dict[str, "Node"], amb: Set[str]
+        ) -> Optional[Tuple[str, "Node"]]:
+            if key and key in table and key not in amb:
+                return key, table[key]
+            return None
+
+        if owner_parts:
+            owner = ".".join(owner_parts)
+            if compact:
+                hit = take(f"{owner}<{compact}>.{leaf}", index, ambiguous)
+                if hit is not None:
+                    return hit
+            hit = take(f"{owner}.{leaf}", index, ambiguous)
+            if hit is not None:
+                return hit
+            hit = take(f"{owner}.{leaf}", mod_fns, mod_amb)
+            if hit is not None:
+                return hit
+            if rooted and len(owner_parts) > 1 and not compact:
+                return take(f"{owner_parts[-1]}.{leaf}", index, ambiguous)
+            return None
+        key = f"{free_module}.{leaf}" if free_module else leaf
+        return take(key, mod_fns, mod_amb)
+
+    @staticmethod
+    def _ts_rust_resolved_owner(
+        parts: List[str], caller_module: str
+    ) -> Tuple[List[str], str, bool]:
+        """Return ``(owner parts, free-function module, rooted)``."""
+        caller = [part for part in caller_module.split(".") if part]
+        kind = parts[0]
+        if kind == "crate":
+            return parts[1:], "", True
+        if kind == "self":
+            return caller + parts[1:], caller_module, True
+        if kind == "super":
+            base = caller[:-1]
+            rest = parts[1:]
+            while rest and rest[0] == "super":
+                rest = rest[1:]
+                base = base[:-1]
+            return base + rest, ".".join(base), True
+        return caller + parts, caller_module, False
 
     @staticmethod
     def _ts_rust_path_type(qualifier: str) -> Optional[Tuple[str, Optional[str]]]:
-        """Split a normalized Rust path into ``(type, generic args)``.
+        """Split a normalized Rust qualifier into ``(path, generic args)``.
 
-        ``crate.Plugin`` and ``Svc.<String>`` are local paths.
-        ``libloading.Library`` and ``std.process.Command`` are not.
+        ``Svc.<String>`` is the normalized form of ``Svc::<String>``. The
+        ``.<`` marker consumes the opening ``<``, so the args are the
+        remainder without the final ``>``.
         """
         path = qualifier
         args: Optional[str] = None
         marker = ".<"
         if marker in path and path.endswith(">"):
             path, _, arg_text = path.partition(marker)
-            if arg_text.startswith("<") and arg_text.endswith(">"):
-                args = arg_text[1:-1]
-            else:
-                args = arg_text
-        if not path:
+            if not arg_text.endswith(">"):
+                return None
+            args = arg_text[:-1]
+        if not path or any(not part for part in path.split(".")):
             return None
-        parts = path.split(".")
-        if any(not part for part in parts):
-            return None
-        prefix = parts[:-1]
-        if prefix and prefix[0] not in {"crate", "self", "super"}:
-            return None
-        return parts[-1], args
+        return path, args
 
     @staticmethod
     def _ts_public_index_key(
@@ -6985,6 +7096,7 @@ class NativeAnalyzer:
             index = self._ts_build_function_index(root, func_types)
             ambiguous_bare = self._ts_ambiguous_bare_functions(root)
             ambiguous_qualified = self._ts_ambiguous_qualified_functions(root)
+            module_fns, module_ambiguous = self._ts_rust_module_functions(root)
         except Exception as e:  # pragma: no cover - defensive
             self.logger.debug(
                 "Callee enrichment setup failed for handler at byte %s: %s",
@@ -7018,6 +7130,9 @@ class NativeAnalyzer:
                 continue
             enclosing = self._ts_find_enclosing_class_name(node)
             enclosing_impl = self._ts_enclosing_rust_impl(node)
+            caller_module = (
+                self._ts_rust_module_path(node) if self.language == "rust" else ""
+            )
             for ref in callee_refs(node):
                 resolved = self._ts_resolve_indexed_function(
                     ref,
@@ -7026,6 +7141,9 @@ class NativeAnalyzer:
                     enclosing,
                     enclosing_impl,
                     ambiguous_qualified,
+                    caller_module,
+                    module_fns,
+                    module_ambiguous,
                 )
                 if resolved is None:
                     continue
@@ -7090,13 +7208,18 @@ class NativeAnalyzer:
         if dangerous:
             handler_type = self._ts_find_enclosing_class_name(handler_node)
             handler_impl = self._ts_enclosing_rust_impl(handler_node)
+            handler_module = (
+                self._ts_rust_module_path(handler_node)
+                if self.language == "rust"
+                else ""
+            )
             for flow in ctx.parameter_flows:
                 reaches = flow.get("reaches_calls") or []
                 for call in reaches:
                     raw = str(call)
-                    norm = self._ts_rewrite_self_call(
-                        self._ts_normalize_call_ref(raw), handler_type
-                    )
+                    norm = self._ts_normalize_call_ref(raw)
+                    if self._ts_ref_is_self(raw):
+                        norm = self._ts_rewrite_self_call(norm, handler_type)
                     resolved = self._ts_resolve_indexed_function(
                         raw,
                         index,
@@ -7104,6 +7227,9 @@ class NativeAnalyzer:
                         handler_type,
                         handler_impl,
                         ambiguous_qualified,
+                        handler_module,
+                        module_fns,
+                        module_ambiguous,
                     )
                     if resolved is not None and resolved[0] in dangerous:
                         flow["reaches_external"] = True
