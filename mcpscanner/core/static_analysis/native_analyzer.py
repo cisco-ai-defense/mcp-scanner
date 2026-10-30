@@ -2340,6 +2340,14 @@ class NativeAnalyzer:
         cur = node.parent
         while cur is not None:
             if cur.type in class_types:
+                # Rust ``impl ServerHandler for Svc`` has no name field.
+                # The first ``type_identifier`` is the trait. The ``type``
+                # field is ``Svc``. ``impl<T> Svc<T>`` is a ``generic_type``.
+                if self.language == "rust" and cur.type == "impl_item":
+                    type_node = cur.child_by_field_name("type")
+                    if type_node is None:
+                        return ""
+                    return self._ts_rust_impl_type_name(type_node)
                 name_node = cur.child_by_field_name("name")
                 if name_node is not None:
                     return self._ts_get_node_text(name_node)
@@ -2351,6 +2359,126 @@ class NativeAnalyzer:
                 return ""
             cur = cur.parent
         return ""
+
+    def _ts_rust_impl_type_name(self, node: "Node") -> str:
+        """Return a Rust impl type's name with generic arguments removed.
+
+        ``impl<T> Svc<T>`` yields ``Svc``. ``impl ServerHandler for Svc``
+        yields ``Svc``, because the caller passes the ``type`` field and
+        not the trait. ``foo::Bar`` yields ``Bar``.
+        """
+        cur: Optional["Node"] = node
+        for _ in range(6):
+            if cur is None:
+                return ""
+            if cur.type == "type_identifier":
+                return self._ts_get_node_text(cur)
+            if cur.type in ("scoped_type_identifier", "scoped_identifier"):
+                cur = cur.child_by_field_name("name")
+                continue
+            if cur.type in ("generic_type", "reference_type"):
+                cur = cur.child_by_field_name("type")
+                continue
+            return ""
+        return ""
+
+    def _ts_rust_rendered_type_name(self, node: "Node") -> str:
+        """Return a Rust type name, keeping generic arguments.
+
+        ``Svc<T>`` and ``Svc<String>`` stay distinct. ``Box<Svc>`` does not
+        collapse to ``Box``. ``foo::Bar`` still yields ``Bar``.
+        """
+        cur: Optional["Node"] = node
+        for _ in range(6):
+            if cur is None:
+                return ""
+            if cur.type == "type_identifier":
+                return self._ts_get_node_text(cur)
+            if cur.type in ("scoped_type_identifier", "scoped_identifier"):
+                cur = cur.child_by_field_name("name")
+                continue
+            if cur.type == "reference_type":
+                cur = cur.child_by_field_name("type")
+                continue
+            if cur.type == "generic_type":
+                inner = cur.child_by_field_name("type")
+                args = cur.child_by_field_name("type_arguments")
+                name = self._ts_rust_rendered_type_name(inner) if inner else ""
+                if not name:
+                    return ""
+                if args is None:
+                    return name
+                arg_text = "".join(self._ts_get_node_text(args).split())
+                return f"{name}{arg_text}"
+            return ""
+        return ""
+
+    def _ts_enclosing_rust_impl(self, node: "Node") -> Optional["Node"]:
+        """Return the nearest Rust ``impl_item`` that encloses ``node``."""
+        if self.language != "rust":
+            return None
+        cur = node.parent
+        while cur is not None:
+            if cur.type == "impl_item":
+                return cur
+            cur = cur.parent
+        return None
+
+    def _ts_index_rust_impl_method(
+        self,
+        impl: "Node",
+        func_node: "Node",
+        bare: str,
+        index: Dict[str, "Node"],
+        ambiguous: Set[str],
+    ) -> None:
+        """Index one method under its impl block and its type.
+
+        ``Self::`` uses the impl-block key, so an inherent ``impl Svc`` and
+        ``impl ServerHandler for Svc`` do not overwrite each other.
+        ``Box<Svc>`` and ``Box<Other>`` stay distinct. A blanket
+        ``impl<T> Svc<T>`` is also stored as ``Svc.method`` for calls from
+        ``impl Svc<String>``.
+        """
+        index[f"#{impl.start_byte}.{bare}"] = func_node
+        type_node = impl.child_by_field_name("type")
+        if type_node is None:
+            return
+        rendered = self._ts_rust_rendered_type_name(type_node)
+        base = self._ts_rust_impl_type_name(type_node)
+        trait_node = impl.child_by_field_name("trait")
+        if trait_node is not None:
+            trait = self._ts_rust_rendered_type_name(trait_node)
+            owner = rendered or base
+            if owner and trait:
+                self._ts_index_qualified(
+                    index, ambiguous, f"{owner}.{trait}.{bare}", func_node
+                )
+            return
+        if base:
+            self._ts_index_qualified(index, ambiguous, f"{base}.{bare}", func_node)
+        if rendered and rendered != base:
+            self._ts_index_qualified(
+                index, ambiguous, f"{rendered}.{bare}", func_node
+            )
+
+    @staticmethod
+    def _ts_index_qualified(
+        index: Dict[str, "Node"],
+        ambiguous: Set[str],
+        key: str,
+        node: "Node",
+    ) -> None:
+        """Record ``key`` unless another definition already owns it."""
+        if not key or key in ambiguous:
+            return
+        current = index.get(key)
+        if current is None:
+            index[key] = node
+            return
+        if current.start_byte != node.start_byte:
+            ambiguous.add(key)
+            del index[key]
 
     def _ts_build_annotation_index(
         self, root: "Node", func_types: Set[str]
@@ -4417,6 +4545,7 @@ class NativeAnalyzer:
 
         index: Dict[str, "Node"] = {}
         ambiguous_bare: Set[str] = set()
+        ambiguous_qualified: Set[str] = set()
 
         def _index_bare(bare: str, node: "Node") -> None:
             if bare in index and index[bare].start_byte != node.start_byte:
@@ -4430,9 +4559,19 @@ class NativeAnalyzer:
                 if name_node is not None:
                     bare = self._ts_get_node_text(name_node)
                     _index_bare(bare, node)
-                    class_name = self._ts_find_enclosing_class_name(node)
-                    if class_name:
-                        index[f"{class_name}.{bare}"] = node
+                    rust_impl = (
+                        self._ts_enclosing_rust_impl(node)
+                        if self.language == "rust"
+                        else None
+                    )
+                    if rust_impl is not None:
+                        self._ts_index_rust_impl_method(
+                            rust_impl, node, bare, index, ambiguous_qualified
+                        )
+                    else:
+                        class_name = self._ts_find_enclosing_class_name(node)
+                        if class_name:
+                            index[f"{class_name}.{bare}"] = node
                 # ``const handler = async (args) => { ... };``
                 # ``handler = async (args) => { ... };``
                 if node.type in ("arrow_function", "function_expression"):
@@ -4457,6 +4596,11 @@ class NativeAnalyzer:
             amb_store = {}
             self._func_index_ambiguous_cache = amb_store
         amb_store[cache_key] = ambiguous_bare
+        qual_store = getattr(self, "_func_index_ambiguous_qualified_cache", None)
+        if qual_store is None:
+            qual_store = {}
+            self._func_index_ambiguous_qualified_cache = qual_store
+        qual_store[cache_key] = ambiguous_qualified
         return index
 
     # =========================================================================
@@ -5781,35 +5925,175 @@ class NativeAnalyzer:
             return set()
         return store.get(cache_key, set())
 
+    def _ts_ambiguous_qualified_functions(self, root: "Node") -> Set[str]:
+        """Return qualified names that map to more than one definition."""
+        cache_key = (id(root), self.language)
+        store = getattr(self, "_func_index_ambiguous_qualified_cache", None)
+        if store is None:
+            return set()
+        return store.get(cache_key, set())
+
     def _ts_resolve_indexed_function(
         self,
         ref: str,
         index: Dict[str, "Node"],
         ambiguous_bare: Set[str],
         enclosing_type: str = "",
+        enclosing_impl: Optional["Node"] = None,
+        ambiguous_qualified: Optional[Set[str]] = None,
     ) -> Optional[Tuple[str, "Node"]]:
         """Resolve a call reference, preferring qualified names.
 
-        ``Self::foo`` / ``self.foo`` are rewritten to the enclosing impl or
-        class before lookup. A bare name that is also stored under its
-        qualified key (``execute_command`` and ``Svc.execute_command``) is
-        one function, not an ambiguous pair.
+        ``Self::foo`` resolves to the enclosing impl block, then to an
+        inherent method of that type. A value receiver (``client.execute``)
+        may use a unique leaf. A Rust ``::`` path resolves only when its
+        type matches an indexed owner: ``crate::Plugin::new`` and
+        ``Svc::<String>::helper`` match, and ``String::new`` does not.
         """
+        qualified_ambiguous = ambiguous_qualified or set()
+        type_path = "::" in ref.split("(", 1)[0]
         normalized = self._ts_normalize_call_ref(ref)
         if not normalized:
             return None
+        if (
+            self.language == "rust"
+            and enclosing_impl is not None
+            and self._ts_ref_is_self(ref)
+        ):
+            return self._ts_resolve_rust_self_call(
+                normalized, enclosing_impl, index, qualified_ambiguous
+            )
         normalized = self._ts_rewrite_self_call(normalized, enclosing_type)
+        if normalized in qualified_ambiguous:
+            return None
         if normalized in index:
             return normalized, index[normalized]
+        if type_path:
+            return self._ts_resolve_rust_type_path(
+                normalized, index, qualified_ambiguous
+            )
         leaf = normalized.rsplit(".", 1)[-1]
         if not leaf or leaf in ambiguous_bare:
             return None
-        matches = [k for k in index if k == leaf or k.endswith("." + leaf)]
+        matches = [
+            k
+            for k in index
+            if not k.startswith("#")
+            and k not in qualified_ambiguous
+            and (k == leaf or k.endswith("." + leaf))
+        ]
         nodes = {index[k].start_byte for k in matches}
         if len(nodes) != 1:
             return None
         key = max(matches, key=lambda k: (k.count("."), len(k)))
         return key, index[key]
+
+    @staticmethod
+    def _ts_ref_is_self(ref: str) -> bool:
+        """Return whether ``ref`` is ``Self::...`` or ``self.``."""
+        head = ref.split("(", 1)[0].strip().replace("::", ".")
+        return head in {"Self", "self"} or head.startswith(("Self.", "self."))
+
+    def _ts_resolve_rust_self_call(
+        self,
+        normalized: str,
+        impl: "Node",
+        index: Dict[str, "Node"],
+        ambiguous: Set[str],
+    ) -> Optional[Tuple[str, "Node"]]:
+        """Resolve ``Self::method`` to this impl, else an inherent method."""
+        leaf = normalized.rsplit(".", 1)[-1]
+        if not leaf or leaf in {"Self", "self"}:
+            return None
+        impl_key = f"#{impl.start_byte}.{leaf}"
+        if impl_key in index:
+            node = index[impl_key]
+            return self._ts_public_index_key(node, index, ambiguous, leaf), node
+        type_node = impl.child_by_field_name("type")
+        if type_node is None:
+            return None
+        rendered = self._ts_rust_rendered_type_name(type_node)
+        base = self._ts_rust_impl_type_name(type_node)
+        for key in (
+            f"{rendered}.{leaf}" if rendered else "",
+            f"{base}.{leaf}" if base and base != rendered else "",
+        ):
+            if key and key in index and key not in ambiguous:
+                return key, index[key]
+        return None
+
+    def _ts_resolve_rust_type_path(
+        self,
+        normalized: str,
+        index: Dict[str, "Node"],
+        ambiguous: Set[str],
+    ) -> Optional[Tuple[str, "Node"]]:
+        """Resolve ``Type::method`` without binding a different type's leaf."""
+        if "." not in normalized:
+            return None
+        qualifier, leaf = normalized.rsplit(".", 1)
+        parsed = self._ts_rust_path_type(qualifier)
+        if parsed is None or not leaf:
+            return None
+        base, args = parsed
+        if args:
+            specific = f"{base}<{''.join(args.split())}>.{leaf}"
+            if specific in index and specific not in ambiguous:
+                return specific, index[specific]
+        key = f"{base}.{leaf}"
+        if key in index and key not in ambiguous:
+            return key, index[key]
+        return None
+
+    @staticmethod
+    def _ts_rust_path_type(qualifier: str) -> Optional[Tuple[str, Optional[str]]]:
+        """Split a normalized Rust path into ``(type, generic args)``.
+
+        ``crate.Plugin`` and ``Svc.<String>`` are local paths.
+        ``libloading.Library`` and ``std.process.Command`` are not.
+        """
+        path = qualifier
+        args: Optional[str] = None
+        marker = ".<"
+        if marker in path and path.endswith(">"):
+            path, _, arg_text = path.partition(marker)
+            if arg_text.startswith("<") and arg_text.endswith(">"):
+                args = arg_text[1:-1]
+            else:
+                args = arg_text
+        if not path:
+            return None
+        parts = path.split(".")
+        if any(not part for part in parts):
+            return None
+        prefix = parts[:-1]
+        if prefix and prefix[0] not in {"crate", "self", "super"}:
+            return None
+        return parts[-1], args
+
+    @staticmethod
+    def _ts_public_index_key(
+        node: "Node",
+        index: Dict[str, "Node"],
+        ambiguous: Set[str],
+        leaf: str,
+    ) -> str:
+        """Prefer ``Svc.helper`` over an impl-block key for the same node."""
+        keys = [
+            key
+            for key, target in index.items()
+            if not key.startswith("#")
+            and key not in ambiguous
+            and target.start_byte == node.start_byte
+            and (key == leaf or key.endswith("." + leaf))
+        ]
+        qualified = [key for key in keys if "." in key]
+        if qualified:
+            keys = qualified
+        if not keys:
+            return f"#{node.start_byte}.{leaf}"
+        keys.sort(key=lambda key: (key.count("."), len(key)))
+        return keys[0]
 
     @staticmethod
     def _ts_rewrite_self_call(normalized: str, enclosing_type: str) -> str:
@@ -6700,6 +6984,7 @@ class NativeAnalyzer:
             root = self._ts_root(handler_node)
             index = self._ts_build_function_index(root, func_types)
             ambiguous_bare = self._ts_ambiguous_bare_functions(root)
+            ambiguous_qualified = self._ts_ambiguous_qualified_functions(root)
         except Exception as e:  # pragma: no cover - defensive
             self.logger.debug(
                 "Callee enrichment setup failed for handler at byte %s: %s",
@@ -6713,8 +6998,10 @@ class NativeAnalyzer:
         def callee_refs(node: "Node") -> List[str]:
             refs: List[str] = []
             for call in self._ts_extract_calls(node):
-                nm = self._ts_normalize_call_ref(call.get("name") or "")
-                if nm:
+                # Keep ``::`` so a Rust type path is not treated as a value
+                # receiver. ``_ts_resolve_indexed_function`` normalizes it.
+                nm = (call.get("name") or "").strip()
+                if nm and nm != "<unknown>":
                     refs.append(nm)
             return refs
 
@@ -6730,9 +7017,15 @@ class NativeAnalyzer:
             if depth >= 3:
                 continue
             enclosing = self._ts_find_enclosing_class_name(node)
+            enclosing_impl = self._ts_enclosing_rust_impl(node)
             for ref in callee_refs(node):
                 resolved = self._ts_resolve_indexed_function(
-                    ref, index, ambiguous_bare, enclosing
+                    ref,
+                    index,
+                    ambiguous_bare,
+                    enclosing,
+                    enclosing_impl,
+                    ambiguous_qualified,
                 )
                 if resolved is None:
                     continue
@@ -6796,14 +7089,21 @@ class NativeAnalyzer:
         # parameter -> sink data flow.
         if dangerous:
             handler_type = self._ts_find_enclosing_class_name(handler_node)
+            handler_impl = self._ts_enclosing_rust_impl(handler_node)
             for flow in ctx.parameter_flows:
                 reaches = flow.get("reaches_calls") or []
                 for call in reaches:
+                    raw = str(call)
                     norm = self._ts_rewrite_self_call(
-                        self._ts_normalize_call_ref(str(call)), handler_type
+                        self._ts_normalize_call_ref(raw), handler_type
                     )
                     resolved = self._ts_resolve_indexed_function(
-                        norm, index, ambiguous_bare, handler_type
+                        raw,
+                        index,
+                        ambiguous_bare,
+                        handler_type,
+                        handler_impl,
+                        ambiguous_qualified,
                     )
                     if resolved is not None and resolved[0] in dangerous:
                         flow["reaches_external"] = True

@@ -211,6 +211,134 @@ def test_shared_constructor_leaf_is_not_a_subprocess_sink() -> None:
     assert not label.has_eval_exec, "CString::new flagged as dynamic code load"
 
 
+RUST_STRING_NEW_BESIDE_PLUGIN_NEW = """\
+use libloading::Library;
+use rmcp::{tool, tool_router};
+
+struct Plugin;
+
+impl Plugin {
+    fn new(path: &str) -> String {
+        unsafe { Library::new(path).unwrap(); }
+        path.to_string()
+    }
+
+    fn from(path: &str) -> String {
+        unsafe { Library::new(path).unwrap(); }
+        path.to_string()
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Build an empty label.")]
+    fn make_label(&self, plugin_path: String) -> String {
+        let _label = String::new();
+        let _owned = String::from(plugin_path);
+        plugin_path
+    }
+}
+"""
+
+
+RUST_STRING_NEW_BESIDE_BARE_NEW = """\
+use libloading::Library;
+use rmcp::{tool, tool_router};
+
+fn new(path: &str) -> String {
+    unsafe { Library::new(path).unwrap(); }
+    path.to_string()
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Build an empty label.")]
+    fn make_label(&self, plugin_path: String) -> String {
+        let _label = String::new();
+        plugin_path
+    }
+}
+"""
+
+
+def test_rust_foreign_type_path_does_not_resolve_to_local_method() -> None:
+    """``String::new`` must not inherit a local ``Plugin::new`` sink.
+
+    The same leaf also must not mark the tool parameter as reaching that
+    method when the call is ``String::from``.
+    """
+    analyzer = NativeAnalyzer(RUST_STRING_NEW_BESIDE_PLUGIN_NEW, "lib.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_eval_exec is False
+    assert "Plugin.new" not in reachable
+    assert "Plugin.from" not in reachable
+    flow = next(
+        (
+            item
+            for item in ctx.parameter_flows
+            if item.get("parameter_name") == "plugin_path"
+        ),
+        None,
+    )
+    assert flow is not None, ctx.parameter_flows
+    assert flow["reaches_external"] is False, flow
+
+
+RUST_LIBLOADING_PATH_BESIDE_LOCAL_LIBRARY = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Library;
+
+impl Library {
+    fn new(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Load a plugin module from the plugins directory.")]
+    fn load_plugin(&self, plugin_path: String) -> String {
+        unsafe { libloading::Library::new(plugin_path.as_str()).unwrap(); }
+        plugin_path
+    }
+}
+"""
+
+
+def test_rust_external_crate_path_does_not_resolve_to_local_type() -> None:
+    """``libloading::Library::new`` must not bind to a local ``Library::new``."""
+    analyzer = NativeAnalyzer(RUST_LIBLOADING_PATH_BESIDE_LOCAL_LIBRARY, "lib.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is False
+    assert "Library.new" not in (ctx.reachable_functions or [])
+
+
+def test_rust_foreign_type_path_does_not_resolve_to_bare_function() -> None:
+    """``String::new`` must not bind to a top-level ``fn new``."""
+    analyzer = NativeAnalyzer(RUST_STRING_NEW_BESIDE_BARE_NEW, "lib.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_eval_exec is False
+    assert "new" not in (ctx.reachable_functions or [])
+
+
 RUST_SELF_CALLS_THE_SAFE_IMPL = """\
 use std::process::Command;
 use rmcp::{tool, tool_router};

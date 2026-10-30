@@ -1540,6 +1540,356 @@ def test_rust_self_call_resolves_inside_its_own_impl() -> None:
     assert flow["reaches_external"] is True, flow
 
 
+RUST_INSTANCE_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Client;
+
+impl Client {
+    fn execute(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Run a command through the client.")]
+    fn run(&self, command: String) -> i32 {
+        let client = Client;
+        client.execute(&command)
+    }
+}
+"""
+
+
+def test_rust_instance_call_reaches_indexed_method() -> None:
+    """``client.execute`` still targets ``Client.execute``."""
+    analyzer = NativeAnalyzer(RUST_INSTANCE_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "Client.execute" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_TRAIT_IMPL_SELF = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+trait ServerHandler {}
+
+struct Svc;
+struct Other;
+
+impl ServerHandler for Svc {
+    fn helper(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+
+    #[tool(description = "Run a command through the trait impl.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(self, &command)
+    }
+}
+
+impl ServerHandler for Other {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+"""
+
+
+def test_rust_trait_impl_self_uses_the_implementing_type() -> None:
+    """``impl ServerHandler for Svc`` indexes the type, not the trait alone."""
+    analyzer = NativeAnalyzer(RUST_TRAIT_IMPL_SELF, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.ServerHandler.helper" in reachable
+    assert "ServerHandler.helper" not in reachable
+    assert "Other.helper" not in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_GENERIC_IMPL_SELF = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Svc<T> {
+    _marker: std::marker::PhantomData<T>,
+}
+
+struct Other;
+
+impl Other {
+    fn helper(command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+
+impl<T> Svc<T> {
+    fn helper(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+#[tool_router]
+impl Svc<String> {
+    #[tool(description = "Run a command through the generic impl.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(&command)
+    }
+}
+"""
+
+
+def test_rust_generic_impl_self_uses_the_type_name() -> None:
+    """``impl<T> Svc<T>`` indexes ``Svc.helper`` so ``Self::helper`` resolves."""
+    analyzer = NativeAnalyzer(RUST_GENERIC_IMPL_SELF, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.helper" in reachable
+    assert "Other.helper" not in reachable
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_TRAIT_IMPL_DOES_NOT_REPLACE_INHERENT = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+trait ServerHandler {}
+
+struct Svc;
+
+impl ServerHandler for Svc {
+    fn helper(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+#[tool_router]
+impl Svc {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+
+    #[tool(description = "Measure a command string.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(self, &command)
+    }
+}
+"""
+
+
+def test_rust_self_in_inherent_impl_ignores_later_trait_impl() -> None:
+    """A later trait impl must not replace this impl's ``Self::helper``."""
+    analyzer = NativeAnalyzer(RUST_TRAIT_IMPL_DOES_NOT_REPLACE_INHERENT, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is False
+    assert "Svc.helper" in reachable
+    assert "Svc.ServerHandler.helper" not in reachable
+
+
+RUST_INHERENT_IMPL_DOES_NOT_REPLACE_TRAIT = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+trait ServerHandler {}
+
+struct Svc;
+
+#[tool_router]
+impl ServerHandler for Svc {
+    fn helper(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+
+    #[tool(description = "Run a command through the trait impl.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(self, &command)
+    }
+}
+
+impl Svc {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+"""
+
+
+def test_rust_self_in_trait_impl_ignores_later_inherent_impl() -> None:
+    """A later inherent impl must not hide this trait impl's shell call."""
+    analyzer = NativeAnalyzer(RUST_INHERENT_IMPL_DOES_NOT_REPLACE_TRAIT, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.ServerHandler.helper" in reachable
+    assert "Svc.helper" not in reachable
+
+
+RUST_BOX_IMPLS_STAY_DISTINCT = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+trait ServerHandler {}
+
+struct Svc;
+struct Other;
+
+#[tool_router]
+impl ServerHandler for Box<Svc> {
+    fn helper(&self, command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+
+    #[tool(description = "Run a command through the boxed impl.")]
+    fn run(&self, command: String) -> i32 {
+        Self::helper(&command)
+    }
+}
+
+impl ServerHandler for Box<Other> {
+    fn helper(&self, command: &str) -> i32 {
+        command.len() as i32
+    }
+}
+"""
+
+
+def test_rust_box_impls_do_not_share_a_method_key() -> None:
+    """``Box<Svc>`` and ``Box<Other>`` do not overwrite one ``helper``."""
+    analyzer = NativeAnalyzer(RUST_BOX_IMPLS_STAY_DISTINCT, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    reachable = ctx.reachable_functions or []
+    assert ctx.has_subprocess_calls is True
+    assert "Box<Svc>.ServerHandler.helper" in reachable
+    assert "Box<Other>.ServerHandler.helper" not in reachable
+
+
+RUST_CRATE_PATH_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Plugin;
+
+impl Plugin {
+    fn new(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct Svc;
+
+#[tool_router]
+impl Svc {
+    #[tool(description = "Run a command through the local plugin.")]
+    fn run(&self, command: String) -> i32 {
+        crate::Plugin::new(&command)
+    }
+}
+"""
+
+
+def test_rust_crate_path_reaches_local_method() -> None:
+    """``crate::Plugin::new`` reaches the local ``Plugin::new``."""
+    analyzer = NativeAnalyzer(RUST_CRATE_PATH_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "Plugin.new" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
+RUST_TURBOFISH_CALL = """\
+use std::process::Command;
+use rmcp::{tool, tool_router};
+
+struct Svc<T> {
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Svc<T> {
+    fn helper(command: &str) -> i32 {
+        match Command::new("sh").arg("-c").arg(command).status() {
+            Ok(s) => s.code().unwrap_or(1),
+            Err(_) => 1,
+        }
+    }
+}
+
+struct App;
+
+#[tool_router]
+impl App {
+    #[tool(description = "Run a command through the generic helper.")]
+    fn run(&self, command: String) -> i32 {
+        Svc::<String>::helper(&command)
+    }
+}
+"""
+
+
+def test_rust_turbofish_reaches_blanket_impl() -> None:
+    """``Svc::<String>::helper`` reaches ``impl<T> Svc<T>``."""
+    analyzer = NativeAnalyzer(RUST_TURBOFISH_CALL, "shell.rs")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1
+    ctx = caps[0]
+    assert ctx.has_subprocess_calls is True
+    assert "Svc.helper" in (ctx.reachable_functions or [])
+    flow = _flow_for(ctx, "command")
+    assert flow is not None
+    assert flow["reaches_external"] is True, flow
+
+
 RUST_RENAMED_LIBRARY_IMPORT = """\
 use libloading::Library as PluginLib;
 use rmcp::{tool, tool_router};
