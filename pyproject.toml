@@ -29,19 +29,23 @@ dependencies = [
     "uvicorn>=0.29.0",
     "pydantic>=2.6.0",
     "python-dotenv>=1.0.0",
-    # Floor, not exact: 1.93.2 is the first 1.93 release that fixes
-    # CVE-2026-84377 / GHSA-3cv6-jpf6-8222 (authenticated SSRF and
-    # provider-credential exfiltration). An exact pin here forced litellm's
-    # own exact python-dotenv pin on consumers too, which made mcp-scanner
-    # uninstallable alongside anything needing a newer python-dotenv (e.g.
-    # fastmcp>=3.0). Leaving the upper bound open lets the resolver pick a
-    # later litellm with a compatible python-dotenv range instead.
+    # Floor, not exact: an exact pin forces litellm's own exact python-dotenv
+    # pin on consumers, which made mcp-scanner uninstallable alongside anything
+    # needing a newer python-dotenv (e.g. fastmcp>=3.0). Leaving the upper
+    # bound open lets the resolver pick a later compatible litellm.
     #
-    # The same CVE was reintroduced in later minors and re-patched each
-    # time (per the advisory): 1.94.0-1.94.2 (fixed 1.94.3), 1.95.0 (fixed
-    # 1.95.1), 1.96.0-1.96.1 (fixed 1.96.2). Excluding those exact
-    # vulnerable releases so a floor-only resolver can't land on one.
-    "litellm>=1.93.2,!=1.94.0,!=1.94.1,!=1.94.2,!=1.95.0,!=1.96.0,!=1.96.1",
+    # Why 1.106.5:
+    # - GHSA-w4c7-34wj-hqm8 (unauthenticated file read leaks the master key on
+    #   Enterprise proxies) is fixed in 1.103.10, 1.104.8, 1.105.6 and 1.106.5;
+    #   1.106.5 is the first release of the current line with the fix.
+    # - CVE-2026-114612 / GHSA-7hp6-4w63-5g45, GHSA-g5ff-637f-6q2m and
+    #   CVE-2026-84377 / GHSA-3cv6-jpf6-8222 (with its re-introductions in
+    #   1.94.x-1.96.x) are all fixed below this floor.
+    # - Since 1.103.9 litellm sends max_completion_tokens instead of
+    #   max_tokens to GPT-6 reasoning models.
+    # The advisories target the LiteLLM proxy server, which mcp-scanner does
+    # not run, but the floor keeps known-vulnerable releases out of installs.
+    "litellm>=1.106.5",
     "expandvars>=0.12.0",
     # JS/TS parsing for npm behavioral analysis pins the shared tree-sitter
     # runtime to a tested ABI range (other language packs stay >=0.21.0,
