@@ -236,11 +236,9 @@ class TestBehavioralCodeAnalyzerEmitsErrorNotSafe:
 
         try:
             # Patch at the AlignmentLLMClient level so the test
-            # exercises the full chain: orchestrator's batched call
-            # raises -> per-function fallback also raises -> sentinels
-            # propagate through check_alignment_batch -> code_analyzer's
-            # _dispatch_finding routes them to _create_llm_unavailable_finding
-            # -> SecurityFinding(severity="ERROR") emitted.
+            # exercises the full chain: the batched call raises, the
+            # per-function fallback raises, names land on
+            # errored_function_names, and the analyzer emits UNKNOWN.
             async def _boom(_prompt: str, **_kwargs) -> str:
                 raise RuntimeError(
                     "ValidationException: The provided model identifier "
@@ -292,10 +290,9 @@ class TestBehavioralCodeAnalyzerEmitsErrorNotSafe:
     async def test_partial_llm_failure_does_not_corrupt_safe_rows_for_peers(
         self,
     ) -> None:
-        """When the orchestrator returns a sentinel for one function and
-        nothing for another (verified clean), the analyzer must emit
-        exactly one ERROR row and one SAFE row — never an ERROR row that
-        masquerades as SAFE for the unverified function.
+        """When one function is unverified and its peer is clean, the
+        analyzer must emit one UNKNOWN row and one SAFE row. The
+        unverified function must not be reported as SAFE.
         """
         config = Config(llm_provider_api_key="test-key")
         analyzer = BehavioralCodeAnalyzer(config)
@@ -311,9 +308,8 @@ class TestBehavioralCodeAnalyzerEmitsErrorNotSafe:
             captured_contexts: list = []
 
             async def _capture_then_partial(contexts, batch_size=5):
-                # Mirror the new contract: return a sentinel for the
-                # first function and nothing for the second (verified
-                # clean). The first arg in tuple is the analysis dict.
+                # One function comes back marked unavailable. The peer
+                # is omitted, which means verified clean.
                 captured_contexts.extend(contexts)
                 return [
                     (
@@ -342,23 +338,24 @@ class TestBehavioralCodeAnalyzerEmitsErrorNotSafe:
             "sanity: both tools should be sent through check_alignment_batch"
         )
 
-        error_findings = [f for f in findings if f.severity == "ERROR"]
+        unknown_findings = [f for f in findings if f.severity == "UNKNOWN"]
         safe_findings = [f for f in findings if f.severity == "SAFE"]
 
-        assert len(error_findings) == 1, (
-            f"expected exactly one ERROR finding (for the unverified "
-            f"function); got {len(error_findings)}"
+        assert len(unknown_findings) == 1, (
+            f"expected exactly one UNKNOWN finding (for the unverified "
+            f"function); got {len(unknown_findings)}"
         )
         assert len(safe_findings) == 1, (
             f"expected exactly one SAFE finding (for the peer that the "
             f"LLM cleared); got {len(safe_findings)}"
         )
+        assert (unknown_findings[0].details or {}).get("analysis_status") == (
+            "errored"
+        )
 
-        # ERROR and SAFE must be for DIFFERENT functions. Otherwise
-        # we'd have double-counted, which is itself a contract violation.
-        error_func = (error_findings[0].details or {}).get("function_name")
+        unknown_func = (unknown_findings[0].details or {}).get("function_name")
         safe_func = (safe_findings[0].details or {}).get("function_name")
-        assert error_func != safe_func, (
-            f"ERROR and SAFE rows must cover disjoint functions; both "
-            f"named {error_func}"
+        assert unknown_func != safe_func, (
+            f"UNKNOWN and SAFE rows must cover disjoint functions; both "
+            f"named {unknown_func}"
         )

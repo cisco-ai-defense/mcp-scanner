@@ -66,9 +66,9 @@ from .threat_vulnerability_classifier import ThreatVulnerabilityClassifier
 # Legacy marker. The orchestrator does not put this key on results.
 # A failed check returns ``None`` and records the function name in
 # ``errored_function_names``. ``BehavioralCodeAnalyzer`` turns that set
-# into ``severity="UNKNOWN"``. ``_dispatch_finding`` still recognizes
-# the key when a caller injects a sentinel dict, and that path emits
-# ``severity="ERROR"``.
+# into ``severity="UNKNOWN"``. ``_dispatch_finding`` records a dict
+# that still carries this key on ``errored_function_names`` and does
+# not emit a separate ERROR finding.
 LLM_UNAVAILABLE_KEY = "_llm_unavailable"
 
 
@@ -359,8 +359,9 @@ class AlignmentOrchestrator:
             as an ERROR sentinel.
 
             A result dict that already contains :data:`LLM_UNAVAILABLE_KEY`
-            is left for ``BehavioralCodeAnalyzer._dispatch_finding``. This
-            method does not create those dicts.
+            is recorded by ``BehavioralCodeAnalyzer._dispatch_finding`` on
+            ``errored_function_names``. This method does not create those
+            dicts. The analyzer then emits UNKNOWN, not ERROR.
         """
         results = []
 

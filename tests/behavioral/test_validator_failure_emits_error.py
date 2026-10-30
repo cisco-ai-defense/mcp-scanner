@@ -53,7 +53,6 @@ import pytest
 from mcpscanner.config import Config
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.analyzers.behavioral.alignment.alignment_orchestrator import (
-    LLM_UNAVAILABLE_KEY,
     AlignmentOrchestrator,
     AlignmentVerificationError,
 )
