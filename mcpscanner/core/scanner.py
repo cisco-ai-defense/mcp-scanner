@@ -1264,12 +1264,21 @@ class Scanner:
         # MCP 1.x streamable HTTP servers can reject pre-initialize discover
         # with this exact missing-session response. It is safe to retry the
         # legacy initialize handshake only for this known server shape.
+        # MCP TypeScript SDK servers that predate 2026-07-28 reject the
+        # discover request's MCP-Protocol-Version header with -32600
+        # "Bad Request: Unsupported protocol version: 2026-07-28. Supported
+        # versions: ..." and still accept initialize() (mcp.deepwiki.com).
         if code == -32600:
+            message = getattr(rpc_error, "message", str(error))
             return (
                 legacy_http
-                and getattr(rpc_error, "message", str(error))
-                == "Bad Request: Missing session ID"
                 and getattr(rpc_error, "data", None) in (None, "")
+                and (
+                    message == "Bad Request: Missing session ID"
+                    or message.startswith(
+                        "Bad Request: Unsupported protocol version: "
+                    )
+                )
             )
         # MCP 1.x Python stdio servers use this exact generic error for an
         # unknown discover method. A modern server may use -32602 for a real
