@@ -27,16 +27,15 @@ returned policy, that meant Bedrock-hosted Anthropic models (which
 consistently respond with ``{}`` to multi-KB prompts paired with
 ``response_format=json_object``) produced false-clean findings artifacts.
 
-The fix adds :class:`AlignmentVerificationError` and routes validator
-failures through it; the existing outer ``except Exception`` clause
-converts them into the same ``LLM_UNAVAILABLE_KEY`` sentinel that
-transport errors already produced. These tests lock the new contract:
+A failed check returns ``None`` and records the function on
+``errored_function_names``. ``BehavioralCodeAnalyzer`` emits
+``severity="UNKNOWN"`` from that set. These tests lock that contract:
 
-1. Empty string response → sentinel.
-2. ``{}`` response → sentinel.
-3. Non-JSON response → sentinel.
-4. Response missing required fields → sentinel.
-5. Empty batch ``[]`` response → per-function fallback emits sentinels.
+1. Empty string response → errored name, return ``None``.
+2. ``{}`` response → errored name, return ``None``.
+3. Non-JSON response → errored name, return ``None``.
+4. Response missing required fields → errored name, return ``None``.
+5. Empty batch ``[]`` response → per-function errored names.
 6. Batch item missing ``mismatch_detected`` → per-function fallback
    emits sentinels (no silent SAFE pad).
 7. End-to-end: ``BehavioralCodeAnalyzer.analyze`` emits ERROR rows
@@ -308,10 +307,10 @@ class TestValidateBatchNoSilentPadding:
 
 
 class TestBehavioralCodeAnalyzerEmitsErrorOnEmptyJsonResponse:
-    """End-to-end regression for the exact Bedrock-Anthropic failure
-    mode the user encountered: model responds with ``{}`` to every
-    function in the batch, ``BehavioralCodeAnalyzer.analyze`` must emit
-    ``severity="ERROR"`` rows (not SAFE) for each function.
+    """End-to-end regression for the Bedrock-Anthropic failure mode:
+    the model responds with ``{}`` for every function, and
+    ``BehavioralCodeAnalyzer.analyze`` must emit ``severity="UNKNOWN"``
+    rows (not SAFE) for each function.
     """
 
     @pytest.mark.asyncio
@@ -330,10 +329,9 @@ class TestBehavioralCodeAnalyzerEmitsErrorOnEmptyJsonResponse:
 
         try:
             # Simulate the exact bug: every LLM call returns "{}".
-            # Pre-fix: orchestrator silently swallowed → analyzer
-            # synthesised SAFE for both tools. Post-fix: orchestrator
-            # raises AlignmentVerificationError → outer except emits
-            # sentinel → analyzer emits ERROR.
+            # Pre-fix: orchestrator returned None and the analyzer
+            # synthesised SAFE. Post-fix: the name is recorded on
+            # errored_function_names and the analyzer emits UNKNOWN.
             async def _empty(*_args, **_kwargs) -> str:
                 return "{}"
 

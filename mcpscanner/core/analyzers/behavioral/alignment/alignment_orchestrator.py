@@ -63,58 +63,22 @@ from .alignment_response_validator import AlignmentResponseValidator, is_unanaly
 from .threat_vulnerability_classifier import ThreatVulnerabilityClassifier
 
 
-# Marker key on result dicts indicating that LLM verification could NOT
-# complete for a function. Callers (BehavioralCodeAnalyzer) detect this
-# via ``analysis.get(LLM_UNAVAILABLE_KEY)`` and emit a ``severity="ERROR"``
-# finding instead of treating the function as verified-clean. The leading
-# underscore signals "internal sentinel" so it doesn't collide with any
-# real LLM-returned field name.
+# Legacy marker. The orchestrator does not put this key on results.
+# A failed check returns ``None`` and records the function name in
+# ``errored_function_names``. ``BehavioralCodeAnalyzer`` turns that set
+# into ``severity="UNKNOWN"``. ``_dispatch_finding`` still recognizes
+# the key when a caller injects a sentinel dict, and that path emits
+# ``severity="ERROR"``.
 LLM_UNAVAILABLE_KEY = "_llm_unavailable"
 
 
 class AlignmentVerificationError(RuntimeError):
-    """Raised when an LLM response could not be parsed or validated.
+    """Unused by the orchestrator. Kept so existing imports keep working.
 
-    Distinct from a transport/provider failure (which surfaces as the
-    underlying exception from :class:`AlignmentLLMClient`): this signals
-    "the LLM responded, but the response shape is unusable" — empty
-    string, ``{}``, missing required fields, or a non-dict payload.
-
-    Treating those cases as a verification failure (rather than a
-    silent skip) is critical for Bedrock-hosted Anthropic models: under
-    a 73 KB user prompt with ``response_format=json_object`` they
-    consistently reply with ``{}``, and the prior orchestrator silently
-    converted that into a SAFE row. See the module docstring for the
-    full failure taxonomy.
-
-    Caught by ``check_alignment``'s outer ``except Exception`` clause
-    and converted into the same ``LLM_UNAVAILABLE_KEY`` sentinel that
-    transport errors produce, so downstream callers don't need to know
-    the difference between "couldn't reach the LLM" and "LLM responded
-    with garbage".
+    ``check_alignment`` does not raise this. An unusable LLM response
+    adds the function name to ``errored_function_names`` and returns
+    ``None``. Callers emit ``severity="UNKNOWN"`` from that set.
     """
-
-
-def _make_llm_unavailable_result(error: BaseException) -> Dict[str, Any]:
-    """Build a sentinel result for an unrecoverable per-function LLM failure.
-
-    The sentinel satisfies the orchestrator's ``Tuple[Dict, FunctionContext]``
-    return shape but is distinguishable from a real mismatch via
-    ``LLM_UNAVAILABLE_KEY``. ``mismatch_detected`` is set to False so any
-    legacy caller that branches on it still treats the entry as "not a
-    mismatch" — but proper callers should branch on ``LLM_UNAVAILABLE_KEY``
-    first to avoid losing the verification-failure signal.
-
-    The error message is truncated to keep findings.json artifacts small;
-    full traces still land in the analyzer log via ``exc_info=True``.
-    """
-    raw_message = str(error) if error is not None else ""
-    return {
-        LLM_UNAVAILABLE_KEY: True,
-        "mismatch_detected": False,
-        "error_type": type(error).__name__ if error is not None else "Unknown",
-        "error_message": raw_message[:500],
-    }
 
 
 class AlignmentOrchestrator:
@@ -275,13 +239,10 @@ class AlignmentOrchestrator:
             result = self.response_validator.validate(response)
 
             if not result:
-                # The LLM responded but the response was empty / not
-                # JSON / missing required fields. Previously we silently
-                # swallowed this, which let downstream synthesise a
-                # SAFE row for an unverified function. Now we raise so
-                # the outer except clause emits an LLM_UNAVAILABLE
-                # sentinel — same severity="ERROR" treatment as a
-                # transport failure.
+                # Empty, non-JSON, or incomplete response. Record the
+                # function as unverified. Callers read
+                # ``errored_function_names`` and emit UNKNOWN. This is
+                # not turned into an ERROR sentinel.
                 response_excerpt = (
                     (response or "").strip()[:200] if response is not None else ""
                 )
@@ -390,25 +351,16 @@ class AlignmentOrchestrator:
             batch_size: Number of functions per LLM request (default: 5)
 
         Returns:
-            List of ``(analysis_dict, func_context)`` tuples — one per
-            function that either tripped a mismatch OR could not be
-            verified. Verified-clean functions are NOT in the list (their
-            absence is the signal). Each entry is one of:
+            List of ``(analysis_dict, func_context)`` tuples for functions
+            where a mismatch was detected. Verified-clean functions are
+            omitted. Functions that could not be verified are also omitted
+            here; their names are added to ``errored_function_names``.
+            Callers must treat that set as UNKNOWN, not as SAFE and not
+            as an ERROR sentinel.
 
-            * Mismatch tuple — ``analysis_dict`` does not contain
-              :data:`LLM_UNAVAILABLE_KEY` and may include ``threat_name``,
-              ``severity``, etc.
-            * LLM-unavailable sentinel — ``analysis_dict[LLM_UNAVAILABLE_KEY]``
-              is True. The caller MUST emit a ``severity="ERROR"`` finding
-              for this entry instead of falling back to "no mismatch =
-              SAFE", which would mask the verification gap.
-
-            Prior versions of this method silently swallowed batch-level
-            exceptions and returned an empty list, which caused
-            ``BehavioralCodeAnalyzer`` to synthesise SAFE rows for every
-            function as if the LLM had cleared them. The new contract
-            propagates per-function verification failures so that bug is
-            no longer reachable.
+            A result dict that already contains :data:`LLM_UNAVAILABLE_KEY`
+            is left for ``BehavioralCodeAnalyzer._dispatch_finding``. This
+            method does not create those dicts.
         """
         results = []
 

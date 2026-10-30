@@ -280,13 +280,11 @@ class LLMAnalyzer(BaseAnalyzer):
         """Confirm the parsed LLM response carries the expected schema.
 
         Raises ``ValueError`` when the response is structurally unusable
-        (not a dict, missing the ``threat_analysis`` key, or the inner
-        object is missing the two fields downstream code reads). This is
-        the same "couldn't verify" → ``severity=ERROR`` distinction the
-        behavioral path enforces via ``AlignmentVerificationError``:
-        previously a Bedrock ``{}`` short-circuit silently produced an
-        empty findings list, conflating "verified clean" with "couldn't
-        verify".
+        (not a dict, missing ``threat_analysis``, or the two fields
+        downstream code reads have the wrong type). ``analyze`` turns
+        that into an analyzer-infrastructure finding (severity INFO).
+        A Bedrock ``{}`` short-circuit used to produce an empty findings
+        list, which looked the same as a clean verdict.
 
         Notes:
             * A *well-formed* clean response (``threat_analysis`` present
@@ -313,18 +311,25 @@ class LLMAnalyzer(BaseAnalyzer):
                 f"LLM response 'threat_analysis' is not a JSON object "
                 f"(got {type(threat_analysis).__name__})"
             )
-        # The two fields downstream consumers always read.
-        # ``malicious_content_detected`` gates whether to emit findings;
-        # ``primary_threats`` is the list iterated to build them. A
-        # response missing either is ambiguous — could be "clean" or
-        # could be Bedrock-truncated. Treat as "couldn't verify".
-        for required in ("malicious_content_detected", "primary_threats"):
-            if required not in threat_analysis:
-                raise ValueError(
-                    f"LLM response 'threat_analysis' missing required "
-                    f"field '{required}' (got keys: "
-                    f"{sorted(threat_analysis.keys())})"
-                )
+        # ``malicious_content_detected`` gates findings. A missing value
+        # or a non-bool (including the string ``"false"``, which is
+        # truthy) is not a verdict. ``primary_threats`` is iterated; a
+        # null or a string would either look clean or emit one finding
+        # per character.
+        detected = threat_analysis.get("malicious_content_detected")
+        if not isinstance(detected, bool):
+            raise ValueError(
+                "LLM response 'threat_analysis.malicious_content_detected' "
+                f"must be a boolean (got {type(detected).__name__})"
+            )
+        threats = threat_analysis.get("primary_threats")
+        if not isinstance(threats, list) or any(
+            not isinstance(item, str) for item in threats
+        ):
+            raise ValueError(
+                "LLM response 'threat_analysis.primary_threats' "
+                f"must be a list of strings (got {type(threats).__name__})"
+            )
 
     @staticmethod
     def _completion_text(response: Any) -> str:

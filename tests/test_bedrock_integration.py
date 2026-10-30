@@ -207,11 +207,11 @@ class TestBedrockErrorHandling:
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_bedrock_access_denied_error(self, mock_completion):
-        """Bedrock AccessDenied (after retries) must surface as ERROR finding.
+        """Bedrock AccessDenied must surface as an infrastructure finding.
 
         Pre-fix this asserted ``len(findings) == 0`` — that locked the
-        silent-failure contract for Bedrock-specific errors. The new
-        contract emits a ``severity="ERROR"`` sentinel finding so a
+        silent-failure contract for Bedrock-specific errors. The finding
+        is severity INFO with category ANALYZER INFRASTRUCTURE, so a
         misconfigured AWS account or revoked Bedrock model access is
         never silently reported as "tool is clean". Retry behaviour is
         unchanged.
@@ -240,12 +240,12 @@ class TestBedrockErrorHandling:
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_bedrock_throttling_error(self, mock_completion):
-        """Bedrock ThrottlingException (after retries) must surface as ERROR finding.
+        """Bedrock ThrottlingException must surface as an infrastructure finding.
 
-        Same contract update as ``test_bedrock_access_denied_error``:
-        sustained rate-limiting that exhausts retries is reported as a
-        ``severity="ERROR"`` sentinel rather than silently treated as
-        "tool is clean". Retry/backoff behaviour is unchanged.
+        Same contract as ``test_bedrock_access_denied_error``: rate
+        limiting that exhausts retries is reported as severity INFO,
+        category ANALYZER INFRASTRUCTURE, rather than silently treated
+        as "tool is clean". Retry/backoff behaviour is unchanged.
         """
         mock_completion.side_effect = Exception("ThrottlingException: Rate exceeded")
 

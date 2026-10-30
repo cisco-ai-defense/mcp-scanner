@@ -224,3 +224,45 @@ class TestAlignmentPromptBuilderContent:
         assert "SECURITY FLAGS" in prompt
         assert "SUBPROCESS" in prompt
         assert "execute_shell_command(command: String)" in prompt
+
+    def test_default_budget_keeps_framework_out_of_user_role(self) -> None:
+        """The real template is larger than the default alignment cap.
+
+        Parts must be built before the join. Splitting the joined string
+        drops the truncated template and puts the framework back in the
+        user message.
+        """
+        from mcpscanner.core.analyzers.behavioral.alignment import (
+            AlignmentPromptBuilder,
+        )
+        from mcpscanner.core.static_analysis.context_extractor import (
+            FunctionContext,
+        )
+
+        ctx = FunctionContext(
+            name="execute_shell_command",
+            decorator_types=["<annotation>.tool"],
+            imports=[],
+            function_calls=[],
+            assignments=[],
+            control_flow={},
+            parameter_flows=[],
+            constants={},
+            variable_dependencies={},
+            has_file_operations=False,
+            has_network_operations=False,
+            has_subprocess_calls=False,
+            has_eval_exec=False,
+            has_dangerous_imports=False,
+            docstring="Run a command.",
+        )
+        builder = AlignmentPromptBuilder()
+        heading = "# MCP Tool Description Mismatch Analysis"
+        system, user = builder.build_prompt_parts(ctx)
+        assert system.startswith(heading)
+        assert heading not in user
+        assert "execute_shell_command" in user
+        batch_system, batch_user = builder.build_batch_prompt_parts([ctx])
+        assert batch_system.startswith(heading)
+        assert heading not in batch_user
+        assert "execute_shell_command" in batch_user

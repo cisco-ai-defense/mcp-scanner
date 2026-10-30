@@ -42,10 +42,8 @@ __all__ = [
     "AlignmentPromptBuilder",
     "AlignmentLLMClient",
     "AlignmentResponseValidator",
-    # Marker key on orchestrator result dicts that signals LLM
-    # verification could not complete for a function. SDK consumers
-    # that read raw orchestrator output (rather than going through
-    # BehavioralCodeAnalyzer's SecurityFinding wrapping) need this to
-    # distinguish "verified clean" from "couldn't verify".
+    # Legacy marker. The orchestrator records failures on
+    # ``errored_function_names`` and returns None. It does not put
+    # this key on result dicts. A missing result is not a sentinel.
     "LLM_UNAVAILABLE_KEY",
 ]

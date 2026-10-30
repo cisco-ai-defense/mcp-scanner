@@ -24,9 +24,10 @@ parser failure, every empty / ``{}`` / missing-fields response from
 the model resolved to the same outcome: an empty findings list.
 Downstream code interpreted "no findings" as "the LLM cleared this
 tool", so latent provider failures looked identical to honest clean
-verdicts. The behavioral path had the exact same bug class and was
-fixed via the ``LLM_UNAVAILABLE_KEY`` sentinel
+verdicts. The behavioral path records the function on
+``errored_function_names`` and the analyzer emits UNKNOWN
 (see ``tests/behavioral/test_validator_failure_emits_error.py``).
+This analyzer emits severity INFO, category ANALYZER INFRASTRUCTURE.
 
 Separately, the framework prompts (~19 KB combined) used to be
 concatenated into the ``user`` message instead of the ``system``
@@ -39,8 +40,8 @@ These tests lock the new contract:
 
 1. Each garbage-response shape (``{}``, ``""``, missing
    ``threat_analysis``, non-dict, transport error, parser error)
-   yields exactly one ``severity="ERROR"`` finding with
-   ``details.llm_unavailable=True`` — never ``[]``.
+   yields exactly one analyzer-infrastructure finding
+   (severity INFO) — never ``[]``.
 2. Honest clean and honest malicious responses still behave correctly
    (negative controls).
 3. The framework prompts ride in the ``system`` role and the
@@ -105,7 +106,7 @@ def analyzer() -> LLMAnalyzer:
 
 class TestGarbageResponseEmitsErrorFinding:
     """Each shape of "LLM responded with garbage" must yield exactly
-    one ``severity="ERROR"`` finding for the affected tool — never
+    one analyzer-infrastructure finding (severity INFO) — never
     ``[]``, which would silently look like a clean verdict.
     """
 
@@ -125,6 +126,21 @@ class TestGarbageResponseEmitsErrorFinding:
             (
                 '{"threat_analysis": {"malicious_content_detected": false}}',
                 "missing_primary_threats",
+            ),
+            (
+                '{"threat_analysis": {"malicious_content_detected": true, '
+                '"primary_threats": null}}',
+                "null_primary_threats",
+            ),
+            (
+                '{"threat_analysis": {"malicious_content_detected": true, '
+                '"primary_threats": "DATA EXFILTRATION"}}',
+                "string_primary_threats",
+            ),
+            (
+                '{"threat_analysis": {"malicious_content_detected": "false", '
+                '"primary_threats": []}}',
+                "string_false_flag",
             ),
             ("[]", "non_dict_root_array"),
             ('"just a string"', "non_dict_root_string"),
@@ -464,11 +480,11 @@ class TestValidateThreatAnalysisShape:
     * Root must be a dict.
     * Root must have a ``threat_analysis`` key.
     * ``threat_analysis`` must be a dict.
-    * ``threat_analysis`` must contain ``malicious_content_detected``
-      AND ``primary_threats``.
+    * ``malicious_content_detected`` must be a bool.
+    * ``primary_threats`` must be a list of strings.
 
-    Anything else raises ``ValueError`` so the caller's outer except
-    routes it to ``_create_llm_unavailable_finding``.
+    Anything else raises ``ValueError``. ``analyze`` turns that into
+    an analyzer-infrastructure finding (severity INFO).
     """
 
     def test_well_formed_response_passes(self) -> None:
@@ -511,6 +527,33 @@ class TestValidateThreatAnalysisShape:
             (
                 {"threat_analysis": {"malicious_content_detected": False}},
                 "missing_primary_threats",
+            ),
+            (
+                {
+                    "threat_analysis": {
+                        "malicious_content_detected": True,
+                        "primary_threats": None,
+                    }
+                },
+                "null_primary_threats",
+            ),
+            (
+                {
+                    "threat_analysis": {
+                        "malicious_content_detected": True,
+                        "primary_threats": "DATA EXFILTRATION",
+                    }
+                },
+                "string_primary_threats",
+            ),
+            (
+                {
+                    "threat_analysis": {
+                        "malicious_content_detected": "false",
+                        "primary_threats": [],
+                    }
+                },
+                "string_false_flag",
             ),
             ([], "root_is_list"),
             ("string", "root_is_string"),

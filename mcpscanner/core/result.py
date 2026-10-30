@@ -346,6 +346,7 @@ def process_scan_results(
         "MEDIUM": 0,
         "LOW": 0,
         "INFO": 0,
+        "ERROR": 0,
         "SAFE": 0,
         "UNKNOWN": 0,
     }
@@ -378,6 +379,7 @@ def process_scan_results(
         "MEDIUM": 0,
         "LOW": 0,
         "INFO": 0,
+        "ERROR": 0,
         "SAFE": 0,
         "UNKNOWN": 0,
     }
@@ -541,7 +543,8 @@ def get_highest_severity(severities: List[str]) -> str:
     Severity model:
     - "UNKNOWN" represents "not yet analyzed" / "analyzer didn't run". It is the
       pre-analysis default and is *displaced* by any concrete severity
-      ("HIGH", "MEDIUM", "LOW", "INFO", "SAFE") produced by an analyzer.
+      ("HIGH", "MEDIUM", "LOW", "INFO", "ERROR", "SAFE") produced by an
+      analyzer. ERROR ranks above SAFE and below INFO.
     - When concrete severities are present, the highest among them wins.
     - When the list is empty or contains only "UNKNOWN" entries, the result is
       "UNKNOWN" (nothing concrete to roll up).
@@ -553,10 +556,11 @@ def get_highest_severity(severities: List[str]) -> str:
         str: The highest severity level.
     """
     severity_order = {
-        "HIGH": 5,
-        "MEDIUM": 4,
-        "LOW": 3,
-        "INFO": 2,
+        "HIGH": 6,
+        "MEDIUM": 5,
+        "LOW": 4,
+        "INFO": 3,
+        "ERROR": 2,
         "SAFE": 1,
     }
 

@@ -350,7 +350,14 @@ def _build_behavioral_results(
         src_file = details.get("source_file", source_path)
         findings_by_key.setdefault((src_file, func_name), []).append(finding)
 
-    severity_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "SAFE": 0, "UNKNOWN": 0}
+    severity_order = {
+        "HIGH": 4,
+        "MEDIUM": 3,
+        "LOW": 2,
+        "ERROR": 1,
+        "SAFE": 0,
+        "UNKNOWN": 0,
+    }
     results: List[Dict[str, Any]] = []
 
     analyzed_functions = getattr(analyzer, "analyzed_functions", []) or []

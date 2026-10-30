@@ -30,13 +30,13 @@ unreachable.
 
 These tests lock the new contract:
 
-1. ``check_alignment`` returns a ``(sentinel, ctx)`` tuple — not ``None``
-   — when ``verify_alignment`` raises.
-2. ``check_alignment_batch`` emits one sentinel per function in the batch
-   when the batch path fails, instead of dropping the batch silently.
-3. End-to-end: ``BehavioralCodeAnalyzer.analyze`` returns ``severity="ERROR"``
-   findings (one per function) and zero ``severity="SAFE"`` findings when
-   the LLM provider is unreachable.
+1. ``check_alignment`` returns ``None`` and records the function on
+   ``errored_function_names`` when ``verify_alignment`` raises.
+2. ``check_alignment_batch`` records every function in the failed batch
+   on ``errored_function_names`` instead of dropping the batch silently.
+3. End-to-end: ``BehavioralCodeAnalyzer.analyze`` returns
+   ``severity="UNKNOWN"`` findings (one per function) and zero
+   ``severity="SAFE"`` findings when the LLM provider is unreachable.
 """
 
 import os
@@ -214,11 +214,10 @@ class TestCheckAlignmentBatchEmitsSentinelOnFailure:
 
 class TestBehavioralCodeAnalyzerEmitsErrorNotSafe:
     """End-to-end regression: when the LLM provider is unreachable,
-    ``BehavioralCodeAnalyzer.analyze`` must emit ``severity="ERROR"``
+    ``BehavioralCodeAnalyzer.analyze`` must emit ``severity="UNKNOWN"``
     rows for every scanned function and zero ``severity="SAFE"`` rows.
-    This is the exact bug the user reported: the prior implementation
-    silently emitted SAFE for every function on Bedrock validation
-    failures, producing false-negative findings artifacts.
+    The prior implementation silently emitted SAFE for every function
+    when verification failed.
     """
 
     @pytest.mark.asyncio
