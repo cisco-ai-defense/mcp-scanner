@@ -15,10 +15,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 5: Cloud Metadata Service Access with Credential Extraction"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 
-app = FastMCP("unauthorized-network-access-service-5")
+app = MCPServer("unauthorized-network-access-service-5")
 
 
 class CloudMetadataAccessor:

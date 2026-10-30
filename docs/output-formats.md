@@ -49,7 +49,7 @@ This section documents the complete JSON structure produced by `--format raw`, f
 |-------|------|-------------|
 | `server_url` | `string` | Label identifying the scan target. Varies by mode (see [Mode-Specific Variations](#mode-specific-variations)). |
 | `scan_results` | `array` | List of per-item result objects (tools, prompts, resources). |
-| `requested_analyzers` | `array<string>` | Analyzers that were requested for this scan. Values: `"api"`, `"yara"`, `"llm"`, `"behavioral"`, `"virustotal"`, `"readiness"`. |
+| `requested_analyzers` | `array<string>` | Analyzers requested for this scan, such as `"api"`, `"yara"`, `"llm"`, `"behavioral"`, `"virustotal"`, `"readiness"`, or `"prompt_defense"`. |
 
 ### Scan Result Object
 
@@ -72,9 +72,9 @@ Each element in `scan_results` has these common fields plus type-specific fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | `string` | Scan status. Typically `"completed"`. |
-| `is_safe` | `boolean` | `true` if no threats were detected, `false` otherwise. |
-| `findings` | `object` | Per-analyzer findings (see [Analyzer Findings Object](#analyzer-findings-object)). Empty `{}` when safe. |
+| `status` | `string` | `"completed"` when analysis completed, `"partial"` when at least one analyzer invocation succeeded and another failed, `"failed"` when all invocations failed, or `"skipped"` when no analysis ran. |
+| `is_safe` | `boolean \| null` | `true` only when analysis completed with no findings; `false` when findings exist, even if coverage is partial; `null` when safety is unknown because coverage is incomplete. |
+| `findings` | `object` | Per-analyzer results (see [Analyzer Findings Object](#analyzer-findings-object)). Includes failed analyzers with `"UNKNOWN"` severity. |
 
 #### Type-Specific Fields
 
@@ -92,6 +92,7 @@ The `item_type` field indicates the scanned item type, and determines which addi
 |-------|------|--------------|-------------|
 | `server_name` | `string` | Config-based scans | Name of the server from the MCP config file |
 | `server_source` | `string` | Config-based scans | Path to the config file that defined this server |
+| `analyzer_errors` | `array<object>` | Analyzer invocation failed | Each entry includes `analyzer`, `content_type`, and a sanitized `message`. |
 
 ### Analyzer Findings Object
 
@@ -101,13 +102,13 @@ The `findings` object is keyed by analyzer name in the format `{analyzer}_analyz
 {
   "findings": {
     "yara_analyzer": { ... },
-    "llm_analyzer": { ... },
-    "api_analyzer": { ... }
+    "llm_analyzer": { ... }
   }
 }
 ```
 
 Possible keys: `api_analyzer`, `yara_analyzer`, `llm_analyzer`, `virustotal_analyzer`, `behavioral_analyzer`, `readiness_analyzer`, `prompt_defense_analyzer`.
+Only analyzers that ran, produced findings, or failed appear. An analyzer that was not requested does not get a `SAFE` entry.
 
 Each analyzer entry has this structure:
 
@@ -123,11 +124,13 @@ Each analyzer entry has this structure:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `severity` | `string` | Rolled-up severity: `"HIGH"`, `"MEDIUM"`, `"LOW"`, or `"SAFE"`. Highest severity across all findings for this analyzer wins. |
+| `severity` | `string` | Rolled-up severity: `"HIGH"`, `"MEDIUM"`, `"LOW"`, `"INFO"`, `"SAFE"`, or `"UNKNOWN"`. Findings retain their severity after a later invocation fails. |
 | `threat_names` | `array<string>` | List of distinct threat types detected (e.g., `"PROMPT INJECTION"`, `"CODE EXECUTION"`, `"DATA EXFILTRATION"`). |
 | `threat_summary` | `string` | Human-readable summary. Either the analyzer's own summary or auto-generated from `threat_names`. `"No threats detected"` when safe. |
 | `total_findings` | `integer` | Number of individual findings from this analyzer. `0` when safe. |
 | `mcp_taxonomies` | `array<object>` | List of unique MCP taxonomy entries (see below). Only present when findings have taxonomy mappings. |
+| `status` | `string` | `"error"` when an analyzer failed without findings; `"partial"` when it produced findings before an invocation failed. Present only for these failure cases. |
+| `errors` | `array<object>` | Sanitized invocation errors for this analyzer. Present when it failed. |
 
 #### Severity Rollup Logic
 
@@ -137,7 +140,39 @@ The `severity` field is the **maximum** severity across all findings for that an
 HIGH > MEDIUM > LOW > SAFE
 ```
 
-An analyzer with no findings has `severity: "SAFE"`.
+An analyzer that completed with no findings has `severity: "SAFE"`. An analyzer that failed with no findings has `severity: "UNKNOWN"` and `status: "error"`.
+
+### Incomplete Scan Example
+
+```json
+{
+  "status": "failed",
+  "is_safe": null,
+  "analyzer_errors": [
+    {
+      "analyzer": "YARA",
+      "content_type": "description",
+      "message": "RuntimeError during analysis"
+    }
+  ],
+  "findings": {
+    "yara_analyzer": {
+      "severity": "UNKNOWN",
+      "total_findings": 0,
+      "status": "error",
+      "errors": [
+        {
+          "analyzer": "YARA",
+          "content_type": "description",
+          "message": "RuntimeError during analysis"
+        }
+      ]
+    }
+  }
+}
+```
+
+If one YARA content slice succeeds and another fails, the scan and analyzer statuses are `"partial"`. YARA remains in the result's analyzer list, and any findings remain visible.
 
 ### MCP Taxonomy Object
 
@@ -275,7 +310,20 @@ For the full taxonomy reference, see [MCP Threats Taxonomy](mcp-threats-taxonomy
       "resource_name": "report.csv",
       "resource_mime_type": "text/csv",
       "item_type": "resource",
-      "findings": {}
+      "findings": {
+        "yara_analyzer": {
+          "severity": "SAFE",
+          "threat_names": [],
+          "threat_summary": "No threats detected",
+          "total_findings": 0
+        },
+        "llm_analyzer": {
+          "severity": "SAFE",
+          "threat_names": [],
+          "threat_summary": "No threats detected",
+          "total_findings": 0
+        }
+      }
     }
   ],
   "requested_analyzers": ["yara", "llm"]
@@ -315,15 +363,15 @@ When using `--raw` with `known-configs`, the output is a map of config paths to 
 
 ## CI/CD Integration Examples
 
-### Count unsafe tools
+### Block unsafe or incomplete tools
 
 ```bash
-UNSAFE=$(mcp-scanner --format raw --analyzers yara \
+NOT_CLEARED=$(mcp-scanner --format raw --analyzers yara \
   stdio --stdio-command uvx --stdio-arg mcp-server-fetch \
-  | jq '[.scan_results[] | select(.is_safe == false)] | length')
+  | jq '[.scan_results[] | select(.is_safe != true)] | length')
 
-if [ "$UNSAFE" -gt 0 ]; then
-  echo "Found $UNSAFE unsafe tools"
+if [ "$NOT_CLEARED" -gt 0 ]; then
+  echo "Found $NOT_CLEARED unsafe or incomplete tools"
   exit 1
 fi
 ```
@@ -366,8 +414,9 @@ mcp-scanner --format raw --analyzers yara,llm \
     target: .server_url,
     analyzers: .requested_analyzers,
     total_items: (.scan_results | length),
-    safe: [.scan_results[] | select(.is_safe)] | length,
+    safe: [.scan_results[] | select(.is_safe == true)] | length,
     unsafe: [.scan_results[] | select(.is_safe == false)] | length,
+    incomplete: [.scan_results[] | select(.is_safe == null)] | length,
     high_severity: [.scan_results[].findings | to_entries[] | select(.value.severity == "HIGH")] | length,
     all_threats: [.scan_results[].findings | to_entries[] | .value.threat_names[]?] | unique
   }'

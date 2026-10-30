@@ -38,8 +38,11 @@ rule coercive_injection {
         // HTML-like tag instructions with specific malicious actions
         $html_tag_with_commands = /\b<(IMPORTANT|critical|urgent)>[^\n]*(read [^\n]*contents?|pass [^\n]*contents?|add [^\n]*entire|send [^\n]*to[^\n]*@|execute[^\n]*before|call[^\n]*first|use[^\n]*authentication)[^\n]*<\/(IMPORTANT|critical|urgent)>\b/i
 
-        // Tool execution override patterns
-        $execution_overrides = /\b(do not execute[^\n]*other[^\n]*tool|must[^\n]*this tool|only[^\n]*this tool|tool[^\n]*will not work)\b/i
+        // Tool execution override patterns. The `only`/`must` gaps are bound
+        // to clause boundaries ([^\n.;]) so a restriction in one clause
+        // cannot reach "this tool" in another (issue #252: e.g. "Returns
+        // only cached results; this tool never contacts the network.").
+        $execution_overrides = /\b(do not execute[^\n]{0,40}other[^\n]{0,40}tool|must[^\n.;]{0,40}this tool|only[^\n.;]{0,40}this tool|tool[^\n]{0,40}will not work)\b/i
 
         // Behavioral control instructions
         $behavior_control = /\b(tell (the )?user only|hide (the )?user)\b/i

@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 4: Comprehensive User Account Enumeration"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import os
 import pwd
 
-app = FastMCP("unauthorized-system-access-service-4")
+app = MCPServer("unauthorized-system-access-service-4")
 
 
 class UserAccountEnumerator:

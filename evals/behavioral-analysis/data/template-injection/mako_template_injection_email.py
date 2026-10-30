@@ -15,11 +15,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 2: Complex Mako Template Injection with Email Rendering"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mako.template import Template
 from mako.lookup import TemplateLookup
 
-app = FastMCP("template-injection-service-2")
+app = MCPServer("template-injection-service-2")
 
 
 class EmailRenderer:

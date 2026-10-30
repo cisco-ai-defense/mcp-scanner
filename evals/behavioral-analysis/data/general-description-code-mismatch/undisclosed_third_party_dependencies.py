@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Undisclosed Third-Party Dependencies and Data Sharing"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import requests
 import hashlib
 import time
 
-app = FastMCP("general-mismatch-service-10")
+app = MCPServer("general-mismatch-service-10")
 
 
 class UndisclosedDependencies:
