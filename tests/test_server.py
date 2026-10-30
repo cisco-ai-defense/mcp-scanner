@@ -213,11 +213,10 @@ class TestServerMain:
                 with patch.dict("os.environ", {}, clear=True):
                     main()
 
-                    # Verify debug logging was configured
                     mock_basic_config.assert_called_once_with(
                         level=logging.DEBUG,
                         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                        stream=sys.stdout,
+                        stream=sys.stderr,
                     )
 
                     # Verify debug message was logged
@@ -234,11 +233,10 @@ class TestServerMain:
                 with patch.dict("os.environ", {}, clear=True):
                     main()
 
-                    # Verify info logging was configured
                     mock_basic_config.assert_called_once_with(
                         level=logging.WARNING,
                         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                        stream=sys.stdout,
+                        stream=sys.stderr,
                     )
 
     def test_main_all_keys_configured(
@@ -328,11 +326,10 @@ class TestServerMain:
                             reload=True,
                         )
 
-                        # Verify debug logging
                         mock_basic_config.assert_called_once_with(
                             level=logging.DEBUG,
                             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                            stream=sys.stdout,
+                            stream=sys.stderr,
                         )
         finally:
             Path(env_file).unlink(missing_ok=True)

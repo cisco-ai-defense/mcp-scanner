@@ -29,6 +29,12 @@ from litellm import acompletion
 from ...config.config import Config
 from ...config.constants import MCPScannerConstants
 from ...threats.threats import LLM_THREAT_MAPPING
+from ...utils.analyzer_errors import (
+    ErrorKind,
+    build_infrastructure_error_finding,
+    classify_analyzer_error,
+    retry_transient_async,
+)
 from .base import BaseAnalyzer, SecurityFinding
 
 
@@ -148,30 +154,31 @@ class LLMAnalyzer(BaseAnalyzer):
             self.logger.error(f"Prompt file not found: {prompt_file_name}")
             raise
         except Exception as e:
-            self.logger.error(f"Failed to load prompt {prompt_file_name}: {e}")
+            self.logger.error("Failed to load LLM prompt: %s", type(e).__name__)
             raise IOError(f"Could not load prompt {prompt_file_name}: {e}")
 
     def _create_threat_analysis_prompt_parts(
         self,
-        tool_name: str,
+        entity_name: str,
         description: str = None,
         parameters: Dict[str, Any] = None,
+        entity_kind: str = "tool",
+        body_text: str = None,
         _context: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, str, bool]:
-        """Build the threat-analysis prompt as a (system, user, injection_flag) split.
+        """Build the threat-analysis prompt as (system, user, injection_flag).
 
-        The framework prompts (~19 KB combined: ``boilerplate_protection_rule_prompt.md``
-        plus ``threat_analysis_prompt.md``) used to be concatenated into the
-        ``user`` message. That works against most providers but is the
-        wrong role assignment — the framework is static instructions, the
-        user message should carry only the per-call evidence. Splitting
-        it brings LLMAnalyzer in line with the behavioral path's
-        Bedrock-friendly shape (see
-        ``AlignmentPromptBuilder.build_prompt_parts``).
+        The framework prompts stay in the system role. The user role
+        carries only the delimited evidence. Resource and prompt scans
+        use ``body_text`` instead of a tool parameter list.
 
-        The two halves share the same random delimiter id so the
-        protection rules in the system prompt can reference the exact
-        delimited block emitted in the user prompt.
+        Args:
+            entity_name: Name of the tool, resource, or prompt
+            description: Description or list metadata (optional)
+            parameters: Tool parameters schema (optional; ignored for resource/prompt)
+            entity_kind: ``tool``, ``resource``, or ``prompt``
+            body_text: Resource/prompt body from ``read_resource`` / ``get_prompt``
+            _context: Additional context (unused)
 
         Returns:
             Tuple ``(system_prompt, user_payload, prompt_injection_detected)``:
@@ -189,25 +196,39 @@ class LLMAnalyzer(BaseAnalyzer):
         start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
         end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
 
-        if parameters:
-            param_list = []
-            for param_name, param_info in parameters.items():
-                param_type = param_info.get("type", "unknown")
-                param_desc = param_info.get("description", "No description")
-                param_list.append(f"  - {param_name} ({param_type}): {param_desc}")
-            params_text = "\n".join(param_list)
+        if entity_kind in ("resource", "prompt"):
+            label = "Resource" if entity_kind == "resource" else "Prompt"
+            analysis_content = f"{label} Name: {entity_name}\n"
+            if description and description.strip():
+                analysis_content += f"Metadata:\n{description.strip()}\n"
+            analysis_content += f"Body:\n{(body_text or '').strip()}\n"
+            analysis_content += "Parameters:\n  Not applicable\n"
         else:
-            params_text = "  No parameters"
+            # Format parameters for display
+            if parameters:
+                param_list = []
+                for param_name, param_info in parameters.items():
+                    param_type = param_info.get("type", "unknown")
+                    param_desc = param_info.get("description", "No description")
+                    param_list.append(
+                        f"  - {param_name} ({param_type}): {param_desc}"
+                    )
+                params_text = "\n".join(param_list)
+            else:
+                params_text = "  No parameters"
 
-        analysis_content = f"Tool Name: {tool_name}\n"
-        if description:
-            analysis_content += f"Description: {description}\n"
-        analysis_content += f"Parameters:\n{params_text}"
+            analysis_content = f"Tool Name: {entity_name}\n"
+            if description:
+                analysis_content += f"Description: {description}\n"
+            analysis_content += f"Parameters:\n{params_text}"
 
         prompt_injection_detected = False
         if start_tag in analysis_content or end_tag in analysis_content:
             self.logger.warning(
-                f"Potential prompt injection detected in tool {tool_name}: Input contains delimiter tags"
+                "Potential prompt injection detected in %s %s: "
+                "Input contains delimiter tags",
+                entity_kind,
+                entity_name,
             )
             prompt_injection_detected = True
 
@@ -230,6 +251,8 @@ class LLMAnalyzer(BaseAnalyzer):
         tool_name: str,
         description: str = None,
         parameters: Dict[str, Any] = None,
+        entity_kind: str = "tool",
+        body_text: str = None,
         _context: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, bool]:
         """Backward-compatible wrapper around :meth:`_create_threat_analysis_prompt_parts`.
@@ -244,6 +267,8 @@ class LLMAnalyzer(BaseAnalyzer):
                 tool_name,
                 description=description,
                 parameters=parameters,
+                entity_kind=entity_kind,
+                body_text=body_text,
                 _context=_context,
             )
         )
@@ -301,47 +326,41 @@ class LLMAnalyzer(BaseAnalyzer):
                     f"{sorted(threat_analysis.keys())})"
                 )
 
-    def _create_llm_unavailable_finding(
-        self, tool_name: str, error: BaseException
-    ) -> SecurityFinding:
-        """Build a ``severity=ERROR`` sentinel finding for verification failures.
+    @staticmethod
+    def _completion_text(response: Any) -> str:
+        """Extract non-empty text from a LiteLLM chat completion."""
+        try:
+            content = response.choices[0].message.content
+        except (AttributeError, IndexError, TypeError):
+            return ""
+        return (content or "").strip()
 
-        Mirrors the behavioral path's ``LLM_UNAVAILABLE_KEY`` /
-        ``_create_llm_unavailable_finding`` pattern so consumers can
-        treat unverified-tool rows uniformly across the LLM and
-        behavioral analyzers. The finding:
+    @staticmethod
+    def _completion_finish_reason(response: Any) -> str:
+        try:
+            reason = response.choices[0].finish_reason
+        except (AttributeError, IndexError, TypeError):
+            return ""
+        return str(reason or "")
 
-          * Has ``severity="ERROR"`` so it never collapses into the
-            ``HIGH``/``MEDIUM``/``LOW``/``SAFE`` aggregate buckets.
-          * Has an empty ``threat_category`` so it doesn't pollute
-            threat-name aggregates.
-          * Marks ``details.llm_unavailable=True`` so consumers can
-            filter/route ERROR rows separately from any future
-            ERROR-severity sources.
-          * Carries the truncated error message so operators can debug
-            without re-running with logging enabled.
-        """
-        error_message = str(error) if error is not None else ""
-        # Truncate to keep findings.json artefacts small. Full traces
-        # still go to the analyzer log via ``exc_info=True``.
-        truncated = error_message[:500]
-        return SecurityFinding(
-            severity="ERROR",
-            summary=(
-                f"LLM verification failed for tool '{tool_name}': "
-                f"{error_message[:200]}"
-            ),
-            analyzer="LLM",
-            threat_category="",
-            details={
-                "tool_name": tool_name,
-                "llm_unavailable": True,
-                "error_type": (
-                    type(error).__name__ if error is not None else "Unknown"
-                ),
-                "error_message": truncated,
-            },
-        )
+    @staticmethod
+    def _extract_mcp_entity_body(content: str, entity_kind: str) -> str:
+        """Extract analyzable body text from scanner-formatted resource/prompt content."""
+        if not content:
+            return ""
+        if entity_kind == "resource":
+            marker = "Content:\n"
+        elif entity_kind == "prompt":
+            marker = "Messages:\n"
+        else:
+            return content.strip()
+        idx = content.find(marker)
+        if idx == -1:
+            # No rendered messages or resource content. The formatted
+            # string is metadata only; returning it would present name,
+            # description, and arguments as the body.
+            return ""
+        return content[idx + len(marker) :].strip()
 
     def _parse_response(self, response_content: str) -> Dict[str, Any]:
         """Parse the LLM response and extract analysis results.
@@ -394,17 +413,21 @@ class LLMAnalyzer(BaseAnalyzer):
             return json.loads(json_content)
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Failed to parse LLM response as JSON: {e}")
+            self.logger.error(
+                "Failed to parse LLM response as JSON: %s", type(e).__name__
+            )
             self.logger.error(
                 f"Response content length: {len(response_content)} characters"
             )
-            raise ValueError(f"Invalid JSON in LLM response: {e}")
+            raise ValueError("Invalid JSON in LLM response") from e
         except Exception as e:
-            self.logger.error(f"Unexpected error parsing LLM response: {e}")
+            self.logger.error(
+                "Unexpected error parsing LLM response: %s", type(e).__name__
+            )
             self.logger.error(
                 f"Response content length: {len(response_content)} characters"
             )
-            raise ValueError(f"Failed to parse LLM response: {e}")
+            raise ValueError("Failed to parse LLM response") from e
 
     def _create_findings_from_threat_analysis(
         self, analysis_result: Dict[str, Any], tool_name: str
@@ -482,28 +505,56 @@ class LLMAnalyzer(BaseAnalyzer):
         Raises:
             Exception: If the LLM API request fails.
         """
-        tool_name = (
-            context.get("tool_name", "Unknown Tool") if context else "Unknown Tool"
-        )
+        if context:
+            entity_name = (
+                context.get("tool_name")
+                or context.get("prompt_name")
+                or context.get("resource_name")
+            )
+        else:
+            entity_name = None
+        entity_name = entity_name or "Unknown Tool"
+        if context and context.get("entity_type") == "resource":
+            entity_kind = "resource"
+        elif context and (
+            context.get("prompt_name") or context.get("entity_type") == "prompt"
+        ):
+            entity_kind = "prompt"
+        else:
+            entity_kind = "tool"
 
         try:
             # Parse the content to extract tool information
             tool_info = self._parse_tool_content(content, context)
             findings = []
 
-            # Threat Analysis: Analyze tool name, description, and parameters together
-            if tool_info.get("description") or tool_info.get("parameters"):
-                # Use the (system, user) split — keeps the ~19 KB
-                # framework prompts in the system role and only the
-                # delimited per-tool evidence in the user role. This
-                # matches the behavioral path and keeps Bedrock from
-                # mistaking the framework for a chat turn it has to
-                # respond *to*.
+            body_text = ""
+            metadata_text = ""
+            if entity_kind in ("resource", "prompt"):
+                body_text = self._extract_mcp_entity_body(content, entity_kind)
+                metadata_text = (
+                    content.split("Content:\n")[0].split("Messages:\n")[0].strip()
+                )
+            has_tool_fields = tool_info.get("description") or tool_info.get(
+                "parameters"
+            )
+            has_body = bool(body_text.strip())
+            if has_tool_fields or has_body:
                 system_prompt, user_payload, prompt_injection_detected = (
                     self._create_threat_analysis_prompt_parts(
-                        tool_name,
-                        description=tool_info.get("description"),
+                        entity_name,
+                        description=(
+                            metadata_text
+                            if entity_kind in ("resource", "prompt")
+                            else tool_info.get("description")
+                        ),
                         parameters=tool_info.get("parameters"),
+                        entity_kind=entity_kind,
+                        body_text=(
+                            body_text
+                            if entity_kind in ("resource", "prompt")
+                            else None
+                        ),
                         _context=context,
                     )
                 )
@@ -516,7 +567,7 @@ class LLMAnalyzer(BaseAnalyzer):
                         analyzer="LLM",
                         threat_category="PROMPT INJECTION",
                         details={
-                            "tool_name": tool_name,
+                            "tool_name": entity_name,
                             "threat_type": "PROMPT INJECTION",
                             "evidence": "prompt injection detected in tool content",
                             "primary_threats": ["PROMPT INJECTION"],
@@ -524,43 +575,80 @@ class LLMAnalyzer(BaseAnalyzer):
                     )
                     findings.append(finding)
                 else:
-                    # No prompt injection detected, proceed with normal LLM analysis
-                    threat_response = await self._make_llm_request(
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_payload},
-                        ],
-                        context=f"threat analysis for {tool_name}",
-                    )
+                    messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_payload},
+                    ]
+                    max_attempts = self._max_retries + 1
+                    threat_content = ""
+                    finish_reason = ""
+                    for attempt in range(1, max_attempts + 1):
+                        threat_response = await self._make_llm_request(
+                            messages=messages,
+                            context=f"threat analysis for {entity_name}",
+                        )
+                        threat_content = self._completion_text(threat_response)
+                        finish_reason = self._completion_finish_reason(
+                            threat_response
+                        )
+                        if threat_content:
+                            break
+                        self.logger.warning(
+                            "Empty LLM completion for %s (attempt %d/%d, "
+                            "finish_reason=%s) — retrying",
+                            entity_name,
+                            attempt,
+                            max_attempts,
+                            finish_reason or "unknown",
+                        )
+                        if attempt < max_attempts:
+                            await asyncio.sleep(self._rate_limit_delay)
 
-                    threat_content = threat_response.choices[0].message.content
-                    threat_analysis = self._parse_response(threat_content)
-                    # Reject empty-{} / missing-fields / non-dict
-                    # responses up front. These were previously routed
-                    # through ``_create_findings_from_threat_analysis``
-                    # which silently returned [] for any input lacking
-                    # the expected schema — collapsing "couldn't verify"
-                    # into "verified clean".
-                    self._validate_threat_analysis_shape(threat_analysis)
-                    threat_findings = self._create_findings_from_threat_analysis(
-                        threat_analysis, tool_name
-                    )
-                    findings.extend(threat_findings)
+                    if not threat_content:
+                        empty_error = ValueError(
+                            "Empty response from LLM after "
+                            f"{max_attempts} attempt(s)"
+                            + (
+                                f" (finish_reason={finish_reason})"
+                                if finish_reason
+                                else ""
+                            )
+                        )
+                        self.logger.warning(
+                            "LLM threat analysis skipped after %d empty attempt(s)",
+                            max_attempts,
+                        )
+                        findings.append(
+                            build_infrastructure_error_finding(
+                                analyzer_name="LLM",
+                                subject=entity_name,
+                                error=empty_error,
+                                model=self._model,
+                                safe_reason="empty_response",
+                            )
+                        )
+                    else:
+                        threat_analysis = self._parse_response(threat_content)
+                        self._validate_threat_analysis_shape(threat_analysis)
+                        threat_findings = (
+                            self._create_findings_from_threat_analysis(
+                                threat_analysis, entity_name
+                            )
+                        )
+                        findings.extend(threat_findings)
 
             return findings
 
         except Exception as e:
-            # Verification could not complete (transport failure,
-            # parser failure, schema validation failure). Emit a
-            # ``severity="ERROR"`` sentinel finding so the absence of
-            # findings is never confused with "verified clean". This
-            # mirrors the behavioral path's LLM_UNAVAILABLE sentinel
-            # pattern. The full traceback still lands in the analyzer
-            # log; only a 500-char truncated message goes on the
-            # finding to keep findings.json artefacts small.
-            self.logger.error(f"LLM analysis failed for {tool_name}: {str(e)}")
-            self.logger.error(f"Full traceback for {tool_name}:", exc_info=True)
-            return [self._create_llm_unavailable_finding(tool_name, e)]
+            self.logger.error("LLM analysis failed: %s", type(e).__name__)
+            return [
+                build_infrastructure_error_finding(
+                    analyzer_name="LLM",
+                    subject=entity_name,
+                    error=e,
+                    model=self._model,
+                )
+            ]
 
     def _parse_tool_content(
         self, content: str, context: Optional[Dict[str, Any]] = None
@@ -619,102 +707,67 @@ class LLMAnalyzer(BaseAnalyzer):
         Raises:
             Exception: If all retries are exhausted
         """
-        last_exception = None
+        from mcpscanner.utils.llm_request_params import apply_model_constraints
 
-        for attempt in range(self._max_retries + 1):
-            try:
-                self.logger.debug(
-                    f"LLM API attempt {attempt + 1}/{self._max_retries + 1} for {context}"
+        max_attempts = self._max_retries + 1
+
+        async def operation() -> Any:
+            self.logger.debug(
+                "LLM API request for %s (max_attempts=%d)",
+                context,
+                max_attempts,
+            )
+            request_params = {
+                "model": self._model,
+                "messages": messages,
+                "max_tokens": self._max_tokens,
+                "temperature": self._temperature,
+                "timeout": self._llm_timeout,
+            }
+            apply_model_constraints(self._model, request_params)
+
+            if self._api_key:
+                request_params["api_key"] = self._api_key
+            if self._base_url:
+                request_params["api_base"] = self._base_url
+            if self._api_version:
+                request_params["api_version"] = self._api_version
+            if self._aws_region:
+                request_params["aws_region_name"] = self._aws_region
+            if self._aws_session_token:
+                request_params["aws_session_token"] = self._aws_session_token
+            if self._aws_profile_name:
+                request_params["aws_profile_name"] = self._aws_profile_name
+
+            return await acompletion(**request_params, drop_params=True)
+
+        async def on_retry(
+            exc: BaseException, attempt: int, delay: float
+        ) -> None:
+            self.logger.warning(
+                "LLM API transient error, retrying in %.1fs "
+                "(attempt %d/%d): %s",
+                delay,
+                attempt,
+                max_attempts,
+                type(exc).__name__,
+            )
+
+        try:
+            return await retry_transient_async(
+                operation,
+                max_attempts=max_attempts,
+                base_delay=self._rate_limit_delay,
+                model=self._model,
+                on_retry=on_retry,
+            )
+        except Exception as e:
+            kind = classify_analyzer_error(e, context="llm", model=self._model)
+            if kind is ErrorKind.FINAL:
+                self.logger.error("LLM API final error: %s", type(e).__name__)
+            else:
+                self.logger.error(
+                    "LLM API transient error, retries exhausted: %s",
+                    type(e).__name__,
                 )
-
-                # Build request parameters with per-request configuration
-                request_params = {
-                    "model": self._model,
-                    "messages": messages,
-                    "max_tokens": self._max_tokens,
-                    "temperature": self._temperature,
-                    "timeout": self._llm_timeout,
-                }
-
-                # Add API key if set (works for OpenAI, Anthropic, and Bedrock API keys)
-                # For Bedrock: api_key can be a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK)
-                # If not set, Bedrock will use AWS credentials (profile/IAM role)
-                if self._api_key:
-                    request_params["api_key"] = self._api_key
-
-                # Add base URL if configured (for Azure OpenAI or custom endpoints)
-                if self._base_url:
-                    request_params["api_base"] = self._base_url
-
-                # Add API version if configured (required for Azure OpenAI)
-                if self._api_version:
-                    request_params["api_version"] = self._api_version
-
-                # Add AWS region for Bedrock
-                if self._aws_region:
-                    request_params["aws_region_name"] = self._aws_region
-
-                # Add AWS session token for temporary credentials
-                if self._aws_session_token:
-                    request_params["aws_session_token"] = self._aws_session_token
-
-                # Add AWS profile for credential resolution
-                if self._aws_profile_name:
-                    request_params["aws_profile_name"] = self._aws_profile_name
-
-                response = await acompletion(**request_params)
-                return response
-
-            except Exception as e:
-                last_exception = e
-                error_msg = str(e).lower()
-
-                # Check for AWS/Bedrock specific errors (only for Bedrock models)
-                is_bedrock_model = self._model and "bedrock/" in self._model
-                if is_bedrock_model and any(
-                    keyword in error_msg
-                    for keyword in [
-                        "bedrockexception",
-                        "throttlingexception",
-                    ]
-                ):
-                    self.logger.error(
-                        f"AWS Bedrock error for {context}: {e}. "
-                        "Check AWS credentials, region, and Bedrock model access."
-                    )
-                    if attempt < self._max_retries:
-                        delay = (2**attempt) * self._rate_limit_delay
-                        self.logger.warning(
-                            f"Retrying AWS Bedrock request in {delay}s "
-                            f"(attempt {attempt + 1}/{self._max_retries + 1})"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        break
-
-                # Check if it's a rate limiting error
-                if any(
-                    keyword in error_msg
-                    for keyword in ["rate limit", "quota", "too many requests", "429"]
-                ):
-                    if attempt < self._max_retries:
-                        # Exponential backoff: 2^attempt * base_delay
-                        delay = (2**attempt) * self._rate_limit_delay
-                        self.logger.warning(
-                            f"Rate limit hit for {context}, retrying in {delay}s (attempt {attempt + 1}/{self._max_retries + 1})"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        self.logger.error(
-                            f"Rate limit exceeded for {context}, no more retries"
-                        )
-                        break
-                else:
-                    # For non-rate-limit errors, don't retry
-                    self.logger.error(f"LLM API error for {context}: {e}")
-                    break
-
-        # If we get here, all retries failed
-        raise last_exception
+            raise

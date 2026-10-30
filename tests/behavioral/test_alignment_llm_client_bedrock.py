@@ -150,6 +150,7 @@ class TestAlignmentLLMClientRequestForwarding:
 
         kwargs = mocked.await_args.kwargs
         assert kwargs["api_key"] == "sk-test"
+        assert kwargs["drop_params"] is True
         # AWS routing knobs MUST NOT leak into non-Bedrock requests.
         assert "aws_region_name" not in kwargs
         assert "aws_session_token" not in kwargs
@@ -228,6 +229,23 @@ class TestAlignmentLLMClientRequestForwarding:
         kwargs = mocked.await_args.kwargs
         assert "response_format" not in kwargs
         assert kwargs["api_version"] == "2024-02-15-preview"
+
+    @pytest.mark.asyncio
+    async def test_request_disables_json_mode_for_bedrock(self):
+        """Bedrock + litellm json_object mode returns empty `{}` — must omit it."""
+        cfg = _bedrock_config()
+        client = AlignmentLLMClient(cfg)
+
+        with patch(
+            "mcpscanner.core.analyzers.behavioral.alignment."
+            "alignment_llm_client.acompletion",
+            new=AsyncMock(return_value=_stub_acompletion_response()),
+        ) as mocked:
+            await client._make_llm_request("hello")
+
+        kwargs = mocked.await_args.kwargs
+        assert "response_format" not in kwargs
+        assert kwargs["aws_region_name"] == "us-west-2"
 
 
 # ---------------------------------------------------------------------------

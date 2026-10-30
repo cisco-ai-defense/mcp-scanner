@@ -49,6 +49,13 @@ class MarkerAnalyzer:
         ]
 
 
+class FailingAnalyzer:
+    name = "YARA"
+
+    async def analyze(self, content, context=None):
+        raise RuntimeError("secret-token-must-not-leak")
+
+
 @pytest.fixture
 def temp_json_file():
     """Create a temporary JSON file for testing."""
@@ -355,6 +362,49 @@ class TestResourcesScanning:
         assert results[1]["status"] == "skipped"  # binary - skipped
 
     @pytest.mark.asyncio
+    async def test_scan_resource_mime_filter_ignores_parameters(
+        self, static_analyzer, temp_json_file
+    ):
+        """MIME parameters don't change the allowlist match, as on the remote path.
+
+        MCP Apps UI resources use ``text/html;profile=mcp-app``; they were
+        skipped by a ``text/html`` allowlist on the static path only.
+        """
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "ui://demo/app.html",
+                    "name": "app",
+                    "mimeType": "text/html;profile=mcp-app",
+                    "text": "<p>Hi</p>",
+                },
+                {
+                    "uri": "file:///notes.txt",
+                    "name": "notes",
+                    "mimeType": "Text/Plain; charset=utf-8",
+                    "text": "hello",
+                },
+                {
+                    "uri": "file:///data.json",
+                    "name": "data",
+                    "mimeType": "application/json; charset=utf-8",
+                    "text": "{}",
+                },
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await static_analyzer.scan_resources_file(
+            temp_json_file, allowed_mime_types=["text/plain", "text/html"]
+        )
+
+        assert [r["status"] for r in results] == ["completed", "completed", "skipped"]
+        # The declared type is reported as given.
+        assert results[0]["resource_mime_type"] == "text/html;profile=mcp-app"
+
+    @pytest.mark.asyncio
     async def test_scan_malicious_resource(self, static_analyzer, temp_json_file):
         """Test scanning a malicious resource."""
         resources_data = {
@@ -525,6 +575,107 @@ class TestResourcesScanning:
         assert results[0]["analyzers"] == []
         assert marker.seen == []
 
+    @pytest.mark.asyncio
+    async def test_scan_resource_dict_includes_description_and_text(
+        self, temp_json_file
+    ):
+        """Static-path P0-3 plumbing: every resource result dict must
+        carry ``resource_description`` and ``resource_text`` so the CLI
+        can thread them into ``ResourceScanResult`` and the meta-analyzer
+        gets the same evidence the primary pass saw.
+
+        Without these keys, ``--enable-meta`` on a static resource scan
+        falls back to ``"N/A"`` for description and FP triage on
+        file-based resources is unsupervised.
+
+        Canonical shape (P1-1 follow-up): ``resource_description`` is
+        the verbatim MCP-advertised description, ``resource_text`` is
+        the resource BODY only — never the LLM-formatted
+        ``analysis_content`` blob with ``Resource URI:`` / ``Name:`` /
+        ``Description:`` / ``MIME Type:`` headers prepended (which
+        would cause double-description / metadata-leak when piped
+        through ``Scanner._build_resource_description_for_meta`` to the
+        meta-analyzer LLM).
+        """
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///documents/notes.txt",
+                    "name": "Notes",
+                    "description": "Safe README content for the resource.",
+                    "mimeType": "text/plain",
+                    "text": "Body that explains apiKey is a JSON Schema field.",
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(temp_json_file)
+
+        assert len(results) == 1
+        # Description survives verbatim.
+        assert (
+            results[0]["resource_description"]
+            == "Safe README content for the resource."
+        )
+        # Body-only contract.
+        assert (
+            results[0]["resource_text"]
+            == "Body that explains apiKey is a JSON Schema field."
+        )
+        # Canonical-shape pin: no LLM-formatted preamble allowed.
+        # If a future contributor reverts to ``analysis_content`` here,
+        # the meta-analyzer would receive duplicate description text
+        # and leaked URI/name/MIME headers framed as "Content".
+        rt = results[0]["resource_text"]
+        assert "Resource URI:" not in rt
+        assert "Name: Notes" not in rt
+        assert "MIME Type:" not in rt
+        # And critically: the description must NOT also be embedded
+        # inside resource_text (it lives in resource_description).
+        assert "Description: Safe README content" not in rt
+
+    @pytest.mark.asyncio
+    async def test_scan_resource_skip_mime_keeps_description_and_text(
+        self, temp_json_file
+    ):
+        """Even on the MIME-filter skip path the dict must include the
+        new keys (set to whatever the input provided). Otherwise the
+        CLI's ``r.get("resource_description", "")`` falls silently to
+        empty and re-running meta on the skipped result would feed N/A.
+        """
+        marker = MarkerAnalyzer()
+        analyzer = StaticAnalyzer(analyzers=[marker])
+        resources_data = {
+            "resources": [
+                {
+                    "uri": "file:///data.bin",
+                    "name": "Binary File",
+                    "description": "advertised description",
+                    "mimeType": "application/octet-stream",
+                }
+            ]
+        }
+
+        with open(temp_json_file, "w") as f:
+            json.dump(resources_data, f)
+
+        results = await analyzer.scan_resources_file(
+            temp_json_file, allowed_mime_types=["text/plain"]
+        )
+
+        assert len(results) == 1
+        assert results[0]["status"] == "skipped"
+        # Even on skip, the keys must be present (CLI uses ``.get`` so
+        # absence falls silently to ``""`` — pin presence here).
+        assert "resource_description" in results[0]
+        assert "resource_text" in results[0]
+        assert results[0]["resource_description"] == "advertised description"
+
 
 class TestEdgeCases:
     """Test edge cases and error handling."""
@@ -575,9 +726,10 @@ class TestEdgeCases:
 
         results = await analyzer.scan_tools_file(temp_json_file)
 
-        # Without analyzers, everything appears safe
+        # Without analyzers, no security verdict is possible.
         assert len(results) == 1
-        assert results[0]["is_safe"] == True
+        assert results[0]["status"] == "skipped"
+        assert results[0]["is_safe"] is None
         assert len(results[0]["findings"]) == 0
 
 
@@ -621,6 +773,7 @@ class TestResultGeneration:
         assert tool_result.tool_name == "safe_tool"
         assert tool_result.tool_description == "A safe tool description"
         assert tool_result.status == "completed"
+
         assert tool_result.is_safe == True
 
     @pytest.mark.asyncio
@@ -742,3 +895,140 @@ class TestResultGeneration:
         assert tool_result.is_safe == False
         assert len(tool_result.findings) > 0
         assert tool_result.status == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("file_name", "payload", "scan_method"),
+    [
+        (
+            "tools.json",
+            {"tools": [{"name": "demo", "description": "A tool"}]},
+            "scan_tools_file",
+        ),
+        (
+            "prompts.json",
+            {"prompts": [{"name": "demo", "description": "A prompt"}]},
+            "scan_prompts_file",
+        ),
+        (
+            "resources.json",
+            {
+                "resources": [
+                    {
+                        "uri": "file:///demo.txt",
+                        "name": "demo",
+                        "mimeType": "text/plain",
+                    }
+                ]
+            },
+            "scan_resources_file",
+        ),
+    ],
+)
+async def test_failed_static_analyzer_never_reports_safe(
+    tmp_path, caplog, file_name, payload, scan_method
+):
+    path = tmp_path / file_name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rows = await getattr(StaticAnalyzer([FailingAnalyzer()]), scan_method)(path)
+    row = rows[0]
+
+    assert row["status"] == "failed"
+    assert row["is_safe"] is None
+    assert row["analyzers"] == []
+    assert row["analyzer_errors"] == [
+        {
+            "analyzer": "YARA",
+            "content_type": (
+                "description"
+                if scan_method == "scan_tools_file"
+                else "prompt" if scan_method == "scan_prompts_file" else "resource"
+            ),
+            "message": "RuntimeError during analysis",
+        }
+    ]
+    assert "secret-token-must-not-leak" not in caplog.text
+    assert "secret-token-must-not-leak" not in json.dumps(row)
+
+
+@pytest.mark.asyncio
+async def test_partial_static_tool_scan_tracks_failed_component(tmp_path):
+    class FailOnParameters:
+        name = "YARA"
+
+        async def analyze(self, content, context=None):
+            if context["content_type"] == "parameters":
+                raise RuntimeError("hidden token")
+            return []
+
+    path = tmp_path / "tools.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "demo",
+                        "description": "A tool",
+                        "inputSchema": {"type": "object"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = (await StaticAnalyzer([FailOnParameters()]).scan_tools_file(path))[0]
+
+    assert row["status"] == "partial"
+    assert row["is_safe"] is None
+    assert row["analyzers"] == ["YARA"]
+    assert row["analyzer_errors"][0]["content_type"] == "parameters"
+
+
+@pytest.mark.asyncio
+async def test_partial_static_scan_preserves_confirmed_findings(tmp_path):
+    path = tmp_path / "tools.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "demo",
+                        "description": "Runs subprocess.run on input",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = (
+        await StaticAnalyzer([MarkerAnalyzer(), FailingAnalyzer()]).scan_tools_file(
+            path
+        )
+    )[0]
+
+    assert row["status"] == "partial"
+    assert row["is_safe"] is False
+    assert row["analyzers"] == ["Marker"]
+    assert len(row["findings"]) == 1
+    assert row["analyzer_errors"][0]["analyzer"] == "YARA"
+
+
+@pytest.mark.asyncio
+async def test_output_schema_only_without_schema_analyzer_is_unscanned(tmp_path):
+    path = tmp_path / "tools.json"
+    path.write_text(
+        json.dumps({"tools": [{"name": "lookup", "outputSchema": {"type": "object"}}]}),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_tools_file(path))[0]
+
+    assert marker.seen == []
+    assert row["status"] == "skipped"
+    assert row["is_safe"] is None
+    assert row["analyzers"] == []

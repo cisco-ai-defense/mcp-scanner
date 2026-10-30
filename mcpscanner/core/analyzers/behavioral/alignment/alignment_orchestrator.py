@@ -29,30 +29,37 @@ Failure semantics
 -----------------
 The orchestrator distinguishes three outcomes per function:
 
-* **Mismatch detected** — returns ``(analysis_dict, func_context)`` where
-  ``analysis_dict`` describes the mismatch (no ``LLM_UNAVAILABLE_KEY`` set).
-* **Verified clean** — returns ``None``.
-* **Could not verify** — returns ``(sentinel_dict, func_context)`` where
-  ``sentinel_dict[LLM_UNAVAILABLE_KEY] is True``. This is the case when the
-  LLM provider failed (network error, model identifier invalid, throttling
-  past retry, prompt build crash, etc.). Callers MUST NOT collapse this
-  into the "verified clean" bucket; downstream analyzers map it to a
-  ``severity="ERROR"`` finding so operators can see what was unverified.
+* **Mismatch detected** — returns ``(analysis_dict, func_context)``.
+* **Verified clean** — returns ``None`` and leaves
+  ``errored_function_names`` untouched.
+* **Could not verify** — returns ``None`` and adds the function name to
+  ``errored_function_names``. Callers must treat that set as inconclusive
+  (UNKNOWN), not as a clean result.
 
-Returning a sentinel rather than re-raising lets ``check_alignment_batch``
-report partial progress: a single bad function in a batch shouldn't drop
-the alignment results for its peers.
+``LLM_UNAVAILABLE_KEY`` remains for callers that still receive a sentinel
+dict. The current orchestrator records failures on
+``errored_function_names`` instead of returning that sentinel.
 """
 
+import asyncio
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .....config.config import Config
+from .....config.constants import MCPScannerConstants
 from .....threats.threats import ThreatMapping
+from .....utils.analyzer_errors import (
+    ERROR_KIND_TRANSIENT,
+    ErrorKind,
+    classify_analyzer_error,
+    compute_backoff_delay,
+)
+from .....utils.log_format import sanitize_log_value, truncate
 from ....static_analysis.context_extractor import FunctionContext
 from .alignment_prompt_builder import AlignmentPromptBuilder
 from .alignment_llm_client import AlignmentLLMClient
-from .alignment_response_validator import AlignmentResponseValidator
+from .alignment_response_validator import AlignmentResponseValidator, is_unanalysed
 from .threat_vulnerability_classifier import ThreatVulnerabilityClassifier
 
 
@@ -139,16 +146,89 @@ class AlignmentOrchestrator:
         self.response_validator = AlignmentResponseValidator()
         self.threat_vuln_classifier = ThreatVulnerabilityClassifier(config)
 
-        # Track analysis statistics
-        self.stats = {
+        self.stats = self._fresh_stats()
+        # Names of functions whose alignment check raised or produced an
+        # invalid response in the current scan. Consumed by the behavioural
+        # analyzer to skip SAFE-synthesis (an errored function is not
+        # "safe", just unknown).
+        self.errored_function_names: Set[str] = set()
+
+        self.logger.debug("AlignmentOrchestrator initialized")
+
+    def _record_skipped_error(
+        self, exc: BaseException, *, context: str = "llm"
+    ) -> ErrorKind:
+        """Increment error counters and return the error disposition."""
+        kind = classify_analyzer_error(
+            exc,
+            context=context,
+            model=getattr(self.llm_client, "_model", None),
+        )
+        self.stats["skipped_error"] += 1
+        if kind is ErrorKind.TRANSIENT:
+            self.stats["skipped_error_transient"] += 1
+        else:
+            self.stats["skipped_error_final"] += 1
+        return kind
+
+    @staticmethod
+    def _fresh_stats() -> Dict[str, int]:
+        """Return a fresh, zeroed stats dict."""
+        return {
             "total_analyzed": 0,
             "mismatches_detected": 0,
             "no_mismatch": 0,
             "skipped_invalid_response": 0,
             "skipped_error": 0,
+            "skipped_error_transient": 0,
+            "skipped_error_final": 0,
         }
 
-        self.logger.debug("AlignmentOrchestrator initialized")
+    def reset_stats(self) -> None:
+        """Reset cumulative counters to zero."""
+        for key in self.stats:
+            self.stats[key] = 0
+        self.errored_function_names.clear()
+
+    def _alignment_prompt_parts(
+        self, func_context: FunctionContext
+    ) -> Tuple[Optional[str], str]:
+        """Return ``(system_template, user_payload)`` for one function.
+
+        Prefer the system/user split. Fall back to the single-string
+        prompt when the builder only implements ``build_prompt``.
+        """
+        builder = self.prompt_builder
+        parts = getattr(builder, "build_prompt_parts", None)
+        if parts is not None:
+            return parts(func_context)
+        return None, builder.build_prompt(func_context)
+
+    def _batch_alignment_prompt_parts(
+        self, batch: List[FunctionContext]
+    ) -> Tuple[Optional[str], str]:
+        """Return ``(system_template, user_payload)`` for a function batch."""
+        builder = self.prompt_builder
+        parts = getattr(builder, "build_batch_prompt_parts", None)
+        if parts is not None:
+            return parts(batch)
+        body = builder.build_batch_analysis_content(batch)
+        return None, builder.wrap_batch_prompt(batch, body)
+
+    async def _verify_alignment(
+        self,
+        user_payload: str,
+        system_template: Optional[str],
+        *,
+        max_retries: Optional[int] = None,
+    ) -> str:
+        """Call the LLM client, passing the system role only when set."""
+        kwargs: Dict[str, Any] = {}
+        if system_template:
+            kwargs["system_prompt"] = system_template
+        if max_retries is not None:
+            kwargs["max_retries"] = max_retries
+        return await self.llm_client.verify_alignment(user_payload, **kwargs)
 
     async def check_alignment(
         self, func_context: FunctionContext
@@ -166,71 +246,33 @@ class AlignmentOrchestrator:
             func_context: Complete function context with dataflow analysis
 
         Returns:
-            One of three values:
-
-            * ``(analysis_dict, func_context)`` where ``analysis_dict`` does
-              NOT contain :data:`LLM_UNAVAILABLE_KEY` — a real mismatch was
-              detected.
-            * ``(sentinel_dict, func_context)`` where
-              ``sentinel_dict[LLM_UNAVAILABLE_KEY] is True`` — LLM
-              verification could not complete (provider error, invalid model
-              id, response validation failure, prompt build crash, etc.).
-              The caller MUST treat this as "unverified", not "clean".
-            * ``None`` — verification succeeded and no mismatch was detected.
-
-            Prior versions of this method returned ``None`` for both clean
-            and "couldn't verify" outcomes, which let LLM provider failures
-            silently masquerade as a clean bill of health when the caller
-            synthesised SAFE rows for missing mismatches.
+            ``(analysis_dict, func_context)`` when a mismatch is detected.
+            ``None`` when the function is clean or when verification could
+            not complete. Failures also add ``func_context.name`` to
+            ``errored_function_names`` so callers can emit UNKNOWN instead
+            of SAFE.
         """
         self.stats["total_analyzed"] += 1
+        check_start = time.perf_counter()
+        stage = "local"
 
         try:
-            # Step 1: Build alignment verification prompt as
-            # (system_template, user_payload). Splitting the framework
-            # template into the system slot is what makes Bedrock
-            # Anthropic models actually respond with structured JSON
-            # instead of an empty {} — see AlignmentPromptBuilder.
+            # Split the framework template into the system slot so Bedrock
+            # Anthropic models return structured JSON instead of ``{}``.
             self.logger.debug(f"Building alignment prompt for {func_context.name}")
-            try:
-                system_template, user_payload = (
-                    self.prompt_builder.build_prompt_parts(func_context)
-                )
-            except Exception as e:
-                self.logger.error(
-                    f"Prompt building failed for {func_context.name}: {e}",
-                    exc_info=True,
-                )
-                self.stats["skipped_error"] += 1
-                raise
+            system_template, user_payload = self._alignment_prompt_parts(
+                func_context
+            )
 
-            # Step 2: Query LLM for alignment verification
+            stage = "llm"
             self.logger.debug(
                 f"Querying LLM for alignment verification of {func_context.name}"
             )
-            try:
-                response = await self.llm_client.verify_alignment(
-                    user_payload, system_prompt=system_template
-                )
-            except Exception as e:
-                self.logger.error(
-                    f"LLM verification failed for {func_context.name}: {e}",
-                    exc_info=True,
-                )
-                self.stats["skipped_error"] += 1
-                raise
+            response = await self._verify_alignment(user_payload, system_template)
 
-            # Step 3: Validate and parse response
+            stage = "parse"
             self.logger.debug(f"Validating alignment response for {func_context.name}")
-            try:
-                result = self.response_validator.validate(response)
-            except Exception as e:
-                self.logger.error(
-                    f"Response validation failed for {func_context.name}: {e}",
-                    exc_info=True,
-                )
-                self.stats["skipped_error"] += 1
-                raise
+            result = self.response_validator.validate(response)
 
             if not result:
                 # The LLM responded but the response was empty / not
@@ -248,14 +290,20 @@ class AlignmentOrchestrator:
                     f"(excerpt: {response_excerpt!r})"
                 )
                 self.stats["skipped_invalid_response"] += 1
-                raise AlignmentVerificationError(
-                    f"LLM response was empty/non-JSON/missing required "
-                    f"fields (excerpt: {response_excerpt!r})"
-                )
+                name = getattr(func_context, "name", None)
+                if name:
+                    self.errored_function_names.add(name)
+                return None
 
             # Step 4: Return analysis if mismatch detected
             if result.get("mismatch_detected"):
-                self.logger.debug(f"Alignment mismatch detected in {func_context.name}")
+                check_ms = int((time.perf_counter() - check_start) * 1000)
+                self.logger.info(
+                    "alignment mismatch function=%s threat=%s duration_ms=%d",
+                    func_context.name,
+                    result.get("threat_name", "<unset>") or "<unset>",
+                    check_ms,
+                )
                 self.stats["mismatches_detected"] += 1
 
                 # Step 5: Classify as threat or vulnerability (second alignment layer)
@@ -303,22 +351,31 @@ class AlignmentOrchestrator:
 
                 return (result, func_context)
             else:
-                self.logger.debug(f"No alignment mismatch in {func_context.name}")
+                check_ms = int((time.perf_counter() - check_start) * 1000)
+                self.logger.debug(
+                    "alignment ok function=%s duration_ms=%d",
+                    func_context.name,
+                    check_ms,
+                )
                 self.stats["no_mismatch"] += 1
                 return None
 
         except Exception as e:
-            # Verification could not complete. Surface a sentinel so the
-            # caller can emit a `severity="ERROR"` finding instead of
-            # treating the function as verified-clean. We log with
-            # exc_info to preserve the full trace in the analyzer log even
-            # though the truncated message is what lands on the finding.
+            check_ms = int((time.perf_counter() - check_start) * 1000)
+            kind = self._record_skipped_error(e, context=stage)
             self.logger.error(
-                f"Alignment check failed for {func_context.name}: {e}",
-                exc_info=True,
+                "alignment check failed function=%s duration_ms=%d error_kind=%s "
+                "error_type=%s error=%s",
+                func_context.name,
+                check_ms,
+                kind.value,
+                type(e).__name__,
+                truncate(e),
             )
-            self.stats["skipped_error"] += 1
-            return (_make_llm_unavailable_result(e), func_context)
+            name = getattr(func_context, "name", None)
+            if name:
+                self.errored_function_names.add(name)
+            return None
 
     async def check_alignment_batch(
         self, func_contexts: List[FunctionContext], batch_size: int = 5
@@ -355,37 +412,79 @@ class AlignmentOrchestrator:
         """
         results = []
 
+        total_funcs = len(func_contexts)
+        total_batches = (total_funcs + batch_size - 1) // batch_size if batch_size else 0
+        self.logger.info(
+            "alignment batch scan start total_functions=%d batches=%d batch_size=%d",
+            total_funcs,
+            total_batches,
+            batch_size,
+        )
+
         # Process in batches
         for i in range(0, len(func_contexts), batch_size):
             batch = func_contexts[i : i + batch_size]
-            self.logger.debug(f"Processing batch of {len(batch)} functions")
+            batch_idx = i // batch_size + 1
+            batch_start = time.perf_counter()
+            self.logger.debug(
+                "batch %d/%d start size=%d", batch_idx, total_batches, len(batch)
+            )
 
+            stage = "local"
             try:
-                # Build batched prompt as (system_template, user_payload)
-                # — same Anthropic-friendly split as the single-function
-                # path. See ``check_alignment``.
-                system_template, user_payload = (
-                    self.prompt_builder.build_batch_prompt_parts(batch)
+                system_template, user_payload = self._batch_alignment_prompt_parts(
+                    batch
                 )
-
-                # Query LLM
-                response = await self.llm_client.verify_alignment(
-                    user_payload, system_prompt=system_template
+                batch_results = None
+                parse_attempts = max(
+                    1, MCPScannerConstants.LLM_BATCH_PARSE_MAX_ATTEMPTS
                 )
+                base_delay = MCPScannerConstants.LLM_RETRY_BASE_DELAY
 
-                # Parse batched response
-                batch_results = self.response_validator.validate_batch(
-                    response, len(batch)
-                )
-
-                if not batch_results:
-                    self.logger.warning(
-                        "Invalid batch response, falling back to individual analysis"
+                for parse_attempt in range(parse_attempts):
+                    stage = "llm"
+                    if parse_attempt == 0:
+                        response = await self._verify_alignment(
+                            user_payload, system_template
+                        )
+                    else:
+                        # Re-prompt only; first attempt already consumed the
+                        # full API retry budget for transient failures.
+                        response = await self._verify_alignment(
+                            user_payload,
+                            system_template,
+                            max_retries=1,
+                        )
+                    stage = "parse"
+                    batch_results = self.response_validator.validate_batch(
+                        response, len(batch)
                     )
-                    # Fall back to individual analysis. ``check_alignment``
-                    # now returns sentinel-or-mismatch-or-None, so we must
-                    # forward every non-None result (including sentinels)
-                    # rather than dropping them.
+                    if batch_results is not None:
+                        break
+                    if parse_attempt < parse_attempts - 1:
+                        delay = compute_backoff_delay(parse_attempt, base_delay)
+                        self.logger.warning(
+                            "batch %d/%d invalid_response error_kind=%s "
+                            "attempt=%d/%d backoff_s=%.1f fallback=retry_batch",
+                            batch_idx,
+                            total_batches,
+                            ERROR_KIND_TRANSIENT,
+                            parse_attempt + 1,
+                            parse_attempts,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+
+                # ``None`` means hard failure (empty / unparseable response).
+                if batch_results is None:
+                    self.logger.warning(
+                        "batch %d/%d invalid_response fallback=individual size=%d "
+                        "-- LLM returned an unparseable batch, retrying "
+                        "each function individually",
+                        batch_idx,
+                        total_batches,
+                        len(batch),
+                    )
                     for func_context in batch:
                         result = await self.check_alignment(func_context)
                         if result is not None:
@@ -393,6 +492,9 @@ class AlignmentOrchestrator:
                     continue
 
                 # Process each result in the batch
+                batch_mismatches = 0
+                batch_clean = 0
+                batch_unanalysed = 0
                 for idx, result in enumerate(batch_results):
                     if idx >= len(batch):
                         break
@@ -400,8 +502,20 @@ class AlignmentOrchestrator:
                     func_context = batch[idx]
                     self.stats["total_analyzed"] += 1
 
+                    # Sentinel slot: the LLM never produced a valid
+                    # result for this function. Route to errored —
+                    # these functions are "unknown", not "safe".
+                    if is_unanalysed(result):
+                        self.stats["skipped_invalid_response"] += 1
+                        batch_unanalysed += 1
+                        name = getattr(func_context, "name", None)
+                        if name:
+                            self.errored_function_names.add(name)
+                        continue
+
                     if result and result.get("mismatch_detected"):
                         self.stats["mismatches_detected"] += 1
+                        batch_mismatches += 1
 
                         # Classify as threat or vulnerability
                         threat_name = result.get("threat_name", "")
@@ -440,22 +554,46 @@ class AlignmentOrchestrator:
                         results.append((result, func_context))
                     else:
                         self.stats["no_mismatch"] += 1
+                        batch_clean += 1
+
+                batch_ms = int((time.perf_counter() - batch_start) * 1000)
+                self.logger.info(
+                    "batch %d/%d done size=%d mismatches=%d clean=%d "
+                    "unanalysed=%d duration_ms=%d",
+                    batch_idx,
+                    total_batches,
+                    len(batch),
+                    batch_mismatches,
+                    batch_clean,
+                    batch_unanalysed,
+                    batch_ms,
+                )
 
             except Exception as e:
-                # Whole batch failed (typically prompt build or LLM call).
-                # Fall back to per-function calls so peers are unaffected.
-                # ``check_alignment`` is exception-safe and now returns a
-                # sentinel rather than re-raising on its own failures, so
-                # we no longer need a defensive ``try/except: pass``
-                # around the call — that pattern was the silent-failure
-                # bug we are fixing here.
-                self.logger.error(
-                    f"Batch analysis failed: {e}, falling back to individual",
-                    exc_info=True,
+                batch_ms = int((time.perf_counter() - batch_start) * 1000)
+                kind = classify_analyzer_error(
+                    e,
+                    context=stage,
+                    model=getattr(self.llm_client, "_model", None),
                 )
+                self.logger.error(
+                    "batch %d/%d failed size=%d duration_ms=%d error_kind=%s "
+                    "error_type=%s error=%s fallback=individual_analysis",
+                    batch_idx,
+                    total_batches,
+                    len(batch),
+                    batch_ms,
+                    kind.value,
+                    type(e).__name__,
+                    truncate(e),
+                )
+                # NOTE: we do *not* pre-populate ``errored_function_names``
+                # for the whole batch. ``check_alignment`` marks errored
+                # on raise / invalid-response, and leaves the set
+                # untouched on clean / mismatch.
                 for func_context in batch:
                     result = await self.check_alignment(func_context)
-                    if result is not None:
+                    if result:
                         results.append(result)
 
         return results
@@ -483,12 +621,53 @@ class AlignmentOrchestrator:
     def get_statistics(self) -> Dict[str, int]:
         """Get analysis statistics.
 
+        The fields obey the partitioning invariant:
+
+            total_analyzed == (
+                mismatches_detected
+                + no_mismatch
+                + skipped_invalid_response
+                + skipped_error
+            )
+
+        i.e. every function the orchestrator *attempted* to analyse falls
+        into exactly one of the four outcome buckets. Operators reading
+        these fields for SLO purposes should treat
+        ``skipped_invalid_response + skipped_error`` as the "did not get
+        a usable LLM result" bucket — those functions are surfaced as
+        ``UNKNOWN`` severity downstream.
+
         Returns:
             Dictionary with analysis statistics including:
-            - total_analyzed: Total functions analyzed
+            - total_analyzed: Total functions analyzed (success + failure)
             - mismatches_detected: Functions with detected mismatches
             - no_mismatch: Functions with no mismatch
             - skipped_invalid_response: Functions skipped due to invalid LLM response
-            - skipped_error: Functions skipped due to errors
+              (includes short-padded slots, malformed batch items, etc.)
+            - skipped_error: Functions skipped due to exceptions
         """
         return self.stats.copy()
+
+    def log_summary(self, scope: str = "behavioral") -> None:
+        """Emit a single ``key=value`` INFO summary line for the current stats.
+
+        Args:
+            scope: Free-form label that distinguishes summaries when the
+                orchestrator runs in more than one context. Sanitised
+                before logging.
+        """
+        s = self.stats
+        safe_scope = sanitize_log_value(scope)
+        self.logger.info(
+            "alignment summary scope=%s total=%d mismatches=%d clean=%d "
+            "skipped_invalid_response=%d skipped_error=%d "
+            "skipped_error_transient=%d skipped_error_final=%d",
+            safe_scope,
+            s["total_analyzed"],
+            s["mismatches_detected"],
+            s["no_mismatch"],
+            s["skipped_invalid_response"],
+            s["skipped_error"],
+            s.get("skipped_error_transient", 0),
+            s.get("skipped_error_final", 0),
+        )

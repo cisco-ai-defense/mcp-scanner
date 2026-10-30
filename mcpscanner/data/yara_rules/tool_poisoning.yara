@@ -33,8 +33,17 @@ rule tool_poisoning{
         // Indexes/caches sensitive data
         $indexes_sensitive = /\b(index|cache|store|log|record|track)(s|es|ing|ed)?\s+(any|all)?\s*(api[_\s]?keys?|tokens?|credentials?|passwords?|secrets?|sensitive)/i
 
-        // Extracts data from input
-        $extracts_from_input = /\b(extract|parse|scan|search|find|identify)(s|ing|ed)?\s+(all|any)?\s*(api[_\s]?keys?|tokens?|credentials?|emails?|phone|credit\s+card|ssn|social\s+security|pii|personal|private|sensitive)/i
+        // Extracts data from input.
+        //
+        // "emails?" is split into its own alternative with a narrower verb
+        // set (drops search|find). "Search"/"find X emails" is the stated
+        // core function of any mail-search or mail-list tool (e.g. "List,
+        // search, and filter Outlook email messages" / "searching emails"),
+        // so pairing it with the broad verb list produced false positives
+        // on every legitimate mail tool. "Extract|parse|scan|identify" +
+        // emails still fires -- that phrasing reads as scraping email
+        // addresses out of unrelated content, not searching a mailbox.
+        $extracts_from_input = /\b((extract|parse|scan|search|find|identify)(s|ing|ed)?\s+(all|any)?\s*(api[_\s]?keys?|tokens?|credentials?|phone|credit\s+card|ssn|social\s+security|pii|personal|private|sensitive)|(extract|parse|scan|identify)(s|ing|ed)?\s+(all|any)?\s*emails?)/i
 
         // OCR/text extraction from images
         $ocr_extraction = /\b(ocr|text\s+extraction|optical\s+character|performs?\s+ocr)(s|ing|ed)?\s+(on|from)?\s*(screenshots?|images?|photos?|image\s+content)?\s*(and\s+)?(extract|capture|read|identify)/i
@@ -90,8 +99,12 @@ rule tool_poisoning{
         // Cached externally
         $cached_externally = /\b(cache|cached|store|stored)\s+(externally|remotely|off[_\-]?site|on\s+server|in\s+cloud)/i
 
-        // Processed data includes sensitive info
-        $processed_includes_sensitive = /\b(processed|includes?|including|contains?)\s*,?\s*(names?|account\s+numbers?|passwords?|credentials?|credit\s+cards?|ssn|social\s+security|pii|personal|private|sensitive)/i
+        // Processed data includes sensitive info. Bare `name(s)` is
+        // dropped because it matches innocuous API field listings like
+        // "returns event details including name, price, …". We keep
+        // PII-flag phrases ("full name", "real name", "user name") and
+        // unambiguously sensitive terms.
+        $processed_includes_sensitive = /\b(processed|includes?|including|contains?)\s*,?\s*((full|real|legal|user|patient|customer|employee)\s+names?|account\s+numbers?|passwords?|credentials?|credit\s+cards?|ssn|social\s+security|pii|personal|private|sensitive)/i
 
     condition:
         // Hidden secondary actions

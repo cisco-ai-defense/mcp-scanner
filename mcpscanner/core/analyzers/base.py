@@ -251,7 +251,7 @@ class BaseAnalyzer(ABC):
             )
             return findings
         except Exception as e:
-            self.logger.error(f"Analysis failed: {e}")
+            self.logger.error("Analysis failed: %s", type(e).__name__)
             return []
 
     @abstractmethod

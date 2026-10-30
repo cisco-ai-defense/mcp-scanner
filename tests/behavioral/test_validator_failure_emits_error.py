@@ -121,8 +121,8 @@ class TestAlignmentVerificationErrorExposure:
 
 
 class TestCheckAlignmentValidatorFailuresEmitSentinel:
-    """Each shape of "LLM responded with garbage" must yield the
-    ``LLM_UNAVAILABLE_KEY`` sentinel — not ``None``.
+    """Each shape of "LLM responded with garbage" must land the function
+    in ``errored_function_names`` so the analyzer emits UNKNOWN, not SAFE.
     """
 
     @pytest.mark.parametrize(
@@ -164,29 +164,12 @@ class TestCheckAlignmentValidatorFailuresEmitSentinel:
         ):
             result = await orchestrator.check_alignment(ctx)
 
-        assert result is not None, (
-            f"check_alignment must NOT return None for {case_label!r} — "
-            f"None is reserved for verified-clean. Returning None on a "
-            f"validator failure is exactly the silent-SAFE bug we are "
-            f"regressing against."
+        assert result is None
+        assert ctx.name in orchestrator.errored_function_names, (
+            f"{case_label}: garbage responses must be recorded as errored, "
+            f"not treated as verified-clean"
         )
-        analysis, returned_ctx = result
-        assert returned_ctx is ctx
-        assert analysis.get(LLM_UNAVAILABLE_KEY) is True, (
-            f"sentinel marker missing for {case_label!r}: {analysis!r}"
-        )
-        assert analysis.get("error_type") == "AlignmentVerificationError", (
-            f"sentinel must carry the AlignmentVerificationError type so "
-            f"operators can distinguish validator failures from transport "
-            f"failures (RuntimeError, etc.); got "
-            f"error_type={analysis.get('error_type')!r}"
-        )
-        # Stat plumbing: validator failures bump skipped_invalid_response
-        # AND are surfaced as sentinels. Both signals matter — the stat
-        # is what shows up in get_statistics() summaries, the sentinel
-        # is what shows up in the findings artefact.
         assert orchestrator.stats["skipped_invalid_response"] >= 1
-        assert orchestrator.stats["skipped_error"] >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -245,16 +228,18 @@ class TestCheckAlignmentBatchFallsBackOnGarbageResponses:
                 contexts, batch_size=5
             )
 
-        assert len(results) == len(contexts), (
-            f"{case_label}: expected one sentinel per function, got "
-            f"{len(results)} results for {len(contexts)} input contexts"
+        assert results == [], (
+            f"{case_label}: garbage batch items must not be reported as "
+            f"mismatches; got {results!r}"
         )
-        for analysis, returned_ctx in results:
-            assert analysis.get(LLM_UNAVAILABLE_KEY) is True, (
-                f"{case_label}: every result must carry the sentinel; "
-                f"got analysis={analysis!r}"
-            )
-            assert returned_ctx in contexts
+        if case_label in ("truncated_array", "non_dict_item"):
+            expected_errored = {contexts[1].name}
+        else:
+            expected_errored = {ctx.name for ctx in contexts}
+        assert orchestrator.errored_function_names == expected_errored, (
+            f"{case_label}: unverified functions must be errored, got "
+            f"{orchestrator.errored_function_names!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -263,24 +248,26 @@ class TestCheckAlignmentBatchFallsBackOnGarbageResponses:
 
 
 class TestValidateBatchNoSilentPadding:
-    """The batch validator used to silently pad missing
-    ``mismatch_detected`` items with ``False`` — collapsing
-    "couldn't verify" into "verified clean". Lock the new
-    return-None-on-ambiguity policy.
+    """Short or malformed batch slots are tagged unanalysed so the
+    orchestrator can route them to ``errored_function_names``.
     """
 
     def test_empty_array_returns_none(self) -> None:
         validator = AlignmentResponseValidator()
-        assert validator.validate_batch("[]", expected_count=3) is None
+        out = validator.validate_batch("[]", expected_count=3)
+        assert out is not None and len(out) == 3
+        assert all(item.get("_unanalysed") is True for item in out)
 
     def test_truncated_array_returns_none(self) -> None:
         validator = AlignmentResponseValidator()
-        # 2 items returned but 3 expected — must fall back, not pad.
         response = (
             '[{"mismatch_detected": false},'
             ' {"mismatch_detected": false}]'
         )
-        assert validator.validate_batch(response, expected_count=3) is None
+        out = validator.validate_batch(response, expected_count=3)
+        assert out is not None and len(out) == 3
+        assert out[0].get("_unanalysed") is not True
+        assert out[2].get("_unanalysed") is True
 
     def test_item_missing_mismatch_detected_returns_none(self) -> None:
         validator = AlignmentResponseValidator()
@@ -288,12 +275,16 @@ class TestValidateBatchNoSilentPadding:
             '[{"mismatch_detected": false},'
             ' {"function_name": "x"}]'
         )
-        assert validator.validate_batch(response, expected_count=2) is None
+        out = validator.validate_batch(response, expected_count=2)
+        assert out is not None and len(out) == 2
+        assert out[1].get("_unanalysed") is True
 
     def test_non_dict_item_returns_none(self) -> None:
         validator = AlignmentResponseValidator()
         response = '[{"mismatch_detected": false}, "garbage"]'
-        assert validator.validate_batch(response, expected_count=2) is None
+        out = validator.validate_batch(response, expected_count=2)
+        assert out is not None and len(out) == 2
+        assert out[1].get("_unanalysed") is True
 
     def test_well_formed_batch_still_validates(self) -> None:
         """Negative control: a healthy batch response must still pass."""
@@ -368,22 +359,16 @@ class TestBehavioralCodeAnalyzerEmitsErrorOnEmptyJsonResponse:
             f"SAFE findings: {[(f.summary, f.details) for f in safe_findings]}"
         )
 
-        error_findings = [f for f in findings if f.severity == "ERROR"]
-        assert len(error_findings) == 2, (
-            "expected one ERROR finding per scanned tool (echo, add); "
-            f"got {len(error_findings)}: "
-            f"{[(f.severity, f.summary) for f in error_findings]}"
+        unknown_findings = [f for f in findings if f.severity == "UNKNOWN"]
+        assert len(unknown_findings) == 2, (
+            "expected one UNKNOWN finding per scanned tool (echo, add); "
+            f"got {len(unknown_findings)}: "
+            f"{[(f.severity, f.summary) for f in unknown_findings]}"
         )
 
-        for f in error_findings:
+        for f in unknown_findings:
             d = f.details or {}
-            assert d.get("llm_unavailable") is True
-            assert d.get("error_type") == "AlignmentVerificationError", (
-                "ERROR rows from validator-failures must carry "
-                "error_type=AlignmentVerificationError so operators can "
-                "distinguish 'LLM said {}' from 'LLM was unreachable'; "
-                f"got {d.get('error_type')!r}"
-            )
+            assert d.get("analysis_status") == "errored"
 
 
 # ---------------------------------------------------------------------------

@@ -99,8 +99,10 @@ def orchestrator() -> AlignmentOrchestrator:
 
 
 class TestCheckAlignmentReturnsSentinelOnLLMFailure:
-    """``check_alignment`` must surface a sentinel — not ``None`` — when
-    LLM verification fails. ``None`` is reserved for "verified clean".
+    """``check_alignment`` records an unverified function on
+    ``errored_function_names`` instead of returning a sentinel tuple.
+    ``None`` means "no mismatch to report"; the errored set is what
+    stops the analyzer from synthesising SAFE.
     """
 
     @pytest.mark.asyncio
@@ -136,20 +138,8 @@ class TestCheckAlignmentReturnsSentinelOnLLMFailure:
         ):
             result = await orchestrator.check_alignment(ctx)
 
-        assert result is not None, (
-            "check_alignment must NOT return None when LLM verification "
-            "fails — None is reserved for 'verified clean' and would "
-            "let downstream collapse the failure into SAFE."
-        )
-        analysis, returned_ctx = result
-        assert returned_ctx is ctx
-        assert analysis.get(LLM_UNAVAILABLE_KEY) is True, (
-            f"sentinel marker missing from analysis dict: {analysis}"
-        )
-        assert analysis.get("error_type") == "RuntimeError"
-        assert "simulated bedrock outage" in analysis.get("error_message", "")
-        # The skipped_error stat must increment so operators can see the
-        # gap from get_statistics().
+        assert result is None
+        assert "echo" in orchestrator.errored_function_names
         assert orchestrator.stats["skipped_error"] >= 1
 
     @pytest.mark.asyncio
@@ -216,16 +206,10 @@ class TestCheckAlignmentBatchEmitsSentinelOnFailure:
         ):
             results = await orchestrator.check_alignment_batch(contexts, batch_size=5)
 
-        assert len(results) == len(contexts), (
-            f"expected one sentinel per function, got {len(results)} for "
-            f"{len(contexts)} input contexts"
-        )
-        for analysis, returned_ctx in results:
-            assert analysis.get(LLM_UNAVAILABLE_KEY) is True, (
-                f"every result tuple must carry the LLM_UNAVAILABLE_KEY "
-                f"sentinel; got analysis={analysis}"
-            )
-            assert returned_ctx in contexts
+        assert results == []
+        assert orchestrator.errored_function_names == {
+            ctx.name for ctx in contexts
+        }
 
 
 class TestBehavioralCodeAnalyzerEmitsErrorNotSafe:
@@ -288,33 +272,21 @@ class TestBehavioralCodeAnalyzerEmitsErrorNotSafe:
             f"findings: {[(f.summary, f.details) for f in safe_findings]}"
         )
 
-        error_findings = [f for f in findings if f.severity == "ERROR"]
-        assert len(error_findings) == 2, (
-            "expected one ERROR finding per scanned tool (echo, add); "
-            f"got {len(error_findings)}: "
-            f"{[(f.severity, f.summary) for f in error_findings]}"
+        unknown_findings = [f for f in findings if f.severity == "UNKNOWN"]
+        assert len(unknown_findings) == 2, (
+            "expected one UNKNOWN finding per scanned tool (echo, add); "
+            f"got {len(unknown_findings)}: "
+            f"{[(f.severity, f.summary) for f in unknown_findings]}"
         )
 
-        # Each ERROR row must be self-describing: function_name +
-        # source_file + llm_unavailable=True so consumers can filter.
-        names = sorted((f.details or {}).get("function_name") for f in error_findings)
+        names = sorted(
+            (f.details or {}).get("function_name") for f in unknown_findings
+        )
         assert names == ["add", "echo"], names
-        for f in error_findings:
+        for f in unknown_findings:
             d = f.details or {}
             assert d.get("source_file") == temp_path
-            assert d.get("llm_unavailable") is True, (
-                "ERROR finding must mark details.llm_unavailable=True so "
-                "consumers can distinguish LLM-availability errors from "
-                "other future ERROR-severity sources"
-            )
-            assert d.get("error_type") == "RuntimeError"
-            assert "ValidationException" in d.get("error_message", ""), (
-                "the original Bedrock error message must survive into "
-                "details.error_message so operators can debug without "
-                "re-running with logging enabled"
-            )
-            # threat_category empty so ERROR rows don't pollute
-            # downstream threat-name aggregates.
+            assert d.get("analysis_status") == "errored"
             assert f.threat_category == ""
 
     @pytest.mark.asyncio

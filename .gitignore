@@ -201,3 +201,9 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Local dev / experiment scratch space — not checked in.
+_external/
+evals/behavioral-analysis/scripts/scan_results.json
+evals/behavioral-analysis/scripts/*_server.py
+evals/behavioral-analysis/scripts/*_server.js

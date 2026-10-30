@@ -17,12 +17,17 @@
 """Dataflow analysis framework."""
 
 import ast
+import time
 from typing import Any, Generic, TypeVar
 
 from ..parser.base import BaseParser
 from ..parser.python_parser import PythonParser
+from ....utils.log_format import sanitize_log_value
+from ....utils.logging_config import get_logger
 
 T = TypeVar("T")
+
+logger = get_logger(__name__)
 
 
 class CFGNode:
@@ -125,6 +130,7 @@ class DataFlowAnalyzer(Generic[T]):
         Returns:
             Control Flow Graph
         """
+        build_start = time.perf_counter()
         ast_root = self.analyzer.get_ast()
         cfg = ControlFlowGraph()
 
@@ -132,6 +138,12 @@ class DataFlowAnalyzer(Generic[T]):
             self._build_python_cfg(ast_root, cfg)
 
         self.cfg = cfg
+        logger.debug(
+            "static_cfg python built file=%s nodes=%d duration_us=%d",
+            sanitize_log_value(getattr(self.analyzer, "file_path", "<unknown>")),
+            len(cfg.nodes),
+            int((time.perf_counter() - build_start) * 1_000_000),
+        )
         return cfg
 
     def _build_python_cfg(self, node: ast.AST, cfg: ControlFlowGraph) -> CFGNode:
@@ -259,10 +271,21 @@ class DataFlowAnalyzer(Generic[T]):
             initial_fact: Initial dataflow fact
             forward: True for forward analysis, False for backward
         """
+        analyze_start = time.perf_counter()
+        analysis_name = type(self).__name__
+        file_path = sanitize_log_value(
+            getattr(self.analyzer, "file_path", "<unknown>")
+        )
+
         if not self.cfg:
             self.build_cfg()
 
         if not self.cfg:
+            logger.debug(
+                "static_dataflow %s skipped file=%s reason=no_cfg",
+                analysis_name,
+                file_path,
+            )
             return
 
         for node in self.cfg.nodes:
@@ -274,17 +297,24 @@ class DataFlowAnalyzer(Generic[T]):
 
         iteration_count = 0
         max_iterations = len(self.cfg.nodes) * 100  # Safety limit
+        capped = False
 
         while worklist:
             iteration_count += 1
 
             # Safety check to prevent infinite loops
             if iteration_count > max_iterations:
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    f"Dataflow analysis exceeded max iterations ({max_iterations}), stopping early"
+                logger.warning(
+                    "static_dataflow %s iteration_cap_hit file=%s nodes=%d "
+                    "iterations=%d max=%d direction=%s",
+                    analysis_name,
+                    file_path,
+                    len(self.cfg.nodes),
+                    iteration_count,
+                    max_iterations,
+                    "forward" if forward else "backward",
                 )
+                capped = True
                 break
 
             node = worklist.pop(0)
@@ -326,6 +356,18 @@ class DataFlowAnalyzer(Generic[T]):
                         if pred.id not in in_worklist:
                             worklist.append(pred)
                             in_worklist.add(pred.id)
+
+        logger.debug(
+            "static_dataflow %s done file=%s nodes=%d iterations=%d "
+            "direction=%s capped=%s duration_us=%d",
+            analysis_name,
+            file_path,
+            len(self.cfg.nodes),
+            iteration_count,
+            "forward" if forward else "backward",
+            capped,
+            int((time.perf_counter() - analyze_start) * 1_000_000),
+        )
 
     def transfer(self, node: CFGNode, in_fact: T) -> T:
         """Transfer function for dataflow analysis.

@@ -15,12 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Example 10: Zip Bomb and Decompression Bomb Attack"""
-from mcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 import zipfile
 import gzip
 import bz2
 
-app = FastMCP("resource-exhaustion-service-10")
+app = MCPServer("resource-exhaustion-service-10")
 
 
 class DecompressionBomb:

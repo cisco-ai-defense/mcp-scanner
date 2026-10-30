@@ -22,17 +22,22 @@ following the same BaseParser interface as PythonParser.
 Supported languages: TypeScript, JavaScript, Go, Java, Kotlin, C#, Ruby, Rust, PHP
 """
 
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from tree_sitter import Language, Parser, Node, Tree
 
 from .base import BaseParser
 from ..types import Position, Range
+from ....utils.log_format import sanitize_log_value
+from ....utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
-# Language module cache
 _LANGUAGE_CACHE: Dict[str, Language] = {}
+_LANG_LOAD_WARNED: Set[str] = set()
 
 
 def _get_language(lang_name: str) -> Optional[Language]:
@@ -72,11 +77,30 @@ def _get_language(lang_name: str) -> Optional[Language]:
             import tree_sitter_php as mod
             lang = Language(mod.language_php())
         else:
+            if lang_name not in _LANG_LOAD_WARNED:
+                _LANG_LOAD_WARNED.add(lang_name)
+                logger.warning(
+                    "static_parser treesitter unsupported_language language=%s",
+                    lang_name,
+                )
             return None
-        
+
         _LANGUAGE_CACHE[lang_name] = lang
+        logger.debug(
+            "static_parser treesitter language_loaded language=%s",
+            lang_name,
+        )
         return lang
-    except ImportError:
+    except ImportError as exc:
+        if lang_name not in _LANG_LOAD_WARNED:
+            _LANG_LOAD_WARNED.add(lang_name)
+            logger.warning(
+                "static_parser treesitter language_module_missing language=%s "
+                "error_type=%s error=%s",
+                lang_name,
+                type(exc).__name__,
+                str(exc)[:200],
+            )
         return None
 
 
@@ -201,12 +225,33 @@ class TreeSitterParser(BaseParser):
         Raises:
             ValueError: If language is not supported or parsing fails
         """
+        parse_start = time.perf_counter()
         parser = self._get_parser()
         if not parser:
+            logger.warning(
+                "static_parser treesitter parse_skipped file=%s language=%s "
+                "reason=unsupported_or_missing_grammar",
+                sanitize_log_value(self.file_path),
+                self.language,
+            )
             raise ValueError(f"Unsupported language: {self.language}")
-        
+
         self._tree = parser.parse(self.source_bytes)
         self._ast = self._tree
+        parse_us = int((time.perf_counter() - parse_start) * 1_000_000)
+        has_error = bool(
+            getattr(self._tree.root_node, "has_error", False)
+        )
+        logger.debug(
+            "static_parser treesitter parsed file=%s language=%s lines=%d "
+            "bytes=%d has_error=%s duration_us=%d",
+            sanitize_log_value(self.file_path),
+            self.language,
+            len(self.lines),
+            len(self.source_bytes),
+            has_error,
+            parse_us,
+        )
         return self._tree
     
     def get_node_range(self, node: Node) -> Range:

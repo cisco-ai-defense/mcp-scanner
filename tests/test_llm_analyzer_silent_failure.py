@@ -146,19 +146,15 @@ class TestGarbageResponseEmitsErrorFinding:
             )
 
         assert len(findings) == 1, (
-            f"{case_label}: expected exactly one ERROR finding, got "
+            f"{case_label}: expected exactly one infrastructure finding, got "
             f"{len(findings)}. Returning [] for a malformed LLM response "
             f"is the silent-failure bug we are regressing against."
         )
         f = findings[0]
-        assert f.severity == "ERROR"
+        assert f.severity == "INFO"
         assert f.analyzer == "LLM"
-        assert f.threat_category == "", (
-            f"{case_label}: ERROR rows must have an empty "
-            f"threat_category; got {f.threat_category!r}"
-        )
-        assert f.details["llm_unavailable"] is True
-        assert f.details["tool_name"] == "fetch_docs"
+        assert f.threat_category == "ANALYZER INFRASTRUCTURE"
+        assert f.details["subject"] == "fetch_docs"
         assert f.details["error_type"] == "ValueError", (
             f"{case_label}: schema validation failures must surface as "
             f"ValueError on the finding; got {f.details.get('error_type')!r}"
@@ -196,8 +192,8 @@ class TestGarbageResponseEmitsErrorFinding:
             f"unparseable responses; got {len(findings)}"
         )
         f = findings[0]
-        assert f.severity == "ERROR"
-        assert f.details["llm_unavailable"] is True
+        assert f.severity == "INFO"
+        assert f.threat_category == "ANALYZER INFRASTRUCTURE"
         assert f.details["error_type"] == "ValueError"
 
     @pytest.mark.asyncio
@@ -222,10 +218,10 @@ class TestGarbageResponseEmitsErrorFinding:
 
         assert len(findings) == 1
         f = findings[0]
-        assert f.severity == "ERROR"
-        assert f.details["llm_unavailable"] is True
+        assert f.severity == "INFO"
+        assert f.threat_category == "ANALYZER INFRASTRUCTURE"
         assert f.details["error_type"] == "RuntimeError"
-        assert "ValidationException" in f.details["error_message"]
+        assert f.details["subject"] == "fetch_docs"
 
     @pytest.mark.asyncio
     async def test_unknown_tool_default_name_propagates_to_error_finding(
@@ -243,7 +239,8 @@ class TestGarbageResponseEmitsErrorFinding:
             findings = await analyzer.analyze(_MALICIOUS_CONTENT)
 
         assert len(findings) == 1
-        assert findings[0].details["tool_name"] == "Unknown Tool"
+        assert findings[0].details["subject"] == "Unknown Tool"
+        assert findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
 
 
 # ---------------------------------------------------------------------------

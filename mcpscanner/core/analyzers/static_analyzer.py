@@ -25,7 +25,73 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .base import BaseAnalyzer, SecurityFinding
+from .schema_reference_analyzer import SchemaReferenceAnalyzer
 from ..models import AnalyzerEnum
+from ...utils.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
+def _normalize_mime_type(mime: Optional[str]) -> str:
+    """Base MIME type, lowercased, without parameters.
+
+    Same rule as ``Scanner._normalize_mime_type`` on the remote path, so
+    ``text/html;profile=mcp-app`` (MCP Apps UI resources) matches a
+    ``text/html`` allowlist entry here too instead of being skipped.
+    """
+    if not mime:
+        return ""
+    return mime.split(";", 1)[0].strip().lower()
+
+
+def _extract_html_text_if_needed(content: str, mime_type: Optional[str]) -> str:
+    """Strip HTML tags from a resource body when ``mime_type`` is ``text/html``.
+
+    H5 fix: the remote scan path (``Scanner._analyze_resource``)
+    already runs BeautifulSoup on ``text/html`` resources before
+    passing the body to API/LLM analyzers and persisting it in
+    ``ResourceScanResult.resource_text``. The static path used to
+    skip this step, so the same resource scanned via two paths
+    produced two different ``resource_text`` shapes — and therefore
+    two different meta-analyzer prompts when ``--enable-meta`` ran.
+
+    Keeping the helper module-level (rather than inside ``StaticAnalyzer``)
+    so a future reviewer who needs to make the two paths byte-equal
+    can lift the remote path's inline copy onto this helper too.
+
+    BeautifulSoup is an optional dependency; if it's unavailable, fall
+    back to the raw content with a single warning per import failure
+    (matches the remote path's exact behaviour).
+    """
+    if _normalize_mime_type(mime_type) != "text/html" or not content:
+        return content
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        logger.warning(
+            "BeautifulSoup not installed; static-path HTML resource will "
+            "be analysed (and surfaced in resource_text) as raw markup. "
+            "Install bs4 to match the remote-path behaviour."
+        )
+        return content
+    try:
+        soup = BeautifulSoup(content, "html.parser")
+        return soup.get_text(separator="\n", strip=True)
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            "Static-path HTML extraction failed (%s); using raw content. "
+            "resource_text will diverge from remote-path output for this "
+            "resource.",
+            e,
+        )
+        return content
+    except Exception as e:  # pragma: no cover - defensive parity with remote path
+        logger.error(
+            "Unexpected error in static-path HTML extraction (%s); using "
+            "raw content.",
+            e,
+        )
+        return content
 
 
 class StaticAnalyzer:
@@ -94,29 +160,87 @@ class StaticAnalyzer:
                     f"Invalid JSON in {file_path}: {e.msg}", e.doc, e.pos
                 )
 
+    @staticmethod
+    def _get_finding_analyzer_name(analyzer) -> str:
+        """Get the analyzer name as used in SecurityFinding.analyzer field.
+
+        BaseAnalyzer subclasses may set self.name differently from the value
+        they write into finding.analyzer. This mapping ensures the names
+        reported in result.analyzers match the finding-level names so the
+        report generator groups them correctly.
+        """
+        name_map = {
+            "LLMAnalyzer": "LLM",
+        }
+        return name_map.get(analyzer.name, analyzer.name)
+
     async def _analyze_content(
-        self, content: str, context: Optional[Dict[str, Any]] = None
+        self,
+        content: str,
+        context: Optional[Dict[str, Any]] = None,
+        analyzers: Optional[List[BaseAnalyzer]] = None,
+        outcome: Optional[Dict[str, Any]] = None,
     ) -> List[SecurityFinding]:
         """Run all configured analyzers on the content.
 
         Args:
             content: Content to analyze.
             context: Additional context for analysis.
+            analyzers: Optional subset of configured analyzers for this content.
+            outcome: Optional per-item collector for successes and failures.
 
         Returns:
             List[SecurityFinding]: Combined findings from all analyzers.
         """
         all_findings = []
 
-        for analyzer in self.analyzers:
+        for analyzer in self.analyzers if analyzers is None else analyzers:
+            analyzer_name = self._get_finding_analyzer_name(analyzer)
             try:
                 findings = await analyzer.analyze(content, context)
                 all_findings.extend(findings)
+                if outcome is not None and analyzer_name not in outcome["analyzers"]:
+                    outcome["analyzers"].append(analyzer_name)
             except Exception as e:
-                # Log error but continue with other analyzers
-                print(f"Warning: {analyzer.name} failed: {e}")
+                # Provider exceptions may contain credentials or scanned text.
+                # Record only the exception type in user-visible results/logs.
+                error_type = type(e).__name__
+                content_type = str((context or {}).get("content_type", "content"))
+                if outcome is not None:
+                    outcome["analyzer_errors"].append(
+                        {
+                            "analyzer": analyzer_name,
+                            "content_type": content_type,
+                            "message": f"{error_type} during analysis",
+                        }
+                    )
+                logger.error(
+                    "%s analysis failed on %s: %s",
+                    analyzer_name,
+                    content_type,
+                    error_type,
+                )
 
         return all_findings
+
+    @staticmethod
+    def _scan_outcome(
+        findings: List[SecurityFinding], outcome: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Complete a static item without treating analyzer failure as safe."""
+        errors = outcome["analyzer_errors"]
+        successful = outcome["analyzers"]
+        if errors:
+            status = "partial" if successful else "failed"
+        else:
+            status = "completed" if successful else "skipped"
+        is_safe = False if findings else True if status == "completed" else None
+        return {
+            "is_safe": is_safe,
+            "status": status,
+            "analyzers": successful,
+            "analyzer_errors": errors,
+        }
 
     async def scan_tools_file(
         self, file_path: Union[str, Path]
@@ -169,34 +293,48 @@ class StaticAnalyzer:
             tool_description = tool_data.get("description", "")
 
             all_findings = []
+            outcome: Dict[str, Any] = {"analyzers": [], "analyzer_errors": []}
 
             # Analyze description
             if tool_description:
                 desc_context = {"tool_name": tool_name, "content_type": "description"}
                 desc_findings = await self._analyze_content(
-                    tool_description, desc_context
+                    tool_description, desc_context, outcome=outcome
                 )
                 all_findings.extend(desc_findings)
 
-            # Analyze parameters (if present)
-            if "inputSchema" in tool_data:
+            # Keep the established YARA/LLM/API parameter scope for tools
+            # with inputSchema. Only the schema-reference analyzer inspects
+            # an outputSchema-only tool; expanding every analyzer here would
+            # change unrelated static scan results.
+            if "inputSchema" in tool_data or "outputSchema" in tool_data:
                 # Remove description to avoid duplicate analysis
                 params_data = {k: v for k, v in tool_data.items() if k != "description"}
                 params_json = json.dumps(params_data)
 
                 params_context = {"tool_name": tool_name, "content_type": "parameters"}
+                params_analyzers = (
+                    None
+                    if "inputSchema" in tool_data
+                    else [
+                        analyzer
+                        for analyzer in self.analyzers
+                        if isinstance(analyzer, SchemaReferenceAnalyzer)
+                    ]
+                )
                 params_findings = await self._analyze_content(
-                    params_json, params_context
+                    params_json,
+                    params_context,
+                    analyzers=params_analyzers,
+                    outcome=outcome,
                 )
                 all_findings.extend(params_findings)
 
             result = {
                 "tool_name": tool_name,
                 "tool_description": tool_description,
-                "is_safe": len(all_findings) == 0,
                 "findings": all_findings,
-                "status": "completed",
-                "analyzers": [a.name for a in self.analyzers],
+                **self._scan_outcome(all_findings, outcome),
             }
 
             results.append(result)
@@ -247,6 +385,7 @@ class StaticAnalyzer:
         for prompt_data in data["prompts"]:
             prompt_name = prompt_data.get("name", "unknown")
             prompt_description = prompt_data.get("description", "")
+            outcome: Dict[str, Any] = {"analyzers": [], "analyzer_errors": []}
 
             # Analyze prompt content
             analysis_content = f"Prompt Name: {prompt_name}\n"
@@ -259,15 +398,15 @@ class StaticAnalyzer:
 
             context = {"prompt_name": prompt_name, "content_type": "prompt"}
 
-            findings = await self._analyze_content(analysis_content, context)
+            findings = await self._analyze_content(
+                analysis_content, context, outcome=outcome
+            )
 
             result = {
                 "prompt_name": prompt_name,
                 "prompt_description": prompt_description,
-                "is_safe": len(findings) == 0,
                 "findings": findings,
-                "status": "completed",
-                "analyzers": [a.name for a in self.analyzers],
+                **self._scan_outcome(findings, outcome),
             }
 
             results.append(result)
@@ -436,23 +575,47 @@ class StaticAnalyzer:
         if not resource_mime:
             resource_mime = "text/plain" if text_content else "application/octet-stream"
 
+        # H5 fix: strip HTML on the static path so ``resource_text``
+        # produced here byte-matches what ``Scanner._analyze_resource``
+        # produces on the remote path. Without this, a ``text/html``
+        # resource scanned from a JSON file shipped raw markup to the
+        # meta-analyzer while the same resource scanned via
+        # ``scan-remote-server`` shipped extracted text — divergent
+        # prompts → divergent FP-filter decisions for the same content.
+        text_content = _extract_html_text_if_needed(text_content, resource_mime)
+
         if skip_blob_only and saw_blob and not text_content:
             return {
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
                 "resource_mime_type": resource_mime,
+                # Surface the MCP-advertised description and the text we
+                # would have analysed even on the skip path; downstream
+                # ``ResourceScanResult`` construction can persist them
+                # verbatim, and the meta-analyzer can second-guess
+                # follow-up reads of the same resource against the same
+                # evidence the primary pass saw.
+                "resource_description": resource_description,
+                "resource_text": text_content,
                 "is_safe": True,
                 "findings": [],
                 "status": "skipped",
                 "analyzers": [],
             }
 
-        # Check MIME type filter
-        if allowed_mime_types and resource_mime not in allowed_mime_types:
+        # Check MIME type filter — resource isn't scanned, return a "skipped"
+        # result that matches the shape used by the skip_blob_only branch above.
+        # Bug fix: previously this branch referenced an undefined `findings`
+        # variable, since `findings` is only assigned by the analysis path below.
+        if allowed_mime_types and _normalize_mime_type(resource_mime) not in {
+            _normalize_mime_type(m) for m in allowed_mime_types
+        }:
             return {
                 "resource_uri": resource_uri,
                 "resource_name": resource_name,
                 "resource_mime_type": resource_mime,
+                "resource_description": resource_description,
+                "resource_text": text_content,
                 "is_safe": True,
                 "findings": [],
                 "status": "skipped",
@@ -474,14 +637,33 @@ class StaticAnalyzer:
             "has_resource_content": bool(text_content),
         }
 
-        findings = await self._analyze_content(analysis_content, context)
+        outcome: Dict[str, Any] = {"analyzers": [], "analyzer_errors": []}
+        findings = await self._analyze_content(
+            analysis_content, context, outcome=outcome
+        )
 
         return {
             "resource_uri": resource_uri,
             "resource_name": resource_name,
             "resource_mime_type": resource_mime,
-            "is_safe": len(findings) == 0,
+            # P0-3 plumbing for the static path. The remote ``_analyze_resource``
+            # already persists these on the resulting ``ResourceScanResult``;
+            # without these dict keys the CLI couldn't wire them through and
+            # ``--enable-meta`` would feed the meta-analyzer ``"N/A"`` for
+            # description (sees only name + uri + mime_type), making FP
+            # filtering on file-based resource scans unsupervised.
+            #
+            # Canonical shape (matches the remote path and the skip
+            # branches above): ``resource_description`` is the
+            # MCP-advertised description verbatim, and ``resource_text``
+            # is the resource BODY only — never the LLM-formatted
+            # ``analysis_content`` blob (which prepends ``Resource URI:``,
+            # ``Name:``, ``Description:``, ``MIME Type:`` headers and
+            # would duplicate the description into the body when the
+            # meta-analyzer concats them via
+            # ``Scanner._build_resource_description_for_meta``).
+            "resource_description": resource_description,
+            "resource_text": text_content,
             "findings": findings,
-            "status": "completed",
-            "analyzers": [a.name for a in self.analyzers],
+            **self._scan_outcome(findings, outcome),
         }

@@ -30,6 +30,8 @@ Covers:
   that emit unresolved-handler stubs.
 """
 
+import pytest
+
 from mcpscanner.core.static_analysis import NativeAnalyzer
 
 
@@ -166,6 +168,95 @@ mcp.tool()(docs.fetch_agentcore_doc)
 '''
 
 
+PYTHON_MIXED_DECORATOR_AND_PROGRAMMATIC = '''
+from fastmcp import FastMCP
+
+mcp = FastMCP("demo")
+
+@mcp.tool()
+def add(a: float, b: float) -> float:
+    """Add two numbers."""
+    return a + b
+
+def sub(a: float, b: float) -> float:
+    """Subtract."""
+    return a - b
+
+mcp.add_tool(sub)
+'''
+
+
+def test_python_programmatic_not_shadowed_by_decorator_tools() -> None:
+    """Gap 8 must run even when ``@mcp.tool()`` tools exist in the file."""
+    analyzer = NativeAnalyzer(
+        PYTHON_MIXED_DECORATOR_AND_PROGRAMMATIC, "mixed.py"
+    )
+    names = {c.name for c in analyzer.extract_mcp_capability_contexts()}
+    assert names == {"add", "sub"}, names
+
+
+PYTHON_SELF_MCP_NESTED = '''
+from fastmcp import FastMCP
+
+class Server:
+    def __init__(self):
+        self.mcp = FastMCP("demo")
+
+    def setup(self):
+        @self.mcp.tool()
+        def add(a: float, b: float) -> float:
+            """Add numbers."""
+            return a + b
+'''
+
+
+def test_python_self_mcp_nested_decorator() -> None:
+    """``@self.mcp.tool()`` inside a method must be recognized."""
+    from mcpscanner.core.static_analysis.context_extractor import ContextExtractor
+
+    names = {
+        c.name
+        for c in ContextExtractor(PYTHON_SELF_MCP_NESTED, "nested.py")
+        .extract_mcp_function_contexts()
+    }
+    assert "add" in names, names
+
+
+TS_MEMBER_HANDLER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+const server = new McpServer({ name: "demo", version: "1.0" });
+const obj = { handler: (a, b) => a + b };
+server.tool("add", {}, obj.handler);
+"""
+
+
+def test_ts_member_expression_handler_emits_capability() -> None:
+    """``server.tool('add', schema, obj.handler)`` must not be dropped."""
+    analyzer = NativeAnalyzer(TS_MEMBER_HANDLER, "member.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert any(c.name == "add" for c in caps), [c.name for c in caps]
+
+
+TS_DYNAMIC_NAME = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+const server = new McpServer({ name: "demo", version: "1.0" });
+const toolName = "add";
+function handler(a, b) { return a + b; }
+server.tool(toolName, {}, handler);
+"""
+
+
+def test_ts_dynamic_tool_name_emits_unresolved_stub() -> None:
+    """``server.tool(toolName, schema, handler)`` must emit a capability."""
+    analyzer = NativeAnalyzer(TS_DYNAMIC_NAME, "dynamic.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert caps, names
+    assert any(
+        "toolName" in n or "handler" in n for n in names
+    ), names
+
+
 def test_python_crossfile_module_attr_emits_unresolved_stub() -> None:
     """``mcp.tool()(docs.search_agentcore_docs)`` references a handler
     defined in another module. Emit unresolved stubs so the
@@ -182,6 +273,71 @@ def test_python_crossfile_module_attr_emits_unresolved_stub() -> None:
             t == "<registration.unresolved>.tool"
             for t in cap.decorator_types
         ), cap.decorator_types
+
+
+# ---------------------------------------------------------------------------
+# JS/TS: Graph-style endpoint loops (``tool.alias`` + static endpoint table).
+# ---------------------------------------------------------------------------
+
+GRAPH_ENDPOINT_LOOP = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "graph", version: "1.0" });
+
+const api = {
+  endpoints: [
+    { alias: "list-messages", description: "List messages", schema: {} },
+    { alias: "get-user", description: "Get user", schema: {} },
+    { alias: "list-onenote-notebooks", description: "OneNote", schema: {} },
+  ],
+};
+
+for (const tool of api.endpoints) {
+  const toolDescription = tool.description;
+  const paramSchema = tool.schema;
+  server.tool(
+    tool.alias,
+    toolDescription,
+    paramSchema,
+    {},
+    async (params) => ({ content: [{ type: "text", text: "ok" }] }),
+  );
+}
+"""
+
+
+def test_graph_endpoint_loop_expands_literal_aliases() -> None:
+    """``for (const tool of api.endpoints)`` + ``tool.alias`` must expand
+    every static ``alias`` in the endpoint table."""
+    analyzer = NativeAnalyzer(GRAPH_ENDPOINT_LOOP, "graph-tools.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert "list-messages" in names, names
+    assert "get-user" in names, names
+    assert "list-onenote-notebooks" in names, names
+    table_caps = [
+        c
+        for c in caps
+        if any("registration.table" in t for t in c.decorator_types)
+    ]
+    registration_caps = [
+        c
+        for c in caps
+        if any(t == "<registration>.tool" for t in c.decorator_types)
+    ]
+    assert len(table_caps) == 0, [c.decorator_types for c in caps]
+    assert len(registration_caps) >= 3, [c.decorator_types for c in caps]
+
+
+def test_graph_loop_inline_handler_uses_alias_not_description() -> None:
+    """Loop registrations with shared inline handlers are covered by table
+    expansion — no duplicate ``tool.alias`` stub."""
+    analyzer = NativeAnalyzer(GRAPH_ENDPOINT_LOOP, "graph-tools.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert "list-messages" in names, names
+    assert not any("tool.alias" in n for n in names), names
+    assert not any(n == "toolDescription" for n in names), names
 
 
 # ---------------------------------------------------------------------------
@@ -204,21 +360,351 @@ tools.forEach((m) => {
 """
 
 
-def test_js_loop_registration_emits_unresolved_or_inline_handlers() -> None:
-    """``tools.forEach(m => server.tool(m.name, m.schema, m.fn))`` must
-    produce at least one capability — either inline handlers (if the
-    extractor is smart enough) or unresolved-handler stubs (Gap 8)."""
+def test_js_loop_registration_expands_static_forEach_names() -> None:
+    """``tools.forEach(m => server.tool(m.name, ...))`` must expand literal
+    tool names from the static ``tools`` table."""
     analyzer = NativeAnalyzer(JS_LOOP_REGISTRATION, "loop.js")
     caps = analyzer.extract_mcp_capability_contexts()
-    # The exact handler resolution depends on JS grammar interpretation.
-    # The minimum correctness requirement is: at least one tool capability
-    # is reported (either as inline arrow or unresolved stub) so the LLM
-    # has something to inspect.
-    if caps:
-        kinds = {
-            t.split(".", 2)[1]
-            for c in caps
-            for t in c.decorator_types
-            if t.startswith("<registration>") or t.startswith("<registration.")
-        }
-        assert "tool" in kinds, kinds
+    names = {c.name for c in caps}
+    assert names == {"add", "sub"}, names
+    table_caps = [
+        c
+        for c in caps
+        if any("registration.table" in t for t in c.decorator_types)
+    ]
+    assert len(table_caps) == 2, [c.decorator_types for c in caps]
+
+
+TS_CUSTOM_WRAPPER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+function safeTool(
+  name: string,
+  schema: Record<string, z.ZodTypeAny>,
+  handler: (args: any) => Promise<{ content: Array<{ type: "text"; text: string }> }>,
+) {
+  return server.tool(name, schema, handler);
+}
+
+safeTool(
+  "greet",
+  { name: z.string() },
+  async ({ name }) => ({ content: [{ type: "text", text: `hello ${name}` }] }),
+);
+"""
+
+
+def test_ts_custom_wrapper_uses_literal_tool_name() -> None:
+    """``safeTool('greet', schema, handler)`` must not pick schema key ``name``."""
+    analyzer = NativeAnalyzer(TS_CUSTOM_WRAPPER, "wrapper.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert names == {"greet"}, names
+
+
+TS_BOUND_METHOD_REGISTRATION = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+
+class ControlPlaneTools {
+  async memoryCreate(args: { name: string }) {
+    return { content: [{ type: "text", text: args.name }] };
+  }
+
+  async memoryGet(args: { name: string }) {
+    return { content: [{ type: "text", text: args.name }] };
+  }
+
+  register(mcp: McpServer) {
+    mcp.tool("memory_create", { name: z.string() }, this.memoryCreate.bind(this));
+    mcp.tool("memory_get", { name: z.string() }, this.memoryGet.bind(this));
+  }
+}
+"""
+
+
+def test_ts_bound_method_registration_resolves_bind_handlers() -> None:
+    """``mcp.tool('memory_create', schema, this.method.bind(this))`` must classify."""
+    analyzer = NativeAnalyzer(TS_BOUND_METHOD_REGISTRATION, "controlplane.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    names = {c.name for c in caps}
+    assert any("memory_create" in n for n in names), names
+    assert any("memory_get" in n for n in names), names
+
+
+JS_LOOP_PLUS_INDEPENDENT_DYNAMIC = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+const tools = [
+  { name: "add", schema: {}, fn: (a, b) => a + b },
+];
+
+tools.forEach((m) => {
+  server.tool(m.name, m.schema, m.fn);
+});
+
+const config = { name: "dynamic-tool" };
+server.tool(config.name, {}, () => ({ content: [{ type: "text", text: "ok" }] }));
+"""
+
+
+def test_table_loop_suppression_does_not_drop_unrelated_dynamic_registration() -> None:
+    """A static forEach table must not suppress unrelated ``config.name`` calls."""
+    analyzer = NativeAnalyzer(JS_LOOP_PLUS_INDEPENDENT_DYNAMIC, "mixed.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    table_caps = [
+        c
+        for c in caps
+        if any("registration.table" in t for t in c.decorator_types)
+    ]
+    dynamic_caps = [
+        c
+        for c in caps
+        if any(t == "<registration>.tool" for t in c.decorator_types)
+    ]
+    assert [c.name for c in table_caps] == ["add"], [c.name for c in caps]
+    assert len(dynamic_caps) == 1, [c.name for c in caps]
+    assert "config.name" in dynamic_caps[0].name, dynamic_caps[0].name
+
+
+TS_PROMPT_WRAPPER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0.0" });
+
+function safePrompt(name, schema, handler) {
+  return server.prompt(name, schema, handler);
+}
+
+safePrompt("greet", {}, async () => ({ messages: [] }));
+"""
+
+
+def test_ts_prompt_wrapper_preserves_prompt_capability_kind() -> None:
+    """Wrappers that delegate to ``server.prompt`` must not be tagged as tools."""
+    analyzer = NativeAnalyzer(TS_PROMPT_WRAPPER, "prompt-wrapper.ts")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.decorator_types for c in caps]
+    assert any("<registration>.prompt" in t for t in caps[0].decorator_types)
+    assert not any("<registration>.tool" in t for t in caps[0].decorator_types)
+
+
+# ---------------------------------------------------------------------------
+# PR review regressions (table loops, bind handlers, receiver trust).
+# ---------------------------------------------------------------------------
+
+TABLE_LOOP_INLINE_HANDLER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { execSync } from "node:child_process";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+const tools = [{ name: "run_cmd", schema: {}, description: "run" }];
+
+tools.forEach((m) => {
+  server.tool(m.name, m.schema, async ({ command }) => execSync(command));
+});
+"""
+
+
+def test_table_loop_inline_handler_preserves_executable_evidence() -> None:
+    """Shared inline handlers in table loops must not collapse to name-only stubs."""
+    analyzer = NativeAnalyzer(TABLE_LOOP_INLINE_HANDLER, "loop-inline.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [(c.name, c.decorator_types) for c in caps]
+    cap = caps[0]
+    assert cap.name == "run_cmd", cap.name
+    assert any("<registration>.tool" in t for t in cap.decorator_types), cap.decorator_types
+    assert not any("registration.table" in t for t in cap.decorator_types)
+    call_names = {c.get("name") for c in cap.function_calls or []}
+    assert "execSync" in call_names, call_names
+    assert cap.has_subprocess_calls is True
+
+
+BOUND_METHOD_CLASS_RESOLUTION = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+class Safe {
+  run() {
+    return "safe";
+  }
+}
+
+class Dangerous {
+  run() {
+    eval("1");
+    return "danger";
+  }
+}
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+const d = new Dangerous();
+server.tool("ghost", {}, d.run.bind(d));
+"""
+
+
+def test_bind_handler_resolves_receiver_class_not_first_same_named_method() -> None:
+    """``d.run.bind(d)`` must resolve to ``Dangerous.run``, not an earlier ``Safe.run``."""
+    analyzer = NativeAnalyzer(BOUND_METHOD_CLASS_RESOLUTION, "bind-class.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert len(caps) == 1, [c.name for c in caps]
+    cap = caps[0]
+    # The surfaced label is the registered MCP name; which method the bind
+    # resolved to is evidenced by the body, since only ``Dangerous.run``
+    # calls ``eval`` and ``Safe.run`` merely returns a string.
+    assert cap.name == "ghost", cap.name
+    call_names = {c.get("name") for c in cap.function_calls or []}
+    assert "eval" in call_names, call_names
+    assert cap.has_eval_exec is True, cap.has_eval_exec
+
+
+NON_MCP_FOREACH_TABLE = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+const models = [{ name: "gpt-prod", description: "model config" }];
+models.forEach(console.log);
+"""
+
+
+def test_non_mcp_foreach_tables_are_not_expanded() -> None:
+    """``models.forEach(console.log)`` must not emit MCP tool stubs."""
+    analyzer = NativeAnalyzer(NON_MCP_FOREACH_TABLE, "models.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert caps == [], [(c.name, c.decorator_types) for c in caps]
+
+
+UNTRUSTED_NESTED_SERVER_RECEIVER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+const attacker = { server: { tool: (n, s, h) => {} } };
+attacker.server.tool("ghost", {}, () => {});
+"""
+
+
+def test_untrusted_nested_server_receiver_is_ignored() -> None:
+    """``attacker.server.tool`` must not be trusted just because ``server`` appears."""
+    analyzer = NativeAnalyzer(UNTRUSTED_NESTED_SERVER_RECEIVER, "decoy.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert caps == [], [(c.name, c.decorator_types) for c in caps]
+
+
+SHADOWED_WRAPPER_PARAMETER = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+function safeTool(name, schema, handler) {
+  return server.tool(name, schema, handler);
+}
+
+function caller(safeTool) {
+  safeTool("ghost", {}, () => eval("1"));
+}
+
+caller(() => {});
+"""
+
+
+def test_shadowed_wrapper_parameter_is_not_treated_as_registration() -> None:
+    """Parameters named like a wrapper must not inherit wrapper registration semantics."""
+    analyzer = NativeAnalyzer(SHADOWED_WRAPPER_PARAMETER, "shadow-wrapper.js")
+    caps = analyzer.extract_mcp_capability_contexts()
+    assert caps == [], [(c.name, c.decorator_types) for c in caps]
+
+
+# ---------------------------------------------------------------------------
+# Local declarations that rebind a wrapper name. Only parameters used to be
+# recognised as shadows, so any of these produced a ghost capability carrying
+# the local function's evidence (e.g. an ``eval`` that the MCP wrapper never
+# reaches).
+# ---------------------------------------------------------------------------
+
+_LOCAL_SHADOW_PREAMBLE = """\
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "demo", version: "1.0" });
+
+function safeTool(name, schema, handler) {
+  return server.tool(name, schema, handler);
+}
+
+safeTool("real", {}, async () => ({ content: [] }));
+"""
+
+
+LOCAL_SHADOW_BODIES = {
+    "const": """\
+function caller(other) {
+  const safeTool = other;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "let": """\
+function caller(other) {
+  let safeTool = other;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "var": """\
+function caller(other) {
+  var safeTool = other;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "destructured": """\
+function caller(mod) {
+  const { safeTool } = mod;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "renamed_destructure": """\
+function caller(mod) {
+  const { impl: safeTool } = mod;
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "nested_function": """\
+function caller() {
+  function safeTool(a, b, c) { return 1; }
+  safeTool("ghost", {}, () => eval("1"));
+}
+""",
+    "outer_scope": """\
+function outer(other) {
+  const safeTool = other;
+  function inner() {
+    safeTool("ghost", {}, () => eval("1"));
+  }
+}
+""",
+}
+
+
+@pytest.mark.parametrize("kind", sorted(LOCAL_SHADOW_BODIES))
+def test_local_binding_shadow_does_not_emit_ghost_capability(kind: str) -> None:
+    """A local rebinding of the wrapper name is not the MCP wrapper."""
+    source = _LOCAL_SHADOW_PREAMBLE + "\n" + LOCAL_SHADOW_BODIES[kind]
+    analyzer = NativeAnalyzer(source, "local-shadow.ts")
+    names = {c.name for c in analyzer.extract_mcp_capability_contexts()}
+    assert "ghost" not in names, names
+    # The genuine module-level registration must survive the stricter check.
+    assert "real" in names, names
+
+
+def test_unshadowed_wrapper_call_inside_function_still_registers() -> None:
+    """Tightening shadow detection must not suppress real wrapper calls."""
+    unshadowed_call = """\
+function caller() {
+  safeTool("legit", {}, async () => ({ content: [] }));
+}
+"""
+    source = _LOCAL_SHADOW_PREAMBLE + "\n" + unshadowed_call
+    analyzer = NativeAnalyzer(source, "unshadowed.ts")
+    names = {c.name for c in analyzer.extract_mcp_capability_contexts()}
+    assert {"real", "legit"} <= names, names

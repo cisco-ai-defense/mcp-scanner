@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ..core.analyzers.meta_analyzer import build_meta_audit_payload
 from ..core.auth import Auth
 from ..core.exceptions import (
     MCPAuthenticationError,
@@ -26,6 +27,7 @@ from ..core.exceptions import (
 )
 from ..core.models import (
     AllToolsScanResponse,
+    AnalyzerEnum,
     APIScanRequest,
     FormattedToolScanResponse,
     OutputFormat,
@@ -53,6 +55,14 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 
+def _hybrid_routing_kwargs(request: APIScanRequest) -> Dict[str, Optional[str]]:
+    """Pass hybrid connector routing from API request into the scanner."""
+    return {
+        "connector_id": request.connector_id,
+        "tenant_id": request.tenant_id,
+    }
+
+
 def get_scanner() -> ScannerFactory:
     """
     Dependency injection placeholder for the ScannerFactory.
@@ -60,6 +70,22 @@ def get_scanner() -> ScannerFactory:
     """
     raise NotImplementedError(
         "This dependency must be overridden in the main application."
+    )
+
+
+def _build_meta_analysis_audit(scanner_result: Any) -> Optional[Dict[str, Any]]:
+    """Build the API ``meta_analysis`` audit block from a scan result.
+
+    Thin shim over
+    ``mcpscanner.core.analyzers.meta_analyzer.build_meta_audit_payload``
+    so the API and CLI artifacts (``report_generator.results_to_json``)
+    stay byte-identical on field names, ordering, and defaults. Earlier
+    versions duplicated the formatting in two places and the two
+    serializers drifted on the default reason text — keep them on one
+    code path.
+    """
+    return build_meta_audit_payload(
+        getattr(scanner_result, "meta_filtered_findings", None) or []
     )
 
 
@@ -169,6 +195,8 @@ def _group_findings_for_api(
         "yara_analyzer": "YARA",
         "llm_analyzer": "LLM",
     }
+    if AnalyzerEnum.SCHEMA in scanner_result.analyzers:
+        default_analyzers["schema_analyzer"] = "SCHEMA"
 
     # Discover custom analyzers from the scanner instance.
     custom_analyzers = {a.name: a.name for a in scanner.get_custom_analyzers()}
@@ -281,6 +309,17 @@ def _group_findings_for_api(
             "total_findings": len(vulns),
         }
 
+        errors = [
+            error
+            for error in scanner_result.analyzer_errors
+            if error.get("analyzer", "").casefold() == internal_name.casefold()
+        ]
+        if errors:
+            analyzer_result["status"] = "partial" if vulns else "error"
+            analyzer_result["errors"] = errors
+            if not vulns:
+                analyzer_result["severity"] = "UNKNOWN"
+
         # Add MCP Taxonomy hierarchy if there are findings
         if vulns:
             threats_hierarchy = _build_taxonomy_hierarchy(vulns)
@@ -303,6 +342,8 @@ def _convert_scanner_result_to_tool_api_result(
         status=scanner_result.status,
         findings=grouped_findings,
         is_safe=scanner_result.is_safe,
+        analyzer_errors=scanner_result.analyzer_errors,
+        meta_analysis=_build_meta_analysis_audit(scanner_result),
     )
 
 
@@ -366,7 +407,8 @@ async def scan_tool_endpoint(
     )
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -389,8 +431,9 @@ async def scan_tool_endpoint(
             server_url=request.server_url,
             tool_name=request.tool_name,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         # Only warn if analyzers actually failed to run
         if len(result.findings) == 0 and len(result.analyzers) == 0:
@@ -457,7 +500,8 @@ async def scan_all_tools_endpoint(
     logger.debug(f"Starting full server scan - server: {request.server_url}")
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -478,8 +522,9 @@ async def scan_all_tools_endpoint(
         results = await scanner.scan_remote_server_tools(
             server_url=request.server_url,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned {len(results)} tools")
 
@@ -552,7 +597,8 @@ async def scan_prompt_endpoint(
     )
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -574,8 +620,9 @@ async def scan_prompt_endpoint(
             server_url=request.server_url,
             prompt_name=request.prompt_name,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
 
@@ -589,7 +636,11 @@ async def scan_prompt_endpoint(
             "status": result.status,
             "is_safe": result.is_safe,
             "findings": grouped_findings,
+            "analyzer_errors": result.analyzer_errors,
         }
+        meta_audit = _build_meta_analysis_audit(result)
+        if meta_audit is not None:
+            response["meta_analysis"] = meta_audit
 
         logger.debug(f"Prompt scan completed successfully for {request.prompt_name}")
         return response
@@ -625,7 +676,8 @@ async def scan_all_prompts_endpoint(
     logger.debug(f"Starting all prompts scan - server: {request.server_url}")
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -646,8 +698,9 @@ async def scan_all_prompts_endpoint(
         results = await scanner.scan_remote_server_prompts(
             server_url=request.server_url,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned {len(results)} prompts")
 
@@ -657,21 +710,25 @@ async def scan_all_prompts_endpoint(
             # Use helper function to group findings
             grouped_findings = _group_findings_for_api(result, scanner)
 
-            prompt_results.append(
-                {
-                    "prompt_name": result.prompt_name,
-                    "prompt_description": result.prompt_description,
-                    "status": result.status,
-                    "is_safe": result.is_safe,
-                    "findings": grouped_findings,
-                }
-            )
+            prompt_entry = {
+                "prompt_name": result.prompt_name,
+                "prompt_description": result.prompt_description,
+                "status": result.status,
+                "is_safe": result.is_safe,
+                "findings": grouped_findings,
+                "analyzer_errors": result.analyzer_errors,
+            }
+            meta_audit = _build_meta_analysis_audit(result)
+            if meta_audit is not None:
+                prompt_entry["meta_analysis"] = meta_audit
+            prompt_results.append(prompt_entry)
 
         response = {
             "server_url": request.server_url,
             "total_prompts": len(results),
-            "safe_prompts": sum(1 for r in results if r.is_safe),
-            "unsafe_prompts": sum(1 for r in results if not r.is_safe),
+            "safe_prompts": sum(1 for r in results if r.is_safe is True),
+            "unsafe_prompts": sum(1 for r in results if r.is_safe is False),
+            "incomplete_prompts": sum(1 for r in results if r.is_safe is None),
             "prompts": prompt_results,
         }
 
@@ -713,7 +770,8 @@ async def scan_resource_endpoint(
     )
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -738,17 +796,15 @@ async def scan_resource_endpoint(
             server_url=request.server_url,
             resource_uri=request.resource_uri,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
             allowed_mime_types=allowed_mime_types,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
 
         # Convert result to API format using helper function
-        if result.status == "completed":
-            grouped_findings = _group_findings_for_api(result, scanner)
-        else:
-            grouped_findings = {}
+        grouped_findings = _group_findings_for_api(result, scanner)
 
         response = {
             "server_url": request.server_url,
@@ -756,9 +812,13 @@ async def scan_resource_endpoint(
             "resource_name": result.resource_name,
             "resource_mime_type": result.resource_mime_type,
             "status": result.status,
-            "is_safe": result.is_safe if result.status == "completed" else None,
+            "is_safe": result.is_safe,
             "findings": grouped_findings,
+            "analyzer_errors": result.analyzer_errors,
         }
+        meta_audit = _build_meta_analysis_audit(result)
+        if meta_audit is not None:
+            response["meta_analysis"] = meta_audit
 
         logger.debug(f"Resource scan completed successfully for {request.resource_uri}")
         return response
@@ -796,7 +856,8 @@ async def scan_all_resources_endpoint(
     logger.debug(f"Starting all resources scan - server: {request.server_url}")
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -820,29 +881,33 @@ async def scan_all_resources_endpoint(
         results = await scanner.scan_remote_server_resources(
             server_url=request.server_url,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
             allowed_mime_types=allowed_mime_types,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned {len(results)} resources")
 
         # Convert results to API format
         resource_results = []
         for result in results:
-            if result.status == "completed":
+            if result.status in {"completed", "partial", "failed"}:
                 # Use helper function to group findings
                 grouped_findings = _group_findings_for_api(result, scanner)
 
-                resource_results.append(
-                    {
-                        "resource_uri": result.resource_uri,
-                        "resource_name": result.resource_name,
-                        "resource_mime_type": result.resource_mime_type,
-                        "status": result.status,
-                        "is_safe": result.is_safe,
-                        "findings": grouped_findings,
-                    }
-                )
+                resource_entry = {
+                    "resource_uri": result.resource_uri,
+                    "resource_name": result.resource_name,
+                    "resource_mime_type": result.resource_mime_type,
+                    "status": result.status,
+                    "is_safe": result.is_safe,
+                    "findings": grouped_findings,
+                    "analyzer_errors": result.analyzer_errors,
+                }
+                meta_audit = _build_meta_analysis_audit(result)
+                if meta_audit is not None:
+                    resource_entry["meta_analysis"] = meta_audit
+                resource_results.append(resource_entry)
             else:
                 # Skipped or failed resources
                 resource_results.append(
@@ -853,18 +918,21 @@ async def scan_all_resources_endpoint(
                         "status": result.status,
                         "is_safe": None,
                         "findings": {},
+                        "analyzer_errors": result.analyzer_errors,
                     }
                 )
 
-        completed = [r for r in results if r.status == "completed"]
+        completed = [r for r in results if r.status in {"completed", "partial"}]
         response = {
             "server_url": request.server_url,
             "total_resources": len(results),
             "scanned_resources": len(completed),
             "skipped_resources": sum(1 for r in results if r.status == "skipped"),
             "failed_resources": sum(1 for r in results if r.status == "failed"),
-            "safe_resources": sum(1 for r in completed if r.is_safe),
-            "unsafe_resources": sum(1 for r in completed if not r.is_safe),
+            "partial_resources": sum(1 for r in results if r.status == "partial"),
+            "safe_resources": sum(1 for r in results if r.is_safe is True),
+            "unsafe_resources": sum(1 for r in results if r.is_safe is False),
+            "incomplete_resources": sum(1 for r in results if r.is_safe is None),
             "allowed_mime_types": allowed_mime_types,
             "resources": resource_results,
         }
@@ -907,7 +975,8 @@ async def scan_instructions_endpoint(
     logger.debug(f"Starting instructions scan - server: {request.server_url}")
 
     try:
-        scanner = scanner_factory(request.analyzers)
+        analyzers = request.resolved_analyzers()
+        scanner = scanner_factory(analyzers)
 
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
@@ -922,16 +991,14 @@ async def scan_instructions_endpoint(
         result = await scanner.scan_remote_server_instructions(
             server_url=request.server_url,
             auth=auth,
-            analyzers=request.analyzers,
+            analyzers=analyzers,
             http_headers=http_headers,
+            **_hybrid_routing_kwargs(request),
         )
         logger.debug(f"Scanner completed - scanned instructions from server")
 
         # Convert result to API format using helper function
-        if result.status == "completed":
-            grouped_findings = _group_findings_for_api(result, scanner)
-        else:
-            grouped_findings = {}
+        grouped_findings = _group_findings_for_api(result, scanner)
 
         response = {
             "server_url": request.server_url,
@@ -939,9 +1006,13 @@ async def scan_instructions_endpoint(
             "protocol_version": result.protocol_version,
             "instructions": result.instructions,
             "status": result.status,
-            "is_safe": result.is_safe if result.status == "completed" else None,
+            "is_safe": result.is_safe,
             "findings": grouped_findings,
+            "analyzer_errors": result.analyzer_errors,
         }
+        meta_audit = _build_meta_analysis_audit(result)
+        if meta_audit is not None:
+            response["meta_analysis"] = meta_audit
 
         logger.debug(f"Instructions scan completed successfully")
         return response
