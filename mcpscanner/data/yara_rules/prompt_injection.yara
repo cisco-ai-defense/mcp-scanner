@@ -14,8 +14,13 @@ rule prompt_injection{
 
     strings:
 
-        // Instruction override patterns
-        $instruction_overrides = /\b(Bypass|Dis\W?regard|Do not (follow|Obey)|Forget|Ignore)\s+((all|any|each|every|most|some)\s+(of\s+)?)?((your|the)\s)?(command|communication|conte[nx]t|conversation|data|guidelines|input|instruction|message|request|response|text)(s)?/i
+        // Instruction override patterns.
+        // Positional words are their own optional group, after the quantifier
+        // and the article. That matches "previous instructions", "all previous
+        // instructions", and "the above instructions". They cannot live in the
+        // quantifier alternation: once "all" is consumed, the next token still
+        // has to be an article or a noun, so "all previous" would miss.
+        $instruction_overrides = /\b(Bypass|Dis\W?regard|Do not (follow|Obey)|Forget|Ignore)\s+((all|any|each|every|most|some)\s+(of\s+)?)?((your|the)\s)?((previous|prior|above|earlier|preceding)\s+)?(command|communication|conte[nx]t|conversation|data|guidelines|input|instruction|message|request|response|text)(s)?/i
 
         // Tool injection commands
         $tool_injection_commands = /\b(inject tool[_\s]calls?|now call function|use function)\b/i
