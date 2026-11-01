@@ -413,6 +413,58 @@ class TestLLMAnalyzer:
         assert "HIGH" in severities
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-opus-4-7",
+            "vertex_ai/claude-opus-4-7",
+            "bedrock/us.anthropic.claude-opus-4-7",
+        ],
+    )
+    @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
+    async def test_make_llm_request_omits_temperature_for_opus_47(
+        self, mock_completion, model
+    ):
+        """Opus 4.7 rejects `temperature` with a 400, so it must not be sent."""
+        config = Config(llm_provider_api_key="test-api-key", llm_model=model)
+        analyzer = LLMAnalyzer(config)
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "{}"
+        mock_completion.return_value = mock_response
+
+        await analyzer._make_llm_request(
+            messages=[{"role": "user", "content": "hi"}],
+            context="opus 4.7 temperature",
+        )
+
+        kwargs = mock_completion.call_args.kwargs
+        assert kwargs["model"] == model
+        assert "temperature" not in kwargs
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
+    async def test_make_llm_request_keeps_temperature_for_sonnet(
+        self, mock_completion
+    ):
+        config = Config(
+            llm_provider_api_key="test-api-key",
+            llm_model="anthropic/claude-sonnet-4-5",
+        )
+        analyzer = LLMAnalyzer(config)
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "{}"
+        mock_completion.return_value = mock_response
+
+        await analyzer._make_llm_request(
+            messages=[{"role": "user", "content": "hi"}],
+            context="sonnet temperature",
+        )
+
+        assert mock_completion.call_args.kwargs["temperature"] == analyzer._temperature
+
+    @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_make_llm_request_passes_drop_params_for_gpt5(self, mock_completion):
         """GPT-5.x models reject unsupported params; drop_params must be set."""
