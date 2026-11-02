@@ -424,6 +424,10 @@ class TestLLMAnalyzer:
             "anthropic/claude-sonnet-5-5",
             "anthropic/claude-haiku-5-5",
             "anthropic/claude-fable-5-1",
+            "anthropic/claude-mythos-5",
+            "anthropic/claude-mythos-5-1",
+            "anthropic/claude-mythos-preview",
+            "bedrock/anthropic.claude-mythos-5",
         ],
     )
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
@@ -495,3 +499,13 @@ class TestLLMAnalyzer:
         assert kwargs["temperature"] == 1
         assert "max_completion_tokens" in kwargs
         assert "max_tokens" not in kwargs
+
+
+@pytest.mark.parametrize(
+    "model", ["openai/fable-gpt-4o", "openai/gpt-4o", "ollama/mythos-7b"]
+)
+def test_supports_temperature_for_non_claude_models(model):
+    """Only Claude model ids lose `temperature`; a name like `fable` must not."""
+    from mcpscanner.utils.llm_request_params import supports_temperature
+
+    assert supports_temperature(model)

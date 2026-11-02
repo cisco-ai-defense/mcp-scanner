@@ -6,7 +6,8 @@ import re
 
 # Claude models that reject sampling parameters such as ``temperature``.
 _NO_TEMPERATURE_RE = re.compile(
-    r"opus-4[-.][7-9]|opus-[5-9]|fable|sonnet-[5-9]|haiku-[5-9]"
+    r"opus-4[-.][7-9]|opus-[5-9]|claude-fable|claude-mythos"
+    r"|sonnet-[5-9]|haiku-[5-9]"
 )
 
 
@@ -14,7 +15,7 @@ def supports_temperature(model: str) -> bool:
     """Return whether ``temperature`` may be sent for this model.
 
     Opus 4.7 and later Claude models (Opus 4.8+, Opus 5.x, Sonnet 5.x,
-    Haiku 5.x, Fable) reject ``temperature`` with a 400 (``temperature is
+    Haiku 5.x, Fable, Mythos) reject ``temperature`` with a 400 (``temperature is
     deprecated for this model``) on every provider that serves them
     (Anthropic, Vertex AI, Bedrock), so the knob is omitted for them.
     """
