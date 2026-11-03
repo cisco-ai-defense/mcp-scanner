@@ -256,6 +256,30 @@ class TestInstructionOverrideQualifiers:
             f"got: {[f.details.get('threat_type') for f in findings]}"
         )
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "description",
+        [
+            # text/data/context are prefixes of these longer words. The noun
+            # group has to end on a word boundary or they match inside them.
+            "ignore previous textual differences",
+            "Ignore previous database backups.",
+            "Ignore previous contextual notes",
+        ],
+    )
+    async def test_noun_prefix_is_not_an_override(self, description):
+        """text, data, and context must be whole words, not prefixes."""
+        findings = await self.analyzer.analyze(description)
+        prompt_hits = [
+            f
+            for f in findings
+            if f.details.get("raw_response", {}).get("rule") == "prompt_injection"
+        ]
+        assert not prompt_hits, (
+            f"prompt_injection should not match {description!r}, got: "
+            f"{[f.details.get('threat_type') for f in prompt_hits]}"
+        )
+
 
 class TestDataExfiltration:
     """Test cases for data exfiltration detection."""

@@ -20,7 +20,10 @@ rule prompt_injection{
         // instructions", and "the above instructions". They cannot live in the
         // quantifier alternation: once "all" is consumed, the next token still
         // has to be an article or a noun, so "all previous" would miss.
-        $instruction_overrides = /\b(Bypass|Dis\W?regard|Do not (follow|Obey)|Forget|Ignore)\s+((all|any|each|every|most|some)\s+(of\s+)?)?((your|the)\s)?((previous|prior|above|earlier|preceding)\s+)?(command|communication|conte[nx]t|conversation|data|guidelines|input|instruction|message|request|response|text)(s)?/i
+        // The noun group ends with a word boundary, after the optional plural,
+        // so text/data/context cannot match as prefixes of longer words
+        // (textual, database, contextual).
+        $instruction_overrides = /\b(Bypass|Dis\W?regard|Do not (follow|Obey)|Forget|Ignore)\s+((all|any|each|every|most|some)\s+(of\s+)?)?((your|the)\s)?((previous|prior|above|earlier|preceding)\s+)?(command|communication|conte[nx]t|conversation|data|guidelines|input|instruction|message|request|response|text)(s)?\b/i
 
         // Tool injection commands
         $tool_injection_commands = /\b(inject tool[_\s]calls?|now call function|use function)\b/i
