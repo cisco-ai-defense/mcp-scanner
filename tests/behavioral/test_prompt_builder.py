@@ -43,7 +43,7 @@ class TestPromptBuilder:
             / "prompts"
             / "code_alignment_threat_analysis_prompt.md"
         )
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
         assert len(content) > 0, "Prompt template should not be empty"
         assert (
             "DATA EXFILTRATION" in content
@@ -58,7 +58,7 @@ class TestPromptBuilder:
             / "prompts"
             / "code_alignment_threat_analysis_prompt.md"
         )
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
 
         # Check for key threat categories mentioned in the prompt
         # Note: This prompt uses descriptive section titles for mismatch detection
@@ -82,7 +82,7 @@ class TestPromptBuilder:
             / "prompts"
             / "code_alignment_threat_analysis_prompt.md"
         )
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
 
         # Key concepts for mismatch detection
         keywords = ["mismatch", "docstring", "dataflow", "claims", "actual"]
@@ -100,7 +100,7 @@ class TestPromptBuilder:
             / "prompts"
             / "code_alignment_threat_analysis_prompt.md"
         )
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
 
         assert len(content) > 5000, f"Prompt seems too short: {len(content)} characters"
 
@@ -113,7 +113,7 @@ class TestPromptBuilder:
             / "prompts"
             / "code_alignment_threat_analysis_prompt.md"
         )
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
 
         # Should define threat categories (severity is in threats.py, not in the prompt)
         for threat in ["PROMPT INJECTION", "DATA EXFILTRATION", "TOOL POISONING"]:
@@ -128,7 +128,7 @@ class TestPromptBuilder:
             / "prompts"
             / "code_alignment_threat_analysis_prompt.md"
         )
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
 
         # Should have JSON format instructions
         json_keywords = ["json", "{", "}"]
@@ -155,7 +155,7 @@ class TestPromptBuilder:
             / "prompts"
             / "code_alignment_threat_analysis_prompt.md"
         )
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
 
         # Prompt should be comprehensive (at least 5000 characters)
         assert len(content) > 5000, f"Prompt seems too short: {len(content)} characters"
@@ -169,7 +169,7 @@ class TestPromptBuilder:
             / "prompts"
             / "code_alignment_threat_analysis_prompt.md"
         )
-        content = prompt_path.read_text()
+        content = prompt_path.read_text(encoding="utf-8")
 
         # Should have examples
         example_keywords = ["example", "docstring", "actual behavior"]
