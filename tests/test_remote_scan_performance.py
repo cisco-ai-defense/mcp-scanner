@@ -1424,6 +1424,44 @@ async def test_stream_heartbeats_during_a_slow_tool_and_hides_error_text(
 
 
 @pytest.mark.asyncio
+async def test_stream_disconnect_unblocks_a_full_queue(monkeypatch):
+    """A full queue must not trap shutdown after the client leaves."""
+    from mcpscanner.api.router import _ndjson_scan_stream
+
+    monkeypatch.setattr(MCPScannerConstants, "STREAM_QUEUE_SIZE", 1)
+    monkeypatch.setattr(MCPScannerConstants, "STREAM_HEARTBEAT_SECONDS", 30)
+    second_put = asyncio.Event()
+    original_put = asyncio.Queue.put
+
+    async def track_put(self, item):
+        if not second_put.is_set():
+            second_put.set()
+            await original_put(self, item)
+            return
+        await original_put(self, item)
+
+    monkeypatch.setattr(asyncio.Queue, "put", track_put)
+
+    async def items():
+        yield SimpleNamespace(name="one")
+        yield SimpleNamespace(name="two")
+        await asyncio.Event().wait()
+
+    class Request:
+        async def is_disconnected(self):
+            return False
+
+    stream = _ndjson_scan_stream(
+        Request(), items(), lambda result: {"name": result.name}
+    )
+    iterator = stream.__aiter__()
+    assert "started" in await iterator.__anext__()
+    await asyncio.wait_for(second_put.wait(), timeout=1)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(iterator.aclose(), timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_stream_done_is_incomplete_when_the_list_stops(config):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

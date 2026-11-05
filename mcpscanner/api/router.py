@@ -53,7 +53,12 @@ from ..core.result import (
     group_findings_by_analyzer,
 )
 from ..config.constants import MCPScannerConstants
-from ..core.scanner import ScanListNotice, Scanner, ScannerFactory
+from ..core.scanner import (
+    ScanListNotice,
+    Scanner,
+    ScannerFactory,
+    _signal_stream_end,
+)
 from ..utils.logging_config import get_logger
 from ..core.auth import AuthType
 
@@ -1211,7 +1216,14 @@ async def _ndjson_scan_stream(
                 _ndjson({"event": "error", "message": type(exc).__name__})
             )
         finally:
-            await queue.put(finished)
+            # A disconnect stops the reader. A waiting put would then block
+            # forever on a full queue, and cancellation is not delivered to
+            # that new wait.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                _signal_stream_end(queue, finished)
+            else:
+                await queue.put(finished)
 
     producer = asyncio.create_task(produce())
     try:
@@ -1234,6 +1246,8 @@ async def _ndjson_scan_stream(
     finally:
         if not producer.done():
             producer.cancel()
+            while not queue.empty():
+                queue.get_nowait()
         with suppress(asyncio.CancelledError, Exception):
             await producer
 

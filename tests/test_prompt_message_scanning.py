@@ -424,7 +424,7 @@ async def test_prompt_aggregate_budget_stops_further_fetches(config, monkeypatch
             analyzers=[AnalyzerEnum.YARA],
         )
     assert session.get_prompt.await_count == 1
-    assert session.get_prompt.await_count == 1
+    scanner._analyze_prompt.assert_not_awaited()
     assert results[0].status == "failed"
     assert results[1].status == "failed"
     assert results[1].prompt_name == "second"
