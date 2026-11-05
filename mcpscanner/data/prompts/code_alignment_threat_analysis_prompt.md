@@ -81,6 +81,11 @@ Class 2 does not accuse the author of anything. It reports attack surface reacha
 by an untrusted MCP caller. An honest description does not make the sink safe;
 absence of deception lowers severity rather than suppressing the finding.
 
+Class 2 is accepted only when `reachability_evidence` names an MCP parameter and
+a sink that the supplied parameter-flow facts show that parameter reaching.
+Prose in `dataflow_evidence` is not proof. A sink that appears in the function
+but is not reached by that parameter is not Class 2.
+
 ### Class 3 — `DOCUMENTATION_MISMATCH`
 
 The description does not describe the implementation, but the implementation is
@@ -1215,7 +1220,8 @@ Respond with ONLY a valid JSON object:
   "description_claims": "What the docstring says the function does",
   "actual_behavior": "What the code actually does (with specific line references)",
   "security_implications": "Why this is dangerous for users",
-  "dataflow_evidence": "Specific dataflow paths showing the mismatch (param → operations → sink)"
+  "dataflow_evidence": "Specific dataflow paths showing the mismatch (param → operations → sink)",
+  "reachability_evidence": {"parameter": "mcp parameter name", "sink": "call name from parameter-flow facts"}
 }
 ```
 
@@ -1224,7 +1230,7 @@ Respond with ONLY a valid JSON object:
 - **mismatch_detected**: `true` if there is a clear discrepancy between docstring and implementation, OR if malicious code is detected regardless of docstring quality
 - **finding_class**: REQUIRED when mismatch_detected is true. Exactly one of:
   - `"MALICIOUS_BEHAVIOR"` — deliberate attack, deception, or hidden functionality (asserts intent)
-  - `"CAPABILITY_RISK"` — MCP parameter reaches a dangerous sink unvalidated (asserts reachability only)
+  - `"CAPABILITY_RISK"` — MCP parameter reaches a dangerous sink unvalidated (asserts reachability only). REQUIRED `reachability_evidence` must be an object or list of objects `{"parameter", "sink"}` copied from the parameter-flow facts. A prose `dataflow_evidence` string does not satisfy this.
   - `"DOCUMENTATION_MISMATCH"` — description/implementation divergence with no security risk
 
   Evaluate in that order and emit the first that applies. Do not invent other values.
@@ -1294,7 +1300,8 @@ what makes this Class 1 rather than Class 2.
   "description_claims": "Execute a shell command and return its output",
   "actual_behavior": "Passes the 'command' parameter to subprocess.run(command, shell=True) with no allowlist or escaping",
   "security_implications": "Any MCP caller can execute arbitrary commands on the host; the honest description does not constrain what an untrusted caller may send",
-  "dataflow_evidence": "Parameter 'command' flows unmodified to subprocess.run(command, shell=True) at line 8"
+  "dataflow_evidence": "Parameter 'command' flows unmodified to subprocess.run(command, shell=True) at line 8",
+  "reachability_evidence": {"parameter": "command", "sink": "subprocess.run"}
 }
 ```
 **Note**: No deception here — the description is accurate. It is still reported

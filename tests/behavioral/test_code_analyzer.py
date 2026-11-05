@@ -656,6 +656,7 @@ def run(cmd: str) -> str:
             if (f.get("parameter_name") or f.get("parameter")) == "cmd"
         )
         assert flow.get("reaches_external") is True
+        assert "subprocess.run" in (flow.get("external_sinks") or [])
 
     def test_merge_unique_preserve_order_is_stable(self) -> None:
         assert _merge_unique_preserve_order(["helper", "sink"], ["sink", "other"]) == [
