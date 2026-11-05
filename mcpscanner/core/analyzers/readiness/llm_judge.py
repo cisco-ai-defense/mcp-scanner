@@ -266,7 +266,10 @@ class ReadinessLLMJudge:
 
         apply_model_constraints(self.model, request_params)
 
-        response = await acompletion(**request_params, drop_params=True)
+        from mcpscanner.utils.llm_gate import llm_request_gate
+
+        async with llm_request_gate():
+            response = await acompletion(**request_params, drop_params=True)
 
         # Parse response
         content = response.choices[0].message.content
@@ -296,10 +299,17 @@ class ReadinessLLMJudge:
         """Convert LLM evaluation results to SecurityFinding objects."""
         findings: List[SecurityFinding] = []
 
-        # Check for parse errors
+        # A parse failure or an error object is not a clean evaluation.
+        # The model text stays out of the finding and the log.
         if "error" in result:
-            self.logger.warning(f"LLM evaluation error: {result.get('error')}")
-            return []
+            self.logger.warning("LLM readiness response was not usable")
+            return [
+                build_infrastructure_error_finding(
+                    analyzer_name="READINESS-LLM",
+                    subject=tool_name,
+                    error=ValueError("LLM readiness response was not usable"),
+                )
+            ]
 
         readiness_analysis = result.get("readiness_analysis", {})
 

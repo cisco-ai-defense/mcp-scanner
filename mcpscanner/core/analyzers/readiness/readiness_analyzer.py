@@ -80,8 +80,38 @@ Optional LLM-based Semantic Analysis:
 import json
 from typing import Any, Dict, List, Optional
 
+from ....utils.analyzer_errors import build_infrastructure_error_finding
 from ..base import BaseAnalyzer, SecurityFinding
 from .opa_provider import OpaProvider
+
+
+class ReadinessCheckFailure(Exception):
+    """At least one local readiness check failed.
+
+    ``findings`` are the results of the checks that finished.
+    ``failed_checks`` are rule ids such as ``HEUR-018``. The message stays
+    generic so tool text is not copied into logs.
+    """
+
+    def __init__(self, findings: List[SecurityFinding], failed_checks: List[str]):
+        super().__init__("readiness check failed")
+        self.findings = findings
+        self.failed_checks = self.safe_rule_ids(failed_checks)
+
+    @staticmethod
+    def safe_rule_ids(rule_ids: Any) -> List[str]:
+        """Keep rule ids. Drop anything that is not a ``HEUR-`` number."""
+        if not isinstance(rule_ids, (list, tuple)):
+            return []
+        safe = []
+        for rule_id in rule_ids:
+            if (
+                isinstance(rule_id, str)
+                and rule_id.startswith("HEUR-")
+                and rule_id[5:].isdigit()
+            ):
+                safe.append(rule_id)
+        return safe
 
 
 class ReadinessAnalyzer(BaseAnalyzer):
@@ -115,6 +145,32 @@ class ReadinessAnalyzer(BaseAnalyzer):
         >>> analyzer = ReadinessAnalyzer(enable_llm_judge=True)
         >>> findings = await analyzer.analyze(tool_json_content)
     """
+
+    # Highest severity each local check can report. A skipped check is
+    # surfaced at this severity so a high-only report still shows it.
+    CHECK_SEVERITY = {
+        "HEUR-001": "HIGH",
+        "HEUR-002": "MEDIUM",
+        "HEUR-003": "MEDIUM",
+        "HEUR-004": "HIGH",
+        "HEUR-005": "LOW",
+        "HEUR-006": "MEDIUM",
+        "HEUR-007": "LOW",
+        "HEUR-008": "LOW",
+        "HEUR-009": "MEDIUM",
+        "HEUR-010": "HIGH",
+        "HEUR-011": "LOW",
+        "HEUR-012": "INFO",
+        "HEUR-013": "LOW",
+        "HEUR-014": "LOW",
+        "HEUR-015": "LOW",
+        "HEUR-016": "MEDIUM",
+        "HEUR-017": "INFO",
+        "HEUR-018": "HIGH",
+        "HEUR-019": "INFO",
+        "HEUR-020": "MEDIUM",
+    }
+    SEVERITY_RANK = ("INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL")
 
     # Severity deductions for readiness score calculation
     SEVERITY_DEDUCTIONS = {
@@ -204,6 +260,164 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """Check if LLM judge is available for semantic analysis."""
         return self._llm_judge is not None and self._llm_judge.is_available()
 
+    def _tool_context(
+        self, content: str, context: Optional[Dict[str, Any]]
+    ) -> tuple:
+        """Return ``(tool_name, tool_def)`` for a readiness scan."""
+        tool_name = context.get("tool_name", "unknown") if context else "unknown"
+        tool_def = self._parse_tool_definition(content, context)
+        return tool_name, tool_def
+
+    @staticmethod
+    def _text(value: Any) -> str:
+        """Return ``value`` when it is text, otherwise an empty string."""
+        return value if isinstance(value, str) else ""
+
+    @staticmethod
+    def _number(value: Any) -> Optional[float]:
+        """Return a real number, ignoring booleans and other types."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    @staticmethod
+    def _mapping(value: Any) -> Dict[str, Any]:
+        """Return ``value`` when it is a dict, otherwise an empty dict."""
+        return value if isinstance(value, dict) else {}
+
+    def _description(self, tool_def: Dict[str, Any]) -> str:
+        """Tool description text. A null description is an empty string."""
+        return self._text(tool_def.get("description"))
+
+    @property
+    def opa_enabled(self) -> bool:
+        """True when OPA policy checks can run."""
+        return self._opa_provider is not None and self._opa_provider.is_available()
+
+    def heuristic_findings(
+        self, content: str, context: Optional[Dict[str, Any]] = None
+    ) -> List[SecurityFinding]:
+        """Local readiness checks. These do not call the network."""
+        tool_name, tool_def = self._tool_context(content, context)
+        if not tool_def:
+            return []
+        findings, failed_checks = self._run_heuristic_checks(tool_def, tool_name)
+        if failed_checks:
+            raise ReadinessCheckFailure(findings, failed_checks)
+        return findings
+
+    async def opa_findings(
+        self, content: str, context: Optional[Dict[str, Any]] = None
+    ) -> List[SecurityFinding]:
+        """OPA policy checks. Safe to cancel without dropping heuristics."""
+        tool_name, tool_def = self._tool_context(content, context)
+        if not tool_def or not self.opa_enabled:
+            return []
+        return await self._run_opa_checks(tool_def, tool_name)
+
+    async def judge_findings(
+        self, content: str, context: Optional[Dict[str, Any]] = None
+    ) -> List[SecurityFinding]:
+        """LLM-judge checks. Cancellation leaves OPA and heuristic findings."""
+        tool_name, tool_def = self._tool_context(content, context)
+        if not tool_def or not self.llm_judge_available:
+            return []
+        try:
+            return await self._llm_judge.analyze(tool_def, tool_name)
+        except Exception as e:
+            self.logger.warning("LLM judge analysis failed: %s", type(e).__name__)
+            raise
+
+    async def remote_findings(
+        self, content: str, context: Optional[Dict[str, Any]] = None
+    ) -> List[SecurityFinding]:
+        """OPA and LLM-judge checks for callers that run them together.
+
+        A failed judge stays on the result as an infrastructure finding.
+        OPA findings already collected are kept.
+        """
+        tool_name, _tool_def = self._tool_context(content, context)
+        findings = await self.opa_findings(content, context)
+        try:
+            findings.extend(await self.judge_findings(content, context))
+        except Exception as exc:
+            findings.append(
+                build_infrastructure_error_finding(
+                    analyzer_name="READINESS",
+                    subject=tool_name or "unknown",
+                    error=exc,
+                )
+            )
+        return findings
+
+    def incomplete_check_finding(
+        self, tool_name: str, failed_checks: Optional[List[str]] = None
+    ) -> SecurityFinding:
+        """A finding that names the local checks that did not finish.
+
+        Rule ids are included. The check's exception text is not.
+        """
+        label = self._text(tool_name) or "unknown"
+        rules = ReadinessCheckFailure.safe_rule_ids(failed_checks or [])
+        named = ", ".join(rules) if rules else "an unnamed check"
+        return self.create_security_finding(
+            severity=self._severity_for_gap(rules),
+            summary=(
+                f"Tool '{label}' did not finish readiness checks {named}. "
+                "No readiness score is reported for this tool."
+            ),
+            threat_category="SILENT_FAILURE_PATH",
+            details={
+                "tool_name": label,
+                "rule_id": "HEUR-INCOMPLETE",
+                "failed_checks": rules,
+                "checks_completed": False,
+            },
+        )
+
+    def mark_checks_incomplete(
+        self,
+        findings: List[SecurityFinding],
+        failed_checks: Optional[List[str]] = None,
+    ) -> List[SecurityFinding]:
+        """Drop the score when a check did not run."""
+        rules = ReadinessCheckFailure.safe_rule_ids(failed_checks or [])
+        for finding in findings:
+            if finding.details is None:
+                finding.details = {}
+            finding.details["checks_completed"] = False
+            finding.details["is_production_ready"] = False
+            finding.details["readiness_score"] = None
+            finding.details["failed_checks"] = rules
+        return findings
+
+    def _severity_for_gap(self, rules: List[str]) -> str:
+        """Use the highest severity among the checks that did not run."""
+        if not rules:
+            return "HIGH"
+        rank = {name: index for index, name in enumerate(self.SEVERITY_RANK)}
+        chosen = "INFO"
+        for rule_id in rules:
+            severity = self.CHECK_SEVERITY.get(rule_id, "HIGH")
+            if rank.get(severity, 0) >= rank.get(chosen, 0):
+                chosen = severity
+        return chosen
+
+    def stamp_readiness(
+        self, findings: List[SecurityFinding]
+    ) -> List[SecurityFinding]:
+        """Attach the readiness score to each finding."""
+        score = self._calculate_readiness_score(findings)
+        is_production_ready = score >= 70 and not any(
+            f.severity == "CRITICAL" for f in findings
+        )
+        for finding in findings:
+            if finding.details is None:
+                finding.details = {}
+            finding.details["readiness_score"] = score
+            finding.details["is_production_ready"] = is_production_ready
+        return findings
+
     async def analyze(
         self, content: str, context: Optional[Dict[str, Any]] = None
     ) -> List[SecurityFinding]:
@@ -217,93 +431,68 @@ class ReadinessAnalyzer(BaseAnalyzer):
         Returns:
             List of SecurityFinding objects for readiness issues.
         """
-        findings: List[SecurityFinding] = []
-        tool_name = context.get("tool_name", "unknown") if context else "unknown"
-
-        # Parse content as tool definition
-        tool_def = self._parse_tool_definition(content, context)
-
-        if tool_def:
-            # Run heuristic checks
-            findings.extend(self._run_heuristic_checks(tool_def, tool_name))
-
-            # Run OPA policy checks if enabled and available
-            if self._opa_provider and self._opa_provider.is_available():
-                opa_findings = await self._run_opa_checks(tool_def, tool_name)
-                findings.extend(opa_findings)
-
-            # Run LLM semantic analysis if enabled and available
-            if self._llm_judge is not None and self._llm_judge.is_available():
-                try:
-                    llm_findings = await self._llm_judge.analyze(tool_def, tool_name)
-                    findings.extend(llm_findings)
-                except Exception as e:
-                    self.logger.warning(
-                        "LLM judge analysis failed: %s", type(e).__name__
-                    )
-
-        # Calculate readiness score
-        score = self._calculate_readiness_score(findings)
-        is_production_ready = score >= 70 and not any(
-            f.severity == "CRITICAL" for f in findings
+        tool_name, _tool_def = self._tool_context(content, context)
+        failed_checks: List[str] = []
+        try:
+            findings = self.heuristic_findings(content, context)
+        except ReadinessCheckFailure as exc:
+            findings = list(exc.findings)
+            failed_checks = list(exc.failed_checks)
+            findings.append(self.incomplete_check_finding(tool_name, failed_checks))
+        findings.extend(await self.remote_findings(content, context))
+        stamped = self.stamp_readiness(findings)
+        judge_incomplete = any(
+            getattr(finding, "threat_category", None) == "ANALYZER INFRASTRUCTURE"
+            for finding in stamped
         )
-
-        # Add score to each finding's details
-        for finding in findings:
-            if finding.details is None:
-                finding.details = {}
-            finding.details["readiness_score"] = score
-            finding.details["is_production_ready"] = is_production_ready
-
-        return findings
+        if failed_checks or judge_incomplete:
+            self.mark_checks_incomplete(stamped, failed_checks)
+        return stamped
 
     def _run_heuristic_checks(
         self, tool_def: Dict[str, Any], tool_name: str
-    ) -> List[SecurityFinding]:
-        """Run all heuristic checks on the tool definition."""
+    ) -> tuple:
+        """Run all heuristic checks on the tool definition.
+
+        Returns ``(findings, failed_checks)``. A check that raises is
+        skipped. Findings from the checks that finished are still
+        returned, with the rule ids of the checks that did not.
+        """
         findings: List[SecurityFinding] = []
-
-        # Timeout Guards
-        findings.extend(self._check_missing_timeout(tool_def, tool_name))
-        findings.extend(self._check_timeout_too_long(tool_def, tool_name))
-
-        # Retry Configuration
-        findings.extend(self._check_no_retry_limit(tool_def, tool_name))
-        findings.extend(self._check_unlimited_retries(tool_def, tool_name))
-        findings.extend(self._check_no_backoff_strategy(tool_def, tool_name))
-
-        # Error Handling
-        findings.extend(self._check_missing_error_schema(tool_def, tool_name))
-        findings.extend(self._check_error_schema_missing_code(tool_def, tool_name))
-        findings.extend(self._check_no_output_schema(tool_def, tool_name))
-
-        # Description Quality
-        findings.extend(self._check_vague_description(tool_def, tool_name))
-        findings.extend(self._check_too_many_capabilities(tool_def, tool_name))
-
-        # Input Validation
-        findings.extend(self._check_no_required_fields(tool_def, tool_name))
-        findings.extend(self._check_no_input_validation_hints(tool_def, tool_name))
-
-        # Operational Config
-        findings.extend(self._check_no_rate_limit(tool_def, tool_name))
-        findings.extend(self._check_no_version(tool_def, tool_name))
-        findings.extend(self._check_no_observability(tool_def, tool_name))
-
-        # Resource Management
-        findings.extend(
-            self._check_resource_cleanup_not_documented(tool_def, tool_name)
+        failed_checks: List[str] = []
+        checks = (
+            ("HEUR-001", self._check_missing_timeout),
+            ("HEUR-002", self._check_timeout_too_long),
+            ("HEUR-003", self._check_no_retry_limit),
+            ("HEUR-004", self._check_unlimited_retries),
+            ("HEUR-005", self._check_no_backoff_strategy),
+            ("HEUR-006", self._check_missing_error_schema),
+            ("HEUR-007", self._check_error_schema_missing_code),
+            ("HEUR-008", self._check_no_output_schema),
+            ("HEUR-009", self._check_vague_description),
+            ("HEUR-010", self._check_too_many_capabilities),
+            ("HEUR-011", self._check_no_required_fields),
+            ("HEUR-012", self._check_no_input_validation_hints),
+            ("HEUR-013", self._check_no_rate_limit),
+            ("HEUR-014", self._check_no_version),
+            ("HEUR-015", self._check_no_observability),
+            ("HEUR-016", self._check_resource_cleanup_not_documented),
+            ("HEUR-017", self._check_no_idempotency_indication),
+            ("HEUR-018", self._check_dangerous_operation_keywords),
+            ("HEUR-019", self._check_no_authentication_context),
+            ("HEUR-020", self._check_circular_dependency_risk),
         )
-        findings.extend(self._check_no_idempotency_indication(tool_def, tool_name))
-
-        # Safety
-        findings.extend(
-            self._check_dangerous_operation_keywords(tool_def, tool_name)
-        )
-        findings.extend(self._check_no_authentication_context(tool_def, tool_name))
-        findings.extend(self._check_circular_dependency_risk(tool_def, tool_name))
-
-        return findings
+        for rule_id, check in checks:
+            try:
+                findings.extend(check(tool_def, tool_name))
+            except Exception as exc:
+                failed_checks.append(rule_id)
+                self.logger.warning(
+                    "Readiness check %s failed: %s",
+                    rule_id,
+                    type(exc).__name__,
+                )
+        return findings, failed_checks
 
     async def _run_opa_checks(
         self, tool_def: Dict[str, Any], tool_name: str
@@ -382,7 +571,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         has_timeout = any(field in tool_def for field in timeout_fields)
 
         # Also check nested config
-        config = tool_def.get("config", {})
+        config = self._mapping(tool_def.get("config"))
         has_timeout = has_timeout or any(field in config for field in timeout_fields)
 
         if not has_timeout:
@@ -419,16 +608,17 @@ class ReadinessAnalyzer(BaseAnalyzer):
         findings: List[SecurityFinding] = []
 
         timeout_fields = ["timeout", "timeoutMs", "timeout_ms"]
-        config = tool_def.get("config", {})
+        config = self._mapping(tool_def.get("config"))
 
         for field in timeout_fields:
-            timeout_value = tool_def.get(field) or config.get(field)
+            raw_timeout = tool_def.get(field) or config.get(field)
+            timeout_value = self._number(raw_timeout)
             if timeout_value is not None and timeout_value > 300000:
                 findings.append(
                     self.create_security_finding(
                         severity="MEDIUM",
                         summary=(
-                            f"Tool '{tool_name}' has {field}={timeout_value}ms "
+                            f"Tool '{tool_name}' has {field}={raw_timeout}ms "
                             "(over 5 minutes). Long timeouts can cause extended hangs "
                             "and poor user experience."
                         ),
@@ -468,7 +658,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         has_retries = any(field in tool_def for field in retry_fields)
 
-        config = tool_def.get("config", {})
+        config = self._mapping(tool_def.get("config"))
         has_retries = has_retries or any(field in config for field in retry_fields)
 
         # Also check for retryPolicy object
@@ -512,7 +702,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         findings: List[SecurityFinding] = []
 
         retry_fields = ["maxRetries", "retries", "max_retries", "retryLimit"]
-        config = tool_def.get("config", {})
+        config = self._mapping(tool_def.get("config"))
         retry_policy = tool_def.get("retryPolicy") or config.get("retryPolicy") or {}
 
         for field in retry_fields:
@@ -522,8 +712,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 or (retry_policy.get(field) if isinstance(retry_policy, dict) else None)
             )
 
-            if retry_value is not None:
-                if retry_value == -1:
+            numeric_retry = self._number(retry_value)
+            if numeric_retry is not None:
+                if numeric_retry == -1:
                     findings.append(
                         self.create_security_finding(
                             severity="HIGH",
@@ -545,7 +736,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
                             },
                         )
                     )
-                elif retry_value > 10:
+                elif numeric_retry > 10:
                     findings.append(
                         self.create_security_finding(
                             severity="HIGH",
@@ -579,7 +770,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
 
         # First check if retries are configured
         retry_fields = ["maxRetries", "retries", "max_retries", "retryLimit"]
-        config = tool_def.get("config", {})
+        config = self._mapping(tool_def.get("config"))
         retry_policy = tool_def.get("retryPolicy") or config.get("retryPolicy") or {}
 
         has_retries = any(
@@ -722,7 +913,12 @@ class ReadinessAnalyzer(BaseAnalyzer):
             "responseSchema",
             "response_schema",
         ]
-        has_output_schema = any(field in tool_def for field in output_schema_fields)
+        # A null or empty value is present on MCP tool dumps and is not a schema.
+        has_output_schema = any(
+            isinstance(tool_def.get(field), dict) and bool(tool_def.get(field))
+            for field in output_schema_fields
+            if field in tool_def
+        )
 
         if not has_output_schema:
             findings.append(
@@ -757,7 +953,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-009: Check if description is missing or too short (<20 chars)."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "")
+        description = self._description(tool_def)
 
         if not description:
             findings.append(
@@ -839,7 +1035,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-010: Check if description mentions >5 verbs or overload keywords."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = self._description(tool_def).lower()
 
         # Check for overload keywords
         overload_keywords = ["any", "all", "everything", "anything", "whatever"]
@@ -1053,7 +1249,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         has_rate_limit = any(field in tool_def for field in rate_limit_fields)
 
-        config = tool_def.get("config", {})
+        config = self._mapping(tool_def.get("config"))
         has_rate_limit = has_rate_limit or any(
             field in config for field in rate_limit_fields
         )
@@ -1137,7 +1333,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         has_observability = any(field in tool_def for field in observability_fields)
 
-        config = tool_def.get("config", {})
+        config = self._mapping(tool_def.get("config"))
         has_observability = has_observability or any(
             field in config for field in observability_fields
         )
@@ -1175,7 +1371,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-016: Check if description mentions resources but not cleanup."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = self._description(tool_def).lower()
 
         # Check if tool appears to use resources that need cleanup
         resource_indicators = [
@@ -1243,7 +1439,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-017: Check if tool appears to modify state but doesn't document idempotency."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = self._description(tool_def).lower()
 
         # Check if tool appears to be state-changing
         state_changing_verbs = [
@@ -1309,8 +1505,8 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-018: Check for dangerous keywords in name/description."""
         findings: List[SecurityFinding] = []
 
-        name = tool_def.get("name", "").lower()
-        description = tool_def.get("description", "").lower()
+        name = self._text(tool_def.get("name")).lower()
+        description = self._description(tool_def).lower()
         combined = f"{name} {description}"
 
         dangerous_keywords = [
@@ -1375,11 +1571,11 @@ class ReadinessAnalyzer(BaseAnalyzer):
         ]
         has_auth = any(field in tool_def for field in auth_fields)
 
-        config = tool_def.get("config", {})
+        config = self._mapping(tool_def.get("config"))
         has_auth = has_auth or any(field in config for field in auth_fields)
 
         # Check if description mentions external services
-        description = tool_def.get("description", "").lower()
+        description = self._description(tool_def).lower()
         external_indicators = [
             "api",
             "service",
@@ -1430,10 +1626,11 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """HEUR-020: Check if tool references itself or common circular patterns."""
         findings: List[SecurityFinding] = []
 
-        description = tool_def.get("description", "").lower()
+        description = self._description(tool_def).lower()
 
         # Check if tool name appears in its own description (potential self-reference)
-        if tool_name and tool_name.lower() in description:
+        tool_label = self._text(tool_name).lower()
+        if tool_label and tool_label in description:
             findings.append(
                 self.create_security_finding(
                     severity="MEDIUM",

@@ -465,6 +465,7 @@ async def test_within_limit_resource_keeps_name_and_body(config):
 @pytest.mark.asyncio
 async def test_aggregate_budget_stops_later_resource_reads(config, monkeypatch):
     monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPT_RESOURCE_AGGREGATE_CHARS", 2)
+    monkeypatch.setattr(MCPScannerConstants, "REMOTE_SCAN_CONCURRENCY", 1)
     scanner = Scanner(config)
     resources = [
         _listed_resource("resource://a", "text/plain", name="a"),

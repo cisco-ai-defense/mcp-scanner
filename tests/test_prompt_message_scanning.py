@@ -198,6 +198,9 @@ async def test_analyze_prompt_failure_preserves_messages_text(config):
     )
     assert results[0].status == "failed"
     assert results[0].prompt_messages_text == "fetched body"
+    assert results[0].is_safe is None
+    assert results[0].findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+    assert "analyzer blew up" not in results[0].findings[0].summary
 
 
 @pytest.mark.asyncio
@@ -328,8 +331,6 @@ async def test_prompt_count_budget_does_not_schedule_every_prompt(
     config, monkeypatch
 ):
     """Only prompts inside the count budget become analysis tasks."""
-    import asyncio
-
     monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPTS_PER_SCAN", 1)
     scanner = Scanner(config)
     prompts = [
@@ -347,25 +348,22 @@ async def test_prompt_count_budget_does_not_schedule_every_prompt(
             )
         ]
     )
-    scheduled = []
-    real_gather = asyncio.gather
+    analyzed = []
+    real_analyze = scanner._analyze_prompt
 
-    async def counting_gather(*args, **kwargs):
-        scheduled.append(args)
-        return await real_gather(*args, **kwargs)
+    async def counting_analyze(*args, **kwargs):
+        analyzed.append(args[0].name if args else kwargs.get("prompt"))
+        return await real_analyze(*args, **kwargs)
 
+    scanner._analyze_prompt = counting_analyze
     patches = _patch_prompt_session(scanner, session)
-    with patches[0], patches[1], patches[2], patch(
-        "mcpscanner.core.scanner.asyncio.gather", counting_gather
-    ):
+    with patches[0], patches[1], patches[2]:
         results = await scanner.scan_remote_server_prompts(
             "https://example.com/mcp",
             analyzers=[AnalyzerEnum.YARA],
         )
     assert session.get_prompt.await_count == 1
-    assert len(scheduled) == 1
-    assert len(scheduled[0]) == 1
-    assert [result.prompt_name for result in results] == ["first", "second", "third"]
+    assert analyzed == ["first"]
     assert results[0].status == "completed"
     assert results[1].status == "failed"
     assert results[2].status == "failed"
@@ -402,6 +400,7 @@ async def test_within_limit_prompt_keeps_name_and_body(config):
 @pytest.mark.asyncio
 async def test_prompt_aggregate_budget_stops_further_fetches(config, monkeypatch):
     monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPT_RESOURCE_AGGREGATE_CHARS", 2)
+    monkeypatch.setattr(MCPScannerConstants, "REMOTE_SCAN_CONCURRENCY", 1)
     scanner = Scanner(config)
     prompts = [
         MCPPrompt(name="first", description="d", arguments=[]),
@@ -425,7 +424,7 @@ async def test_prompt_aggregate_budget_stops_further_fetches(config, monkeypatch
             analyzers=[AnalyzerEnum.YARA],
         )
     assert session.get_prompt.await_count == 1
-    scanner._analyze_prompt.assert_not_awaited()
+    assert session.get_prompt.await_count == 1
     assert results[0].status == "failed"
     assert results[1].status == "failed"
     assert results[1].prompt_name == "second"

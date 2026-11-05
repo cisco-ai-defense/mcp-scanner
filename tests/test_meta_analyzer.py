@@ -88,6 +88,7 @@ class TestMetaAnalysisResult:
         assert result.correlations == []
         assert result.recommendations == []
         assert result.overall_risk_assessment == {}
+        assert result.failure is None
 
     def test_to_dict_only_emits_consumed_surface(self):
         """``to_dict`` is aligned with ``CONSUMED_FIELDS`` — emit only
@@ -628,6 +629,7 @@ class TestParseResponse:
         result = self.analyzer._parse_response("not json at all", self.findings)
         assert result.false_positives == []
         assert result.overall_risk_assessment["risk_level"] == "UNKNOWN"
+        assert isinstance(result.failure, Exception)
 
     def test_partial_fields(self):
         """Missing false_positives field defaults to empty list."""
@@ -688,6 +690,8 @@ class TestAnalyzeFindings:
         assert result.false_positives == []
         assert result.overall_risk_assessment["risk_level"] == "UNKNOWN"
         assert "failed" in result.overall_risk_assessment["summary"].lower()
+        assert isinstance(result.failure, Exception)
+        assert "API timeout" not in str(result.overall_risk_assessment["summary"])
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.meta_analyzer.acompletion")
@@ -2642,6 +2646,44 @@ class TestIsSafeAfterMetaFiltering:
             "is_safe must NOT count meta_filtered_findings; the "
             "meta-analyzer already classified them as benign."
         )
+
+    def test_infrastructure_finding_is_not_dropped(self):
+        """A failed analyzer step stays visible and is not a clean scan."""
+        from mcpscanner.core.result import ToolScanResult
+
+        finding = _make_finding(
+            severity="INFO",
+            summary="LLM analysis did not complete",
+            analyzer="LLM",
+            threat_category="ANALYZER INFRASTRUCTURE",
+            details={"error_type": "TimeoutError"},
+        )
+        threat = _make_finding(severity="HIGH", summary="Real threat")
+        meta_result = MetaAnalysisResult(
+            false_positives=[
+                {"_index": 0, "false_positive_reason": "benign"},
+                {"_index": 1, "false_positive_reason": "benign"},
+            ],
+        )
+        kept, dropped = apply_meta_analysis([finding, threat], meta_result)
+        assert [item.threat_category for item in kept] == ["ANALYZER INFRASTRUCTURE"]
+        assert [item.summary for item in dropped] == ["Real threat"]
+
+        result = ToolScanResult(
+            tool_name="t",
+            tool_description="d",
+            status="partial",
+            analyzers=["llm"],
+            findings=kept,
+            analyzer_errors=[
+                {
+                    "analyzer": "LLM",
+                    "content_type": "comprehensive",
+                    "message": "TimeoutError during analysis",
+                }
+            ],
+        )
+        assert result.is_safe is None
 
 
 class TestBuildMetaAuditPayload:

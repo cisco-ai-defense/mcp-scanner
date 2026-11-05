@@ -41,7 +41,7 @@ class TestConfig:
         assert config.llm_max_tokens == CONSTANTS.DEFAULT_LLM_MAX_TOKENS
         assert config.llm_temperature == CONSTANTS.DEFAULT_LLM_TEMPERATURE
         assert config.llm_rate_limit_delay == 1.0
-        assert config.llm_max_retries == 3
+        assert config.llm_max_retries == CONSTANTS.LLM_MAX_RETRIES
         assert config.stdio_timeout == CONSTANTS.DEFAULT_STDIO_TIMEOUT
 
     def test_config_initialization_with_api_key(self):
