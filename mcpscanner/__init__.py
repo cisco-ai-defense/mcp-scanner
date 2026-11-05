@@ -20,6 +20,12 @@ A Python SDK for scanning MCP servers and tools for security findings.
 Provides both a programmatic API and a REST API server.
 """
 
+from dotenv import load_dotenv as _load_dotenv
+
+# Load .env before anything imports MCPScannerConstants, whose os.getenv()
+# defaults are read once at import time and would otherwise ignore .env.
+_load_dotenv()
+
 from .core.analyzers.api_analyzer import ApiAnalyzer
 from .core.analyzers.base import BaseAnalyzer, SecurityFinding
 from .core.analyzers.llm_analyzer import LLMAnalyzer
