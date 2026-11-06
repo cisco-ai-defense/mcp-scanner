@@ -132,7 +132,7 @@ def test_import_map_disambiguates_same_named_handler(tmp_path: Path) -> None:
     # The cross-file stub records the defining path. With the import
     # map fix it must be ``tools/add.ts``, not ``fixtures/add.ts``.
     source = getattr(cap, "source_file", "") or ""
-    assert source.endswith("tools/add.ts"), source
+    assert source.replace("\\", "/").endswith("tools/add.ts"), source
 
 
 def test_import_map_falls_back_to_suffix_when_no_import_match(
@@ -264,7 +264,7 @@ def test_python_programmatic_registration_resolves_via_call_graph(
     tags = cap.decorator_types
     assert any("registration.cross_file" in t for t in tags), tags
     source = getattr(cap, "source_file", "") or ""
-    assert source.endswith("tools/docs.py"), source
+    assert source.replace("\\", "/").endswith("tools/docs.py"), source
 
 
 # ---------------------------------------------------------------------------
