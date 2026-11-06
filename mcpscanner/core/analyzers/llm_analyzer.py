@@ -487,13 +487,18 @@ class LLMAnalyzer(BaseAnalyzer):
                         },
                         {"role": "user", "content": threat_prompt},
                     ]
-                    max_attempts = self._max_retries + 1
+                    # The first call keeps the transport retry budget. Further
+                    # empty replies (content filters, blank choices) get one
+                    # provider call each so those retries do not multiply it.
+                    empty_attempts = self._max_retries + 1
+                    threat_response = None
                     threat_content = ""
                     finish_reason = ""
-                    for attempt in range(1, max_attempts + 1):
+                    for attempt in range(1, empty_attempts + 1):
                         threat_response = await self._make_llm_request(
                             messages=messages,
                             context=f"threat analysis for {entity_name}",
+                            max_attempts=None if attempt == 1 else 1,
                         )
                         threat_content = self._completion_text(threat_response)
                         finish_reason = self._completion_finish_reason(
@@ -503,19 +508,19 @@ class LLMAnalyzer(BaseAnalyzer):
                             break
                         self.logger.warning(
                             "Empty LLM completion for %s (attempt %d/%d, "
-                            "finish_reason=%s) — retrying",
+                            "finish_reason=%s)",
                             entity_name,
                             attempt,
-                            max_attempts,
+                            empty_attempts,
                             finish_reason or "unknown",
                         )
-                        if attempt < max_attempts:
+                        if attempt < empty_attempts and self._rate_limit_delay:
                             await asyncio.sleep(self._rate_limit_delay)
 
                     if not threat_content:
                         empty_error = ValueError(
                             "Empty response from LLM after "
-                            f"{max_attempts} attempt(s)"
+                            f"{empty_attempts} attempt(s)"
                             + (
                                 f" (finish_reason={finish_reason})"
                                 if finish_reason
@@ -524,7 +529,7 @@ class LLMAnalyzer(BaseAnalyzer):
                         )
                         self.logger.warning(
                             "LLM threat analysis skipped after %d empty attempt(s)",
-                            max_attempts,
+                            empty_attempts,
                         )
                         findings.append(
                             build_infrastructure_error_finding(
@@ -600,7 +605,10 @@ class LLMAnalyzer(BaseAnalyzer):
         return tool_info
 
     async def _make_llm_request(
-        self, messages: List[Dict[str, str]], context: str = ""
+        self,
+        messages: List[Dict[str, str]],
+        context: str = "",
+        max_attempts: Optional[int] = None,
     ) -> Any:
         """Make an LLM request with retry logic and exponential backoff.
 
@@ -615,8 +623,9 @@ class LLMAnalyzer(BaseAnalyzer):
             Exception: If all retries are exhausted
         """
         from mcpscanner.utils.llm_request_params import apply_model_constraints
-
-        max_attempts = self._max_retries + 1
+        if max_attempts is None:
+            max_attempts = self._max_retries + 1
+        max_attempts = max(1, int(max_attempts))
 
         async def operation() -> Any:
             self.logger.debug(
@@ -645,8 +654,10 @@ class LLMAnalyzer(BaseAnalyzer):
                 request_params["aws_session_token"] = self._aws_session_token
             if self._aws_profile_name:
                 request_params["aws_profile_name"] = self._aws_profile_name
+            from mcpscanner.utils.llm_gate import llm_request_gate
 
-            return await acompletion(**request_params, drop_params=True)
+            async with llm_request_gate():
+                return await acompletion(**request_params, drop_params=True)
 
         async def on_retry(
             exc: BaseException, attempt: int, delay: float

@@ -14,9 +14,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List, Optional, Union
+import asyncio
+import json
+from contextlib import suppress
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from ..core.analyzers.meta_analyzer import build_meta_audit_payload
 from ..core.auth import Auth
@@ -44,10 +48,17 @@ from ..core.result import (
     PromptScanResult,
     ResourceScanResult,
     InstructionsScanResult,
+    analyzer_result_key,
     get_highest_severity,
     group_findings_by_analyzer,
 )
-from ..core.scanner import Scanner, ScannerFactory
+from ..config.constants import MCPScannerConstants
+from ..core.scanner import (
+    ScanListNotice,
+    Scanner,
+    ScannerFactory,
+    _signal_stream_end,
+)
 from ..utils.logging_config import get_logger
 from ..core.auth import AuthType
 
@@ -327,6 +338,33 @@ def _group_findings_for_api(
                 analyzer_result["threats"] = {"items": threats_hierarchy}
 
         grouped_findings[display_name] = analyzer_result
+
+    # Coverage failures use analyzer names outside API/YARA/LLM. Keep
+    # their summary; otherwise a partial catalog looks like "not run".
+    seen_internal = {name.casefold() for name in all_analyzers_map.values()}
+    for analyzer_name, vulns in analyzer_groups.items():
+        if analyzer_name.casefold() in seen_internal:
+            continue
+        summaries = [
+            vuln.summary for vuln in vulns if getattr(vuln, "summary", None)
+        ]
+        display_name = analyzer_result_key(analyzer_name) + "_analyzer"
+        extra = {
+            "severity": get_highest_severity([vuln.severity for vuln in vulns]),
+            "total_findings": len(vulns),
+        }
+        if summaries:
+            extra["threat_summary"] = summaries[0]
+        errors = [
+            error
+            for error in scanner_result.analyzer_errors
+            if error.get("analyzer", "").casefold() == analyzer_name.casefold()
+        ]
+        if errors:
+            extra["status"] = "partial"
+            extra["errors"] = errors
+        grouped_findings[display_name] = extra
+        seen_internal.add(analyzer_name.casefold())
 
     return grouped_findings
 
@@ -1034,3 +1072,326 @@ async def scan_instructions_endpoint(
         raise HTTPException(
             status_code=500, detail=f"Error scanning instructions: {str(e)}"
         )
+
+
+def _scan_http_error(exc: Exception, noun: str) -> HTTPException:
+    """Map setup failures to the same statuses as the non-streaming scans.
+
+    The detail keeps the scanner's own message for the known connection and
+    validation errors. An unexpected exception contributes its type only, so
+    provider text cannot ride along in the response.
+    """
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, MCPAuthenticationError):
+        return HTTPException(status_code=401, detail=str(exc))
+    if isinstance(exc, MCPServerNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, MCPConnectionError):
+        return HTTPException(status_code=502, detail=str(exc))
+    logger.error("Scan stream setup failed: %s", type(exc).__name__)
+    return HTTPException(
+        status_code=500, detail=f"Error scanning {noun}: {type(exc).__name__}"
+    )
+
+
+def _auth_from_scan_request(request: APIScanRequest) -> Optional[Auth]:
+    """Build the MCP auth object from an API scan request."""
+    if not request.auth:
+        return None
+    auth = None
+    if request.auth.auth_type == AuthType.BEARER:
+        auth = Auth.bearer(request.auth.bearer_token)
+    elif request.auth.auth_type == AuthType.APIKEY:
+        auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
+    if auth is None and request.auth.custom_headers:
+        auth = Auth.custom(request.auth.custom_headers)
+    elif auth is not None and request.auth.custom_headers:
+        auth.custom_headers = request.auth.custom_headers
+    return auth
+
+
+def _ndjson(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload) + "\n"
+
+
+def _jsonable(value: Any) -> Any:
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump()
+    return value
+
+
+def _prompt_stream_entry(result: Any, scanner: Scanner) -> Dict[str, Any]:
+    entry = {
+        "prompt_name": result.prompt_name,
+        "prompt_description": result.prompt_description,
+        "status": result.status,
+        "is_safe": result.is_safe,
+        "findings": _group_findings_for_api(result, scanner),
+        "analyzer_errors": result.analyzer_errors,
+    }
+    meta_audit = _build_meta_analysis_audit(result)
+    if meta_audit is not None:
+        entry["meta_analysis"] = meta_audit
+    return entry
+
+
+def _resource_stream_entry(result: Any, scanner: Scanner) -> Dict[str, Any]:
+    if result.status in {"completed", "partial", "failed"}:
+        entry = {
+            "resource_uri": result.resource_uri,
+            "resource_name": result.resource_name,
+            "resource_mime_type": result.resource_mime_type,
+            "status": result.status,
+            "is_safe": result.is_safe,
+            "findings": _group_findings_for_api(result, scanner),
+            "analyzer_errors": result.analyzer_errors,
+        }
+        meta_audit = _build_meta_analysis_audit(result)
+        if meta_audit is not None:
+            entry["meta_analysis"] = meta_audit
+        return entry
+    return {
+        "resource_uri": result.resource_uri,
+        "resource_name": result.resource_name,
+        "resource_mime_type": result.resource_mime_type,
+        "status": result.status,
+        "is_safe": None,
+        "findings": {},
+        "analyzer_errors": result.analyzer_errors,
+    }
+
+
+def _result_is_list_gap(result: Any) -> bool:
+    errors = getattr(result, "analyzer_errors", None) or []
+    return any(
+        isinstance(error, dict)
+        and str(error.get("content_type", "")).endswith("_list")
+        for error in errors
+    )
+
+
+async def _ndjson_scan_stream(
+    http_request: Request,
+    iterator: AsyncIterator[Any],
+    encode_result: Callable[[Any], Any],
+) -> AsyncIterator[str]:
+    """Turn scan results into NDJSON while a slow item is still running.
+
+    The queue is bounded. A heartbeat is written when the next result does
+    not arrive in time. Disconnect cancels the scan and does not write a
+    clean done event. Error text is the exception type only.
+    """
+    queue: asyncio.Queue = asyncio.Queue(
+        maxsize=max(1, int(MCPScannerConstants.STREAM_QUEUE_SIZE))
+    )
+    finished = object()
+    complete = True
+
+    async def produce() -> None:
+        nonlocal complete
+        try:
+            async for item in iterator:
+                if isinstance(item, ScanListNotice):
+                    if not item.list_complete:
+                        complete = False
+                    await queue.put(
+                        _ndjson({"event": "listed", "count": item.count})
+                    )
+                    continue
+                if _result_is_list_gap(item):
+                    complete = False
+                await queue.put(
+                    _ndjson(
+                        {"event": "result", "result": _jsonable(encode_result(item))}
+                    )
+                )
+            await queue.put(_ndjson({"event": "done", "complete": complete}))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Scan stream failed: %s", type(exc).__name__)
+            await queue.put(
+                _ndjson({"event": "error", "message": type(exc).__name__})
+            )
+        finally:
+            # A disconnect stops the reader. A waiting put would then block
+            # forever on a full queue, and cancellation is not delivered to
+            # that new wait.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                _signal_stream_end(queue, finished)
+            else:
+                await queue.put(finished)
+
+    producer = asyncio.create_task(produce())
+    try:
+        yield _ndjson({"event": "started"})
+        while True:
+            if await http_request.is_disconnected():
+                producer.cancel()
+                break
+            try:
+                payload = await asyncio.wait_for(
+                    queue.get(),
+                    timeout=float(MCPScannerConstants.STREAM_HEARTBEAT_SECONDS),
+                )
+            except asyncio.TimeoutError:
+                yield _ndjson({"event": "heartbeat"})
+                continue
+            if payload is finished:
+                break
+            yield payload
+    finally:
+        if not producer.done():
+            producer.cancel()
+            while not queue.empty():
+                queue.get_nowait()
+        with suppress(asyncio.CancelledError, Exception):
+            await producer
+
+
+class _ScanStreamResponse(StreamingResponse):
+    """NDJSON response that closes the MCP session even if the body never runs.
+
+    Starlette writes the status line before iterating the body. A disconnect
+    on that write never starts the scan generator, and closing an unstarted
+    generator does not run its cleanup.
+    """
+
+    def __init__(self, content: AsyncIterator[str], session_holder: Any) -> None:
+        super().__init__(content, media_type="application/x-ndjson")
+        self._session_holder = session_holder
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self._session_holder.close()
+
+
+def _streaming_response(
+    chunks: AsyncIterator[str], session_holder: Any
+) -> StreamingResponse:
+    return _ScanStreamResponse(chunks, session_holder)
+
+
+async def _response_for_open_catalog(
+    session_holder: Any, chunks: AsyncIterator[str]
+) -> StreamingResponse:
+    """Build the stream response, closing the session if that build fails."""
+    try:
+        return _streaming_response(chunks, session_holder)
+    except BaseException:
+        await session_holder.close()
+        raise
+
+
+@router.post("/scan-all-tools/stream", tags=["Scanning"])
+async def scan_all_tools_stream_endpoint(
+    request: APIScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Stream one NDJSON result per tool as that tool finishes."""
+    analyzers = request.resolved_analyzers()
+    scanner = scanner_factory(analyzers)
+    http_headers = dict(http_request.headers)
+    routing = _hybrid_routing_kwargs(request)
+    try:
+        prepared = await scanner._prepare_remote_catalog(
+            "tools",
+            request.server_url,
+            _auth_from_scan_request(request),
+            analyzers,
+            routing.get("connector_id"),
+            routing.get("tenant_id"),
+        )
+    except Exception as exc:
+        raise _scan_http_error(exc, "tools") from exc
+    iterator = scanner._iter_prepared_tools(
+        prepared, analyzers, http_headers, release_session=False
+    )
+    return await _response_for_open_catalog(
+        prepared[0],
+        _ndjson_scan_stream(
+            http_request,
+            iterator,
+            lambda result: _convert_scanner_result_to_tool_api_result(result, scanner),
+        ),
+    )
+
+
+@router.post("/scan-all-prompts/stream", tags=["Scanning"])
+async def scan_all_prompts_stream_endpoint(
+    request: APIScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Stream one NDJSON result per prompt as that prompt finishes."""
+    analyzers = request.resolved_analyzers()
+    scanner = scanner_factory(analyzers)
+    http_headers = dict(http_request.headers)
+    routing = _hybrid_routing_kwargs(request)
+    try:
+        prepared = await scanner._prepare_remote_catalog(
+            "prompts",
+            request.server_url,
+            _auth_from_scan_request(request),
+            analyzers,
+            routing.get("connector_id"),
+            routing.get("tenant_id"),
+        )
+    except Exception as exc:
+        raise _scan_http_error(exc, "prompts") from exc
+    iterator = scanner._iter_prepared_prompts(
+        prepared, analyzers, http_headers, release_session=False
+    )
+    return await _response_for_open_catalog(
+        prepared[0],
+        _ndjson_scan_stream(
+            http_request,
+            iterator,
+            lambda result: _prompt_stream_entry(result, scanner),
+        ),
+    )
+
+
+@router.post("/scan-all-resources/stream", tags=["Scanning"])
+async def scan_all_resources_stream_endpoint(
+    request: APIScanRequest,
+    http_request: Request,
+    scanner_factory: ScannerFactory = Depends(get_scanner),
+):
+    """Stream one NDJSON result per resource as that resource finishes."""
+    analyzers = request.resolved_analyzers()
+    scanner = scanner_factory(analyzers)
+    http_headers = dict(http_request.headers)
+    routing = _hybrid_routing_kwargs(request)
+    try:
+        prepared = await scanner._prepare_remote_catalog(
+            "resources",
+            request.server_url,
+            _auth_from_scan_request(request),
+            analyzers,
+            routing.get("connector_id"),
+            routing.get("tenant_id"),
+        )
+    except Exception as exc:
+        raise _scan_http_error(exc, "resources") from exc
+    iterator = scanner._iter_prepared_resources(
+        prepared,
+        analyzers,
+        http_headers,
+        ["text/plain", "text/html"],
+        release_session=False,
+    )
+    return await _response_for_open_catalog(
+        prepared[0],
+        _ndjson_scan_stream(
+            http_request,
+            iterator,
+            lambda result: _resource_stream_entry(result, scanner),
+        ),
+    )
