@@ -97,6 +97,8 @@ mcp-scanner vulnerable-package /path/to/requirements.txt --output results.json -
 mcp-scanner vulnerable-package /path/to/requirements.txt --fix
 ```
 
+`--fix` is skipped, with a warning, when the target is an installed environment (a `.venv` or other `--path` scan). pip-audit upgrades packages with its own interpreter, so it would change a different environment than the one it scanned. Run `pip-audit --fix` with that environment's Python instead.
+
 ## Configuration
 
 The analyzer can be configured via environment variables:
@@ -114,9 +116,10 @@ The analyzer uses the following heuristics to determine how to scan a path:
 
 1. **File ending in `.txt` or `.in`**: Treated as a requirements file (`pip-audit -r <path>`)
 2. **Directory with `requirements.txt`**: Scans the requirements file
-3. **Directory with `pyproject.toml` and `.venv`**: Scans the installed environment via `--path .venv`
-4. **Directory with `pyproject.toml` (no `.venv`)**: Scans as a project directory via positional arg (`pip-audit <dir>`)
-5. **Other directories**: Uses `--path <directory>` to scan installed packages
+3. **Directory with `pyproject.toml` and `.venv`**: Scans the installed environment via `--path` on the venv's site-packages (`.venv/lib/pythonX.Y/site-packages`, or `.venv\Lib\site-packages` on Windows)
+4. **Directory with `pyproject.toml` (no `.venv`, or a `.venv` without site-packages)**: Scans as a project directory via positional arg (`pip-audit <dir>`)
+5. **Virtual environment root (contains `pyvenv.cfg`)**: Scans its site-packages via `--path`
+6. **Other directories**: Uses `--path <directory>` to scan installed packages
 
 ### Dependency Resolution
 

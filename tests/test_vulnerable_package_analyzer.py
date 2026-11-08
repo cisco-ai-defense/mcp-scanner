@@ -20,6 +20,8 @@ import json
 import os
 import subprocess
 import tempfile
+import venv
+from pathlib import Path
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -170,12 +172,21 @@ def tmp_project_dir(tmp_path):
 
 @pytest.fixture
 def tmp_pyproject_dir(tmp_path):
-    """Create a temporary project directory with pyproject.toml and .venv."""
+    """Create a temporary project directory with pyproject.toml and a real .venv."""
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text('[project]\nname = "test"\n')
-    venv = tmp_path / ".venv"
-    venv.mkdir()
+    venv.create(tmp_path / ".venv", with_pip=False)
     return str(tmp_path)
+
+
+def _path_args(cmd):
+    """Values passed to pip-audit's --path flags."""
+    return [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "--path"]
+
+
+def _is_site_packages(path):
+    p = Path(path)
+    return p.name == "site-packages" and p.is_dir()
 
 
 # ---------------------------------------------------------------------------
@@ -376,12 +387,58 @@ class TestAnalyzePath:
 
     @patch("subprocess.run")
     def test_dir_with_pyproject_and_venv(self, mock_run, analyzer, tmp_pyproject_dir):
+        """pip-audit --path only reads distributions directly in the directory,
+        so the venv root has to be mapped to its site-packages."""
         mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
         analyzer.analyze_path(tmp_pyproject_dir)
         cmd = mock_run.call_args[0][0]
-        assert "--path" in cmd
-        venv_path = os.path.join(tmp_pyproject_dir, ".venv")
-        assert venv_path in cmd
+        paths = _path_args(cmd)
+        assert len(paths) == 1
+        assert _is_site_packages(paths[0])
+        venv_root = Path(tmp_pyproject_dir, ".venv").resolve()
+        assert venv_root in Path(paths[0]).resolve().parents
+        assert os.path.join(tmp_pyproject_dir, ".venv") not in cmd
+
+    @patch("subprocess.run")
+    def test_dir_with_pyproject_and_venv_without_site_packages(
+        self, mock_run, analyzer, tmp_path
+    ):
+        """An empty .venv falls back to a project scan instead of an empty --path."""
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+        (tmp_path / ".venv").mkdir()
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        analyzer.analyze_path(str(tmp_path))
+        cmd = mock_run.call_args[0][0]
+        assert "--path" not in cmd
+        assert cmd[-1] == str(tmp_path)
+
+    @patch("subprocess.run")
+    def test_venv_root_scans_its_site_packages(self, mock_run, analyzer, tmp_path):
+        env_dir = tmp_path / "env"
+        venv.create(env_dir, with_pip=False)
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        analyzer.analyze_path(str(env_dir))
+        cmd = mock_run.call_args[0][0]
+        paths = _path_args(cmd)
+        assert len(paths) == 1
+        assert _is_site_packages(paths[0])
+        assert str(env_dir) not in paths
+
+    @pytest.mark.parametrize(
+        "layout",
+        [
+            ("lib", "python3.12", "site-packages"),
+            ("Lib", "site-packages"),
+        ],
+        ids=["posix", "windows"],
+    )
+    def test_venv_site_packages_layouts(self, tmp_path, layout):
+        site_dir = tmp_path.joinpath(*layout)
+        site_dir.mkdir(parents=True)
+        assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == [site_dir]
+
+    def test_venv_site_packages_empty_when_missing(self, tmp_path):
+        assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == []
 
     @patch("subprocess.run")
     def test_dir_with_pyproject_no_venv(self, mock_run, analyzer, tmp_path):
@@ -511,6 +568,40 @@ class TestRunAndParse:
         a._run_and_parse([], source="test")
         cmd = mock_run.call_args[0][0]
         assert "--fix" in cmd
+
+    @patch("subprocess.run")
+    def test_fix_mode_not_applied_to_installed_environment(
+        self, mock_run, tmp_pyproject_dir, caplog
+    ):
+        """pip-audit fixes with its own interpreter, so --fix must not be
+        combined with --path on another environment."""
+        with patch.object(
+            VulnerablePackageAnalyzer,
+            "_find_pip_audit",
+            return_value=["/bin/pip-audit"],
+        ):
+            a = VulnerablePackageAnalyzer(enabled=True, fix_mode=True)
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        with caplog.at_level("WARNING"):
+            a.analyze_path(tmp_pyproject_dir)
+        cmd = mock_run.call_args[0][0]
+        assert "--path" in cmd
+        assert "--fix" not in cmd
+        assert "--fix is not applied" in caplog.text
+
+    @patch("subprocess.run")
+    def test_fix_mode_still_applies_to_requirements(self, mock_run, tmp_requirements):
+        with patch.object(
+            VulnerablePackageAnalyzer,
+            "_find_pip_audit",
+            return_value=["/bin/pip-audit"],
+        ):
+            a = VulnerablePackageAnalyzer(enabled=True, fix_mode=True)
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        a.analyze_path(tmp_requirements)
+        cmd = mock_run.call_args[0][0]
+        assert "--fix" in cmd
+        assert "-r" in cmd
 
     @patch("subprocess.run")
     def test_desc_disabled(self, mock_run):
