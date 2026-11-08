@@ -20,15 +20,24 @@ import pytest
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 from typing import Dict, Any
 
+from mcpscanner import Config
 from mcpscanner.config.config_parser import (
     MCPConfigScanner,
     rebalance_command_args,
     scan_mcp_config_file,
 )
-from mcpscanner.core.mcp_models import StdioServer, RemoteServer, ClaudeConfigFile
+from mcpscanner.core.mcp_models import (
+    StdioServer,
+    RemoteServer,
+    ClaudeConfigFile,
+    VSCodeConfigFile,
+    VSCodeMCPConfig,
+)
+from mcpscanner.core.models import AnalyzerEnum
+from mcpscanner.core.scanner import Scanner
 
 
 class TestRebalanceCommandArgs:
@@ -119,11 +128,80 @@ class TestScanMcpConfigFile:
 
         try:
             config = await scan_mcp_config_file(config_path)
-            # Check that it's a valid VSCodeConfigFile with mcp.mcpServers attribute
-            assert hasattr(config, "mcp")
-            assert hasattr(config.mcp, "mcpServers")
-            assert isinstance(config.mcp.mcpServers, dict)
-            # The parsing should succeed without errors
+            assert isinstance(config, VSCodeConfigFile)
+            servers = MCPConfigScanner().extract_servers(config)
+            assert list(servers) == ["test_server"]
+            assert isinstance(servers["test_server"], StdioServer)
+            assert servers["test_server"].args == ["-m", "test_server"]
+        finally:
+            Path(config_path).unlink()
+
+    @pytest.mark.asyncio
+    async def test_scan_vscode_mcp_json(self):
+        """VS Code mcp.json keeps its servers under a top-level "servers" key."""
+        vscode_mcp_json = {
+            "inputs": [{"type": "promptString", "id": "token", "password": True}],
+            "servers": {
+                "playwright": {
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "@playwright/mcp"],
+                    "env": {"TOKEN": "${input:token}"},
+                },
+                "github": {
+                    "type": "http",
+                    "url": "https://api.githubcopilot.com/mcp",
+                },
+                "broken": {"type": "stdio"},
+            },
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(vscode_mcp_json, f)
+            config_path = f.name
+
+        try:
+            config = await scan_mcp_config_file(config_path)
+            assert isinstance(config, VSCodeMCPConfig)
+            servers = MCPConfigScanner().extract_servers(config)
+            assert sorted(servers) == ["github", "playwright"]
+            assert isinstance(servers["playwright"], StdioServer)
+            assert servers["playwright"].command == "npx"
+            assert isinstance(servers["github"], RemoteServer)
+            assert servers["github"].url == "https://api.githubcopilot.com/mcp"
+        finally:
+            Path(config_path).unlink()
+
+    @pytest.mark.asyncio
+    async def test_scanner_scans_servers_from_vscode_mcp_json(self):
+        """Servers from a VS Code mcp.json reach the stdio and remote scans."""
+        vscode_mcp_json = {
+            "servers": {
+                "local": {"command": "echo", "args": ["hi"]},
+                "remote": {"type": "http", "url": "https://example.com/mcp"},
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(vscode_mcp_json, f)
+            config_path = f.name
+
+        try:
+            scanner = Scanner(Config())
+            with (
+                patch.object(
+                    Scanner, "scan_stdio_server_tools", new=AsyncMock(return_value=[])
+                ) as mock_stdio,
+                patch.object(
+                    Scanner, "scan_remote_server_tools", new=AsyncMock(return_value=[])
+                ) as mock_remote,
+            ):
+                await scanner.scan_mcp_config_file(
+                    config_path, analyzers=[AnalyzerEnum.YARA]
+                )
+
+            assert mock_stdio.call_count == 1
+            assert mock_stdio.call_args.args[0].command == "echo"
+            assert mock_remote.call_count == 1
+            assert mock_remote.call_args.args[0] == "https://example.com/mcp"
         finally:
             Path(config_path).unlink()
 
@@ -332,6 +410,22 @@ class TestMCPConfigScanner:
         assert any(
             client in p.lower() for p in path_strings for client in expected_clients
         )
+
+    @pytest.mark.parametrize(
+        "platform, expected",
+        [
+            ("linux", "~/.config/Code/User/mcp.json"),
+            ("darwin", "~/Library/Application Support/Code/User/mcp.json"),
+            ("win32", "~/AppData/Roaming/Code/User/mcp.json"),
+        ],
+    )
+    def test_well_known_paths_include_vscode_user_mcp_json(
+        self, scanner, platform, expected
+    ):
+        """The VS Code user-profile mcp.json is a well-known path on every OS."""
+        with patch("mcpscanner.config.constants.sys.platform", platform):
+            paths = scanner.constants.get_well_known_mcp_paths()
+        assert expected in paths
 
     @pytest.mark.asyncio
     async def test_scan_well_known_paths_with_errors(self, scanner):
