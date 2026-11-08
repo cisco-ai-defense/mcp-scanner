@@ -18,6 +18,7 @@
 
 import pytest
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -33,6 +34,7 @@ from mcpscanner.cli import (
     display_results,
     _build_behavioral_results,
 )
+from mcpscanner.core.analyzers.api_analyzer import ApiAnalyzer
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner import Config, ToolScanResult
 from mcpscanner.core.models import AnalyzerEnum
@@ -838,6 +840,47 @@ class TestStaticSubcommandCLI:
             assert "MCP Scanner Results" in captured.out
             assert "Total tools scanned: 1" in captured.out
             assert "Safe items: 1" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_api_key_flag_is_applied_before_static_dispatch(
+        self, tools_json_file, monkeypatch, capsys
+    ):
+        """Global CLI environment overrides are applied before subcommand dispatch."""
+        from mcpscanner.cli import main
+
+        monkeypatch.delenv("MCP_SCANNER_API_KEY", raising=False)
+        api_keys_seen_at_config_time = []
+
+        def spy_build_config(selected_analyzers, endpoint_url=None):
+            api_keys_seen_at_config_time.append(
+                os.environ.get("MCP_SCANNER_API_KEY", "")
+            )
+            return _build_config(selected_analyzers, endpoint_url)
+
+        test_args = [
+            "mcp-scanner",
+            "--api-key",
+            "test-api-key",
+            "--analyzers",
+            "api",
+            "static",
+            "--tools",
+            tools_json_file,
+        ]
+
+        with patch(
+            "mcpscanner.cli._build_config", side_effect=spy_build_config
+        ), patch.object(
+            ApiAnalyzer, "analyze", new_callable=AsyncMock
+        ) as mock_analyze:
+            mock_analyze.return_value = []
+            with patch("sys.argv", test_args):
+                await main()
+
+        assert api_keys_seen_at_config_time == ["test-api-key"]
+        assert mock_analyze.await_count >= 1
+        assert "MCP Scanner Results" in capsys.readouterr().out
+        assert os.environ["MCP_SCANNER_API_KEY"] == "test-api-key"
 
     @pytest.mark.asyncio
     async def test_static_resources_result_conversion(self, resources_json_file):
