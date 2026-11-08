@@ -570,6 +570,40 @@ class TestRunAndParse:
         assert "--fix" in cmd
 
     @patch("subprocess.run")
+    def test_fix_mode_not_applied_to_installed_environment(
+        self, mock_run, tmp_pyproject_dir, caplog
+    ):
+        """pip-audit fixes with its own interpreter, so --fix must not be
+        combined with --path on another environment."""
+        with patch.object(
+            VulnerablePackageAnalyzer,
+            "_find_pip_audit",
+            return_value=["/bin/pip-audit"],
+        ):
+            a = VulnerablePackageAnalyzer(enabled=True, fix_mode=True)
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        with caplog.at_level("WARNING"):
+            a.analyze_path(tmp_pyproject_dir)
+        cmd = mock_run.call_args[0][0]
+        assert "--path" in cmd
+        assert "--fix" not in cmd
+        assert "--fix is not applied" in caplog.text
+
+    @patch("subprocess.run")
+    def test_fix_mode_still_applies_to_requirements(self, mock_run, tmp_requirements):
+        with patch.object(
+            VulnerablePackageAnalyzer,
+            "_find_pip_audit",
+            return_value=["/bin/pip-audit"],
+        ):
+            a = VulnerablePackageAnalyzer(enabled=True, fix_mode=True)
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        a.analyze_path(tmp_requirements)
+        cmd = mock_run.call_args[0][0]
+        assert "--fix" in cmd
+        assert "-r" in cmd
+
+    @patch("subprocess.run")
     def test_desc_disabled(self, mock_run):
         with patch.object(VulnerablePackageAnalyzer, "_find_pip_audit", return_value=["/bin/pip-audit"]):
             a = VulnerablePackageAnalyzer(enabled=True, desc=False)

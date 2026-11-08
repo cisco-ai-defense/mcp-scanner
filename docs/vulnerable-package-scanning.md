@@ -97,6 +97,8 @@ mcp-scanner vulnerable-package /path/to/requirements.txt --output results.json -
 mcp-scanner vulnerable-package /path/to/requirements.txt --fix
 ```
 
+`--fix` is skipped, with a warning, when the target is an installed environment (a `.venv` or other `--path` scan). pip-audit upgrades packages with its own interpreter, so it would change a different environment than the one it scanned. Run `pip-audit --fix` with that environment's Python instead.
+
 ## Configuration
 
 The analyzer can be configured via environment variables:

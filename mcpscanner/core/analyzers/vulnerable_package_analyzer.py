@@ -212,6 +212,7 @@ class VulnerablePackageAnalyzer:
 
     @staticmethod
     def _path_args(site_dirs: List[Path]) -> List[str]:
+        """Build one ``--path`` argument per site-packages directory."""
         args: List[str] = []
         for site_dir in site_dirs:
             args.extend(["--path", str(site_dir)])
@@ -232,7 +233,17 @@ class VulnerablePackageAnalyzer:
         if self.desc:
             cmd.append("--desc")
         if self.fix_mode:
-            cmd.append("--fix")
+            if "--path" in extra_args:
+                # pip-audit applies fixes with its own interpreter's pip, not
+                # the environment it read through --path, so --fix would
+                # change the wrong environment.
+                logger.warning(
+                    "--fix is not applied when auditing an installed environment "
+                    "(%s); run pip-audit --fix with that environment's Python",
+                    source,
+                )
+            else:
+                cmd.append("--fix")
         cmd.extend(extra_args)
 
         logger.info("Running: %s", " ".join(cmd))
