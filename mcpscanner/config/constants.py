@@ -375,7 +375,11 @@ class MCPScannerConstants:
             return {
                 "windsurf": ["~/.codeium/windsurf/mcp_config.json"],
                 "cursor": ["~/.cursor/mcp.json"],
-                "vscode": ["~/.vscode/mcp.json", "~/.config/Code/User/settings.json"],
+                "vscode": [
+                    "~/.vscode/mcp.json",
+                    "~/.config/Code/User/mcp.json",
+                    "~/.config/Code/User/settings.json",
+                ],
             }
         elif sys.platform == "darwin":
             return {
@@ -386,6 +390,7 @@ class MCPScannerConstants:
                 ],
                 "vscode": [
                     "~/.vscode/mcp.json",
+                    "~/Library/Application Support/Code/User/mcp.json",
                     "~/Library/Application Support/Code/User/settings.json",
                 ],
             }
@@ -396,6 +401,7 @@ class MCPScannerConstants:
                 "claude": ["~/AppData/Roaming/Claude/claude_desktop_config.json"],
                 "vscode": [
                     "~/.vscode/mcp.json",
+                    "~/AppData/Roaming/Code/User/mcp.json",
                     "~/AppData/Roaming/Code/User/settings.json",
                 ],
             }

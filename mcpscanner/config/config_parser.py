@@ -67,6 +67,52 @@ def rebalance_command_args(command: str, args: List[str]) -> tuple[str, List[str
     return command, args
 
 
+def _filter_valid_servers(servers: dict) -> Dict[str, dict]:
+    """Keep only the server entries that validate as a stdio or remote server.
+
+    Args:
+        servers: Mapping of server name to raw server config
+
+    Returns:
+        Mapping of server name to raw config for the valid entries
+    """
+    valid_servers = {}
+    invalid_count = 0
+
+    for name, server_config in servers.items():
+        try:
+            # Try to validate as either StdioServer or RemoteServer
+            if isinstance(server_config, dict):
+                # Check for any URL field variant (case-insensitive)
+                has_url = any(
+                    k.lower() in ("url", "serverurl") for k in server_config.keys()
+                )
+                if has_url:
+                    # Try RemoteServer (model_validator normalizes URL field)
+                    RemoteServer.model_validate(server_config)
+                    valid_servers[name] = server_config
+                elif "command" in server_config:
+                    # Try StdioServer
+                    StdioServer.model_validate(server_config)
+                    valid_servers[name] = server_config
+                else:
+                    invalid_count += 1
+                    logger.debug(
+                        f"Skipping invalid server '{name}': missing url or command"
+                    )
+            else:
+                invalid_count += 1
+                logger.debug(f"Skipping invalid server '{name}': not a dict")
+        except ValidationError:
+            invalid_count += 1
+            logger.debug(f"Skipping invalid server '{name}': validation failed")
+
+    logger.debug(
+        f"Found {len(valid_servers)} valid servers, skipped {invalid_count} invalid entries"
+    )
+    return valid_servers
+
+
 async def scan_mcp_config_file(path: str) -> MCPConfig:
     """Scan and parse an MCP config file.
 
@@ -84,47 +130,25 @@ async def scan_mcp_config_file(path: str) -> MCPConfig:
 
     def parse_and_validate(config: dict) -> MCPConfig:
         """Parse and validate config with lenient server filtering."""
-        # Check if this looks like a Claude config (has mcpServers at root)
+        # Claude, Cursor and Windsurf keep their servers under "mcpServers"
         if "mcpServers" in config:
-            # Filter out invalid server entries
-            valid_servers = {}
-            invalid_count = 0
-
-            for name, server_config in config["mcpServers"].items():
-                try:
-                    # Try to validate as either StdioServer or RemoteServer
-                    if isinstance(server_config, dict):
-                        # Check for any URL field variant (case-insensitive)
-                        has_url = any(
-                            k.lower() in ("url", "serverurl") for k in server_config.keys()
-                        )
-                        if has_url:
-                            # Try RemoteServer (model_validator normalizes URL field)
-                            RemoteServer.model_validate(server_config)
-                            valid_servers[name] = server_config
-                        elif "command" in server_config:
-                            # Try StdioServer
-                            StdioServer.model_validate(server_config)
-                            valid_servers[name] = server_config
-                        else:
-                            invalid_count += 1
-                            logger.debug(
-                                f"Skipping invalid server '{name}': missing url or command"
-                            )
-                    else:
-                        invalid_count += 1
-                        logger.debug(f"Skipping invalid server '{name}': not a dict")
-                except ValidationError:
-                    invalid_count += 1
-                    logger.debug(f"Skipping invalid server '{name}': validation failed")
-
-            logger.debug(
-                f"Found {len(valid_servers)} valid servers, skipped {invalid_count} invalid entries"
+            return ClaudeConfigFile.model_validate(
+                {"mcpServers": _filter_valid_servers(config["mcpServers"])}
             )
 
-            # Create a cleaned config with only valid servers
-            cleaned_config = {"mcpServers": valid_servers}
-            return ClaudeConfigFile.model_validate(cleaned_config)
+        # VS Code uses "servers": at the top level of mcp.json, and under
+        # "mcp" in settings.json
+        if isinstance(config.get("servers"), dict):
+            return VSCodeMCPConfig.model_validate(
+                {"mcpServers": _filter_valid_servers(config["servers"])}
+            )
+        mcp_section = config.get("mcp")
+        if isinstance(mcp_section, dict) and isinstance(
+            mcp_section.get("servers"), dict
+        ):
+            return VSCodeConfigFile.model_validate(
+                {"mcp": {"mcpServers": _filter_valid_servers(mcp_section["servers"])}}
+            )
 
         # Fall back to original validation for other formats
         models = [VSCodeConfigFile, VSCodeMCPConfig]
