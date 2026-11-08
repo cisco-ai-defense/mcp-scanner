@@ -132,10 +132,16 @@ class VulnerablePackageAnalyzer:
           - File ending in ``.txt`` or ``.in`` → requirements file scan.
           - Directory with ``requirements.txt`` → requirements file scan.
           - Directory with ``pyproject.toml`` and a ``.venv`` → installed
-            environment scan via ``--path .venv``.
-          - Directory with ``pyproject.toml`` (no ``.venv``) → project scan
-            via positional arg (``pip-audit <dir>``).
+            environment scan via ``--path`` on the venv's site-packages.
+          - Directory with ``pyproject.toml`` (no usable ``.venv``) → project
+            scan via positional arg (``pip-audit <dir>``).
+          - A virtual environment root (has ``pyvenv.cfg``) → installed
+            environment scan via ``--path`` on its site-packages.
           - Any other directory → installed environment scan via ``--path``.
+
+        ``pip-audit --path`` only lists distributions found directly in the
+        given directory, so a venv root has to be mapped to its site-packages
+        or the scan silently sees no packages.
         """
         if not self.enabled:
             return []
@@ -153,17 +159,63 @@ class VulnerablePackageAnalyzer:
             pyproject = p / "pyproject.toml"
             if pyproject.is_file():
                 venv = p / ".venv"
-                if venv.is_dir():
-                    args = ["--path", str(venv)]
+                site_dirs = self._venv_site_packages(venv) if venv.is_dir() else []
+                if site_dirs:
+                    args = self._path_args(site_dirs)
                 else:
+                    if venv.is_dir():
+                        logger.warning(
+                            "No site-packages found under %s; scanning %s as a project",
+                            venv,
+                            p,
+                        )
                     args = [str(p)]
                 return self._run_and_parse(args, source=str(p))
+
+            if (p / "pyvenv.cfg").is_file():
+                site_dirs = self._venv_site_packages(p)
+                if site_dirs:
+                    return self._run_and_parse(
+                        self._path_args(site_dirs), source=str(p)
+                    )
+                logger.warning("No site-packages found under virtual environment %s", p)
 
             args = ["--path", str(p)]
             return self._run_and_parse(args, source=str(p))
 
         logger.warning("Path does not exist or is unsupported: %s", target_path)
         return []
+
+    @staticmethod
+    def _venv_site_packages(venv: Path) -> List[Path]:
+        """Return the site-packages directories of a virtual environment.
+
+        Covers the POSIX layout (``lib/pythonX.Y/site-packages``, plus
+        ``lib64`` on some distributions) and the Windows layout
+        (``Lib/site-packages``).
+        """
+        candidates = sorted(venv.glob("lib/python*/site-packages"))
+        candidates += sorted(venv.glob("lib64/python*/site-packages"))
+        candidates.append(venv / "Lib" / "site-packages")
+
+        site_dirs: List[Path] = []
+        seen = set()
+        for candidate in candidates:
+            if not candidate.is_dir():
+                continue
+            key = candidate.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            site_dirs.append(candidate)
+        return site_dirs
+
+    @staticmethod
+    def _path_args(site_dirs: List[Path]) -> List[str]:
+        args: List[str] = []
+        for site_dir in site_dirs:
+            args.extend(["--path", str(site_dir)])
+        return args
 
     def _run_and_parse(
         self, extra_args: List[str], source: str
