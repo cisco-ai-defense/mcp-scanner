@@ -1333,6 +1333,7 @@ class Scanner:
         the server only speaks handshake-era protocol versions. On mcp 1.x
         (no ``discover`` method), uses ``initialize()`` directly.
         """
+        discover_error = None
         if hasattr(session, "discover"):
             try:
                 connect_result = await session.discover()
@@ -1347,15 +1348,16 @@ class Scanner:
                     e, legacy_stdio=legacy_stdio, legacy_http=legacy_http
                 ):
                     raise
-                if getattr(e, "code", None) == -32602:
+                discover_error = e
+                if legacy_http:
                     logger.warning(
-                        "Legacy-shaped server/discover rejection over stdio; "
+                        "Legacy-shaped server/discover rejection over HTTP; "
                         "trying initialize() after: %s",
                         e,
                     )
-                elif getattr(e, "code", None) == -32600:
+                elif getattr(e, "code", None) == -32602:
                     logger.warning(
-                        "Legacy-shaped server/discover rejection over HTTP; "
+                        "Legacy-shaped server/discover rejection over stdio; "
                         "trying initialize() after: %s",
                         e,
                     )
@@ -1364,7 +1366,12 @@ class Scanner:
                     e,
                 )
 
-        connect_result = await session.initialize()
+        try:
+            connect_result = await session.initialize()
+        except Exception as init_error:
+            if discover_error is None:
+                raise
+            raise init_error from discover_error
         session._init_result = connect_result
         protocol_version = getattr(
             connect_result,

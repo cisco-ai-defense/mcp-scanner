@@ -1492,6 +1492,22 @@ async def test_negotiate_falls_back_for_stateless_http_server(config):
 
 
 @pytest.mark.asyncio
+async def test_negotiate_chains_discover_error_when_fallback_initialize_fails(config):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    discover_error = _mcp_error(-32600, STATELESS_HTTP_DISCOVER_REJECTION)
+    init_error = _mcp_error(-32603, "Internal error")
+    session.discover = AsyncMock(side_effect=discover_error)
+    session.initialize = AsyncMock(side_effect=init_error)
+
+    with pytest.raises(McpError) as raised:
+        await scanner._negotiate_mcp_session(session, legacy_http=True)
+
+    assert raised.value is init_error
+    assert raised.value.__cause__ is discover_error
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "code, message",
     [
