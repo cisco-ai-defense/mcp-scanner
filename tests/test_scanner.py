@@ -1416,7 +1416,7 @@ def test_should_fallback_to_initialize_covers_legacy_shapes(config):
     assert not scanner._should_fallback_to_initialize(missing_http_session)
     assert scanner._should_fallback_to_initialize(missing_http_session, legacy_http=True)
     assert not scanner._should_fallback_to_initialize(
-        _mcp_error(-32600, "Bad Request: Invalid session ID"), legacy_http=True
+        _mcp_error(-32600, "Bad Request: Invalid session ID")
     )
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32602, "params._meta is invalid"), legacy_stdio=True
@@ -1436,6 +1436,80 @@ def test_should_fallback_to_initialize_covers_legacy_shapes(config):
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32603, "Internal error")
     )
+
+
+STATELESS_HTTP_DISCOVER_REJECTION = (
+    "Bad Request: Unsupported protocol version: 2026-07-28. "
+    "Supported versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25"
+)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        STATELESS_HTTP_DISCOVER_REJECTION,
+        "Bad Request: Missing session ID",
+    ],
+)
+def test_should_fallback_to_initialize_on_legacy_http_rejection(config, message):
+    scanner = Scanner(config)
+    error = _mcp_error(-32600, message)
+
+    assert scanner._should_fallback_to_initialize(error, legacy_http=True)
+
+
+@pytest.mark.parametrize(
+    "code, message",
+    [
+        (-32020, "Header mismatch: Mcp-Method does not match body"),
+        (-32021, "Missing required client capability: sampling"),
+    ],
+)
+def test_should_fallback_to_initialize_rejects_modern_http_errors(
+    config, code, message
+):
+    scanner = Scanner(config)
+
+    assert not scanner._should_fallback_to_initialize(
+        _mcp_error(code, message), legacy_http=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_negotiate_falls_back_for_stateless_http_server(config):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    session.discover = AsyncMock(
+        side_effect=_mcp_error(-32600, STATELESS_HTTP_DISCOVER_REJECTION)
+    )
+    init_result = SimpleNamespace(protocol_version="2025-11-25")
+    session.initialize = AsyncMock(return_value=init_result)
+
+    result = await scanner._negotiate_mcp_session(session, legacy_http=True)
+
+    assert result is init_result
+    session.initialize.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code, message",
+    [
+        (-32020, "Header mismatch: Mcp-Method does not match body"),
+        (-32021, "Missing required client capability: sampling"),
+    ],
+)
+async def test_negotiate_preserves_modern_http_discover_error(config, code, message):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    error = _mcp_error(code, message)
+    session.discover = AsyncMock(side_effect=error)
+
+    with pytest.raises(McpError) as raised:
+        await scanner._negotiate_mcp_session(session, legacy_http=True)
+
+    assert raised.value is error
+    session.initialize.assert_not_called()
 
 
 @pytest.mark.asyncio
