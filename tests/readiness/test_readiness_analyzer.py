@@ -21,6 +21,8 @@ readiness analysis of MCP tools.
 """
 
 import json
+from unittest.mock import AsyncMock
+
 import pytest
 from pathlib import Path
 
@@ -505,6 +507,7 @@ class TestHEUR008NoOutputSchema:
         assert find_finding_by_rule(findings, "HEUR-001") is not None
         incomplete = find_finding_by_rule(findings, "HEUR-INCOMPLETE")
         assert incomplete is not None
+        assert incomplete.threat_category == "ANALYZER INFRASTRUCTURE"
         assert incomplete.severity == "MEDIUM"
         assert incomplete.details.get("failed_checks") == ["HEUR-002"]
         assert "HEUR-002" in incomplete.summary
@@ -515,10 +518,33 @@ class TestHEUR008NoOutputSchema:
         assert all(
             finding.details.get("is_production_ready") is False for finding in findings
         )
-        assert all(finding.details.get("readiness_score") is None for finding in findings)
+        assert all(
+            finding.details.get("readiness_score") is None for finding in findings
+        )
         assert all(
             finding.details.get("failed_checks") == ["HEUR-002"] for finding in findings
         )
+
+    @pytest.mark.asyncio
+    async def test_opa_failure_keeps_heuristic_findings(self):
+        """An OPA error does not throw away the heuristic findings."""
+        analyzer = ReadinessAnalyzer()
+
+        async def broken_opa(_content, _context=None):
+            raise RuntimeError("opa down")
+
+        analyzer.opa_findings = broken_opa
+        analyzer.judge_findings = AsyncMock(return_value=[])
+        tool_def = {
+            "name": "bare",
+            "description": "A test tool that does something useful",
+        }
+        findings = await analyzer.analyze(json.dumps(tool_def), {"tool_name": "bare"})
+        assert find_finding_by_rule(findings, "HEUR-001") is not None
+        assert any(
+            finding.threat_category == "ANALYZER INFRASTRUCTURE" for finding in findings
+        )
+        assert "opa down" not in " ".join(finding.summary for finding in findings)
 
     @pytest.mark.asyncio
     async def test_skipped_high_check_is_not_reported_as_low(self):
@@ -1303,4 +1329,3 @@ class TestFixtureFiles:
         finding = find_finding_by_rule(findings, "HEUR-020")
         assert finding is not None
         assert finding.severity == "MEDIUM"
-

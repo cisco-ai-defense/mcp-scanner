@@ -268,7 +268,9 @@ async def test_analyzer_deadline_keeps_earlier_findings(config, monkeypatch):
     scanner._custom_analyzers = [
         SimpleNamespace(name="slow-custom", analyze=slow_custom)
     ]
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
     result = await scanner._analyze_tool(tool, [AnalyzerEnum.YARA])
     assert result.status == "partial"
     assert result.findings
@@ -290,12 +292,15 @@ async def test_session_connect_timeout(config, monkeypatch):
             return False
 
     scanner = Scanner(config)
-    with patch(
-        "mcpscanner.core.scanner.streamable_http_client",
-        return_value=SlowContext(),
-    ), patch(
-        "mcpscanner.core.scanner.create_mcp_http_client",
-        return_value=AsyncMock(),
+    with (
+        patch(
+            "mcpscanner.core.scanner.streamable_http_client",
+            return_value=SlowContext(),
+        ),
+        patch(
+            "mcpscanner.core.scanner.create_mcp_http_client",
+            return_value=AsyncMock(),
+        ),
     ):
         with pytest.raises(MCPConnectionError, match="Timed out connecting"):
             await scanner._get_mcp_session("https://example.com/mcp")
@@ -320,9 +325,8 @@ async def test_llm_request_gate_limits_concurrency(monkeypatch):
     import mcpscanner.utils.llm_gate as gate
 
     monkeypatch.setattr(MCPScannerConstants, "LLM_REQUEST_CONCURRENCY", 1)
-    gate._gate = None
-    gate._loop = None
-    sem = gate.llm_request_gate()
+    gate._semaphores.clear()
+    sem = gate.semaphore_for_running_loop()
     assert sem._value == 1
     entered = 0
     peak = 0
@@ -458,9 +462,7 @@ async def test_meta_stops_at_the_same_item_deadline(config, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prompt_and_resource_deadlines_keep_earlier_findings(
-    config, monkeypatch
-):
+async def test_prompt_and_resource_deadlines_keep_earlier_findings(config, monkeypatch):
     from mcpscanner.core.analyzers.base import SecurityFinding
 
     monkeypatch.setattr(MCPScannerConstants, "ITEM_DEADLINE_SECONDS", 0.05)
@@ -518,12 +520,17 @@ async def test_prompt_fetch_failure_runs_meta(config):
     scanner._meta_analyzer = object()
     scanner._meta_analyze_one_prompt = fake_meta
     prompt = MCPPrompt(name="x", description="d", arguments=[])
-    results = await scanner._analyze_collected_prompts(
-        [(prompt, "", RuntimeError("nope"))],
+    result = await scanner._analyze_one_prompt_for_scan(
+        prompt,
         [AnalyzerEnum.YARA, AnalyzerEnum.META],
+        None,
+        "",
+        RuntimeError("nope"),
+        asyncio.Semaphore(1),
+        asyncio.Semaphore(1),
     )
     assert seen == ["x"]
-    assert results[0].status == "failed"
+    assert result.status == "failed"
 
 
 @pytest.mark.asyncio
@@ -531,14 +538,12 @@ async def test_llm_gate_limit_stays_fixed_for_the_loop(monkeypatch):
     import mcpscanner.utils.llm_gate as gate
 
     monkeypatch.setattr(MCPScannerConstants, "LLM_REQUEST_CONCURRENCY", 1)
-    gate._gate = None
-    gate._loop = None
-    first = gate.llm_request_gate()
+    gate._semaphores.clear()
+    first = gate.semaphore_for_running_loop()
     monkeypatch.setattr(MCPScannerConstants, "LLM_REQUEST_CONCURRENCY", 4)
-    assert gate.llm_request_gate() is first
+    assert gate.semaphore_for_running_loop() is first
     assert first._value == 1
-    gate._gate = None
-    gate._loop = None
+    gate._semaphores.clear()
 
 
 @pytest.mark.asyncio
@@ -564,7 +569,9 @@ async def test_llm_retry_budget_is_not_cut_by_the_item_deadline(config, monkeypa
         return [finding]
 
     scanner._llm_analyzer = SimpleNamespace(analyze=llm_analyze)
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
     result = await scanner._analyze_tool(tool, [AnalyzerEnum.LLM])
     assert result.status == "completed"
     assert result.findings[0].summary == "llm matched"
@@ -590,7 +597,9 @@ async def test_fast_analyzer_survives_a_slow_one(config, monkeypatch):
 
     scanner._api_analyzer = SimpleNamespace(analyze=slow_api)
     scanner._yara_analyzer = SimpleNamespace(analyze=yara_analyze)
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
     result = await scanner._analyze_tool(tool, [AnalyzerEnum.API, AnalyzerEnum.YARA])
     assert started == ["api", "yara"] or set(started) == {"api", "yara"}
     assert result.status == "partial"
@@ -681,9 +690,7 @@ def test_llm_call_allowance_includes_empty_followups(config):
 
 
 @pytest.mark.asyncio
-async def test_fast_readiness_survives_a_slow_llm_call(
-    config, monkeypatch
-):
+async def test_fast_readiness_survives_a_slow_llm_call(config, monkeypatch):
     from mcp.types import Tool
 
     monkeypatch.setattr(MCPScannerConstants, "ITEM_DEADLINE_SECONDS", 0.3)
@@ -708,7 +715,9 @@ async def test_fast_readiness_survives_a_slow_llm_call(
         judge_findings=judge_findings,
         stamp_readiness=lambda findings: list(findings),
     )
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
     started = time.monotonic()
     result = await scanner._analyze_tool(
         tool, [AnalyzerEnum.LLM, AnalyzerEnum.READINESS]
@@ -731,11 +740,15 @@ async def test_prompt_defense_stays_on_the_item_deadline(config, monkeypatch):
         return []
 
     scanner._prompt_defense_analyzer = SimpleNamespace(analyze=slow)
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
     started = time.monotonic()
     result = await scanner._analyze_tool(tool, [AnalyzerEnum.PROMPT_DEFENSE])
     elapsed = time.monotonic() - started
-    assert any(error["analyzer"] == "PROMPT_DEFENSE" for error in result.analyzer_errors)
+    assert any(
+        error["analyzer"] == "PROMPT_DEFENSE" for error in result.analyzer_errors
+    )
     assert elapsed < 0.3
 
 
@@ -768,7 +781,9 @@ async def test_readiness_heuristics_survive_a_cancelled_judge(config, monkeypatc
         judge_findings=judge_findings,
         stamp_readiness=lambda findings: list(findings),
     )
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
     result = await scanner._analyze_tool(tool, [AnalyzerEnum.READINESS])
     assert result.status == "partial"
     assert result.findings[0].summary == "missing timeout"
@@ -814,7 +829,9 @@ async def test_readiness_failure_keeps_earlier_findings(config):
         llm_judge_available=False,
         stamp_readiness=lambda findings: list(findings),
     )
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
     result = await scanner._analyze_tool(
         tool, [AnalyzerEnum.YARA, AnalyzerEnum.READINESS]
     )
@@ -856,7 +873,9 @@ async def test_opa_findings_survive_a_cancelled_judge(config, monkeypatch):
         judge_findings=judge_findings,
         stamp_readiness=lambda findings: list(findings),
     )
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
     result = await scanner._analyze_tool(tool, [AnalyzerEnum.READINESS])
     assert result.status == "partial"
     assert result.findings[0].summary == "opa policy"
@@ -923,7 +942,9 @@ async def test_disabled_judge_leaves_the_llm_extension_for_meta(config, monkeypa
         stamp_readiness=lambda findings: list(findings),
     )
     scanner._meta_analyzer = SimpleNamespace(analyze_findings=analyze_findings)
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
 
     async def analyze():
         return await scanner._analyze_tool(tool, [AnalyzerEnum.READINESS])
@@ -1014,9 +1035,7 @@ async def test_failed_readiness_check_is_recorded_and_other_findings_stay(config
         error["message"] == "ReadinessCheckFailure during analysis (HEUR-002)"
         for error in result.analyzer_errors
     )
-    assert all(
-        "bad check" not in error["message"] for error in result.analyzer_errors
-    )
+    assert all("bad check" not in error["message"] for error in result.analyzer_errors)
 
 
 @pytest.mark.asyncio
@@ -1230,9 +1249,7 @@ async def test_list_gap_reason_survives_api_and_reports(config):
     from mcpscanner.core.result import format_results_as_json
 
     scanner = Scanner(config)
-    gap = scanner._append_list_gap(
-        [], "tools", "a pagination cursor was repeated"
-    )[0]
+    gap = scanner._append_list_gap([], "tools", "a pagination cursor was repeated")[0]
     reason = "pagination cursor"
 
     payload = json.loads(format_results_as_json([gap]))["scan_results"][0]
@@ -1281,7 +1298,9 @@ async def test_llm_infrastructure_finding_is_not_a_clean_scan(config):
         return [finding]
 
     scanner._llm_analyzer = SimpleNamespace(analyze=llm_analyze)
-    tool = Tool(name="risky", description="do the thing", inputSchema={"type": "object"})
+    tool = Tool(
+        name="risky", description="do the thing", inputSchema={"type": "object"}
+    )
     result = await scanner._analyze_tool(tool, [AnalyzerEnum.LLM])
     assert result.status == "partial"
     assert result.is_safe is None
@@ -1400,6 +1419,7 @@ async def test_stream_heartbeats_during_a_slow_tool_and_hides_error_text(
     assert body.index('"event": "heartbeat"') < body.index('"event": "result"')
     assert '"event": "done"' in body
     assert '"complete": true' in body
+    assert '"list_complete": true' in body
     assert patches[1].new.await_count == 1
 
     import mcpscanner.api.router as router_mod
@@ -1430,14 +1450,15 @@ async def test_stream_disconnect_unblocks_a_full_queue(monkeypatch):
 
     monkeypatch.setattr(MCPScannerConstants, "STREAM_QUEUE_SIZE", 1)
     monkeypatch.setattr(MCPScannerConstants, "STREAM_HEARTBEAT_SECONDS", 30)
+    put_calls = 0
     second_put = asyncio.Event()
     original_put = asyncio.Queue.put
 
     async def track_put(self, item):
-        if not second_put.is_set():
+        nonlocal put_calls
+        put_calls += 1
+        if put_calls == 2:
             second_put.set()
-            await original_put(self, item)
-            return
         await original_put(self, item)
 
     monkeypatch.setattr(asyncio.Queue, "put", track_put)
@@ -1554,9 +1575,7 @@ def test_stream_closes_the_session_when_the_body_never_starts(monkeypatch):
     async def fail_before_the_body(self, send):
         raise OSError("client left before the body")
 
-    monkeypatch.setattr(
-        _ScanStreamResponse, "stream_response", fail_before_the_body
-    )
+    monkeypatch.setattr(_ScanStreamResponse, "stream_response", fail_before_the_body)
     client = _stream_client(scanner)
     with patches[0], patches[1], patches[2]:
         with pytest.raises(Exception):
@@ -1655,3 +1674,198 @@ async def test_cancelled_prompt_scan_stops_inflight_fetches(config, monkeypatch)
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=1)
     assert set(finished) == {"first", "second"}
+
+
+@pytest.mark.asyncio
+async def test_terminal_resource_reads_refill_the_window(config, monkeypatch):
+    """A run of failed reads must not report later resources as unread."""
+    monkeypatch.setattr(MCPScannerConstants, "REMOTE_SCAN_CONCURRENCY", 2)
+    scanner = Scanner(config)
+    resources = [
+        SimpleNamespace(
+            uri=f"resource://bad{i}",
+            name=f"bad{i}",
+            description="",
+            mimeType="text/plain",
+        )
+        for i in range(2)
+    ] + [
+        SimpleNamespace(
+            uri="resource://ok", name="ok", description="", mimeType="text/plain"
+        )
+    ]
+    read = []
+
+    async def read_resource(uri):
+        read.append(uri)
+        if uri != "resource://ok":
+            raise RuntimeError("unreadable")
+        return SimpleNamespace(
+            contents=[SimpleNamespace(text="hello", mimeType="text/plain", blob=None)]
+        )
+
+    async def analyze(text, uri, name, description, mime, analyzers, http_headers=None):
+        return ResourceScanResult(
+            resource_uri=uri,
+            resource_name=name,
+            resource_mime_type=mime,
+            status="completed",
+            analyzers=[],
+            findings=[],
+            resource_text=text,
+        )
+
+    session = AsyncMock()
+    session.list_resources.return_value = SimpleNamespace(resources=resources)
+    session.read_resource.side_effect = read_resource
+    scanner._analyze_resource = analyze
+    patches = _patch_session(scanner, session)
+    with patches[0], patches[1], patches[2]:
+        results = await scanner.scan_remote_server_resources(
+            "https://example.com/mcp",
+            analyzers=[AnalyzerEnum.YARA],
+            allowed_mime_types=["text/plain"],
+        )
+    assert "resource://ok" in read
+    assert results[-1].status == "completed"
+    assert results[-1].resource_text == "hello"
+
+
+@pytest.mark.asyncio
+async def test_later_list_page_keeps_items_on_non_mcp_error(config):
+    scanner = Scanner(config)
+    tool = SimpleNamespace(name="kept", description="d")
+    session = AsyncMock()
+    session.list_tools.side_effect = [
+        SimpleNamespace(tools=[tool], next_cursor="next"),
+        RuntimeError("transport closed"),
+    ]
+    items, gap = await scanner._list_mcp_items(session, "tools", "https://example.com")
+    assert [item.name for item in items] == ["kept"]
+    assert gap == "a later list page failed"
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_only_findings_skip_meta(config):
+    from mcpscanner.utils.analyzer_errors import build_infrastructure_error_finding
+
+    scanner = Scanner(config)
+    called = []
+
+    class Meta:
+        async def analyze_findings(self, **_kwargs):
+            called.append(True)
+
+    scanner._meta_analyzer = Meta()
+    result = ToolScanResult(
+        tool_name="t",
+        tool_description="d",
+        status="failed",
+        analyzers=[],
+        findings=[
+            build_infrastructure_error_finding(
+                analyzer_name="MCP",
+                subject="t",
+                error=RuntimeError("gone"),
+            )
+        ],
+    )
+    out = await scanner._meta_analyze_one_tool(result, asyncio.Semaphore(1))
+    assert called == []
+    assert out.findings == result.findings
+
+
+@pytest.mark.asyncio
+async def test_queue_wait_does_not_spend_the_item_deadline(config, monkeypatch):
+    monkeypatch.setattr(MCPScannerConstants, "ITEM_DEADLINE_SECONDS", 0.15)
+    scanner = Scanner(config)
+
+    async def slow():
+        from mcpscanner.core.scanner import _item_budget_var
+
+        active = _item_budget_var.get()
+        active.pause()
+        await asyncio.sleep(0.3)
+        active.resume()
+        return "ok"
+
+    async with scanner._item_budget_scope():
+        assert await scanner._wait_for_item(slow(), "YARA") == "ok"
+
+
+@pytest.mark.asyncio
+async def test_zero_heartbeat_does_not_spin(monkeypatch):
+    from mcpscanner.api.router import _ndjson_scan_stream
+
+    monkeypatch.setattr(MCPScannerConstants, "STREAM_HEARTBEAT_SECONDS", 0)
+
+    async def items():
+        await asyncio.sleep(0.05)
+        yield SimpleNamespace(name="one")
+
+    class Request:
+        async def is_disconnected(self):
+            return False
+
+    stream = _ndjson_scan_stream(
+        Request(), items(), lambda result: {"name": result.name}
+    )
+    body = []
+    async for chunk in stream:
+        body.append(chunk)
+    text = "".join(body)
+    assert '"event": "heartbeat"' not in text
+    assert '"event": "result"' in text
+
+
+@pytest.mark.asyncio
+async def test_restored_cancellation_lets_the_next_await_run():
+    from mcpscanner.core.scanner import (
+        _await_cancelled_tasks,
+        _cancellation_window,
+    )
+
+    ran = []
+
+    async def blocked():
+        await asyncio.Event().wait()
+
+    async def cleanup():
+        pending = asyncio.create_task(blocked())
+        await asyncio.sleep(0)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            async with _cancellation_window():
+                await _await_cancelled_tasks([pending])
+                await asyncio.sleep(0)
+                ran.append(True)
+
+    task = asyncio.create_task(cleanup())
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+    assert ran == [True]
+
+
+@pytest.mark.asyncio
+async def test_llm_gate_is_per_event_loop():
+    import concurrent.futures
+
+    import mcpscanner.utils.llm_gate as gate
+
+    gate._semaphores.clear()
+
+    async def grab():
+        return id(gate.semaphore_for_running_loop())
+
+    here = await grab()
+
+    def other():
+        return asyncio.run(grab())
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        other_id = pool.submit(other).result()
+    assert other_id != here
+    gate._semaphores.clear()

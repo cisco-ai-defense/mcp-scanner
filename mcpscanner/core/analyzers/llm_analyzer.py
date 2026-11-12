@@ -97,11 +97,18 @@ class LLMAnalyzer(BaseAnalyzer):
             if hasattr(config, "llm_provider_api_key") and config.llm_provider_api_key:
                 # Use Bedrock API key authentication (MCP_SCANNER_LLM_API_KEY)
                 self._api_key = config.llm_provider_api_key
-                self.logger.debug("Bedrock: Using API key authentication (MCP_SCANNER_LLM_API_KEY)")
-            elif hasattr(config, "aws_bearer_token_bedrock") and config.aws_bearer_token_bedrock:
+                self.logger.debug(
+                    "Bedrock: Using API key authentication (MCP_SCANNER_LLM_API_KEY)"
+                )
+            elif (
+                hasattr(config, "aws_bearer_token_bedrock")
+                and config.aws_bearer_token_bedrock
+            ):
                 # Use AWS Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK)
                 self._api_key = config.aws_bearer_token_bedrock
-                self.logger.debug("Bedrock: Using bearer token authentication (AWS_BEARER_TOKEN_BEDROCK)")
+                self.logger.debug(
+                    "Bedrock: Using bearer token authentication (AWS_BEARER_TOKEN_BEDROCK)"
+                )
             else:
                 # Use AWS credentials (profile/IAM/session token)
                 self._api_key = None
@@ -199,9 +206,7 @@ class LLMAnalyzer(BaseAnalyzer):
                 for param_name, param_info in parameters.items():
                     param_type = param_info.get("type", "unknown")
                     param_desc = param_info.get("description", "No description")
-                    param_list.append(
-                        f"  - {param_name} ({param_type}): {param_desc}"
-                    )
+                    param_list.append(f"  - {param_name} ({param_type}): {param_desc}")
                 params_text = "\n".join(param_list)
             else:
                 params_text = "  No parameters"
@@ -349,9 +354,7 @@ class LLMAnalyzer(BaseAnalyzer):
         primary_threats = threat_analysis.get("primary_threats", [])
 
         # Only create findings if malicious content is detected AND primary threats are specified
-        if primary_threats and threat_analysis.get(
-            "malicious_content_detected", False
-        ):
+        if primary_threats and threat_analysis.get("malicious_content_detected", False):
             # Generate threat summary for all findings
             display_names = []
             for threat_name in primary_threats:
@@ -362,7 +365,9 @@ class LLMAnalyzer(BaseAnalyzer):
             if len(display_names) == 1:
                 threat_summary = f"Detected 1 threat: {display_names[0]}"
             else:
-                threat_summary = f"Detected {len(display_names)} threats: {', '.join(display_names)}"
+                threat_summary = (
+                    f"Detected {len(display_names)} threats: {', '.join(display_names)}"
+                )
 
             # Create specific findings for each detected threat
             for threat_name in primary_threats:
@@ -442,8 +447,12 @@ class LLMAnalyzer(BaseAnalyzer):
             metadata_text = ""
             if entity_kind in ("resource", "prompt"):
                 body_text = self._extract_mcp_entity_body(content, entity_kind)
-                metadata_text = content.split("Content:\n")[0].split("Messages:\n")[0].strip()
-            has_tool_fields = tool_info.get("description") or tool_info.get("parameters")
+                metadata_text = (
+                    content.split("Content:\n")[0].split("Messages:\n")[0].strip()
+                )
+            has_tool_fields = tool_info.get("description") or tool_info.get(
+                "parameters"
+            )
             has_body = bool(body_text.strip())
             if has_tool_fields or has_body:
                 threat_prompt, prompt_injection_detected = (
@@ -456,7 +465,9 @@ class LLMAnalyzer(BaseAnalyzer):
                         ),
                         parameters=tool_info.get("parameters"),
                         entity_kind=entity_kind,
-                        body_text=body_text if entity_kind in ("resource", "prompt") else None,
+                        body_text=(
+                            body_text if entity_kind in ("resource", "prompt") else None
+                        ),
                         _context=context,
                     )
                 )
@@ -491,7 +502,6 @@ class LLMAnalyzer(BaseAnalyzer):
                     # empty replies (content filters, blank choices) get one
                     # provider call each so those retries do not multiply it.
                     empty_attempts = self._max_retries + 1
-                    threat_response = None
                     threat_content = ""
                     finish_reason = ""
                     for attempt in range(1, empty_attempts + 1):
@@ -501,9 +511,7 @@ class LLMAnalyzer(BaseAnalyzer):
                             max_attempts=None if attempt == 1 else 1,
                         )
                         threat_content = self._completion_text(threat_response)
-                        finish_reason = self._completion_finish_reason(
-                            threat_response
-                        )
+                        finish_reason = self._completion_finish_reason(threat_response)
                         if threat_content:
                             break
                         self.logger.warning(
@@ -542,10 +550,8 @@ class LLMAnalyzer(BaseAnalyzer):
                         )
                     else:
                         threat_analysis = self._parse_response(threat_content)
-                        threat_findings = (
-                            self._create_findings_from_threat_analysis(
-                                threat_analysis, entity_name
-                            )
+                        threat_findings = self._create_findings_from_threat_analysis(
+                            threat_analysis, entity_name
                         )
                         findings.extend(threat_findings)
 
@@ -623,6 +629,7 @@ class LLMAnalyzer(BaseAnalyzer):
             Exception: If all retries are exhausted
         """
         from mcpscanner.utils.llm_request_params import apply_model_constraints
+
         if max_attempts is None:
             max_attempts = self._max_retries + 1
         max_attempts = max(1, int(max_attempts))
@@ -659,12 +666,9 @@ class LLMAnalyzer(BaseAnalyzer):
             async with llm_request_gate():
                 return await acompletion(**request_params, drop_params=True)
 
-        async def on_retry(
-            exc: BaseException, attempt: int, delay: float
-        ) -> None:
+        async def on_retry(exc: BaseException, attempt: int, delay: float) -> None:
             self.logger.warning(
-                "LLM API transient error, retrying in %.1fs "
-                "(attempt %d/%d): %s",
+                "LLM API transient error, retrying in %.1fs " "(attempt %d/%d): %s",
                 delay,
                 attempt,
                 max_attempts,

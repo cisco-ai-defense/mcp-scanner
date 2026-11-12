@@ -121,30 +121,69 @@ class ScanListNotice:
         self.list_complete = list_complete
 
 
+_cleanup_depth: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "mcp_scanner_cleanup_depth", default=0
+)
+
+
+def _suspend_task_cancellation() -> int:
+    """Drop a pending cancellation so the next cleanup await can run.
+
+    On Python 3.11 and 3.12, calling ``cancel`` again after ``uncancel``
+    sets ``_must_cancel``, and the next ``uncancel`` does not clear it.
+    Cleanup therefore does not re-cancel the task. The outermost cleanup
+    re-raises ``CancelledError`` after every cleanup await has finished.
+    """
+    current = asyncio.current_task()
+    if current is None:
+        return 0
+    count = 0
+    while current.cancelling():
+        current.uncancel()
+        count += 1
+    return count
+
+
+@asynccontextmanager
+async def _cancellation_window():
+    """Run cleanup awaits, then re-raise if this task was cancelled.
+
+    Several cleanup steps can share one window. A step must not re-raise
+    on its own, or the next step in the same finally would be skipped.
+    """
+    token = _cleanup_depth.set(_cleanup_depth.get() + 1)
+    count = _suspend_task_cancellation()
+    try:
+        yield
+    finally:
+        _cleanup_depth.reset(token)
+        if count and sys.exc_info()[0] is None:
+            raise asyncio.CancelledError()
+
+
 async def _await_cancelled_tasks(tasks: Sequence[asyncio.Task]) -> None:
     """Cancel outstanding tasks and wait, even during an outer cancellation.
 
     On Python 3.11 a pending cancellation is raised at the next await, which
     would skip this wait and close the MCP session while RPCs are still in
-    flight. The count is cleared for the wait and then restored.
+    flight. The count is cleared for the wait. The cancellation is raised
+    again after the wait, unless an outer cleanup window will do that.
     """
     pending = [task for task in tasks if task is not None and not task.done()]
     for task in pending:
         task.cancel()
     if not pending:
         return
-    current = asyncio.current_task()
-    to_restore = 0
-    if current is not None:
-        while current.cancelling():
-            current.uncancel()
-            to_restore += 1
-    try:
+
+    async def wait() -> None:
+        """Wait for the cancelled tasks, including ones that already failed."""
         await asyncio.gather(*pending, return_exceptions=True)
-    finally:
-        if current is not None:
-            for _ in range(to_restore):
-                current.cancel()
+
+    if _cleanup_depth.get():
+        await wait()
+        return
+    async with _cancellation_window():
+        await wait()
 
 
 def _signal_stream_end(queue: asyncio.Queue, finished: object) -> None:
@@ -160,6 +199,38 @@ def _signal_stream_end(queue: asyncio.Queue, finished: object) -> None:
             queue.put_nowait(finished)
         except asyncio.QueueFull:
             return
+
+
+class _SameTaskAsyncIter:
+    """Async iterator whose cleanup runs on the task that enters it.
+
+    ``async for`` does not close a generator on ``break``. The finalizer
+    then closes the MCP session from another task, and anyio refuses to
+    exit that cancel scope. Use ``async with`` (or ``aclose``) so the
+    session closes on this task.
+    """
+
+    def __init__(self, agen: AsyncIterator[Any]) -> None:
+        self._agen = agen
+
+    def __aiter__(self) -> "_SameTaskAsyncIter":
+        return self
+
+    async def __anext__(self) -> Any:
+        return await anext(self._agen)
+
+    async def aclose(self) -> None:
+        """Close the wrapped generator on the calling task."""
+        close = getattr(self._agen, "aclose", None)
+        if close is not None:
+            await close()
+
+    async def __aenter__(self) -> "_SameTaskAsyncIter":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        await self.aclose()
+        return False
 
 
 class _HeldMcpSession:
@@ -181,24 +252,22 @@ class _HeldMcpSession:
         """Close the session once, including while this task is being cancelled."""
         if self._closed:
             return
-        current = asyncio.current_task()
-        to_restore = 0
-        if current is not None:
-            while current.cancelling():
-                current.uncancel()
-                to_restore += 1
-        try:
+
+        async def close_session() -> None:
+            """Close the held session once the lock is free."""
             async with self._lock:
                 if self._closed:
                     return
-                self._closed = True
                 await self._scanner._close_mcp_session(
                     self._client_context, self.session
                 )
-        finally:
-            if current is not None:
-                for _ in range(to_restore):
-                    current.cancel()
+                self._closed = True
+
+        if _cleanup_depth.get():
+            await close_session()
+            return
+        async with _cancellation_window():
+            await close_session()
 
 
 logger = get_logger(__name__)
@@ -210,16 +279,41 @@ class _ItemBudget:
     def __init__(self) -> None:
         self.limit = float(MCPScannerConstants.ITEM_DEADLINE_SECONDS)
         self.llm_extension_used = False
+        self._paused_at: Optional[float] = None
+        self._pause_depth = 0
         if self.limit <= 0:
             self.deadline = None
         else:
             self.deadline = time.monotonic() + self.limit
 
+    @property
+    def paused(self) -> bool:
+        """True while this item is waiting for a shared slot."""
+        return self._pause_depth > 0
+
+    def pause(self) -> None:
+        """Stop the deadline while this item waits for a shared slot."""
+        if self.deadline is None:
+            return
+        if self._pause_depth == 0:
+            self._paused_at = time.monotonic()
+        self._pause_depth += 1
+
+    def resume(self) -> None:
+        """Restart the deadline after a shared slot is acquired."""
+        if self.deadline is None or self._pause_depth == 0:
+            return
+        self._pause_depth -= 1
+        if self._pause_depth == 0 and self._paused_at is not None:
+            self.deadline += time.monotonic() - self._paused_at
+            self._paused_at = None
+
     def remaining(self) -> Optional[float]:
         """Seconds left, ``None`` when the deadline is disabled, else ``>= 0``."""
         if self.deadline is None:
             return None
-        return max(0.0, self.deadline - time.monotonic())
+        now = self._paused_at if self._paused_at is not None else time.monotonic()
+        return max(0.0, self.deadline - now)
 
     def wait_limit(self, allowance: float) -> Optional[float]:
         """How long the next call may run.
@@ -239,9 +333,11 @@ class _ItemBudget:
         return remaining
 
 
-_item_budget_var: contextvars.ContextVar[Optional[_ItemBudget]] = contextvars.ContextVar(
-    "mcpscanner_item_budget",
-    default=None,
+_item_budget_var: contextvars.ContextVar[Optional[_ItemBudget]] = (
+    contextvars.ContextVar(
+        "mcpscanner_item_budget",
+        default=None,
+    )
 )
 
 
@@ -256,7 +352,9 @@ def _discard_awaitable(awaitable: Any) -> None:
         cancel()
 
 
-def _share_item_budget(method: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+def _share_item_budget(
+    method: Callable[..., Awaitable[Any]],
+) -> Callable[..., Awaitable[Any]]:
     """Give every analyzer call inside ``method`` the same item deadline."""
 
     @functools.wraps(method)
@@ -366,7 +464,9 @@ class Scanner:
         # because Scanner instances themselves are not concurrently constructed
         # within a single request lifecycle.
         self._meta_analyzer = (
-            MetaAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
+            MetaAnalyzer(config)
+            if (config.llm_provider_api_key or is_bedrock)
+            else None
         )
         self._custom_analyzers = custom_analyzers or []
 
@@ -429,10 +529,7 @@ class Scanner:
                 "(or AWS credentials for Bedrock models)"
             )
 
-        if (
-            AnalyzerEnum.VIRUSTOTAL in requested_analyzers
-            and not self._vt_analyzer
-        ):
+        if AnalyzerEnum.VIRUSTOTAL in requested_analyzers and not self._vt_analyzer:
             missing_requirements.append(
                 "VirusTotal analyzer requested but VIRUSTOTAL_API_KEY not configured or scanning is disabled"
             )
@@ -444,13 +541,19 @@ class Scanner:
             )
 
         # READINESS analyzer should always be available since it doesn't require API keys
-        if AnalyzerEnum.READINESS in requested_analyzers and not self._readiness_analyzer:
+        if (
+            AnalyzerEnum.READINESS in requested_analyzers
+            and not self._readiness_analyzer
+        ):
             missing_requirements.append(
                 "Readiness analyzer requested but failed to initialize"
             )
 
         # PROMPT_DEFENSE analyzer should always be available (pure regex, no API keys)
-        if AnalyzerEnum.PROMPT_DEFENSE in requested_analyzers and not self._prompt_defense_analyzer:
+        if (
+            AnalyzerEnum.PROMPT_DEFENSE in requested_analyzers
+            and not self._prompt_defense_analyzer
+        ):
             missing_requirements.append(
                 "Prompt Defense analyzer requested but failed to initialize"
             )
@@ -515,10 +618,7 @@ class Scanner:
             text = getattr(content, "text", None)
             return text if isinstance(text, str) else str(text or "")
         if isinstance(content, list):
-            parts = [
-                Scanner._coerce_prompt_message_content(item)
-                for item in content
-            ]
+            parts = [Scanner._coerce_prompt_message_content(item) for item in content]
             return "\n".join(part for part in parts if part)
         return str(content)
 
@@ -563,9 +663,7 @@ class Scanner:
             )
             return self._extract_prompt_messages_text(get_prompt_result), None
         except Exception as e:
-            logger.warning(
-                f"Could not fetch prompt messages for '{prompt.name}': {e}"
-            )
+            logger.warning(f"Could not fetch prompt messages for '{prompt.name}': {e}")
             return "", e
 
     @staticmethod
@@ -773,7 +871,7 @@ class Scanner:
                     for pending in scheduled.values():
                         pending.cancel()
                 else:
-                    schedule_fetches()
+                    self._refill_prefetch(schedule_fetches, True)
             return collected
         finally:
             await _await_cancelled_tasks(list(scheduled.values()))
@@ -831,59 +929,12 @@ class Scanner:
         async def meta(result: PromptScanResult) -> PromptScanResult:
             return await self._meta_analyze_one_prompt(result, meta_sem)
 
-        use_meta = (
-            AnalyzerEnum.META in analyzers and self._meta_analyzer is not None
-        )
+        use_meta = AnalyzerEnum.META in analyzers and self._meta_analyzer is not None
         return await self._analyze_and_meta_item(
             None if fetch_error is not None else scan_sem,
             analyze,
             meta if use_meta else None,
         )
-
-    async def _analyze_collected_prompts(
-        self,
-        collected: List[Tuple[MCPPrompt, str, Optional[Exception]]],
-        analyzers: List[AnalyzerEnum],
-        http_headers: Optional[dict] = None,
-    ) -> List[PromptScanResult]:
-        """Analyze prompts with bounded concurrency after bodies are fetched.
-
-        Meta for an item starts as soon as that item's analyzers finish.
-        """
-        sem = asyncio.Semaphore(self._remote_scan_limit())
-        meta_sem = asyncio.Semaphore(self._META_CONCURRENCY)
-
-        async def run(
-            index: int,
-            prompt: MCPPrompt,
-            text: str,
-            err: Optional[Exception],
-        ) -> Tuple[int, PromptScanResult]:
-            result = await self._analyze_one_prompt_for_scan(
-                prompt,
-                analyzers,
-                http_headers,
-                text,
-                err,
-                sem,
-                meta_sem,
-            )
-            return index, result
-
-        ordered: List[Optional[PromptScanResult]] = [None] * len(collected)
-        if collected:
-            analyzed = await asyncio.gather(
-                *[
-                    run(index, prompt, text, err)
-                    for index, (prompt, text, err) in enumerate(collected)
-                ]
-            )
-            for index, result in analyzed:
-                ordered[index] = result
-        missing = [index for index, result in enumerate(ordered) if result is None]
-        if missing:
-            raise RuntimeError(f"prompt scan left indexes unsettled: {missing}")
-        return ordered
 
     async def _fetch_and_analyze_prompts(
         self,
@@ -922,9 +973,7 @@ class Scanner:
             tasks.append(asyncio.create_task(run(index, prompt, text, err)))
 
         try:
-            await self._collect_prompt_message_bodies(
-                session, prompts, on_item=on_item
-            )
+            await self._collect_prompt_message_bodies(session, prompts, on_item=on_item)
             if tasks:
                 await asyncio.gather(*tasks)
             missing = [index for index, result in enumerate(results) if result is None]
@@ -1038,7 +1087,9 @@ class Scanner:
         if len(combined) <= budget:
             return combined
         elided = len(combined) - budget
-        return combined[:budget] + f"... [prompt context truncated, {elided} bytes elided]"
+        return (
+            combined[:budget] + f"... [prompt context truncated, {elided} bytes elided]"
+        )
 
     @staticmethod
     def _build_resource_description_for_meta(
@@ -1095,7 +1146,9 @@ class Scanner:
                 )
             else:
                 snippet = text
-            parts.append(f"--- Content (first {min(text_total, text_budget)} chars) ---\n{snippet}")
+            parts.append(
+                f"--- Content (first {min(text_total, text_budget)} chars) ---\n{snippet}"
+            )
 
         return "\n\n".join(parts)
 
@@ -1194,20 +1247,20 @@ class Scanner:
         return None
 
     async def _acquire_within_item_budget(self, sem: asyncio.Semaphore) -> bool:
-        """Take a meta slot, but stop waiting once this item's deadline is spent."""
+        """Take a meta slot. Time spent waiting does not use the item deadline."""
         budget = _item_budget_var.get()
-        if budget is None:
+        if budget is None or budget.remaining() is None:
             await sem.acquire()
             return True
-        remaining = budget.remaining()
-        if remaining is None:
-            await sem.acquire()
-            return True
-        if remaining <= 0:
+        if budget.remaining() <= 0:
             return False
+        budget.pause()
         try:
-            await asyncio.wait_for(sem.acquire(), timeout=remaining)
-        except asyncio.TimeoutError:
+            await sem.acquire()
+        finally:
+            budget.resume()
+        if budget.remaining() <= 0:
+            sem.release()
             return False
         return True
 
@@ -1244,11 +1297,47 @@ class Scanner:
             _discard_awaitable(awaitable)
             logger.error("%s exceeded the %gs item deadline", label, budget.limit)
             raise asyncio.TimeoutError()
+        task = asyncio.ensure_future(awaitable)
+        timed_out = False
+        started = time.monotonic()
+        paused_for = 0.0
+        pause_mark: Optional[float] = None
         try:
-            return await asyncio.wait_for(awaitable, timeout=limit)
-        except asyncio.TimeoutError:
-            logger.error("%s exceeded the %gs item deadline", label, budget.limit)
-            raise
+            while not task.done():
+                now = time.monotonic()
+                if budget.paused:
+                    # Queue time for a shared slot is not part of this grant.
+                    if pause_mark is None:
+                        pause_mark = now
+                    await asyncio.wait({task}, timeout=0.05)
+                    continue
+                if pause_mark is not None:
+                    paused_for += now - pause_mark
+                    pause_mark = None
+                elapsed = now - started - paused_for
+                if elapsed >= limit:
+                    timed_out = True
+                    break
+                await asyncio.wait({task}, timeout=max(0.0, limit - elapsed))
+            if timed_out or not task.done():
+                logger.error("%s exceeded the %gs item deadline", label, budget.limit)
+                raise asyncio.TimeoutError()
+            return task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    def _refill_prefetch(self, schedule: Callable[[], None], keep_going: bool) -> None:
+        """Start the next prefetch after an item settles.
+
+        Prompt fetches and resource reads share this call. A terminal
+        result still has to refill the window, or later items are reported
+        as budget-exhausted without being read.
+        """
+        if keep_going:
+            schedule()
 
     def _remote_scan_limit(self) -> int:
         """How many items of one capability type may be in flight on a scan."""
@@ -1346,7 +1435,10 @@ class Scanner:
                 if not items:
                     raise
                 return items, "the list deadline was reached"
-            except McpError:
+            except Exception:
+                # A later page can fail with a transport or validation error
+                # that is not an MCP protocol error. Keep the pages already
+                # read. The first page still raises.
                 if not items:
                     raise
                 return items, "a later list page failed"
@@ -1474,20 +1566,29 @@ class Scanner:
     # limits can monkey-patch ``Scanner._META_CONCURRENCY`` or subclass.
     _META_CONCURRENCY = 8
 
+    def _skip_meta_for_infrastructure(self, result: Any) -> bool:
+        """True when meta cannot change this result.
+
+        An empty finding list, or a list that is only analyzer
+        infrastructure, is kept as-is. Those calls would only take a meta
+        slot and an LLM slot to return the same findings.
+        """
+        findings = getattr(result, "findings", None) or []
+        if findings and any(
+            getattr(finding, "threat_category", None) != "ANALYZER INFRASTRUCTURE"
+            for finding in findings
+        ):
+            return False
+        result.meta_filtered_findings = []
+        return True
+
     async def _meta_analyze_one_tool(
         self,
         result: ToolScanResult,
         sem: "asyncio.Semaphore",
     ) -> ToolScanResult:
         """Per-tool meta-analysis worker. Bounded by ``sem``."""
-        if not result.findings:
-            # P2-2: clear any stale audit list from a prior meta call.
-            # The public ``Scanner.apply_meta_to_results`` invites
-            # repeated invocation; without this reset, a second pass
-            # over a result that previously had findings filtered would
-            # leak the prior call's ``meta_filtered_findings`` into the
-            # new audit block, misrepresenting what just happened.
-            result.meta_filtered_findings = []
+        if self._skip_meta_for_infrastructure(result):
             return result
 
         entity_context = {
@@ -1538,9 +1639,7 @@ class Scanner:
         sem: "asyncio.Semaphore",
     ) -> PromptScanResult:
         """Per-prompt meta-analysis worker. Bounded by ``sem``."""
-        if not result.findings:
-            # P2-2: see ``_meta_analyze_one_tool`` for rationale.
-            result.meta_filtered_findings = []
+        if self._skip_meta_for_infrastructure(result):
             return result
 
         entity_context = {
@@ -1590,9 +1689,7 @@ class Scanner:
         sem: "asyncio.Semaphore",
     ) -> ResourceScanResult:
         """Per-resource meta-analysis worker. Bounded by ``sem``."""
-        if not result.findings:
-            # P2-2: see ``_meta_analyze_one_tool`` for rationale.
-            result.meta_filtered_findings = []
+        if self._skip_meta_for_infrastructure(result):
             return result
 
         # P0-3 fix: pipe MCP description + analyzed text content to the
@@ -1640,7 +1737,8 @@ class Scanner:
                     # silently zeroed those fields on the post-meta result,
                     # defeating the contract that ResourceScanResult holds
                     # the evidence the analyzers saw.
-                    resource_description=getattr(result, "resource_description", "") or "",
+                    resource_description=getattr(result, "resource_description", "")
+                    or "",
                     resource_text=getattr(result, "resource_text", "") or "",
                 )
                 enriched.meta_filtered_findings = dropped
@@ -1999,9 +2097,7 @@ class Scanner:
         )
 
     @staticmethod
-    def _server_supports_capability(
-        session: Any, capability: str
-    ) -> Optional[bool]:
+    def _server_supports_capability(session: Any, capability: str) -> Optional[bool]:
         """Check whether the server advertised support for a capability.
 
         Prefers ``ClientSession.server_capabilities`` (mcp ≥ 2.0, works for
@@ -2424,9 +2520,7 @@ class Scanner:
                     try:
                         collected.extend(
                             await self._wait_for_item(
-                                readiness.judge_findings(
-                                    tool_json, readiness_context
-                                ),
+                                readiness.judge_findings(tool_json, readiness_context),
                                 "READINESS",
                             )
                         )
@@ -2453,18 +2547,13 @@ class Scanner:
                 for finding in readiness_findings:
                     finding.analyzer = "READINESS"
                 ok = (
-                    [AnalyzerEnum.READINESS]
-                    if readiness_findings or not failed
-                    else []
+                    [AnalyzerEnum.READINESS] if readiness_findings or not failed else []
                 )
                 return readiness_findings, ok, [], errors
 
             parts.append(readiness_part)
 
-        if (
-            AnalyzerEnum.PROMPT_DEFENSE in analyzers
-            and self._prompt_defense_analyzer
-        ):
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
 
             async def prompt_defense_part() -> Tuple[list, list, list, list]:
                 try:
@@ -2508,9 +2597,7 @@ class Scanner:
                     return findings, [], [analyzer.name], []
                 except Exception as e:
                     errors = []
-                    self._record_analyzer_error(
-                        errors, analyzer.name, "description", e
-                    )
+                    self._record_analyzer_error(errors, analyzer.name, "description", e)
                     return [], [], [], errors
 
             parts.append(custom_part)
@@ -2525,9 +2612,7 @@ class Scanner:
         # Combine enum analyzers and custom analyzer names, excluding META
         # since meta-analysis enriches existing findings rather than producing
         # its own output section
-        self._record_infrastructure_gaps(
-            all_findings, analyzer_errors, "comprehensive"
-        )
+        self._record_infrastructure_gaps(all_findings, analyzer_errors, "comprehensive")
         all_analyzers, status = self._analysis_outcome(
             successful_analyzers, custom_analyzer_names, analyzer_errors
         )
@@ -2699,10 +2784,7 @@ class Scanner:
                 name,
             )
 
-        if (
-            AnalyzerEnum.PROMPT_DEFENSE in analyzers
-            and self._prompt_defense_analyzer
-        ):
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
 
             async def prompt_defense_part() -> Tuple[list, list, list, list]:
                 try:
@@ -2811,19 +2893,15 @@ class Scanner:
                     "content_type": "instructions",
                 }
                 api_findings = await self._wait_for_item(
-                    self._api_analyzer.analyze(
-                    instructions, api_context
-                ),
-                    'API',
+                    self._api_analyzer.analyze(instructions, api_context),
+                    "API",
                 )
                 for finding in api_findings:
                     finding.analyzer = "API"
                 all_findings.extend(api_findings)
                 successful_analyzers.append(AnalyzerEnum.API)
             except Exception as e:
-                self._record_analyzer_error(
-                    analyzer_errors, "API", "instructions", e
-                )
+                self._record_analyzer_error(analyzer_errors, "API", "instructions", e)
 
         if AnalyzerEnum.YARA in analyzers:
             # Run YARA analysis on the instructions
@@ -2833,19 +2911,15 @@ class Scanner:
                     "content_type": "instructions",
                 }
                 yara_findings = await self._wait_for_item(
-                    self._yara_analyzer.analyze(
-                    instructions, yara_context
-                ),
-                    'YARA',
+                    self._yara_analyzer.analyze(instructions, yara_context),
+                    "YARA",
                 )
                 for finding in yara_findings:
                     finding.analyzer = "YARA"
                 all_findings.extend(yara_findings)
                 successful_analyzers.append(AnalyzerEnum.YARA)
             except Exception as e:
-                self._record_analyzer_error(
-                    analyzer_errors, "YARA", "instructions", e
-                )
+                self._record_analyzer_error(analyzer_errors, "YARA", "instructions", e)
 
         if AnalyzerEnum.LLM in analyzers and self._llm_analyzer:
             # Run LLM analysis on the instructions
@@ -2860,19 +2934,15 @@ class Scanner:
                     "content_type": "instructions",
                 }
                 llm_findings = await self._wait_for_item(
-                    self._llm_analyzer.analyze(
-                    analysis_content, llm_context
-                ),
-                    'LLM',
+                    self._llm_analyzer.analyze(analysis_content, llm_context),
+                    "LLM",
                 )
                 for finding in llm_findings:
                     finding.analyzer = "LLM"
                 all_findings.extend(llm_findings)
                 successful_analyzers.append(AnalyzerEnum.LLM)
             except Exception as e:
-                self._record_analyzer_error(
-                    analyzer_errors, "LLM", "instructions", e
-                )
+                self._record_analyzer_error(analyzer_errors, "LLM", "instructions", e)
         elif AnalyzerEnum.LLM in analyzers and not self._llm_analyzer:
             logger.warning(
                 f"LLM scan requested for instructions from '{server_name}' but LLM analyzer not initialized (MCP_SCANNER_LLM_API_KEY missing)"
@@ -2883,10 +2953,8 @@ class Scanner:
             try:
                 pd_context = {"tool_name": server_name, "content_type": "instructions"}
                 pd_findings = await self._wait_for_item(
-                    self._prompt_defense_analyzer.analyze(
-                    instructions, pd_context
-                ),
-                    'PROMPT_DEFENSE',
+                    self._prompt_defense_analyzer.analyze(instructions, pd_context),
+                    "PROMPT_DEFENSE",
                 )
                 for finding in pd_findings:
                     finding.analyzer = "PromptDefense"
@@ -2910,7 +2978,7 @@ class Scanner:
                     custom_context["http_headers"] = http_headers
                 findings = await self._wait_for_item(
                     analyzer.analyze(instructions, custom_context),
-                    'custom analyzer',
+                    "custom analyzer",
                 )
                 for finding in findings:
                     finding.analyzer = analyzer.name
@@ -2923,9 +2991,7 @@ class Scanner:
                 )
 
         # Combine enum analyzers and custom analyzer names, excluding META
-        self._record_infrastructure_gaps(
-            all_findings, analyzer_errors, "instructions"
-        )
+        self._record_infrastructure_gaps(all_findings, analyzer_errors, "instructions")
         all_analyzers, status = self._analysis_outcome(
             successful_analyzers, custom_analyzer_names, analyzer_errors
         )
@@ -3104,7 +3170,9 @@ class Scanner:
                     headers=extra_headers if extra_headers else None,
                     auth=oauth_provider,
                 )
-                client_context = streamable_http_client(dial_url, http_client=httpx_client)
+                client_context = streamable_http_client(
+                    dial_url, http_client=httpx_client
+                )
         else:
             logger.debug(
                 f'Using standard connection (no auth) for MCP server: server="{destination_url}"'
@@ -3120,7 +3188,9 @@ class Scanner:
                 httpx_client = create_mcp_http_client(
                     headers=extra_headers if extra_headers else None
                 )
-                client_context = streamable_http_client(dial_url, http_client=httpx_client)
+                client_context = streamable_http_client(
+                    dial_url, http_client=httpx_client
+                )
 
         # Stash the httpx client on the context so _close_mcp_session can close it
         client_context._httpx_client = httpx_client
@@ -3170,7 +3240,9 @@ class Scanner:
                 nonlocal client_context_opened, session
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
-                        "ignore", category=RuntimeWarning, message=".*async.*generator.*"
+                        "ignore",
+                        category=RuntimeWarning,
+                        message=".*async.*generator.*",
                     )
                     client_context_opened = await client_context.__aenter__()
                     streams = client_context_opened
@@ -3183,11 +3255,14 @@ class Scanner:
                     )
 
             try:
-                await asyncio.wait_for(
-                    _establish_session(),
-                    timeout=float(MCPScannerConstants.MCP_SESSION_TIMEOUT_SECONDS),
-                )
-            except asyncio.TimeoutError as exc:
+                # asyncio.timeout stays on this task. wait_for would enter
+                # the anyio cancel scopes on a short-lived task, and closing
+                # them from here would raise on Python 3.11.
+                async with asyncio.timeout(
+                    float(MCPScannerConstants.MCP_SESSION_TIMEOUT_SECONDS)
+                ):
+                    await _establish_session()
+            except TimeoutError as exc:
                 await self._close_mcp_session(client_context, session)
                 raise MCPConnectionError(
                     f"Timed out connecting to MCP server at {server_url} "
@@ -3396,14 +3471,13 @@ class Scanner:
                 tenant_id=tenant_id,
             )
             held = _HeldMcpSession(self, client_context, session)
-            if kind != "tools" and self._server_supports_capability(
-                session, kind
-            ) is False:
+            if (
+                kind != "tools"
+                and self._server_supports_capability(session, kind) is False
+            ):
                 return held, [], None
             try:
-                items, list_gap = await self._list_mcp_items(
-                    session, kind, server_url
-                )
+                items, list_gap = await self._list_mcp_items(session, kind, server_url)
             except McpError as e:
                 if self._is_missing_capability_error(e):
                     logger.warning(
@@ -3462,13 +3536,19 @@ class Scanner:
                 yield item
             await producer
         finally:
-            if producer is not None and not producer.done():
-                producer.cancel()
-                await _await_cancelled_tasks([producer])
-            if release_session:
-                await held.close()
+            # One window covers the producer wait and the session close.
+            # Restoring cancellation between them cancels the close on
+            # Python 3.11 and 3.12 before the session is torn down.
+            async with _cancellation_window():
+                if producer is not None and not producer.done():
+                    producer.cancel()
+                    await _await_cancelled_tasks([producer])
+                if release_session:
+                    await held.close()
 
-    async def _failed_tool_result(self, tool: MCPTool, error: Exception) -> ToolScanResult:
+    async def _failed_tool_result(
+        self, tool: MCPTool, error: Exception
+    ) -> ToolScanResult:
         """One tool failure stays a result and does not stop the other tools."""
         logger.error(
             "Error analyzing tool '%s': %s",
@@ -3489,7 +3569,7 @@ class Scanner:
             findings=[finding],
         )
 
-    async def iter_remote_server_tools(
+    def iter_remote_server_tools(
         self,
         server_url: str,
         auth: Optional[Auth] = None,
@@ -3497,22 +3577,31 @@ class Scanner:
         http_headers: Optional[dict] = None,
         connector_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
-    ) -> AsyncIterator[Any]:
-        """Yield each tool result as it finishes. List order is not preserved."""
-        if analyzers is None:
-            analyzers = self.DEFAULT_ANALYZERS
-        prepared = await self._prepare_remote_catalog(
-            "tools",
-            server_url,
-            auth,
-            analyzers,
-            connector_id,
-            tenant_id,
-        )
-        async for item in self._iter_prepared_tools(
-            prepared, analyzers, http_headers
-        ):
-            yield item
+    ) -> _SameTaskAsyncIter:
+        """Yield each tool result as it finishes. List order is not preserved.
+
+        Close the iterator with ``async with`` or ``aclose``. A bare
+        ``async for`` that breaks does not close the MCP session.
+        """
+
+        async def generate() -> AsyncIterator[Any]:
+            selected = analyzers
+            if selected is None:
+                selected = self.DEFAULT_ANALYZERS
+            prepared = await self._prepare_remote_catalog(
+                "tools",
+                server_url,
+                auth,
+                selected,
+                connector_id,
+                tenant_id,
+            )
+            async for item in self._iter_prepared_tools(
+                prepared, selected, http_headers
+            ):
+                yield item
+
+        return _SameTaskAsyncIter(generate())
 
     async def _iter_prepared_tools(
         self,
@@ -3555,7 +3644,7 @@ class Scanner:
         ):
             yield item
 
-    async def iter_remote_server_prompts(
+    def iter_remote_server_prompts(
         self,
         server_url: str,
         auth: Optional[Auth] = None,
@@ -3563,22 +3652,31 @@ class Scanner:
         http_headers: Optional[dict] = None,
         connector_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
-    ) -> AsyncIterator[Any]:
-        """Yield each prompt result as it finishes. List order is not preserved."""
-        if analyzers is None:
-            analyzers = [AnalyzerEnum.API, AnalyzerEnum.LLM]
-        prepared = await self._prepare_remote_catalog(
-            "prompts",
-            server_url,
-            auth,
-            analyzers,
-            connector_id,
-            tenant_id,
-        )
-        async for item in self._iter_prepared_prompts(
-            prepared, analyzers, http_headers
-        ):
-            yield item
+    ) -> _SameTaskAsyncIter:
+        """Yield each prompt result as it finishes. List order is not preserved.
+
+        Close the iterator with ``async with`` or ``aclose``. A bare
+        ``async for`` that breaks does not close the MCP session.
+        """
+
+        async def generate() -> AsyncIterator[Any]:
+            selected = analyzers
+            if selected is None:
+                selected = [AnalyzerEnum.API, AnalyzerEnum.LLM]
+            prepared = await self._prepare_remote_catalog(
+                "prompts",
+                server_url,
+                auth,
+                selected,
+                connector_id,
+                tenant_id,
+            )
+            async for item in self._iter_prepared_prompts(
+                prepared, selected, http_headers
+            ):
+                yield item
+
+        return _SameTaskAsyncIter(generate())
 
     async def _iter_prepared_prompts(
         self,
@@ -3605,7 +3703,7 @@ class Scanner:
         ):
             yield item
 
-    async def iter_remote_server_resources(
+    def iter_remote_server_resources(
         self,
         server_url: str,
         auth: Optional[Auth] = None,
@@ -3614,24 +3712,34 @@ class Scanner:
         allowed_mime_types: Optional[List[str]] = None,
         connector_id: Optional[str] = None,
         tenant_id: Optional[str] = None,
-    ) -> AsyncIterator[Any]:
-        """Yield each resource result as it finishes. List order is not preserved."""
-        if analyzers is None:
-            analyzers = [*self.DEFAULT_ANALYZERS, AnalyzerEnum.LLM]
-        if allowed_mime_types is None:
-            allowed_mime_types = ["text/plain", "text/html"]
-        prepared = await self._prepare_remote_catalog(
-            "resources",
-            server_url,
-            auth,
-            analyzers,
-            connector_id,
-            tenant_id,
-        )
-        async for item in self._iter_prepared_resources(
-            prepared, analyzers, http_headers, allowed_mime_types
-        ):
-            yield item
+    ) -> _SameTaskAsyncIter:
+        """Yield each resource result as it finishes. List order is not preserved.
+
+        Close the iterator with ``async with`` or ``aclose``. A bare
+        ``async for`` that breaks does not close the MCP session.
+        """
+
+        async def generate() -> AsyncIterator[Any]:
+            selected = analyzers
+            if selected is None:
+                selected = [*self.DEFAULT_ANALYZERS, AnalyzerEnum.LLM]
+            mime_types = allowed_mime_types
+            if mime_types is None:
+                mime_types = ["text/plain", "text/html"]
+            prepared = await self._prepare_remote_catalog(
+                "resources",
+                server_url,
+                auth,
+                selected,
+                connector_id,
+                tenant_id,
+            )
+            async for item in self._iter_prepared_resources(
+                prepared, selected, http_headers, mime_types
+            ):
+                yield item
+
+        return _SameTaskAsyncIter(generate())
 
     async def _iter_prepared_resources(
         self,
@@ -3723,9 +3831,7 @@ class Scanner:
                     return []
                 raise
 
-            results = await self._analyze_tools_bounded(
-                tools, analyzers, http_headers
-            )
+            results = await self._analyze_tools_bounded(tools, analyzers, http_headers)
             if list_gap:
                 self._append_list_gap(results, "tools", list_gap)
             return results
@@ -3798,17 +3904,20 @@ class Scanner:
 
             # Create client context and session with proper error handling
             # Pass errlog for stderr redirection (helps avoid JSON corruption from startup messages)
-            client_context = stdio_client(server_params, errlog=errlog if errlog else sys.stderr)
+            client_context = stdio_client(
+                server_params, errlog=errlog if errlog else sys.stderr
+            )
 
-            # Use asyncio.wait_for for timeout instead of asyncio.timeout
+            # Enter both context managers on this task. wait_for would
+            # enter their anyio cancel scopes on another task.
             try:
-                client_context_opened = await asyncio.wait_for(
-                    client_context.__aenter__(), timeout=timeout
-                )
+                async with asyncio.timeout(timeout):
+                    client_context_opened = await client_context.__aenter__()
                 read, write = client_context_opened
 
                 session = ClientSession(read, write)
-                await asyncio.wait_for(session.__aenter__(), timeout=10)
+                async with asyncio.timeout(10):
+                    await session.__aenter__()
                 await asyncio.wait_for(
                     self._negotiate_mcp_session(session, legacy_stdio=True),
                     timeout=10,
@@ -4400,11 +4509,6 @@ class Scanner:
                 f"Prompt '{prompt_name}' not found on the server at {server_url}",
             )
 
-            if not target_prompt:
-                raise ValueError(
-                    f"Prompt '{prompt_name}' not found on the server at {server_url}"
-                )
-
             prompt_messages_text, fetch_error = (
                 await self._resolve_prompt_messages_text(session, target_prompt)
             )
@@ -4482,13 +4586,11 @@ class Scanner:
             )
 
             # Connect result is stashed on the session during negotiation.
-            instructions, server_info, protocol_version = self._session_connect_metadata(
-                session
+            instructions, server_info, protocol_version = (
+                self._session_connect_metadata(session)
             )
 
-            if protocol_version is None and not getattr(
-                session, "_init_result", None
-            ):
+            if protocol_version is None and not getattr(session, "_init_result", None):
                 raise ValueError(
                     f"Failed to get initialization result from server at {server_url}"
                 )
@@ -4682,11 +4784,6 @@ class Scanner:
                 ),
             )
 
-            if not target_prompt:
-                raise ValueError(
-                    f"Prompt '{prompt_name}' not found on the stdio server with command {server_config.command}"
-                )
-
             prompt_messages_text, fetch_error = (
                 await self._resolve_prompt_messages_text(session, target_prompt)
             )
@@ -4797,7 +4894,9 @@ class Scanner:
             async def api_part() -> Tuple[list, list, list, list]:
                 try:
                     api_findings = await self._wait_for_item(
-                        self._api_analyzer.analyze(analysis_content, dict(base_context)),
+                        self._api_analyzer.analyze(
+                            analysis_content, dict(base_context)
+                        ),
                         "API",
                     )
                     for finding in api_findings:
@@ -4867,10 +4966,7 @@ class Scanner:
                 resource_uri,
             )
 
-        if (
-            AnalyzerEnum.PROMPT_DEFENSE in analyzers
-            and self._prompt_defense_analyzer
-        ):
+        if AnalyzerEnum.PROMPT_DEFENSE in analyzers and self._prompt_defense_analyzer:
 
             async def prompt_defense_part() -> Tuple[list, list, list, list]:
                 try:
@@ -5026,7 +5122,6 @@ class Scanner:
         aggregate_limit = MCPScannerConstants.MAX_PROMPT_RESOURCE_AGGREGATE_CHARS
         remaining = aggregate_limit
         scan_sem = asyncio.Semaphore(self._remote_scan_limit())
-        read_sem = asyncio.Semaphore(self._remote_scan_limit())
         meta_sem = asyncio.Semaphore(self._META_CONCURRENCY)
         finishes: List[asyncio.Task] = []
 
@@ -5074,80 +5169,74 @@ class Scanner:
             return result
 
         async def read_one(resource: Any) -> Tuple[str, Any]:
+            """Read one resource. The scheduled window is the concurrency cap."""
             resource_mime = self._advertised_resource_mime(resource)
-            async with read_sem:
-                try:
-                    resource_contents = await asyncio.wait_for(
-                        session.read_resource(resource.uri),
-                        timeout=MCPScannerConstants.MCP_CONTENT_READ_TIMEOUT_SECONDS,
-                    )
-                except asyncio.TimeoutError:
-                    logger.error(
-                        "Timeout reading resource '%s'", resource.uri
-                    )
-                    return "terminal", failed(
-                        resource, resource_mime, asyncio.TimeoutError()
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Error reading resource '%s': %s",
-                        resource.uri,
-                        type(e).__name__,
-                    )
-                    return "terminal", failed(resource, resource_mime, e)
+            try:
+                resource_contents = await asyncio.wait_for(
+                    session.read_resource(resource.uri),
+                    timeout=MCPScannerConstants.MCP_CONTENT_READ_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Timeout reading resource '%s'", resource.uri)
+                return "terminal", failed(
+                    resource, resource_mime, asyncio.TimeoutError()
+                )
+            except Exception as e:
+                logger.error(
+                    "Error reading resource '%s': %s",
+                    resource.uri,
+                    type(e).__name__,
+                )
+                return "terminal", failed(resource, resource_mime, e)
 
-                try:
-                    (
-                        text_content,
-                        effective_mime,
-                        binary_only,
-                        truncated,
-                        observed,
-                    ) = self._extract_resource_read_result(
-                        resource_contents, resource_mime
-                    )
-                except (AttributeError, TypeError) as e:
-                    logger.warning(
-                        "Error extracting content from resource '%s': %s",
-                        resource.uri,
-                        type(e).__name__,
-                    )
-                    return "terminal", failed(resource, resource_mime, e)
+            try:
+                (
+                    text_content,
+                    effective_mime,
+                    binary_only,
+                    truncated,
+                    observed,
+                ) = self._extract_resource_read_result(resource_contents, resource_mime)
+            except (AttributeError, TypeError) as e:
+                logger.warning(
+                    "Error extracting content from resource '%s': %s",
+                    resource.uri,
+                    type(e).__name__,
+                )
+                return "terminal", failed(resource, resource_mime, e)
 
-                if binary_only or not text_content.strip():
-                    logger.info(f"No text content found for resource '{resource.uri}'")
-                    return (
-                        "terminal",
-                        ResourceScanResult(
-                            resource_uri=resource.uri,
-                            resource_name=resource.name or "",
-                            resource_mime_type=effective_mime,
-                            status="skipped",
-                            analyzers=[],
-                            findings=[],
-                        ),
-                    )
+            if binary_only or not text_content.strip():
+                logger.info(f"No text content found for resource '{resource.uri}'")
+                return (
+                    "terminal",
+                    ResourceScanResult(
+                        resource_uri=resource.uri,
+                        resource_name=resource.name or "",
+                        resource_mime_type=effective_mime,
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                    ),
+                )
 
-                if not self._resource_mime_is_allowed(
-                    effective_mime, allowed_mime_types
-                ):
-                    logger.info(
-                        f"Skipping resource '{resource.uri}' with effective "
-                        f"MIME type '{effective_mime}'"
-                    )
-                    return (
-                        "terminal",
-                        ResourceScanResult(
-                            resource_uri=resource.uri,
-                            resource_name=resource.name or "",
-                            resource_mime_type=effective_mime,
-                            status="skipped",
-                            analyzers=[],
-                            findings=[],
-                        ),
-                    )
+            if not self._resource_mime_is_allowed(effective_mime, allowed_mime_types):
+                logger.info(
+                    f"Skipping resource '{resource.uri}' with effective "
+                    f"MIME type '{effective_mime}'"
+                )
+                return (
+                    "terminal",
+                    ResourceScanResult(
+                        resource_uri=resource.uri,
+                        resource_name=resource.name or "",
+                        resource_mime_type=effective_mime,
+                        status="skipped",
+                        analyzers=[],
+                        findings=[],
+                    ),
+                )
 
-                return "content", (text_content, effective_mime, truncated, observed)
+            return "content", (text_content, effective_mime, truncated, observed)
 
         async def analyze_body(
             resource: Any, text: str, mime: str
@@ -5230,11 +5319,13 @@ class Scanner:
                     continue
                 if task is None:
                     settle(index, ready(coverage(resource)))
+                    self._refill_prefetch(schedule_reads, remaining > 0)
                     continue
 
                 kind, payload = await task
                 if kind == "terminal":
                     settle(index, ready(payload))
+                    self._refill_prefetch(schedule_reads, remaining > 0)
                     continue
 
                 text_content, effective_mime, truncated, observed = payload
@@ -5294,7 +5385,7 @@ class Scanner:
                     for pending in scheduled.values():
                         pending.cancel()
                 else:
-                    schedule_reads()
+                    self._refill_prefetch(schedule_reads, True)
 
             for pending in scheduled.values():
                 await drop_read(pending)
@@ -5303,9 +5394,7 @@ class Scanner:
                 await asyncio.gather(*finishes)
             missing = [index for index, result in enumerate(results) if result is None]
             if missing:
-                raise RuntimeError(
-                    f"resource scan left indexes unsettled: {missing}"
-                )
+                raise RuntimeError(f"resource scan left indexes unsettled: {missing}")
             return results
         finally:
             await _await_cancelled_tasks([*finishes, *scheduled.values()])

@@ -219,6 +219,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         self._opa_provider: Optional[OpaProvider] = None
         if enable_opa:
             from pathlib import Path
+
             policies_dir = Path(opa_policies_dir) if opa_policies_dir else None
             self._opa_provider = OpaProvider(policies_dir=policies_dir)
 
@@ -260,9 +261,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
         """Check if LLM judge is available for semantic analysis."""
         return self._llm_judge is not None and self._llm_judge.is_available()
 
-    def _tool_context(
-        self, content: str, context: Optional[Dict[str, Any]]
-    ) -> tuple:
+    def _tool_context(self, content: str, context: Optional[Dict[str, Any]]) -> tuple:
         """Return ``(tool_name, tool_def)`` for a readiness scan."""
         tool_name = context.get("tool_name", "unknown") if context else "unknown"
         tool_def = self._parse_tool_definition(content, context)
@@ -333,11 +332,21 @@ class ReadinessAnalyzer(BaseAnalyzer):
     ) -> List[SecurityFinding]:
         """OPA and LLM-judge checks for callers that run them together.
 
-        A failed judge stays on the result as an infrastructure finding.
-        OPA findings already collected are kept.
+        A failed judge or OPA call stays on the result as an infrastructure
+        finding. Findings already collected are kept.
         """
         tool_name, _tool_def = self._tool_context(content, context)
-        findings = await self.opa_findings(content, context)
+        findings: List[SecurityFinding] = []
+        try:
+            findings.extend(await self.opa_findings(content, context))
+        except Exception as exc:
+            findings.append(
+                build_infrastructure_error_finding(
+                    analyzer_name="READINESS",
+                    subject=tool_name or "unknown",
+                    error=exc,
+                )
+            )
         try:
             findings.extend(await self.judge_findings(content, context))
         except Exception as exc:
@@ -366,7 +375,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 f"Tool '{label}' did not finish readiness checks {named}. "
                 "No readiness score is reported for this tool."
             ),
-            threat_category="SILENT_FAILURE_PATH",
+            threat_category="ANALYZER INFRASTRUCTURE",
             details={
                 "tool_name": label,
                 "rule_id": "HEUR-INCOMPLETE",
@@ -403,9 +412,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 chosen = severity
         return chosen
 
-    def stamp_readiness(
-        self, findings: List[SecurityFinding]
-    ) -> List[SecurityFinding]:
+    def stamp_readiness(self, findings: List[SecurityFinding]) -> List[SecurityFinding]:
         """Attach the readiness score to each finding."""
         score = self._calculate_readiness_score(findings)
         is_production_ready = score >= 70 and not any(
@@ -449,9 +456,7 @@ class ReadinessAnalyzer(BaseAnalyzer):
             self.mark_checks_incomplete(stamped, failed_checks)
         return stamped
 
-    def _run_heuristic_checks(
-        self, tool_def: Dict[str, Any], tool_name: str
-    ) -> tuple:
+    def _run_heuristic_checks(self, tool_def: Dict[str, Any], tool_name: str) -> tuple:
         """Run all heuristic checks on the tool definition.
 
         Returns ``(findings, failed_checks)``. A check that raises is
@@ -793,7 +798,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
                 "retryBackoff",
             ]
             has_backoff = any(field in tool_def for field in backoff_fields)
-            has_backoff = has_backoff or any(field in config for field in backoff_fields)
+            has_backoff = has_backoff or any(
+                field in config for field in backoff_fields
+            )
             has_backoff = has_backoff or (
                 isinstance(retry_policy, dict)
                 and any(field in retry_policy for field in backoff_fields)
@@ -1386,7 +1393,9 @@ class ReadinessAnalyzer(BaseAnalyzer):
             "database",
             "network",
         ]
-        uses_resources = any(indicator in description for indicator in resource_indicators)
+        uses_resources = any(
+            indicator in description for indicator in resource_indicators
+        )
 
         if uses_resources:
             # Check if cleanup is documented

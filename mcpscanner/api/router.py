@@ -345,9 +345,7 @@ def _group_findings_for_api(
     for analyzer_name, vulns in analyzer_groups.items():
         if analyzer_name.casefold() in seen_internal:
             continue
-        summaries = [
-            vuln.summary for vuln in vulns if getattr(vuln, "summary", None)
-        ]
+        summaries = [vuln.summary for vuln in vulns if getattr(vuln, "summary", None)]
         display_name = analyzer_result_key(analyzer_name) + "_analyzer"
         extra = {
             "severity": get_highest_severity([vuln.severity for vuln in vulns]),
@@ -451,19 +449,7 @@ async def scan_tool_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        auth = None
-        if request.auth:
-            if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.auth_type == AuthType.APIKEY:
-                auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.custom_headers:
-                # Custom headers only (no bearer or API key)
-                auth = Auth.custom(request.auth.custom_headers)
+        auth = _auth_from_scan_request(request)
 
         result = await scanner.scan_remote_server_tool(
             server_url=request.server_url,
@@ -544,18 +530,7 @@ async def scan_all_tools_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        auth = None
-        if request.auth:
-            if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.auth_type == AuthType.APIKEY:
-                auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.custom_headers:
-                auth = Auth.custom(request.auth.custom_headers)
+        auth = _auth_from_scan_request(request)
 
         results = await scanner.scan_remote_server_tools(
             server_url=request.server_url,
@@ -641,18 +616,7 @@ async def scan_prompt_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        auth = None
-        if request.auth:
-            if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.auth_type == AuthType.APIKEY:
-                auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.custom_headers:
-                auth = Auth.custom(request.auth.custom_headers)
+        auth = _auth_from_scan_request(request)
 
         result = await scanner.scan_remote_server_prompt(
             server_url=request.server_url,
@@ -664,21 +628,10 @@ async def scan_prompt_endpoint(
         )
         logger.debug(f"Scanner completed - scanned prompt: {request.prompt_name}")
 
-        # Convert result to API format using helper function
-        grouped_findings = _group_findings_for_api(result, scanner)
-
         response = {
             "server_url": request.server_url,
-            "prompt_name": result.prompt_name,
-            "prompt_description": result.prompt_description,
-            "status": result.status,
-            "is_safe": result.is_safe,
-            "findings": grouped_findings,
-            "analyzer_errors": result.analyzer_errors,
+            **_prompt_stream_entry(result, scanner),
         }
-        meta_audit = _build_meta_analysis_audit(result)
-        if meta_audit is not None:
-            response["meta_analysis"] = meta_audit
 
         logger.debug(f"Prompt scan completed successfully for {request.prompt_name}")
         return response
@@ -720,18 +673,7 @@ async def scan_all_prompts_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        auth = None
-        if request.auth:
-            if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.auth_type == AuthType.APIKEY:
-                auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.custom_headers:
-                auth = Auth.custom(request.auth.custom_headers)
+        auth = _auth_from_scan_request(request)
 
         results = await scanner.scan_remote_server_prompts(
             server_url=request.server_url,
@@ -742,24 +684,7 @@ async def scan_all_prompts_endpoint(
         )
         logger.debug(f"Scanner completed - scanned {len(results)} prompts")
 
-        # Convert results to API format
-        prompt_results = []
-        for result in results:
-            # Use helper function to group findings
-            grouped_findings = _group_findings_for_api(result, scanner)
-
-            prompt_entry = {
-                "prompt_name": result.prompt_name,
-                "prompt_description": result.prompt_description,
-                "status": result.status,
-                "is_safe": result.is_safe,
-                "findings": grouped_findings,
-                "analyzer_errors": result.analyzer_errors,
-            }
-            meta_audit = _build_meta_analysis_audit(result)
-            if meta_audit is not None:
-                prompt_entry["meta_analysis"] = meta_audit
-            prompt_results.append(prompt_entry)
+        prompt_results = [_prompt_stream_entry(result, scanner) for result in results]
 
         response = {
             "server_url": request.server_url,
@@ -814,18 +739,7 @@ async def scan_resource_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        auth = None
-        if request.auth:
-            if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.auth_type == AuthType.APIKEY:
-                auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.custom_headers:
-                auth = Auth.custom(request.auth.custom_headers)
+        auth = _auth_from_scan_request(request)
 
         # Use allowed MIME types from request or default
         allowed_mime_types = request.allowed_mime_types or ["text/plain", "text/html"]
@@ -841,22 +755,10 @@ async def scan_resource_endpoint(
         )
         logger.debug(f"Scanner completed - scanned resource: {request.resource_uri}")
 
-        # Convert result to API format using helper function
-        grouped_findings = _group_findings_for_api(result, scanner)
-
         response = {
             "server_url": request.server_url,
-            "resource_uri": result.resource_uri,
-            "resource_name": result.resource_name,
-            "resource_mime_type": result.resource_mime_type,
-            "status": result.status,
-            "is_safe": result.is_safe,
-            "findings": grouped_findings,
-            "analyzer_errors": result.analyzer_errors,
+            **_resource_stream_entry(result, scanner),
         }
-        meta_audit = _build_meta_analysis_audit(result)
-        if meta_audit is not None:
-            response["meta_analysis"] = meta_audit
 
         logger.debug(f"Resource scan completed successfully for {request.resource_uri}")
         return response
@@ -900,18 +802,7 @@ async def scan_all_resources_endpoint(
         # Extract HTTP headers for analyzers
         http_headers = dict(http_request.headers)
 
-        auth = None
-        if request.auth:
-            if request.auth.auth_type == AuthType.BEARER:
-                auth = Auth.bearer(request.auth.bearer_token)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.auth_type == AuthType.APIKEY:
-                auth = Auth.apikey(request.auth.api_key, request.auth.api_key_header)
-                if request.auth.custom_headers:
-                    auth.custom_headers = request.auth.custom_headers
-            elif request.auth.custom_headers:
-                auth = Auth.custom(request.auth.custom_headers)
+        auth = _auth_from_scan_request(request)
 
         # Default allowed MIME types
         allowed_mime_types = ["text/plain", "text/html"]
@@ -926,39 +817,9 @@ async def scan_all_resources_endpoint(
         )
         logger.debug(f"Scanner completed - scanned {len(results)} resources")
 
-        # Convert results to API format
-        resource_results = []
-        for result in results:
-            if result.status in {"completed", "partial", "failed"}:
-                # Use helper function to group findings
-                grouped_findings = _group_findings_for_api(result, scanner)
-
-                resource_entry = {
-                    "resource_uri": result.resource_uri,
-                    "resource_name": result.resource_name,
-                    "resource_mime_type": result.resource_mime_type,
-                    "status": result.status,
-                    "is_safe": result.is_safe,
-                    "findings": grouped_findings,
-                    "analyzer_errors": result.analyzer_errors,
-                }
-                meta_audit = _build_meta_analysis_audit(result)
-                if meta_audit is not None:
-                    resource_entry["meta_analysis"] = meta_audit
-                resource_results.append(resource_entry)
-            else:
-                # Skipped or failed resources
-                resource_results.append(
-                    {
-                        "resource_uri": result.resource_uri,
-                        "resource_name": result.resource_name,
-                        "resource_mime_type": result.resource_mime_type,
-                        "status": result.status,
-                        "is_safe": None,
-                        "findings": {},
-                        "analyzer_errors": result.analyzer_errors,
-                    }
-                )
+        resource_results = [
+            _resource_stream_entry(result, scanner) for result in results
+        ]
 
         completed = [r for r in results if r.status in {"completed", "partial"}]
         response = {
@@ -1123,6 +984,7 @@ def _jsonable(value: Any) -> Any:
 
 
 def _prompt_stream_entry(result: Any, scanner: Scanner) -> Dict[str, Any]:
+    """One prompt result in the shape shared by the JSON and NDJSON APIs."""
     entry = {
         "prompt_name": result.prompt_name,
         "prompt_description": result.prompt_description,
@@ -1138,6 +1000,7 @@ def _prompt_stream_entry(result: Any, scanner: Scanner) -> Dict[str, Any]:
 
 
 def _resource_stream_entry(result: Any, scanner: Scanner) -> Dict[str, Any]:
+    """One resource result in the shape shared by the JSON and NDJSON APIs."""
     if result.status in {"completed", "partial", "failed"}:
         entry = {
             "resource_uri": result.resource_uri,
@@ -1166,8 +1029,7 @@ def _resource_stream_entry(result: Any, scanner: Scanner) -> Dict[str, Any]:
 def _result_is_list_gap(result: Any) -> bool:
     errors = getattr(result, "analyzer_errors", None) or []
     return any(
-        isinstance(error, dict)
-        and str(error.get("content_type", "")).endswith("_list")
+        isinstance(error, dict) and str(error.get("content_type", "")).endswith("_list")
         for error in errors
     )
 
@@ -1197,7 +1059,13 @@ async def _ndjson_scan_stream(
                     if not item.list_complete:
                         complete = False
                     await queue.put(
-                        _ndjson({"event": "listed", "count": item.count})
+                        _ndjson(
+                            {
+                                "event": "listed",
+                                "count": item.count,
+                                "list_complete": item.list_complete,
+                            }
+                        )
                     )
                     continue
                 if _result_is_list_gap(item):
@@ -1212,9 +1080,7 @@ async def _ndjson_scan_stream(
             raise
         except Exception as exc:
             logger.error("Scan stream failed: %s", type(exc).__name__)
-            await queue.put(
-                _ndjson({"event": "error", "message": type(exc).__name__})
-            )
+            await queue.put(_ndjson({"event": "error", "message": type(exc).__name__}))
         finally:
             # A disconnect stops the reader. A waiting put would then block
             # forever on a full queue, and cancellation is not delivered to
@@ -1232,11 +1098,12 @@ async def _ndjson_scan_stream(
             if await http_request.is_disconnected():
                 producer.cancel()
                 break
+            heartbeat = float(MCPScannerConstants.STREAM_HEARTBEAT_SECONDS)
             try:
-                payload = await asyncio.wait_for(
-                    queue.get(),
-                    timeout=float(MCPScannerConstants.STREAM_HEARTBEAT_SECONDS),
-                )
+                if heartbeat <= 0:
+                    payload = await queue.get()
+                else:
+                    payload = await asyncio.wait_for(queue.get(), timeout=heartbeat)
             except asyncio.TimeoutError:
                 yield _ndjson({"event": "heartbeat"})
                 continue
