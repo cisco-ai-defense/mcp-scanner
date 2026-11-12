@@ -48,8 +48,12 @@ rule credential_harvesting{
         // sk-, Bearer) keep their own dedicated alternatives.
         $api_credentials = /\b[Aa][Pp][Ii][\_\-]?[Kk][Ee][Yy][^A-Za-z0-9\n]{1,24}[A-Za-z0-9_\-]{16,512}|[Bb]earer\s+[A-Za-z0-9\-_]{16,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{48}/
 
-        // SSH keys, certificates and credential file content (consolidated)
-        $key_certificate_content = /(-----BEGIN (RSA |OPENSSH |EC |DSA |CERTIFICATE|PRIVATE KEY|ENCRYPTED PRIVATE KEY)-----|ssh-(rsa|ed25519)\s+[A-Za-z0-9+\/=]{8})/
+        // SSH keys, certificates and credential file content (consolidated).
+        // The algorithm prefixes are optional parts of a "PRIVATE KEY" label:
+        // RSA/DSA (OpenSSL traditional), EC (RFC 5915), OPENSSH (sshkey.c),
+        // ENCRYPTED and bare PRIVATE KEY (PKCS #8, RFC 7468). Matching the
+        // prefix directly before "-----" never matched a real key header.
+        $key_certificate_content = /(-----BEGIN ((RSA |OPENSSH |EC |DSA |ENCRYPTED )?PRIVATE KEY|CERTIFICATE)-----|ssh-(rsa|ed25519)\s+[A-Za-z0-9+\/=]{8})/
 
         // AI/ML model API key names (prone to false positives alone)
         $ai_model_credential_names = /\b(OPENAI_API_KEY|ANTHROPIC_API_KEY|CLAUDE_API_KEY|GOOGLE_AI_KEY|GEMINI_API_KEY|COHERE_API_KEY|HUGGINGFACE_TOKEN|HF_TOKEN|TOGETHER_API_KEY|REPLICATE_API_TOKEN|MISTRAL_API_KEY|PALM_API_KEY|BARD_API_KEY|STABILITY_API_KEY|MIDJOURNEY_TOKEN|RUNWAY_API_KEY|ELEVENLABS_API_KEY|DEEPGRAM_API_KEY|AZURE_OPENAI_KEY|AZURE_COGNITIVE_KEY|BEDROCK_ACCESS_KEY)\b/
