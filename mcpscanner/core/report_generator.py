@@ -83,18 +83,17 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
             )
             if threat_type not in findings_by_analyzer[analyzer]["threat_names"]:
                 findings_by_analyzer[analyzer]["threat_names"].append(threat_type)
-            if finding.severity == "HIGH":
-                findings_by_analyzer[analyzer]["severity"] = "HIGH"
-            elif (
-                findings_by_analyzer[analyzer]["severity"] != "HIGH"
-                and finding.severity == "MEDIUM"
-            ):
-                findings_by_analyzer[analyzer]["severity"] = "MEDIUM"
-            elif (
-                findings_by_analyzer[analyzer]["severity"] in ["SAFE", "LOW"]
-                and finding.severity == "LOW"
-            ):
-                findings_by_analyzer[analyzer]["severity"] = "LOW"
+            severity_rank = {
+                "SAFE": 0,
+                "INFO": 1,
+                "LOW": 2,
+                "MEDIUM": 3,
+                "HIGH": 4,
+            }
+            current = findings_by_analyzer[analyzer]["severity"]
+            incoming = finding.severity
+            if severity_rank.get(incoming, -1) > severity_rank.get(current, -1):
+                findings_by_analyzer[analyzer]["severity"] = incoming
 
             # Collect MCP Taxonomy from all findings
             if "mcp_taxonomies" not in findings_by_analyzer[analyzer]:
@@ -397,6 +396,46 @@ class ReportGenerator:
             filtered_result["is_safe"] = None
         return filtered_result
 
+    @staticmethod
+    def _coverage_notes(result: Dict[str, Any]) -> List[str]:
+        """Sentences that say why a row did not finish.
+
+        Analyzer errors are the fixed messages already stored on the
+        result. A finding summary is used only when no error message
+        was recorded.
+        """
+        notes: List[str] = []
+        seen = set()
+        for error in result.get("analyzer_errors") or []:
+            message = error.get("message") if isinstance(error, dict) else None
+            if isinstance(message, str) and message and message not in seen:
+                seen.add(message)
+                notes.append(message)
+        if notes:
+            return notes
+        ignored = {
+            "N/A",
+            "No threats detected",
+            "No specific threats identified",
+            "Analysis failed",
+            "Analyzer not run",
+        }
+        for data in (result.get("findings") or {}).values():
+            if not isinstance(data, dict):
+                continue
+            summary = data.get("threat_summary")
+            if not isinstance(summary, str) or not summary or summary in seen:
+                continue
+            if summary in ignored:
+                continue
+            if data.get("total_findings") or data.get("status") in {
+                "error",
+                "partial",
+            }:
+                seen.add(summary)
+                notes.append(summary)
+        return notes
+
     def _format_raw(self) -> str:
         """Format as raw JSON."""
         return json.dumps(self.data, indent=2)
@@ -462,15 +501,21 @@ class ReportGenerator:
             )
 
             if "server_name" in result and result["server_name"]:
-                return (
+                line = (
                     f"{idx}. {item_name} ({item_type}) "
                     f"(Server: {result['server_name']}) - "
                     f"{highest_severity} ({total_findings} findings)"
                 )
-            return (
-                f"{idx}. {item_name} ({item_type}) - "
-                f"{highest_severity} ({total_findings} findings)"
-            )
+            else:
+                line = (
+                    f"{idx}. {item_name} ({item_type}) - "
+                    f"{highest_severity} ({total_findings} findings)"
+                )
+            if result.get("is_safe", True) is None:
+                notes = self._coverage_notes(result)
+                if notes:
+                    line = f"{line}: {'; '.join(notes)}"
+            return line
 
         if unsafe_results:
             output.append("\n=== Unsafe Items ===")
@@ -547,10 +592,14 @@ class ReportGenerator:
             safety = "Unknown" if is_safe is None else "Yes" if is_safe else "No"
             output.append(f"Safe: {safety}")
             for error in result.get("analyzer_errors", []):
-                output.append(
+                message = error.get("message")
+                line = (
                     f"Analyzer error: {error.get('analyzer', 'Unknown')} "
                     f"on {error.get('content_type', 'content')}"
                 )
+                if message:
+                    line = f"{line}: {message}"
+                output.append(line)
 
             if findings:
                 output.append("Analyzer Results:")
@@ -672,6 +721,8 @@ class ReportGenerator:
 
             if is_safe is None:
                 output.append("   Scan incomplete; safety is unknown")
+                for note in self._coverage_notes(result):
+                    output.append(f"   {note}")
             elif total_findings > 0:
                 output.append(f"   Total findings: {total_findings}")
                 for analyzer, data in findings.items():
@@ -822,9 +873,17 @@ class ReportGenerator:
             for result in incomplete_items:
                 tool_name = result.get(
                     "tool_name",
-                    result.get("package_name", result.get("prompt_name", "Unknown")),
+                    result.get(
+                        "package_name",
+                        result.get(
+                            "prompt_name",
+                            result.get("resource_name", "Unknown"),
+                        ),
+                    ),
                 )
-                output.append(f"  • {tool_name}: scan incomplete")
+                notes = self._coverage_notes(result)
+                detail = "; ".join(notes) if notes else "scan incomplete"
+                output.append(f"  • {tool_name}: {detail}")
             output.append("")
 
         return "\n".join(output)

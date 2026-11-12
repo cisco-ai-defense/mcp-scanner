@@ -294,7 +294,8 @@ class TestLLMAnalyzer:
         """Empty completions (e.g. Bedrock content filter) must not raise."""
         config = Config(llm_provider_api_key="test-api-key")
         analyzer = LLMAnalyzer(config)
-        analyzer._max_retries = 0
+        analyzer._max_retries = 3
+        analyzer._rate_limit_delay = 0
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
@@ -309,6 +310,43 @@ class TestLLMAnalyzer:
         assert len(findings) == 1
         assert findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
         assert "Empty response" in findings[0].summary
+        assert mock_completion.call_count == 4
+
+    @pytest.mark.asyncio
+    @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
+    async def test_empty_completion_then_verdict_is_kept(self, mock_completion):
+        """A later non-empty completion is the verdict. Empty replies retry."""
+        config = Config(llm_provider_api_key="test-api-key")
+        analyzer = LLMAnalyzer(config)
+        analyzer._max_retries = 3
+        analyzer._rate_limit_delay = 0
+
+        empty = MagicMock()
+        empty.choices = [MagicMock()]
+        empty.choices[0].message.content = None
+        empty.choices[0].finish_reason = "content_filter"
+        verdict = MagicMock()
+        verdict.choices = [MagicMock()]
+        verdict.choices[0].message.content = json.dumps(
+            {
+                "threat_analysis": {
+                    "malicious_content_detected": True,
+                    "overall_risk": "HIGH",
+                    "primary_threats": ["PROMPT INJECTION"],
+                }
+            }
+        )
+        verdict.choices[0].finish_reason = "stop"
+        mock_completion.side_effect = [empty, verdict]
+
+        findings = await analyzer.analyze(
+            "dangerous text", {"tool_name": "export_control_test_prompt"}
+        )
+
+        assert len(findings) == 1
+        assert findings[0].severity == "HIGH"
+        assert findings[0].analyzer == "LLM"
+        assert mock_completion.call_count == 2
 
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")

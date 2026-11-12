@@ -125,6 +125,10 @@ class MetaAnalysisResult:
     correlations: List[Dict[str, Any]] = field(default_factory=list)
     recommendations: List[Dict[str, Any]] = field(default_factory=list)
     overall_risk_assessment: Dict[str, Any] = field(default_factory=dict)
+    # Set when the meta pass did not run. ``apply_meta_analysis`` does not
+    # read this. The scanner does, so a provider or parse failure stays
+    # incomplete instead of looking like a finished pass. Not serialized.
+    failure: Optional[BaseException] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the consumed surface of the meta-analysis result.
@@ -328,8 +332,8 @@ class MetaAnalyzer:
             return result
 
         except Exception as e:
-            # On failure we deliberately do nothing: no FP suggestions means
-            # apply_meta_analysis will keep every analyzer finding as-is.
+            # Keep every finding: an empty false-positive list filters nothing.
+            # ``failure`` tells the scanner the pass did not finish.
             self._logger.error(
                 "Meta-analysis failed (%s); keeping all original findings.",
                 type(e).__name__,
@@ -342,6 +346,7 @@ class MetaAnalyzer:
                         "Original findings preserved."
                     ),
                 },
+                failure=e,
             )
 
     def _serialize_findings(self, findings: List[SecurityFinding]) -> str:
@@ -528,7 +533,10 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
         max_attempts = self._max_retries + 1
 
         async def operation() -> str:
-            response = await acompletion(**api_params, drop_params=True)
+            from mcpscanner.utils.llm_gate import llm_request_gate
+
+            async with llm_request_gate():
+                response = await acompletion(**api_params, drop_params=True)
             return response.choices[0].message.content or ""
 
         async def on_retry(
@@ -583,6 +591,7 @@ If no findings are false positives, return `{{"false_positives": []}}`."""
                     "risk_level": "UNKNOWN",
                     "summary": "Failed to parse meta-analysis response",
                 },
+                failure=e,
             )
 
     def _extract_json_from_response(self, response: str) -> Dict[str, Any]:
@@ -837,6 +846,11 @@ def apply_meta_analysis(
     kept_findings: List[SecurityFinding] = []
     dropped_findings: List[SecurityFinding] = []
     for i, finding in enumerate(original_findings):
+        # An analyzer that did not finish is not a false positive. Dropping
+        # it would leave an empty result that looks like a clean scan.
+        if getattr(finding, "threat_category", None) == "ANALYZER INFRASTRUCTURE":
+            kept_findings.append(finding)
+            continue
         if i in fp_data:
             # P3 fix: defensive shallow-copy before annotating. Earlier
             # versions mutated the original ``SecurityFinding.details``
