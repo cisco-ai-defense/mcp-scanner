@@ -23,7 +23,7 @@ rule prompt_injection{
         // The noun group ends with a word boundary, after the optional plural,
         // so text/data/context cannot match as prefixes of longer words
         // (textual, database, contextual).
-        $instruction_overrides = /\b(Bypass|Dis\W?regard|Do not (follow|Obey)|Forget|Ignore)\s+((all|any|each|every|most|some)\s+(of\s+)?)?((your|the)\s)?((previous|prior|above|earlier|preceding)\s+)?(command|communication|conte[nx]t|conversation|data|guidelines|input|instruction|message|request|response|text)(s)?\b/i
+        $instruction_overrides = /\b(Bypass|Dis\W?regard|Do\s+not\s+(follow|Obey)|Forget|Ignore)\s+((all|any|each|every|most|some)\s+(of\s+)?)?((your|the)\s+)?((previous|prior|above|earlier|preceding)\s+)?(command|communication|conte[nx]t|conversation|data|guidelines|input|instruction|message|request|response|text)(s)?\b/i
 
         // Tool injection commands
         $tool_injection_commands = /\b(inject tool[_\s]calls?|now call function|use function)\b/i
