@@ -96,6 +96,10 @@ from .result import (
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
 
+# JSON-RPC error codes defined by MCP 2026-07-28 (HeaderMismatch,
+# MissingRequiredClientCapability, UnsupportedProtocolVersion).
+MODERN_DISCOVER_ERROR_CODES = (-32020, -32021, UNSUPPORTED_PROTOCOL_VERSION)
+
 logger = get_logger(__name__)
 
 
@@ -1261,16 +1265,14 @@ class Scanner:
         code = getattr(error, "code", None)
         if code is None:
             code = getattr(rpc_error, "code", None)
-        # MCP 1.x streamable HTTP servers can reject pre-initialize discover
-        # with this exact missing-session response. It is safe to retry the
-        # legacy initialize handshake only for this known server shape.
+        # Streamable HTTP backward compatibility (MCP 2026-07-28): a discover
+        # rejection that is not a recognized modern error means a legacy
+        # server, whatever its wording (e.g. MCP 1.x "Missing session ID" or
+        # a stateless server's "Unsupported protocol version" -32600).
+        if legacy_http and code not in MODERN_DISCOVER_ERROR_CODES:
+            return True
         if code == -32600:
-            return (
-                legacy_http
-                and getattr(rpc_error, "message", str(error))
-                == "Bad Request: Missing session ID"
-                and getattr(rpc_error, "data", None) in (None, "")
-            )
+            return False
         # MCP 1.x Python stdio servers use this exact generic error for an
         # unknown discover method. A modern server may use -32602 for a real
         # payload defect, so do not infer legacy support from the code alone.
@@ -1331,6 +1333,7 @@ class Scanner:
         the server only speaks handshake-era protocol versions. On mcp 1.x
         (no ``discover`` method), uses ``initialize()`` directly.
         """
+        discover_error = None
         if hasattr(session, "discover"):
             try:
                 connect_result = await session.discover()
@@ -1345,15 +1348,27 @@ class Scanner:
                     e, legacy_stdio=legacy_stdio, legacy_http=legacy_http
                 ):
                     raise
-                if getattr(e, "code", None) == -32602:
+                discover_error = e
+                code = getattr(e, "code", None)
+                # Warn on legacy HTTP rejections. Missing-capability fallbacks
+                # stay at debug unless the code is -32600 or -32602.
+                routine_missing_capability = (
+                    code not in (-32600, -32602)
+                    and Scanner._is_missing_capability_error(e)
+                )
+                if (
+                    legacy_http
+                    and code not in MODERN_DISCOVER_ERROR_CODES
+                    and not routine_missing_capability
+                ):
                     logger.warning(
-                        "Legacy-shaped server/discover rejection over stdio; "
+                        "Legacy-shaped server/discover rejection over HTTP; "
                         "trying initialize() after: %s",
                         e,
                     )
-                elif getattr(e, "code", None) == -32600:
+                elif code == -32602:
                     logger.warning(
-                        "Legacy-shaped server/discover rejection over HTTP; "
+                        "Legacy-shaped server/discover rejection over stdio; "
                         "trying initialize() after: %s",
                         e,
                     )
@@ -1362,7 +1377,12 @@ class Scanner:
                     e,
                 )
 
-        connect_result = await session.initialize()
+        try:
+            connect_result = await session.initialize()
+        except Exception as init_error:
+            if discover_error is None:
+                raise
+            raise init_error from discover_error
         session._init_result = connect_result
         protocol_version = getattr(
             connect_result,
