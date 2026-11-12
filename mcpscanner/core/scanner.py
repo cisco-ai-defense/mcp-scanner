@@ -1349,13 +1349,24 @@ class Scanner:
                 ):
                     raise
                 discover_error = e
-                if legacy_http:
+                code = getattr(e, "code", None)
+                # Warn on legacy HTTP rejections. Missing-capability fallbacks
+                # stay at debug unless the code is -32600 or -32602.
+                routine_missing_capability = (
+                    code not in (-32600, -32602)
+                    and Scanner._is_missing_capability_error(e)
+                )
+                if (
+                    legacy_http
+                    and code not in MODERN_DISCOVER_ERROR_CODES
+                    and not routine_missing_capability
+                ):
                     logger.warning(
                         "Legacy-shaped server/discover rejection over HTTP; "
                         "trying initialize() after: %s",
                         e,
                     )
-                elif getattr(e, "code", None) == -32602:
+                elif code == -32602:
                     logger.warning(
                         "Legacy-shaped server/discover rejection over stdio; "
                         "trying initialize() after: %s",

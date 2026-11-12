@@ -16,6 +16,8 @@
 
 # tests/test_scanner.py
 
+import logging
+
 import pytest
 import respx
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -1070,6 +1072,7 @@ def test_resource_scan_result_failed_status():
 
 
 from types import SimpleNamespace
+
 from mcpscanner.core.scanner import Scanner
 
 try:
@@ -1415,8 +1418,10 @@ def test_should_fallback_to_initialize_covers_legacy_shapes(config):
     missing_http_session = _mcp_error(-32600, "Bad Request: Missing session ID")
     assert not scanner._should_fallback_to_initialize(missing_http_session)
     assert scanner._should_fallback_to_initialize(missing_http_session, legacy_http=True)
-    assert not scanner._should_fallback_to_initialize(
-        _mcp_error(-32600, "Bad Request: Invalid session ID")
+    invalid_http_session = _mcp_error(-32600, "Bad Request: Invalid session ID")
+    assert not scanner._should_fallback_to_initialize(invalid_http_session)
+    assert scanner._should_fallback_to_initialize(
+        invalid_http_session, legacy_http=True
     )
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32602, "params._meta is invalid"), legacy_stdio=True
@@ -1505,6 +1510,44 @@ async def test_negotiate_chains_discover_error_when_fallback_initialize_fails(co
 
     assert raised.value is init_error
     assert raised.value.__cause__ is discover_error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code, message",
+    [
+        (-32022, "Unsupported protocol version"),
+        (-32601, "Method not found"),
+    ],
+)
+async def test_negotiate_preexisting_fallbacks_do_not_warn(
+    config, caplog, monkeypatch, code, message
+):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    session.discover = AsyncMock(side_effect=_mcp_error(code, message))
+    session.initialize = AsyncMock(
+        return_value=SimpleNamespace(protocol_version="2025-11-25")
+    )
+    scanner_logger = logging.getLogger("mcpscanner.core.scanner")
+    monkeypatch.setattr(scanner_logger, "propagate", True)
+
+    with caplog.at_level(logging.DEBUG, logger="mcpscanner.core.scanner"):
+        result = await scanner._negotiate_mcp_session(session, legacy_http=True)
+
+    assert result.protocol_version == "2025-11-25"
+    session.initialize.assert_awaited_once()
+    scanner_records = [
+        record
+        for record in caplog.records
+        if record.name == "mcpscanner.core.scanner"
+    ]
+    assert not any(record.levelno >= logging.WARNING for record in scanner_records)
+    assert any(
+        record.levelno == logging.DEBUG
+        and "falling back to initialize()" in record.getMessage()
+        for record in scanner_records
+    )
 
 
 @pytest.mark.asyncio
