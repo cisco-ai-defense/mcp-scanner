@@ -92,6 +92,39 @@ console = Console(soft_wrap=True, emoji=False, highlight=False)
 error_console = Console(stderr=True, soft_wrap=True, emoji=False, highlight=False)
 
 
+def _ensure_encodable_stdio() -> None:
+    """Keep report output from crashing on a narrow stdout/stderr encoding.
+
+    When stdout is redirected to a file or pipe (``> report.txt``, ``| tee``,
+    a CI log collector), Python encodes it with the locale code page instead
+    of the console's UTF-8 -- e.g. cp1252 on English Windows or cp950 on
+    Traditional Chinese Windows. The report formats use emoji severity
+    markers that those code pages cannot represent, so ``print()`` raised
+    ``UnicodeEncodeError`` after the scan had already finished.
+
+    Only streams that are not UTF-8 and whose error handler raises on
+    unencodable characters (``strict``, or ``surrogateescape`` which Python
+    may pick for redirected stdio) are touched; their encoding is kept, and
+    characters it cannot represent are written as ``?`` instead of aborting
+    the run.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        encoding = (getattr(stream, "encoding", None) or "").lower()
+        if encoding.replace("-", "").replace("_", "") in ("utf8", "utf8sig"):
+            continue
+        errors = getattr(stream, "errors", None) or "strict"
+        if errors not in ("strict", "surrogateescape", "surrogatepass"):
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            # Stream already closed or not reconfigurable; leave it as is.
+            pass
+
+
 def _get_endpoint_from_env() -> str:
     return os.environ.get("MCP_SCANNER_ENDPOINT", "")
 
@@ -3070,6 +3103,8 @@ def cli_entry_point():
     import logging
     import warnings
 
+    _ensure_encodable_stdio()
+
     # Suppress warnings from MCP library cleanup issues
     warnings.filterwarnings(
         "ignore", category=RuntimeWarning, message=".*coroutine.*never awaited.*"
@@ -3109,4 +3144,5 @@ def cli_entry_point():
 
 
 if __name__ == "__main__":
+    _ensure_encodable_stdio()
     asyncio.run(main())
