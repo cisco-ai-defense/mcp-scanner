@@ -496,6 +496,26 @@ class TestAnalyzePath:
         site_dir.mkdir(parents=True)
         assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == [site_dir]
 
+    def test_venv_site_packages_uses_the_recorded_version(self, tmp_path):
+        """A stale lib/python3.11 left in a 3.12 environment is not audited."""
+        (tmp_path / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
+        active = tmp_path / "lib" / "python3.12" / "site-packages"
+        active.mkdir(parents=True)
+        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\nversion = 3.12.4\n")
+        assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == [active]
+
+    @pytest.mark.parametrize(
+        "cfg", ["home = /usr/bin\n", "home = /usr/bin\nversion = 3.13.0\n"]
+    )
+    def test_venv_site_packages_falls_back_to_any_version(self, tmp_path, cfg):
+        """No recorded version, or none matching on disk, still finds packages."""
+        old = tmp_path / "lib" / "python3.11" / "site-packages"
+        new = tmp_path / "lib" / "python3.12" / "site-packages"
+        old.mkdir(parents=True)
+        new.mkdir(parents=True)
+        (tmp_path / "pyvenv.cfg").write_text(cfg)
+        assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == [old, new]
+
     @pytest.mark.parametrize("include", [True, False])
     def test_venv_site_packages_system_site_packages(self, tmp_path, include):
         base = tmp_path / "base"

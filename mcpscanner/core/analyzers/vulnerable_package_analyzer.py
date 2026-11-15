@@ -240,11 +240,26 @@ class VulnerablePackageAnalyzer:
                 values[key.strip().lower()] = value.strip()
         return values
 
+    @staticmethod
+    def _pyvenv_major_minor(cfg: dict) -> str:
+        """``X.Y`` from the ``version_info``/``version`` key of ``pyvenv.cfg``,
+        or ``*`` when the file records no usable version."""
+        version = cfg.get("version_info") or cfg.get("version") or ""
+        parts = version.split(".")
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            return f"{parts[0]}.{parts[1]}"
+        return "*"
+
     @classmethod
     def _system_site_packages(cls, venv: Path) -> List[Path]:
         """Base interpreter site-packages for an environment created with
         ``include-system-site-packages = true``, found from ``pyvenv.cfg``
-        without running the environment's interpreter."""
+        without running the environment's interpreter.
+
+        The user site (``~/.local/lib/pythonX.Y/site-packages``) is not
+        included: it belongs to whichever user runs the interpreter, not to
+        the environment being scanned.
+        """
         cfg = cls._read_pyvenv_cfg(venv)
         if cfg.get("include-system-site-packages", "").lower() != "true":
             return []
@@ -252,9 +267,7 @@ class VulnerablePackageAnalyzer:
         if not home:
             return []
         home_path = Path(home)
-        version = cfg.get("version_info") or cfg.get("version") or ""
-        parts = version.split(".")
-        major_minor = ".".join(parts[:2]) if len(parts) >= 2 else "*"
+        major_minor = cls._pyvenv_major_minor(cfg)
         # home is the directory holding the base interpreter: <prefix>/bin on
         # POSIX, the prefix itself on Windows.
         prefix = home_path.parent
@@ -275,8 +288,16 @@ class VulnerablePackageAnalyzer:
         The environment's own site-packages come first, then the base
         interpreter's when ``pyvenv.cfg`` enables system site-packages.
         """
-        own = cls._site_packages_under(venv)
-        own_dirs = [c for c in own if c.is_dir()]
+        # Only the site-packages for the environment's own Python version is
+        # on its path; a leftover lib/python3.11 in an environment recreated
+        # for 3.12 is not. Fall back to any version when pyvenv.cfg has none
+        # or names a version with no matching directory.
+        major_minor = cls._pyvenv_major_minor(cls._read_pyvenv_cfg(venv))
+        own_dirs = [
+            c for c in cls._site_packages_under(venv, major_minor) if c.is_dir()
+        ]
+        if not own_dirs and major_minor != "*":
+            own_dirs = [c for c in cls._site_packages_under(venv) if c.is_dir()]
         if not own_dirs:
             return []
         candidates = own_dirs + cls._system_site_packages(venv)
