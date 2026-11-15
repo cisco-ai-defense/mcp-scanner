@@ -166,6 +166,8 @@ class TestScanMcpConfigFile:
             assert sorted(servers) == ["github", "playwright"]
             assert isinstance(servers["playwright"], StdioServer)
             assert servers["playwright"].command == "npx"
+            # ${input:token} needs VS Code to prompt, so it is not passed on
+            assert servers["playwright"].env == {}
             assert isinstance(servers["github"], RemoteServer)
             assert servers["github"].url == "https://api.githubcopilot.com/mcp"
         finally:

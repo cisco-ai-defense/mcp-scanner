@@ -22,7 +22,8 @@ from various clients and formats.
 
 import json
 import os
-from typing import Dict, List, Optional, Union
+import re
+from typing import Any, Dict, List, Optional, Union
 from pydantic import ValidationError
 
 try:
@@ -66,6 +67,109 @@ def rebalance_command_args(command: str, args: List[str]) -> tuple[str, List[str
 
     return command, args
 
+
+# VS Code variables in mcp.json / settings.json, e.g. ${workspaceFolder},
+# ${env:NAME} or ${input:token}.
+_VSCODE_VARIABLE = re.compile(r"\$\{([^{}]+)\}")
+
+
+class UnresolvedVariableError(ValueError):
+    """A VS Code variable that cannot be resolved outside the editor."""
+
+
+def _vscode_workspace_folder(config_path: str) -> Optional[str]:
+    """The workspace folder for a ``<workspace>/.vscode/*.json`` file.
+
+    User-profile files (``Code/User/mcp.json``, ``settings.json``) belong to
+    no workspace, so ``${workspaceFolder}`` has no value there.
+    """
+    parent = os.path.dirname(os.path.abspath(config_path))
+    if os.path.basename(parent) == ".vscode":
+        return os.path.dirname(parent)
+    return None
+
+
+def _resolve_vscode_value(value: Any, config_path: str) -> Any:
+    """Substitute the VS Code variables that have a value outside the editor.
+
+    Supports ``${workspaceFolder}``, ``${workspaceFolderBasename}``,
+    ``${userHome}``, ``${env:NAME}`` (empty when unset, as in VS Code),
+    ``${pathSeparator}`` and ``${/}``. Anything else, such as
+    ``${input:...}``, ``${command:...}`` or ``${config:...}``, needs the
+    editor and raises :class:`UnresolvedVariableError`.
+    """
+    if isinstance(value, dict):
+        return {k: _resolve_vscode_value(v, config_path) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_vscode_value(v, config_path) for v in value]
+    if not isinstance(value, str) or "${" not in value:
+        return value
+
+    workspace = _vscode_workspace_folder(config_path)
+
+    def substitute(match: "re.Match[str]") -> str:
+        name = match.group(1)
+        if name in ("workspaceFolder", "workspaceFolderBasename"):
+            if workspace is None:
+                raise UnresolvedVariableError(
+                    f"${{{name}}} has no value outside a workspace .vscode folder"
+                )
+            if name == "workspaceFolder":
+                return workspace
+            return os.path.basename(workspace)
+        if name == "userHome":
+            return os.path.expanduser("~")
+        if name in ("pathSeparator", "/"):
+            return os.sep
+        if name.startswith("env:"):
+            return os.environ.get(name[len("env:") :], "")
+        raise UnresolvedVariableError(f"${{{name}}} can only be resolved by VS Code")
+
+    return _VSCODE_VARIABLE.sub(substitute, value)
+
+
+def _resolve_vscode_servers(servers: Any, config_path: str) -> Any:
+    """Resolve VS Code variables in each server entry.
+
+    A variable with no value outside the editor (``${input:...}``, or
+    ``${workspaceFolder}`` in a user-profile file) is never passed on as
+    literal ``${...}`` text:
+
+    - in an ``env`` or ``headers`` value, that one entry is left out, as if
+      the credential were not set, and the server is still scanned;
+    - anywhere else (``command``, ``args``, ``cwd``, ``url``), the server is
+      skipped, because it cannot be started or reached as configured.
+
+    Both cases log a warning naming the server and the variable.
+    """
+    if not isinstance(servers, dict):
+        return servers
+    resolved = {}
+    for name, server_config in servers.items():
+        if not isinstance(server_config, dict):
+            resolved[name] = server_config
+            continue
+        entry = {}
+        try:
+            for key, value in server_config.items():
+                if key in ("env", "headers") and isinstance(value, dict):
+                    kept = {}
+                    for item, item_value in value.items():
+                        try:
+                            kept[item] = _resolve_vscode_value(item_value, config_path)
+                        except UnresolvedVariableError as e:
+                            logger.warning(
+                                f"Server '{name}' from {config_path}: "
+                                f"leaving out {key} '{item}': {e}"
+                            )
+                    entry[key] = kept
+                else:
+                    entry[key] = _resolve_vscode_value(value, config_path)
+        except UnresolvedVariableError as e:
+            logger.warning(f"Skipping server '{name}' from {config_path}: {e}")
+            continue
+        resolved[name] = entry
+    return resolved
 
 def _filter_valid_servers(servers: dict) -> Dict[str, dict]:
     """Keep only the server entries that validate as a stdio or remote server.
@@ -137,17 +241,25 @@ async def scan_mcp_config_file(path: str) -> MCPConfig:
             )
 
         # VS Code uses "servers": at the top level of mcp.json, and under
-        # "mcp" in settings.json
+        # "mcp" in settings.json, either nested or as the dotted key
+        # "mcp.servers"
         if isinstance(config.get("servers"), dict):
+            servers = _resolve_vscode_servers(config["servers"], path)
             return VSCodeMCPConfig.model_validate(
-                {"mcpServers": _filter_valid_servers(config["servers"])}
+                {"mcpServers": _filter_valid_servers(servers)}
             )
         mcp_section = config.get("mcp")
         if isinstance(mcp_section, dict) and isinstance(
             mcp_section.get("servers"), dict
         ):
+            servers = _resolve_vscode_servers(mcp_section["servers"], path)
             return VSCodeConfigFile.model_validate(
-                {"mcp": {"mcpServers": _filter_valid_servers(mcp_section["servers"])}}
+                {"mcp": {"mcpServers": _filter_valid_servers(servers)}}
+            )
+        if isinstance(config.get("mcp.servers"), dict):
+            servers = _resolve_vscode_servers(config["mcp.servers"], path)
+            return VSCodeConfigFile.model_validate(
+                {"mcp": {"mcpServers": _filter_valid_servers(servers)}}
             )
 
         # Fall back to original validation for other formats
