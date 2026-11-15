@@ -155,6 +155,15 @@ def _resolve_vscode_servers(servers: Any, config_path: str) -> Any:
                 if key in ("env", "headers") and isinstance(value, dict):
                     kept = {}
                     for item, item_value in value.items():
+                        if key == "env":
+                            # VS Code allows numbers (sent as text) and null
+                            # (variable not set) as env values.
+                            if item_value is None:
+                                continue
+                            if isinstance(item_value, (int, float)) and not isinstance(
+                                item_value, bool
+                            ):
+                                item_value = str(item_value)
                         try:
                             kept[item] = _resolve_vscode_value(item_value, config_path)
                         except UnresolvedVariableError as e:
@@ -168,8 +177,15 @@ def _resolve_vscode_servers(servers: Any, config_path: str) -> Any:
         except UnresolvedVariableError as e:
             logger.warning(f"Skipping server '{name}' from {config_path}: {e}")
             continue
+        # VS Code starts a workspace stdio server in the workspace folder
+        # when the entry has no cwd of its own.
+        workspace = _vscode_workspace_folder(config_path)
+        is_remote = any(k.lower() in ("url", "serverurl") for k in entry)
+        if workspace and "command" in entry and not is_remote and not entry.get("cwd"):
+            entry["cwd"] = workspace
         resolved[name] = entry
     return resolved
+
 
 def _filter_valid_servers(servers: dict) -> Dict[str, dict]:
     """Keep only the server entries that validate as a stdio or remote server.

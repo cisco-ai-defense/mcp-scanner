@@ -154,6 +154,36 @@ async def test_workspace_folder_in_a_user_profile_config_skips_the_server(
     assert [c.args[0].command for c in stdio.call_args_list] == ["echo"]
     warnings = " ".join(str(c.args[0]) for c in log.warning.call_args_list)
     assert "Skipping server 'needs-workspace'" in warnings
+    # Outside a workspace there is no folder to default cwd to.
+    assert stdio.call_args.args[0].cwd is None
+
+
+@pytest.mark.asyncio
+async def test_workspace_stdio_server_defaults_cwd_and_accepts_number_env(
+    tmp_path,
+):
+    workspace = tmp_path / "proj"
+    path = _write(
+        workspace / ".vscode" / "mcp.json",
+        {
+            "servers": {
+                "local": {
+                    "command": "python",
+                    "args": ["server.py"],
+                    "env": {"PORT": 3000, "RATIO": 0.5, "UNSET": None, "NAME": "x"},
+                },
+                "pinned": {"command": "python", "cwd": "/opt/server"},
+            }
+        },
+    )
+    stdio, _ = await _scan(path)
+    launched = [c.args[0] for c in stdio.call_args_list]
+    assert len(launched) == 2
+    local = next(s for s in launched if s.args == ["server.py"])
+    pinned = next(s for s in launched if not s.args)
+    assert local.cwd == str(workspace)
+    assert local.env == {"PORT": "3000", "RATIO": "0.5", "NAME": "x"}
+    assert pinned.cwd == "/opt/server"
 
 
 @pytest.mark.asyncio
