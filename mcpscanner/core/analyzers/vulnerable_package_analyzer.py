@@ -131,17 +131,22 @@ class VulnerablePackageAnalyzer:
         Heuristics:
           - File ending in ``.txt`` or ``.in`` → requirements file scan.
           - Directory with ``requirements.txt`` → requirements file scan.
-          - Directory with ``pyproject.toml`` and a ``.venv`` → installed
-            environment scan via ``--path`` on the venv's site-packages.
-          - Directory with ``pyproject.toml`` (no usable ``.venv``) → project
-            scan via positional arg (``pip-audit <dir>``).
-          - A virtual environment root (has ``pyvenv.cfg``) → installed
-            environment scan via ``--path`` on its site-packages.
+          - A virtual environment root (has ``pyvenv.cfg``), including a
+            project that is its own environment → installed environment scan
+            via ``--path`` on its site-packages. Nothing is run when it has no
+            site-packages, since an empty ``--path`` scan reads as clean.
+          - Directory with ``pyproject.toml`` and an environment in ``.venv``,
+            ``venv`` or ``env`` → installed environment scan via ``--path`` on
+            that environment's site-packages.
+          - Directory with ``pyproject.toml`` (no usable environment) →
+            project scan via positional arg (``pip-audit <dir>``).
           - Any other directory → installed environment scan via ``--path``.
 
         ``pip-audit --path`` only lists distributions found directly in the
         given directory, so a venv root has to be mapped to its site-packages
-        or the scan silently sees no packages.
+        or the scan silently sees no packages. An environment created with
+        ``include-system-site-packages = true`` also gets the base
+        interpreter's site-packages.
         """
         if not self.enabled:
             return []
@@ -156,29 +161,35 @@ class VulnerablePackageAnalyzer:
             if req_file.is_file():
                 return self.analyze_requirements(str(req_file))
 
-            pyproject = p / "pyproject.toml"
-            if pyproject.is_file():
-                venv = p / ".venv"
-                site_dirs = self._venv_site_packages(venv) if venv.is_dir() else []
-                if site_dirs:
-                    args = self._path_args(site_dirs)
-                else:
-                    if venv.is_dir():
-                        logger.warning(
-                            "No site-packages found under %s; scanning %s as a project",
-                            venv,
-                            p,
-                        )
-                    args = [str(p)]
-                return self._run_and_parse(args, source=str(p))
-
             if (p / "pyvenv.cfg").is_file():
                 site_dirs = self._venv_site_packages(p)
-                if site_dirs:
-                    return self._run_and_parse(
-                        self._path_args(site_dirs), source=str(p)
+                if not site_dirs:
+                    logger.warning(
+                        "No site-packages found under virtual environment %s; "
+                        "nothing to audit",
+                        p,
                     )
-                logger.warning("No site-packages found under virtual environment %s", p)
+                    return []
+                return self._run_and_parse(self._path_args(site_dirs), source=str(p))
+
+            pyproject = p / "pyproject.toml"
+            if pyproject.is_file():
+                for name in self._PROJECT_VENV_NAMES:
+                    venv = p / name
+                    if not self._looks_like_venv(venv):
+                        continue
+                    site_dirs = self._venv_site_packages(venv)
+                    if site_dirs:
+                        return self._run_and_parse(
+                            self._path_args(site_dirs), source=str(p)
+                        )
+                    logger.warning(
+                        "No site-packages found under %s; scanning %s as a project",
+                        venv,
+                        p,
+                    )
+                    break
+                return self._run_and_parse([str(p)], source=str(p))
 
             args = ["--path", str(p)]
             return self._run_and_parse(args, source=str(p))
@@ -186,17 +197,89 @@ class VulnerablePackageAnalyzer:
         logger.warning("Path does not exist or is unsupported: %s", target_path)
         return []
 
-    @staticmethod
-    def _venv_site_packages(venv: Path) -> List[Path]:
-        """Return the site-packages directories of a virtual environment.
+    # Environment directory names looked for next to a pyproject.toml, in order.
+    _PROJECT_VENV_NAMES = (".venv", "venv", "env")
 
-        Covers the POSIX layout (``lib/pythonX.Y/site-packages``, plus
-        ``lib64`` on some distributions) and the Windows layout
+    @staticmethod
+    def _looks_like_venv(path: Path) -> bool:
+        """``.venv`` is taken as an environment when it is a directory; the
+        more generic ``venv`` and ``env`` names also need a ``pyvenv.cfg``."""
+        if not path.is_dir():
+            return False
+        return path.name == ".venv" or (path / "pyvenv.cfg").is_file()
+
+    @staticmethod
+    def _site_packages_under(prefix: Path, version: str = "*") -> List[Path]:
+        """Site-packages directories under an interpreter prefix.
+
+        Covers CPython and PyPy POSIX layouts (``lib``/``lib64`` with
+        ``pythonX.Y`` or ``pypyX.Y``) and the Windows layout
         (``Lib/site-packages``).
         """
-        candidates = sorted(venv.glob("lib/python*/site-packages"))
-        candidates += sorted(venv.glob("lib64/python*/site-packages"))
-        candidates.append(venv / "Lib" / "site-packages")
+        candidates: List[Path] = []
+        for lib in ("lib", "lib64"):
+            for impl in ("python", "pypy"):
+                candidates += sorted(
+                    prefix.glob(f"{lib}/{impl}{version}/site-packages")
+                )
+        candidates.append(prefix / "Lib" / "site-packages")
+        return candidates
+
+    @staticmethod
+    def _read_pyvenv_cfg(venv: Path) -> dict:
+        """Parse ``pyvenv.cfg`` into lower-cased keys; empty when missing."""
+        cfg = venv / "pyvenv.cfg"
+        values = {}
+        try:
+            text = cfg.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return values
+        for line in text.splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                values[key.strip().lower()] = value.strip()
+        return values
+
+    @classmethod
+    def _system_site_packages(cls, venv: Path) -> List[Path]:
+        """Base interpreter site-packages for an environment created with
+        ``include-system-site-packages = true``, found from ``pyvenv.cfg``
+        without running the environment's interpreter."""
+        cfg = cls._read_pyvenv_cfg(venv)
+        if cfg.get("include-system-site-packages", "").lower() != "true":
+            return []
+        home = cfg.get("home")
+        if not home:
+            return []
+        home_path = Path(home)
+        version = cfg.get("version_info") or cfg.get("version") or ""
+        parts = version.split(".")
+        major_minor = ".".join(parts[:2]) if len(parts) >= 2 else "*"
+        # home is the directory holding the base interpreter: <prefix>/bin on
+        # POSIX, the prefix itself on Windows.
+        prefix = home_path.parent
+        candidates = cls._site_packages_under(prefix, major_minor)
+        for pattern in (
+            f"lib/python{major_minor}/dist-packages",
+            "lib/python3/dist-packages",
+            f"local/lib/python{major_minor}/dist-packages",
+        ):
+            candidates += sorted(prefix.glob(pattern))
+        candidates.append(home_path / "Lib" / "site-packages")
+        return candidates
+
+    @classmethod
+    def _venv_site_packages(cls, venv: Path) -> List[Path]:
+        """Return the site-packages directories a virtual environment uses.
+
+        The environment's own site-packages come first, then the base
+        interpreter's when ``pyvenv.cfg`` enables system site-packages.
+        """
+        own = cls._site_packages_under(venv)
+        own_dirs = [c for c in own if c.is_dir()]
+        if not own_dirs:
+            return []
+        candidates = own_dirs + cls._system_site_packages(venv)
 
         site_dirs: List[Path] = []
         seen = set()

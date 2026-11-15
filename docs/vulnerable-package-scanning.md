@@ -116,9 +116,9 @@ The analyzer uses the following heuristics to determine how to scan a path:
 
 1. **File ending in `.txt` or `.in`**: Treated as a requirements file (`pip-audit -r <path>`)
 2. **Directory with `requirements.txt`**: Scans the requirements file
-3. **Directory with `pyproject.toml` and `.venv`**: Scans the installed environment via `--path` on the venv's site-packages (`.venv/lib/pythonX.Y/site-packages`, or `.venv\Lib\site-packages` on Windows)
-4. **Directory with `pyproject.toml` (no `.venv`, or a `.venv` without site-packages)**: Scans as a project directory via positional arg (`pip-audit <dir>`)
-5. **Virtual environment root (contains `pyvenv.cfg`)**: Scans its site-packages via `--path`
+3. **Virtual environment root (contains `pyvenv.cfg`)**, including a project that is its own environment (`python -m venv .`): Scans its site-packages via `--path` (`lib/pythonX.Y/site-packages`, `lib/pypyX.Y/site-packages`, or `Lib\site-packages` on Windows). When `pyvenv.cfg` sets `include-system-site-packages = true`, the base interpreter's site-packages are scanned too. If the environment has no site-packages, nothing is run and a warning is logged, rather than reporting an empty scan as clean
+4. **Directory with `pyproject.toml` and an environment in `.venv`, `venv` or `env`**: Scans that environment's site-packages the same way (`venv` and `env` must contain `pyvenv.cfg`)
+5. **Directory with `pyproject.toml` (no environment, or one without site-packages)**: Scans as a project directory via positional arg (`pip-audit <dir>`)
 6. **Other directories**: Uses `--path <directory>` to scan installed packages
 
 ### Dependency Resolution

@@ -441,6 +441,80 @@ class TestAnalyzePath:
         assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == []
 
     @patch("subprocess.run")
+    def test_project_that_is_its_own_venv(self, mock_run, analyzer, tmp_path):
+        """python -m venv . puts pyvenv.cfg next to pyproject.toml."""
+        venv.create(tmp_path, with_pip=False)
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        analyzer.analyze_path(str(tmp_path))
+        cmd = mock_run.call_args[0][0]
+        paths = _path_args(cmd)
+        assert len(paths) == 1
+        assert _is_site_packages(paths[0])
+        assert str(tmp_path) not in cmd
+
+    @pytest.mark.parametrize("name", ["venv", "env"])
+    @patch("subprocess.run")
+    def test_dir_with_pyproject_and_named_venv(
+        self, mock_run, analyzer, tmp_path, name
+    ):
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+        venv.create(tmp_path / name, with_pip=False)
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        analyzer.analyze_path(str(tmp_path))
+        cmd = mock_run.call_args[0][0]
+        paths = _path_args(cmd)
+        assert len(paths) == 1
+        assert _is_site_packages(paths[0])
+        assert Path(tmp_path, name).resolve() in Path(paths[0]).resolve().parents
+
+    @patch("subprocess.run")
+    def test_dir_named_env_without_pyvenv_cfg_is_not_a_venv(
+        self, mock_run, analyzer, tmp_path
+    ):
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+        (tmp_path / "env" / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        analyzer.analyze_path(str(tmp_path))
+        cmd = mock_run.call_args[0][0]
+        assert "--path" not in cmd
+        assert cmd[-1] == str(tmp_path)
+
+    @patch("subprocess.run")
+    def test_venv_root_without_site_packages_is_not_scanned(
+        self, mock_run, analyzer, tmp_path, caplog
+    ):
+        """An empty --path scan returns no dependencies and reads as clean."""
+        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        with caplog.at_level("WARNING"):
+            assert analyzer.analyze_path(str(tmp_path)) == []
+        mock_run.assert_not_called()
+        assert "No site-packages found" in caplog.text
+
+    def test_venv_site_packages_pypy_layout(self, tmp_path):
+        site_dir = tmp_path / "lib" / "pypy3.10" / "site-packages"
+        site_dir.mkdir(parents=True)
+        assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == [site_dir]
+
+    @pytest.mark.parametrize("include", [True, False])
+    def test_venv_site_packages_system_site_packages(self, tmp_path, include):
+        base = tmp_path / "base"
+        (base / "bin").mkdir(parents=True)
+        base_site = base / "lib" / "python3.12" / "site-packages"
+        base_site.mkdir(parents=True)
+        (base / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
+        env_dir = tmp_path / "env"
+        own_site = env_dir / "lib" / "python3.12" / "site-packages"
+        own_site.mkdir(parents=True)
+        (env_dir / "pyvenv.cfg").write_text(
+            f"home = {base / 'bin'}\n"
+            f"include-system-site-packages = {'true' if include else 'false'}\n"
+            "version = 3.12.4\n"
+        )
+        expected = [own_site, base_site] if include else [own_site]
+        assert VulnerablePackageAnalyzer._venv_site_packages(env_dir) == expected
+
+    @patch("subprocess.run")
     def test_dir_with_pyproject_no_venv(self, mock_run, analyzer, tmp_path):
         """Without .venv, pip-audit receives the project dir as a positional arg."""
         (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
