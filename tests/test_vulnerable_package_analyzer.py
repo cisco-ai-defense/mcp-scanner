@@ -505,16 +505,42 @@ class TestAnalyzePath:
         assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == [active]
 
     @pytest.mark.parametrize(
-        "cfg", ["home = /usr/bin\n", "home = /usr/bin\nversion = 3.13.0\n"]
+        "cfg", ["home = /usr/bin\n", "home = /usr/bin\nversion = unknown\n"]
     )
-    def test_venv_site_packages_falls_back_to_any_version(self, tmp_path, cfg):
-        """No recorded version, or none matching on disk, still finds packages."""
+    def test_venv_site_packages_any_version_without_recorded_version(
+        self, tmp_path, cfg
+    ):
+        """With no usable recorded version, every version's packages are found."""
         old = tmp_path / "lib" / "python3.11" / "site-packages"
         new = tmp_path / "lib" / "python3.12" / "site-packages"
         old.mkdir(parents=True)
         new.mkdir(parents=True)
         (tmp_path / "pyvenv.cfg").write_text(cfg)
         assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == [old, new]
+
+    def test_venv_site_packages_skips_stale_versions_only(self, tmp_path):
+        """A 3.13 environment with only 3.11/3.12 directories left has no
+        site-packages of its own, so the stale ones are not audited."""
+        (tmp_path / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
+        (tmp_path / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\nversion = 3.13.0\n")
+        assert VulnerablePackageAnalyzer._venv_site_packages(tmp_path) == []
+
+    @patch("subprocess.run")
+    def test_project_venv_with_only_stale_versions_scans_the_project(
+        self, mock_run, analyzer, tmp_path, caplog
+    ):
+        (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+        env_dir = tmp_path / ".venv"
+        (env_dir / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
+        (env_dir / "pyvenv.cfg").write_text("home = /usr/bin\nversion = 3.13.0\n")
+        mock_run.return_value = _make_completed_process(stdout=SAMPLE_CLEAN_JSON)
+        with caplog.at_level("WARNING"):
+            analyzer.analyze_path(str(tmp_path))
+        cmd = mock_run.call_args[0][0]
+        assert "--path" not in cmd
+        assert cmd[-1] == str(tmp_path)
+        assert "No site-packages found" in caplog.text
 
     @pytest.mark.parametrize("include", [True, False])
     def test_venv_site_packages_system_site_packages(self, tmp_path, include):

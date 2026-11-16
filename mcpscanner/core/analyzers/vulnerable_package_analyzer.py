@@ -290,14 +290,14 @@ class VulnerablePackageAnalyzer:
         """
         # Only the site-packages for the environment's own Python version is
         # on its path; a leftover lib/python3.11 in an environment recreated
-        # for 3.12 is not. Fall back to any version when pyvenv.cfg has none
-        # or names a version with no matching directory.
+        # for 3.12 is not. Any version is used only when pyvenv.cfg records
+        # none. A recorded version with no matching directory finds nothing,
+        # so the caller warns or scans the project instead of auditing stale
+        # packages.
         major_minor = cls._pyvenv_major_minor(cls._read_pyvenv_cfg(venv))
         own_dirs = [
             c for c in cls._site_packages_under(venv, major_minor) if c.is_dir()
         ]
-        if not own_dirs and major_minor != "*":
-            own_dirs = [c for c in cls._site_packages_under(venv) if c.is_dir()]
         if not own_dirs:
             return []
         candidates = own_dirs + cls._system_site_packages(venv)
