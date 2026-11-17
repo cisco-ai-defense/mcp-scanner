@@ -46,6 +46,7 @@ from ..core.result import (
     InstructionsScanResult,
     get_highest_severity,
     group_findings_by_analyzer,
+    joined_taxonomy_values,
 )
 from ..core.scanner import Scanner, ScannerFactory
 from ..utils.logging_config import get_logger
@@ -143,20 +144,25 @@ def _build_taxonomy_hierarchy(findings: List[Any]) -> List[Dict[str, Any]]:
             severities = [f.severity for f in subtech_findings]
             max_severity = get_highest_severity(severities)
 
-            # Get description from the first finding (all findings in same sub-technique have same description)
-            description = None
-            if (
-                subtech_findings
-                and hasattr(subtech_findings[0], "mcp_taxonomy")
-                and subtech_findings[0].mcp_taxonomy
-            ):
-                description = subtech_findings[0].mcp_taxonomy.get("description")
+            # One sub-technique can carry more than one description and
+            # more than one mitigation. Keep every distinct value.
+            taxonomies = [
+                taxonomy
+                for taxonomy in (
+                    getattr(finding, "mcp_taxonomy", None)
+                    for finding in subtech_findings
+                )
+                if isinstance(taxonomy, dict)
+            ]
+            description = joined_taxonomy_values(taxonomies, "description")
+            mitigation = joined_taxonomy_values(taxonomies, "mitigation")
 
             subtech_dict = {
                 "sub_technique_id": subtech_id if subtech_id != "N/A" else None,
                 "sub_technique_name": subtech_name if subtech_name != "N/A" else None,
                 "max_severity": max_severity,
                 "description": description,
+                "mitigation": mitigation,
             }
 
             technique_dict["items"].append(subtech_dict)

@@ -32,6 +32,80 @@ def analyzer_result_key(analyzer: Any) -> str:
     return {"promptdefense": "prompt_defense"}.get(name, name)
 
 
+def append_unique_taxonomy(
+    taxonomies: List[Dict[str, Any]], taxonomy: Optional[Dict[str, Any]]
+) -> None:
+    """Keep a taxonomy whose technique, sub-technique, description, or action is new.
+
+    Findings can share a sub-technique and still describe a different problem
+    or require a different action. Collapsing on the sub-technique id alone
+    drops one of those records.
+    """
+    if not isinstance(taxonomy, dict):
+        return
+    key = (
+        taxonomy.get("aitech"),
+        taxonomy.get("aisubtech"),
+        taxonomy.get("description"),
+        taxonomy.get("mitigation"),
+    )
+    for existing in taxonomies:
+        existing_key = (
+            existing.get("aitech"),
+            existing.get("aisubtech"),
+            existing.get("description"),
+            existing.get("mitigation"),
+        )
+        if existing_key == key:
+            return
+    taxonomies.append(taxonomy)
+
+
+def joined_taxonomy_values(
+    taxonomies: List[Dict[str, Any]], field: str
+) -> Optional[str]:
+    """Join the distinct values of one taxonomy field, in first-seen order."""
+    values: List[str] = []
+    for taxonomy in taxonomies:
+        if not isinstance(taxonomy, dict):
+            continue
+        text = taxonomy.get(field)
+        if text and text not in values:
+            values.append(text)
+    if not values:
+        return None
+    return "\n".join(values)
+
+
+def taxonomy_for_single_field(
+    taxonomies: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """One taxonomy object for callers that read a single dict.
+
+    Description and mitigation include every distinct value that belongs to
+    the same technique and sub-technique as the first record. Other
+    sub-techniques stay in ``mcp_taxonomies`` so their ids are not attached
+    to this object's prose.
+    """
+    if not taxonomies:
+        return None
+    first = taxonomies[0]
+    same_subtechnique = [
+        taxonomy
+        for taxonomy in taxonomies
+        if taxonomy.get("aitech") == first.get("aitech")
+        and taxonomy.get("aisubtech") == first.get("aisubtech")
+    ]
+    if len(same_subtechnique) == 1:
+        return first
+    combined = dict(first)
+    for field in ("description", "mitigation"):
+        joined = joined_taxonomy_values(same_subtechnique, field)
+        if joined:
+            combined[field] = joined
+    return combined
+
+
 class ScanResult:
     """Base class for all scan results.
 
@@ -670,8 +744,9 @@ def format_results_as_json(
                 summaries = []
                 severities = []
 
-                # Collect MCP Taxonomy info (use first finding's taxonomy)
-                mcp_taxonomy = None
+                # Collect every distinct taxonomy. The first one stays in
+                # mcp_taxonomy for callers that read a single object.
+                mcp_taxonomies: List[Dict[str, Any]] = []
                 threat_vuln_classification = None
 
                 for vuln in vulns:
@@ -692,13 +767,8 @@ def format_results_as_json(
                         if threat_type not in threat_names:
                             threat_names.append(threat_type)
 
-                    # Collect MCP Taxonomy from first finding
-                    if (
-                        mcp_taxonomy is None
-                        and hasattr(vuln, "mcp_taxonomy")
-                        and vuln.mcp_taxonomy
-                    ):
-                        mcp_taxonomy = vuln.mcp_taxonomy
+                    if hasattr(vuln, "mcp_taxonomy") and vuln.mcp_taxonomy:
+                        append_unique_taxonomy(mcp_taxonomies, vuln.mcp_taxonomy)
 
                     # Collect threat/vulnerability classification from first finding
                     if (
@@ -744,10 +814,13 @@ def format_results_as_json(
                     )
 
                 # Add MCP Taxonomy if available (this replaces threat_names and threat_summary)
-                if mcp_taxonomy:
-                    analyzer_finding["threats"] = mcp_taxonomy
-                    # Also add as mcp_taxonomy for CLI display compatibility
-                    analyzer_finding["mcp_taxonomy"] = mcp_taxonomy
+                if mcp_taxonomies:
+                    combined = taxonomy_for_single_field(mcp_taxonomies)
+                    analyzer_finding["threats"] = combined
+                    # Singular field for callers that read one object. The
+                    # list keeps each finding's own description and mitigation.
+                    analyzer_finding["mcp_taxonomy"] = combined
+                    analyzer_finding["mcp_taxonomies"] = mcp_taxonomies
 
                 if analyzer_errors:
                     analyzer_finding["status"] = "partial"
