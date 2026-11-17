@@ -132,3 +132,89 @@ def test_ensure_encodable_stdio_only_relaxes_narrow_raising_streams(
     narrow.write("\U0001f534 HIGH\n")
     narrow.flush()
     assert narrow.buffer.getvalue() == b"? HIGH\n"
+
+
+def _narrow_stdout(monkeypatch, encoding):
+    stream = io.TextIOWrapper(
+        io.BytesIO(), encoding=encoding, errors="replace", newline="\n"
+    )
+    monkeypatch.setattr(sys, "stdout", stream)
+    return stream
+
+
+@pytest.mark.parametrize("encoding", ["cp950", "cp1252", "ascii"])
+def test_safety_status_stays_distinct_when_icons_cannot_be_encoded(
+    monkeypatch, encoding
+):
+    from mcpscanner.cli import _safety_status_icon
+
+    _narrow_stdout(monkeypatch, encoding)
+
+    markers = [_safety_status_icon(v) for v in (True, False, None)]
+
+    assert markers == ["[SAFE]", "[UNSAFE]", "[UNKNOWN]"]
+
+
+def test_safety_status_keeps_icons_on_utf8_stdout(monkeypatch):
+    from mcpscanner.cli import _safety_status_icon
+
+    _narrow_stdout(monkeypatch, "utf-8")
+
+    markers = [_safety_status_icon(v) for v in (True, False, None)]
+
+    assert len(set(markers)) == 3
+    assert not any(m.startswith("[") for m in markers)
+
+
+@pytest.mark.parametrize("encoding", ["cp950", "ascii"])
+def test_status_tables_show_distinct_states_on_narrow_stdout(monkeypatch, encoding):
+    pytest.importorskip("tabulate")
+    from mcpscanner.cli import (
+        display_instructions_results_table,
+        display_prompt_results_table,
+        display_resource_results_table,
+    )
+
+    def written(display, results):
+        stream = _narrow_stdout(monkeypatch, encoding)
+        display(results, "stdio")
+        stream.flush()
+        return stream.buffer.getvalue().decode(encoding)
+
+    prompts = written(
+        display_prompt_results_table,
+        [
+            {"prompt_name": "p-safe", "is_safe": True, "status": "completed"},
+            {"prompt_name": "p-unsafe", "is_safe": False, "status": "completed"},
+            {"prompt_name": "p-unknown", "is_safe": None, "status": "failed"},
+        ],
+    )
+    instructions = written(
+        display_instructions_results_table,
+        [
+            {"server_name": "s-safe", "is_safe": True, "status": "completed"},
+            {"server_name": "s-unsafe", "is_safe": False, "status": "completed"},
+            {"server_name": "s-unknown", "is_safe": None, "status": "failed"},
+        ],
+    )
+    resources = written(
+        display_resource_results_table,
+        [
+            {"resource_name": "r-safe", "is_safe": True, "status": "completed"},
+            {"resource_name": "r-unsafe", "is_safe": False, "status": "completed"},
+            {"resource_name": "r-skipped", "status": "skipped"},
+            {"resource_name": "r-failed", "status": "failed"},
+        ],
+    )
+
+    def row(output, name):
+        return next(line for line in output.splitlines() if name in line)
+
+    for output, prefix in ((prompts, "p"), (instructions, "s")):
+        assert "[SAFE]" in row(output, f"{prefix}-safe")
+        assert "[UNSAFE]" in row(output, f"{prefix}-unsafe")
+        assert "[UNKNOWN]" in row(output, f"{prefix}-unknown")
+    assert "[SAFE]" in row(resources, "r-safe")
+    assert "[UNSAFE]" in row(resources, "r-unsafe")
+    assert "[SKIPPED]" in row(resources, "r-skipped")
+    assert "[FAILED]" in row(resources, "r-failed")

@@ -129,13 +129,27 @@ def _get_endpoint_from_env() -> str:
     return os.environ.get("MCP_SCANNER_ENDPOINT", "")
 
 
+def _status_marker(icon: str, text: str) -> str:
+    """Return ``icon``, or the ASCII ``text`` when stdout cannot encode it.
+
+    On a narrow stdout (cp1252, cp950, ...) _ensure_encodable_stdio() writes
+    every unencodable icon as ``?``, so different statuses would look alike.
+    """
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        icon.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return text
+    return icon
+
+
 def _safety_status_icon(is_safe: Optional[bool]) -> str:
     """Render safe, unsafe, and unknown outcomes distinctly."""
     if is_safe is True:
-        return "✅"
+        return _status_marker("✅", "[SAFE]")
     if is_safe is False:
-        return "⚠️"
-    return "❌"
+        return _status_marker("⚠️", "[UNSAFE]")
+    return _status_marker("❌", "[UNKNOWN]")
 
 
 def _parse_custom_headers(header_list: Optional[List[str]]) -> Dict[str, str]:
@@ -863,9 +877,9 @@ def display_resource_results_table(
         if status in {"completed", "partial"}:
             status_icon = _safety_status_icon(result.get("is_safe"))
         elif status == "skipped":
-            status_icon = "⏭️"
+            status_icon = _status_marker("⏭️", "[SKIPPED]")
         else:
-            status_icon = "❌"
+            status_icon = _status_marker("❌", "[FAILED]")
 
         resource_name = result.get("resource_name", "Unknown")
         uri = result.get("resource_uri", "N/A")
