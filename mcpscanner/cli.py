@@ -1224,6 +1224,24 @@ def display_instructions_results(
             print()
 
 
+def _static_scan_label(args: argparse.Namespace) -> str:
+    """Report label for ``static`` scans: the files that were scanned.
+
+    ``static`` reads local JSON files and never contacts a server, so the
+    global ``--server-url`` default must not be shown as the scan target.
+    """
+    files = [
+        path
+        for path in (
+            getattr(args, "tools", None),
+            getattr(args, "prompts", None),
+            getattr(args, "resources", None),
+        )
+        if path
+    ]
+    return f"static:{','.join(files)}"
+
+
 async def main():
     """Main entry point for the script."""
     parser = argparse.ArgumentParser(
@@ -2910,6 +2928,8 @@ async def main():
             if getattr(args, "version", None):
                 pkg_spec = f"{args.package}@{args.version}"
             server_label = f"npm:{pkg_spec}"
+        elif hasattr(args, "cmd") and args.cmd == "static":
+            server_label = _static_scan_label(args)
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
             server_label = f"behavioral:{args.source_path}"
         elif args.stdio_command:
@@ -3043,6 +3063,8 @@ async def main():
             server_label = f"npm:{pkg_spec}"
         elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
             server_label = f"vulnerable-package:{args.scan_path}"
+        elif hasattr(args, "cmd") and args.cmd == "static":
+            server_label = _static_scan_label(args)
 
         # Handle prompts, resources, and instructions with detailed view
         if hasattr(args, "cmd") and args.cmd == "prompts":
