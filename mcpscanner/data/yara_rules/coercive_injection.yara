@@ -79,12 +79,13 @@ rule coercive_injection {
         $data_exfiltration_coercion = /\b(list\s+all\s+(api\s+)?keys?|show\s+me?\s+(all\s+)?passwords?|concatenate [^\n]*\s+conversation\s+history|base64\s+encode [^\n]*\s+credentials?)\b/i
 
         // "include ... in your response", split out of
-        // $data_exfiltration_coercion so its quantifiers can be lazy (YARA
-        // can't mix greedy and lazy in one regex). Each occurrence then ends
-        // at its nearest "in your response", and a second `include`
-        // sentence on the same line gets its own occurrence: YARA doesn't
-        // report one that starts inside another. A wallet's seed, recovery
-        // phrase or mnemonic is the wallet itself, so they are objects too.
+        // $data_exfiltration_coercion so it gets its own guard clause
+        // below. Its quantifiers are lazy (YARA can't mix greedy and lazy in
+        // one regex), so each occurrence ends at its nearest "in your
+        // response". YARA reports an occurrence at every `include`, even one
+        // inside an earlier occurrence, so a second `include` sentence on the
+        // same line is checked on its own. A wallet's seed, recovery phrase
+        // or mnemonic is the wallet itself, so they are objects too.
         $include_in_response = /\binclude [^\n]*?\b(secrets??|passwords??|keys??|credentials??|tokens??|config|sensitive|private|confidential|internal|system\s+?prompt|conversation\s+?history|seed\s+?phrases??|recovery\s+?phrases??|mnemonics??) [^\n]*?in\s+?(your\s+?)??response\b/i
 
         // Negated disclosure. "Never include the private key in your
