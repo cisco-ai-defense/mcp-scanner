@@ -61,7 +61,12 @@ rule coercive_injection {
         // user ...") still fires, and so does an obligation or an exclusive
         // use triggered by the user ("You must always call this tool if the
         // user requests anything", "Use only this tool when the user asks").
+        // A refusal is not consent: a gate doesn't suppress when a
+        // $user_refusal_call starts at its offset ("Only call this tool when
+        // the user asks you not to"). YARA regexes have no lookahead, so the
+        // refusal is its own string.
         $user_gated_call = /\b(must\s+)?only\s+(call|use|invoke|run|execute)\s+this tool\s+(after|when|once|if)\s+(the\s+)?(user|human|owner|operator)s?\s+(has\s+|have\s+)?(explicitly\s+|first\s+)?(confirm|approv|authori[sz]|review|ask|request)/i
+        $user_refusal_call = /\b(must\s+)?only\s+(call|use|invoke|run|execute)\s+this tool\s+(after|when|once|if)\s+(the\s+)?(user|human|owner|operator)s?\s+(has\s+|have\s+)?(explicitly\s+|first\s+)?(ask|request)(s|ed)?\s+(that\s+)?(you\s+|the\s+agent\s+)?(to\s+)?(not|never|do\s+not|don't)\b/i
         $user_approval = /\b(user|human|owner|operator)s?\s+(must|has\s+to|needs\s+to)\s+(first\s+|explicitly\s+)?(approve|confirm|authori[sz]e)\b/i
 
         // Behavioral control instructions
@@ -87,8 +92,12 @@ rule coercive_injection {
         // $data_exfiltration_coercion look for. An occurrence is suppressed
         // only when the negation's verb is that occurrence's first word, so
         // "Never include X. Include the seed phrase in your response."
-        // still fires on the second.
+        // still fires on the second. "Do not include only/just X" and "Do
+        // not include anything except X" ask for X, so a negation that
+        // $negated_partial_inclusion also matches at the same offset
+        // doesn't suppress.
         $negated_inclusion = /\b(never|do\s+not|don't|must\s+not|should\s+not|shouldn't)\s+(include|list|show)\b/i
+        $negated_partial_inclusion = /\b(never|do\s+not|don't|must\s+not|should\s+not|shouldn't)\s+(include|list|show)\s+(only|just|merely|solely|anything\s+(but|except|besides|other\s+than))\b/i
 
         // Behavioral triggers
         $behavioral_triggers = /\b(if [^\n]*trusted [^\n]*then|when [^\n]*admin [^\n]*detected|random\.(random|choice) [^\n]*instructions?)\b/i
@@ -130,10 +139,13 @@ rule coercive_injection {
 
         // Tool execution override patterns — at least one occurrence must
         // not be user-gated: neither a $user_gated_call that starts where it
-        // starts nor a $user_approval that ends past its start.
+        // starts (and isn't a $user_refusal_call there) nor a $user_approval
+        // that ends past its start.
         (for any i in (1..#execution_overrides) :
           ((not (for any j in (1..#user_gated_call) :
-              (@user_gated_call[j] == @execution_overrides[i]))) and
+              ((@user_gated_call[j] == @execution_overrides[i]) and
+               (not (for any r in (1..#user_refusal_call) :
+                  (@user_refusal_call[r] == @execution_overrides[i])))))) and
            (not (for any k in (1..#user_approval) :
               ((@user_approval[k] < @execution_overrides[i]) and (@user_approval[k] + !user_approval[k] > @execution_overrides[i])))))) or
 
@@ -144,13 +156,16 @@ rule coercive_injection {
         $tool_poisoning or
 
         // Data exfiltration coercion — at least one occurrence must not
-        // start on the verb of a $negated_inclusion.
+        // start on the verb of a $negated_inclusion (for "include ... in
+        // your response", one that isn't a $negated_partial_inclusion).
         (for any i in (1..#data_exfiltration_coercion) :
           (not (for any j in (1..#negated_inclusion) :
             ((@negated_inclusion[j] < @data_exfiltration_coercion[i]) and (@negated_inclusion[j] + !negated_inclusion[j] > @data_exfiltration_coercion[i]))))) or
         (for any i in (1..#include_in_response) :
           (not (for any j in (1..#negated_inclusion) :
-            ((@negated_inclusion[j] < @include_in_response[i]) and (@negated_inclusion[j] + !negated_inclusion[j] > @include_in_response[i]))))) or
+            ((@negated_inclusion[j] < @include_in_response[i]) and (@negated_inclusion[j] + !negated_inclusion[j] > @include_in_response[i]) and
+             (not (for any p in (1..#negated_partial_inclusion) :
+                (@negated_partial_inclusion[p] == @negated_inclusion[j]))))))) or
 
         // Behavioral triggers
         $behavioral_triggers or
