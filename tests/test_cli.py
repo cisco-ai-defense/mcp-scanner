@@ -1008,7 +1008,7 @@ class TestMainGlobalEnvFlags:
         from pathlib import Path
 
         cli_path = Path(__file__).resolve().parent.parent / "mcpscanner" / "cli.py"
-        tree = ast.parse(cli_path.read_text())
+        tree = ast.parse(cli_path.read_text(encoding="utf-8"))
 
         def imported_names(nodes):
             names = {}
