@@ -21,6 +21,7 @@ import json
 
 from mcpscanner.api.router import _build_taxonomy_hierarchy
 from mcpscanner.cli import (
+    _display_content_scan_results,
     display_instructions_results,
     display_prompt_results,
     display_resource_results,
@@ -174,6 +175,40 @@ def test_prompt_resource_and_instructions_detailed_views(capsys):
     output = capsys.readouterr().out
     assert output.count(FULL_MITIGATION) == 3
     assert "AttributeError" not in output
+
+
+def test_format_detailed_shows_content_scan_mitigations(capsys):
+    taxonomy_result = _analyzer_result()
+    findings = taxonomy_result["findings"]
+    scans = {
+        "prompts": {
+            "prompt_name": "evil_prompt",
+            "is_safe": False,
+            "findings": findings,
+        },
+        "resources": {
+            "resource_name": "evil_resource",
+            "is_safe": False,
+            "findings": findings,
+        },
+        "instructions": {
+            "server_name": "evil-server",
+            "is_safe": False,
+            "findings": findings,
+        },
+    }
+    server = "http://example.test/mcp"
+    for cmd, row in scans.items():
+        assert _display_content_scan_results(cmd, [row], server, "detailed") is True
+        assert FULL_MITIGATION in capsys.readouterr().out
+        assert _display_content_scan_results(cmd, [row], server, "summary") is True
+        assert FULL_MITIGATION not in capsys.readouterr().out
+    assert (
+        _display_content_scan_results(
+            "static", [scans["prompts"]], server, "detailed"
+        )
+        is False
+    )
 
 
 def _behavioral_finding(threat_name: str, summary: str) -> SecurityFinding:

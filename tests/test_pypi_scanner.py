@@ -561,6 +561,41 @@ class TestPackageScanCliMapping:
         assert rows[0]["status"] == "error"
         assert rows[0]["is_safe"] is None
 
+    def test_finding_mitigation_is_copied_into_mcp_taxonomies(self):
+        rows = _package_scan_to_tool_results(
+            scan_results={
+                "scan_status": "completed",
+                "is_safe": False,
+                "findings": [
+                    {
+                        "analyzer": "behavioral",
+                        "severity": "HIGH",
+                        "threat_category": "TOOL POISONING",
+                        "summary": "hidden behavior",
+                        "details": {
+                            "function_name": "run",
+                            "aitech": "AITech-12.1",
+                            "aitech_name": "Tool Exploitation",
+                            "aisubtech": "AISubtech-12.1.2",
+                            "aisubtech_name": "Tool Poisoning",
+                            "taxonomy_description": "hidden instructions",
+                            "mitigation": (
+                                "Make the implementation match the documented "
+                                "purpose."
+                            ),
+                        },
+                    }
+                ],
+            },
+            pkg_spec="evil",
+            ecosystem_label="PyPI",
+        )
+        taxonomy = rows[0]["findings"]["behavioral_analyzer"]["mcp_taxonomies"][0]
+        assert taxonomy["aisubtech"] == "AISubtech-12.1.2"
+        assert taxonomy["description"] == "hidden instructions"
+        assert "taxonomy_description" not in taxonomy
+        assert "documented" in taxonomy["mitigation"]
+
     def test_completed_clean_scan_stays_safe(self):
         rows = _package_scan_to_tool_results(
             scan_results={
