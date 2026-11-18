@@ -269,9 +269,19 @@ async def main():
         analyzers=[AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.LLM]
     )
 
-    # Print tool results
+    # Print tool results. Instructions are not a tool.
     for result in tool_results:
         print(f"Tool: {result.tool_name}, Safe: {result.is_safe}")
+    instructions = scanner.instructions_result
+    if instructions is not None:
+        print(
+            f"Instructions: safe={instructions.is_safe}, "
+            f"findings={len(instructions.findings)}"
+        )
+    # scan_mcp_config_file keeps every reportable server on
+    # scanner.instructions_results. instructions_result is the last one.
+    # A tools/list failure sets scanner.tool_scan_error. A server with no
+    # tools does not.
 
     # Scan all prompts on a server
     prompt_results = await scanner.scan_remote_server_prompts(

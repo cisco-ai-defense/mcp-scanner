@@ -52,6 +52,12 @@ async def main():
 
         # Print scan summary
         print(f"\nScan completed. Found {len(results)} tools.")
+        instructions = scanner.instructions_result
+        if instructions is not None:
+            print(
+                f"Instructions: safe={instructions.is_safe}, "
+                f"findings={len(instructions.findings)}"
+            )
 
         # Count safe and unsafe tools
         safe_tools = [r for r in results if r.is_safe]

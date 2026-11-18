@@ -300,6 +300,40 @@ class InstructionsScanResult(ScanResult):
         return f"InstructionsScanResult(server_name={self.server_name}, protocol_version={self.protocol_version}, status={self.status}, findings={len(self.findings)})"
 
 
+class ToolListFailure(ScanResult):
+    """A tools/list failure after instructions were already recorded.
+
+    This is not an advertised tool. Reports mark it incomplete so a broken
+    tool list is distinct from a server that exposes no tools. The message
+    is the exception type only.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        server_source: str = None,
+        server_name: str = None,
+    ):
+        super().__init__(
+            "failed",
+            [],
+            [],
+            server_source,
+            server_name,
+            analyzer_errors=[
+                {
+                    "analyzer": "tools",
+                    "content_type": "tools/list",
+                    "message": message,
+                }
+            ],
+        )
+
+    def __str__(self) -> str:
+        """Return a string representation of the tool-list failure."""
+        return f"ToolListFailure(server_name={self.server_name}, status={self.status})"
+
+
 def process_scan_results(
     results: List[
         Union[

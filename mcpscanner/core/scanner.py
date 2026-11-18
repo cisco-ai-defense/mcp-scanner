@@ -201,6 +201,17 @@ class Scanner:
             MetaAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
         )
         self._custom_analyzers = custom_analyzers or []
+        # Latest server-instruction scan. Kept off the tool list so callers
+        # that read ``tool_name`` keep working. Prompt and resource scans do
+        # not fill this; a registration that calls all three would otherwise
+        # report the same instructions three times.
+        self.instructions_result: Optional[InstructionsScanResult] = None
+        self.instructions_results: List[InstructionsScanResult] = []
+        # Set when tools/list fails after an instruction result was recorded.
+        # Absent when the server simply exposes no tools. The message is the
+        # exception type only. Config scans keep every server on the list.
+        self.tool_scan_error: Optional[Dict[str, str]] = None
+        self.tool_scan_errors: List[Dict[str, str]] = []
 
         # Debug logging for analyzer initialization
         active_analyzers = []
@@ -1026,9 +1037,11 @@ class Scanner:
             if isinstance(result, ResourceScanResult):
                 return await self._meta_analyze_one_resource(result, sem)
             if isinstance(result, InstructionsScanResult):
-                # No bulk endpoint takes a list of instructions, but the CLI
-                # static path may include one in ``all_results``. Re-use the
-                # single-result helper so behaviour stays in lock-step.
+                # Tool, prompt, and resource scans already meta-analyze
+                # instructions before appending them. A second pass would
+                # clear the audit when every finding was filtered.
+                if result.meta_filtered_findings:
+                    return result
                 return await self._run_meta_analysis_on_instructions_result(
                     result, analyzers
                 )
@@ -1402,6 +1415,209 @@ class Scanner:
             getattr(session, "server_info", None),
             getattr(session, "protocol_version", None),
         )
+
+    async def _scan_connected_instructions(
+        self,
+        session: Any,
+        analyzers: List[AnalyzerEnum],
+        http_headers: Optional[dict] = None,
+    ) -> Optional[InstructionsScanResult]:
+        """Analyze instructions from the session already used for this scan.
+
+        ``server/discover`` and legacy ``initialize`` both carry this text.
+        A server can put tool-poisoning there instead of in a tool description.
+        """
+        instructions, server_info, protocol_version = self._session_connect_metadata(
+            session
+        )
+        if not isinstance(instructions, str) or not instructions.strip():
+            return None
+        server_name = (
+            getattr(server_info, "name", "Unknown")
+            if server_info is not None
+            else "Unknown"
+        )
+        try:
+            result = await self._analyze_instructions(
+                instructions=instructions,
+                server_name=server_name,
+                protocol_version=protocol_version or "Unknown",
+                analyzers=analyzers,
+                http_headers=http_headers,
+            )
+            return await self._run_meta_analysis_on_instructions_result(
+                result, analyzers
+            )
+        except Exception as e:
+            logger.error("Instruction scan failed: %s", type(e).__name__)
+            return InstructionsScanResult(
+                instructions=instructions,
+                server_name=server_name,
+                protocol_version=protocol_version or "Unknown",
+                status="failed",
+                analyzers=[],
+                findings=[],
+                analyzer_errors=[
+                    {
+                        "analyzer": "instructions",
+                        "content_type": "instructions",
+                        "message": f"{type(e).__name__} during analysis",
+                    }
+                ],
+            )
+
+    @staticmethod
+    def _should_report_instructions(
+        instructions_result: Optional[InstructionsScanResult],
+    ) -> bool:
+        """True when the instructions scan is unsafe, incomplete, or audited."""
+        if instructions_result is None:
+            return False
+        if instructions_result.findings or instructions_result.analyzer_errors:
+            return True
+        return bool(getattr(instructions_result, "meta_filtered_findings", None))
+
+    def _record_instructions_result(
+        self, instructions_result: Optional[InstructionsScanResult]
+    ) -> None:
+        """Publish an instructions scan without adding it to an entity list.
+
+        Clean instructions clear the latest result. Findings, analyzer
+        errors, and a meta-analysis audit stay on ``instructions_result``
+        so a failed or filtered scan is not reported as a clean tool list.
+        """
+        if self._should_report_instructions(instructions_result):
+            self.instructions_result = instructions_result
+            return
+        self.instructions_result = None
+
+    def _snapshot_config_instructions(
+        self,
+        collected: List[InstructionsScanResult],
+        server_name: str,
+        config_path: str,
+    ) -> None:
+        """Keep one instructions result per config server, off the tool list."""
+        error = self.tool_scan_error
+        pending = getattr(self, "_pending_tool_scan_errors", None)
+        if error and pending is not None:
+            pending.append(
+                {
+                    "phase": error.get("phase", "tools/list"),
+                    "message": error.get("message", ""),
+                    "server_name": server_name,
+                    "server_source": config_path,
+                }
+            )
+        result = self.instructions_result
+        if result is None:
+            return
+        result.server_name = server_name
+        result.server_source = config_path
+        collected.append(result)
+
+    def _keep_instructions_after_tool_error(self, error: Exception) -> bool:
+        """Keep a recorded instruction scan when tool listing or analysis fails.
+
+        The exception text is not logged. Callers then return the tools
+        already collected so the instruction result reaches the report.
+        """
+        if self.instructions_result is None:
+            return False
+        logger.error(
+            "Tool scan failed after instructions were recorded: %s",
+            type(error).__name__,
+        )
+        self.tool_scan_error = {
+            "phase": "tools/list",
+            "message": f"{type(error).__name__} during tools/list",
+        }
+        return True
+
+    async def _scan_tools_on_session(
+        self,
+        session: Any,
+        analyzers: List[AnalyzerEnum],
+        http_headers: Optional[dict],
+        server_label: str,
+    ) -> List[ToolScanResult]:
+        """List and analyze tools on a session that is already connected.
+
+        A failure inside one tool becomes an incomplete result for that tool.
+        Tools that already finished are still returned. ``tools/list`` errors
+        propagate so the caller can record an incomplete tool scan.
+        """
+        try:
+            tool_list = await session.list_tools()
+        except McpError as e:
+            if self._is_missing_capability_error(e):
+                logger.warning(
+                    "Server '%s' does not expose tools: %s",
+                    server_label,
+                    type(e).__name__,
+                )
+                return []
+            raise
+
+        async def _one(tool: Any) -> ToolScanResult:
+            try:
+                return await self._analyze_tool(tool, analyzers, http_headers)
+            except Exception as error:
+                logger.error(
+                    "Tool analysis failed: %s",
+                    type(error).__name__,
+                )
+                description = getattr(tool, "description", "") or ""
+                if not isinstance(description, str):
+                    description = ""
+                name = getattr(tool, "name", None) or "unknown"
+                return ToolScanResult(
+                    tool_name=str(name),
+                    tool_description=description,
+                    status="failed",
+                    analyzers=[],
+                    findings=[],
+                    analyzer_errors=[
+                        {
+                            "analyzer": "tools",
+                            "content_type": "tool",
+                            "message": (
+                                f"{type(error).__name__} during analysis"
+                            ),
+                        }
+                    ],
+                )
+
+        scan_results = await asyncio.gather(
+            *(_one(tool) for tool in tool_list.tools)
+        )
+        try:
+            return await self._run_meta_analysis_on_results(
+                list(scan_results), analyzers
+            )
+        except Exception as error:
+            logger.error(
+                "Tool meta-analysis failed: %s",
+                type(error).__name__,
+            )
+            return list(scan_results)
+
+    def _publish_config_instructions(
+        self, collected: List[InstructionsScanResult]
+    ) -> None:
+        """Publish every reportable config server and the latest one.
+
+        A later clean server clears ``instructions_result`` during its own
+        scan. Restore the last reportable result so that attribute stays
+        set. ``instructions_results`` holds every such server.
+        """
+        self.instructions_results = list(collected)
+        self.instructions_result = collected[-1] if collected else None
+        pending = getattr(self, "_pending_tool_scan_errors", None)
+        if pending is not None:
+            self.tool_scan_errors = list(pending)
+            self.tool_scan_error = dict(pending[-1]) if pending else None
+            self._pending_tool_scan_errors = []
 
     @staticmethod
     def _analyzer_label(analyzer: Any) -> str:
@@ -2393,7 +2609,18 @@ class Scanner:
             http_headers (Optional[dict]): Optional HTTP headers to pass to analyzers.
 
         Returns:
-            List[ToolScanResult]: The results of the scan for each tool.
+            List[ToolScanResult]: One result per advertised tool. Server
+            instructions are not part of this list. When they produce
+            findings, an analyzer error, or a meta-analysis audit, read
+            ``scanner.instructions_result``. A tool-analysis failure returns
+            the tools that finished and an incomplete result for the tool
+            that failed. A tools/list failure after that result is recorded
+            returns no tools, leaves the attribute set, and sets
+            ``scanner.tool_scan_error``. The report shows that tool list as
+            incomplete. A server that exposes no tools returns an empty list
+            and does not set ``tool_scan_error``. A config scan stores every
+            reportable server on ``scanner.instructions_results`` and every
+            tools/list failure on ``scanner.tool_scan_errors``.
 
         Raises:
             MCPAuthenticationError: If authentication fails (HTTP 401/403).
@@ -2412,6 +2639,9 @@ class Scanner:
 
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
+        self.instructions_result = None
+        self.tool_scan_error = None
+        self.tool_scan_errors = []
 
         client_context = None
         session = None
@@ -2423,33 +2653,27 @@ class Scanner:
                 tenant_id=tenant_id,
             )
 
-            # List all tools
+            # The same session already completed server/discover or initialize.
+            # Record before listing tools so a later tools/list or tool-analysis
+            # error cannot drop a failed or unsafe instruction scan.
+            instruction_result = await self._scan_connected_instructions(
+                session, analyzers, http_headers
+            )
+            self._record_instructions_result(instruction_result)
+
             try:
-                tool_list = await session.list_tools()
-            except McpError as e:
-                if self._is_missing_capability_error(e):
-                    logger.warning(f"Server '{server_url}' does not expose tools: {e}")
+                return await self._scan_tools_on_session(
+                    session, analyzers, http_headers, server_url
+                )
+            except Exception as tool_error:
+                if self._keep_instructions_after_tool_error(tool_error):
                     return []
                 raise
 
-            # Create analysis tasks for each tool
-            scan_tasks = [
-                self._analyze_tool(tool, analyzers, http_headers)
-                for tool in tool_list.tools
-            ]
-
-            # Run all tasks concurrently
-            scan_results = await asyncio.gather(*scan_tasks)
-
-            # Run meta-analysis if enabled (post-pass on all results)
-            scan_results = await self._run_meta_analysis_on_results(
-                list(scan_results), analyzers
-            )
-
-            return scan_results
-
         except Exception as e:
-            logger.error(f"Error scanning server {server_url}: {e}")
+            logger.error(
+                "Error scanning server %s: %s", server_url, type(e).__name__
+            )
             raise
         finally:
             await self._close_mcp_session(client_context, session)
@@ -2626,6 +2850,9 @@ class Scanner:
 
         # Validate that requested analyzers have required configuration
         self._validate_analyzer_requirements(analyzers)
+        self.instructions_result = None
+        self.tool_scan_error = None
+        self.tool_scan_errors = []
 
         client_context = None
         session = None
@@ -2637,37 +2864,29 @@ class Scanner:
                     server_config, timeout, errlog
                 )
 
-                # List all tools
+                instruction_result = await self._scan_connected_instructions(
+                    session, analyzers
+                )
+                self._record_instructions_result(instruction_result)
+
                 try:
-                    tool_list = await session.list_tools()
-                except McpError as e:
-                    if self._is_missing_capability_error(e):
-                        logger.warning(
-                            f"Stdio server '{server_config.command}' does not expose tools: {e}"
-                        )
+                    return await self._scan_tools_on_session(
+                        session, analyzers, None, server_config.command
+                    )
+                except Exception as tool_error:
+                    if self._keep_instructions_after_tool_error(tool_error):
                         return []
                     raise
-
-                # Create analysis tasks for each tool
-                scan_tasks = [
-                    self._analyze_tool(tool, analyzers) for tool in tool_list.tools
-                ]
-
-                # Run all tasks concurrently
-                scan_results = await asyncio.gather(*scan_tasks)
-
-                # Run meta-analysis if enabled (post-pass on all results)
-                scan_results = await self._run_meta_analysis_on_results(
-                    list(scan_results), analyzers
-                )
-
-                return scan_results
 
             # Run the connection and scanning in an isolated task
             return await connect_and_scan()
 
         except Exception as e:
-            logger.error(f"Error scanning stdio server {server_config.command}: {e}")
+            logger.error(
+                "Error scanning stdio server %s: %s",
+                server_config.command,
+                type(e).__name__,
+            )
             raise
         finally:
             # Always clean up resources
@@ -2768,7 +2987,11 @@ class Scanner:
                     Pass ``open(os.devnull, "w")`` to suppress server stderr.
 
         Returns:
-            Dict[str, List[ToolScanResult]]: Dictionary mapping config file paths to scan results.
+            Dict[str, List[ToolScanResult]]: Config paths mapped to tool
+            results. Instructions stay off those lists. Each server whose
+            instructions are unsafe, incomplete, or audited is on
+            ``scanner.instructions_results``. ``scanner.instructions_result``
+            is the last of those, including when a later server is clean.
         """
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -2781,6 +3004,8 @@ class Scanner:
         configs = await config_scanner.scan_well_known_paths()
 
         all_results = {}
+        collected_instructions: List[InstructionsScanResult] = []
+        self._pending_tool_scan_errors = []
 
         for config_path, config in configs.items():
             logger.debug(f"Scanning servers from config: {config_path}")
@@ -2789,6 +3014,8 @@ class Scanner:
 
             for server_name, server_config in servers.items():
                 logger.debug(f"Scanning server '{server_name}' from {config_path}")
+                self.instructions_result = None
+                self.tool_scan_error = None
 
                 try:
                     if isinstance(server_config, StdioServer):
@@ -2813,6 +3040,9 @@ class Scanner:
                                 result.server_name = server_name
                                 result.server_source = config_path
                             config_results.extend(results)
+                            self._snapshot_config_instructions(
+                                collected_instructions, server_name, config_path
+                            )
                         except (
                             ConnectionError,
                             asyncio.TimeoutError,
@@ -2820,6 +3050,9 @@ class Scanner:
                         ) as e:
                             logger.warning(
                                 f"Failed to connect to server '{server_name}': {e}"
+                            )
+                            self._snapshot_config_instructions(
+                                collected_instructions, server_name, config_path
                             )
                             logger.debug(f"Continuing with remaining servers...")
                             continue
@@ -2834,6 +3067,9 @@ class Scanner:
                                 result.server_name = server_name
                                 result.server_source = config_path
                             config_results.extend(results)
+                            self._snapshot_config_instructions(
+                                collected_instructions, server_name, config_path
+                            )
                         except (
                             ConnectionError,
                             asyncio.TimeoutError,
@@ -2841,6 +3077,9 @@ class Scanner:
                         ) as e:
                             logger.warning(
                                 f"Failed to connect to server '{server_name}': {e}"
+                            )
+                            self._snapshot_config_instructions(
+                                collected_instructions, server_name, config_path
                             )
                             logger.debug(f"Continuing with remaining servers...")
                             continue
@@ -2853,11 +3092,15 @@ class Scanner:
                     logger.error(
                         f"Unexpected error scanning server '{server_name}' from {config_path}: {e}"
                     )
+                    self._snapshot_config_instructions(
+                        collected_instructions, server_name, config_path
+                    )
                     logger.debug(f"Continuing with remaining servers...")
                     continue
 
             all_results[config_path] = config_results
 
+        self._publish_config_instructions(collected_instructions)
         return all_results
 
     async def scan_mcp_config_file(
@@ -2879,7 +3122,11 @@ class Scanner:
                     Pass ``open(os.devnull, "w")`` to suppress server stderr.
 
         Returns:
-            List[ToolScanResult]: The results of scanning all servers in the config file.
+            List[ToolScanResult]: Tools from every server in the file.
+            Instructions stay off this list. Each server whose instructions
+            are unsafe, incomplete, or audited is on
+            ``scanner.instructions_results``. ``scanner.instructions_result``
+            is the last of those, including when a later server is clean.
         """
         # Default to all analyzers if none specified
         if analyzers is None:
@@ -2896,9 +3143,13 @@ class Scanner:
 
         servers = config_scanner.extract_servers(config)
         all_results = []
+        collected_instructions: List[InstructionsScanResult] = []
+        self._pending_tool_scan_errors = []
 
         for server_name, server_config in servers.items():
             logger.debug(f"Scanning server '{server_name}' from {config_path}")
+            self.instructions_result = None
+            self.tool_scan_error = None
 
             try:
                 if isinstance(server_config, StdioServer):
@@ -2923,6 +3174,9 @@ class Scanner:
                             result.server_name = server_name
                             result.server_source = config_path
                         all_results.extend(results)
+                        self._snapshot_config_instructions(
+                            collected_instructions, server_name, config_path
+                        )
                     except (
                         ConnectionError,
                         asyncio.TimeoutError,
@@ -2930,6 +3184,9 @@ class Scanner:
                     ) as e:
                         logger.warning(
                             f"Failed to connect to server '{server_name}': {e}"
+                        )
+                        self._snapshot_config_instructions(
+                            collected_instructions, server_name, config_path
                         )
                         logger.debug(f"Continuing with remaining servers...")
                         continue
@@ -2944,6 +3201,9 @@ class Scanner:
                             result.server_name = server_name
                             result.server_source = config_path
                         all_results.extend(results)
+                        self._snapshot_config_instructions(
+                            collected_instructions, server_name, config_path
+                        )
                     except (
                         ConnectionError,
                         asyncio.TimeoutError,
@@ -2951,6 +3211,9 @@ class Scanner:
                     ) as e:
                         logger.warning(
                             f"Failed to connect to server '{server_name}': {e}"
+                        )
+                        self._snapshot_config_instructions(
+                            collected_instructions, server_name, config_path
                         )
                         logger.debug(f"Continuing with remaining servers...")
                         continue
@@ -2963,9 +3226,13 @@ class Scanner:
                 logger.error(
                     f"Unexpected error scanning server '{server_name}' from {config_path}: {e}"
                 )
+                self._snapshot_config_instructions(
+                    collected_instructions, server_name, config_path
+                )
                 logger.debug(f"Continuing with remaining servers...")
                 continue
 
+        self._publish_config_instructions(collected_instructions)
         return all_results
 
     async def scan_remote_server_prompts(
