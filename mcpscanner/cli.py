@@ -44,6 +44,7 @@ from mcpscanner.utils.logging_config import get_logger
 
 from mcpscanner import Config, Scanner
 from mcpscanner.core.models import AnalyzerEnum
+from mcpscanner.core.result import append_unique_taxonomy
 from mcpscanner.core.report_generator import (
     OutputFormat,
     ReportGenerator,
@@ -208,6 +209,32 @@ def _create_auth_with_headers(
         return Auth.custom(custom_headers)
 
 
+_TAXONOMY_DETAIL_KEYS = (
+    "aitech",
+    "aitech_name",
+    "aisubtech",
+    "aisubtech_name",
+    "taxonomy_description",
+    "mitigation",
+)
+
+
+def _taxonomy_from_details(details: Any) -> Dict[str, Any]:
+    """Copy the taxonomy fields a finding stored on its details.
+
+    Analyzers record the description as ``taxonomy_description``. Reports
+    read ``description``.
+    """
+    if not isinstance(details, dict):
+        return {}
+    taxonomy: Dict[str, Any] = {}
+    for key in _TAXONOMY_DETAIL_KEYS:
+        if key in details:
+            name = "description" if key == "taxonomy_description" else key
+            taxonomy[name] = details[key]
+    return taxonomy
+
+
 def _package_scan_to_tool_results(
     *,
     scan_results: dict,
@@ -237,23 +264,24 @@ def _package_scan_to_tool_results(
     out: list = []
     for finding in scan_results.get("findings", []):
         analyzer_name = (finding.get("analyzer", "unknown") or "unknown") + "_analyzer"
+        details = finding.get("details") or {}
+        analyzer_finding = {
+            "severity": finding.get("severity", "UNKNOWN"),
+            "threat_summary": finding.get("summary", ""),
+            "threat_names": [finding.get("threat_category", "UNKNOWN")],
+            "total_findings": 1,
+            "mcp_taxonomies": [],
+        }
+        taxonomy = _taxonomy_from_details(details)
+        if taxonomy:
+            analyzer_finding["mcp_taxonomies"].append(taxonomy)
         out.append(
             {
-                "tool_name": (
-                    (finding.get("details") or {}).get("function_name", pkg_spec)
-                ),
+                "tool_name": details.get("function_name", pkg_spec),
                 "tool_description": finding.get("summary", ""),
                 "status": "completed",
                 "is_safe": False,
-                "findings": {
-                    analyzer_name: {
-                        "severity": finding.get("severity", "UNKNOWN"),
-                        "threat_summary": finding.get("summary", ""),
-                        "threat_names": [finding.get("threat_category", "UNKNOWN")],
-                        "total_findings": 1,
-                        "mcp_taxonomies": [],
-                    }
-                },
+                "findings": {analyzer_name: analyzer_finding},
             }
         )
     if not out:
@@ -433,17 +461,8 @@ def _build_behavioral_results(
             mcp_taxonomies: List[Dict[str, Any]] = []
             for finding in cli_findings:
                 taxonomy = getattr(finding, "mcp_taxonomy", None)
-                if not taxonomy:
-                    continue
-                taxonomy_key = (
-                    taxonomy.get("aitech"),
-                    taxonomy.get("aisubtech"),
-                )
-                existing_keys = [
-                    (t.get("aitech"), t.get("aisubtech")) for t in mcp_taxonomies
-                ]
-                if taxonomy_key not in existing_keys:
-                    mcp_taxonomies.append(taxonomy)
+                if taxonomy:
+                    append_unique_taxonomy(mcp_taxonomies, taxonomy)
 
             threat_vuln_classification = _infer_behavioral_threat_classification(
                 func_findings, max_severity
@@ -670,6 +689,68 @@ def _severity_style(severity: str) -> str:
     return _SEVERITY_STYLES.get(str(severity).upper(), "bold")
 
 
+def _finding_count(findings: Any) -> int:
+    """Count findings whether they are a list or an analyzer-keyed dict."""
+    if isinstance(findings, dict):
+        return sum(
+            data.get("total_findings", 0)
+            for data in findings.values()
+            if isinstance(data, dict)
+        )
+    if isinstance(findings, list):
+        return len(findings)
+    return 0
+
+
+def _iter_display_findings(findings: Any) -> List[Dict[str, Any]]:
+    """Normalize findings for the prompt, resource, and instructions views.
+
+    ``results_to_json`` stores findings as a dict keyed by analyzer.
+    Older callers pass a list of finding dicts. Both shapes are accepted.
+    """
+    if isinstance(findings, dict):
+        records = []
+        for analyzer_name, data in findings.items():
+            if not isinstance(data, dict):
+                continue
+            if data.get("total_findings", 0) <= 0 and not _taxonomies_for_display(
+                data
+            ):
+                continue
+            records.append(
+                {
+                    "summary": data.get("threat_summary", "No summary"),
+                    "severity": data.get("severity", "Unknown"),
+                    "analyzer": str(analyzer_name).replace("_analyzer", "").upper(),
+                    "details": {"primary_threats": data.get("threat_names") or []},
+                    "mcp_taxonomies": data.get("mcp_taxonomies") or [],
+                    "mcp_taxonomy": data.get("mcp_taxonomy"),
+                }
+            )
+        return records
+    if isinstance(findings, list):
+        return [item for item in findings if isinstance(item, dict)]
+    return []
+
+
+def _taxonomies_for_display(analyzer_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return every distinct taxonomy, not the combined single object.
+
+    ``mcp_taxonomy`` repeats those actions in one string when several
+    findings share a sub-technique. Prefer the list so each action is
+    printed once.
+    """
+    plural = analyzer_data.get("mcp_taxonomies") or []
+    if isinstance(plural, list):
+        taxonomies = [item for item in plural if isinstance(item, dict)]
+        if taxonomies:
+            return taxonomies
+    single = analyzer_data.get("mcp_taxonomy")
+    if isinstance(single, dict):
+        return [single]
+    return []
+
+
 def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
     """
     Display the scan results in a readable format.
@@ -785,8 +866,7 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                             console.print(f"      Threats: {threat_display}")
 
                         # Display MCP Taxonomy if available
-                        mcp_taxonomy = analyzer_data.get("mcp_taxonomy")
-                        if mcp_taxonomy:
+                        for mcp_taxonomy in _taxonomies_for_display(analyzer_data):
                             aitech = mcp_taxonomy.get("aitech")
                             aitech_name = mcp_taxonomy.get("aitech_name")
                             aisubtech = mcp_taxonomy.get("aisubtech")
@@ -807,10 +887,48 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                                 console.print(
                                     f"      Description: {escape(str(description))}"
                                 )
+                            mitigation = mcp_taxonomy.get("mitigation")
+                            if mitigation:
+                                console.print(
+                                    f"      Mitigation: {escape(str(mitigation))}"
+                                )
 
                         console.print()
                         finding_num += 1
             console.print()
+
+
+def _display_content_scan_results(
+    cmd: str,
+    results: List[Dict[str, Any]],
+    server_label: str,
+    output_format: str,
+) -> bool:
+    """Show prompt, resource, and instruction scans.
+
+    ``--format detailed`` uses the detailed view, which includes each
+    mitigation. Summary and the other short formats stay unchanged.
+    """
+    detailed = output_format == "detailed"
+    if cmd == "prompts":
+        if output_format == "table":
+            display_prompt_results_table(results, server_label)
+        else:
+            display_prompt_results(results, server_label, detailed=detailed)
+        return True
+    if cmd == "resources":
+        if output_format == "table":
+            display_resource_results_table(results, server_label)
+        else:
+            display_resource_results(results, server_label, detailed=detailed)
+        return True
+    if cmd == "instructions":
+        if output_format == "table":
+            display_instructions_results_table(results, server_label)
+        else:
+            display_instructions_results(results, server_label, detailed=detailed)
+        return True
+    return False
 
 
 def display_prompt_results_table(
@@ -955,10 +1073,11 @@ def display_prompt_results(
                 print(f"   Description: {desc[:80]}{'...' if len(desc) > 80 else ''}")
 
             findings = prompt.get("findings", [])
-            print(f"   Findings: {len(findings)}")
+            display_findings = _iter_display_findings(findings)
+            print(f"   Findings: {_finding_count(findings)}")
 
-            if detailed and findings:
-                for j, finding in enumerate(findings, 1):
+            if detailed and display_findings:
+                for j, finding in enumerate(display_findings, 1):
                     print(f"   {j}. {finding.get('summary', 'No summary')}")
                     print(f"      Severity: {finding.get('severity', 'Unknown')}")
                     print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
@@ -973,8 +1092,7 @@ def display_prompt_results(
                         )
                         print(f"      Threats: {threats}")
 
-                    mcp_taxonomy = finding.get("mcp_taxonomy")
-                    if mcp_taxonomy:
+                    for mcp_taxonomy in _taxonomies_for_display(finding):
                         aitech = mcp_taxonomy.get("aitech")
                         aitech_name = mcp_taxonomy.get("aitech_name")
                         aisubtech = mcp_taxonomy.get("aisubtech")
@@ -989,6 +1107,9 @@ def display_prompt_results(
                             )
                         if description:
                             print(f"      Description: {description}")
+                        mitigation = mcp_taxonomy.get("mitigation")
+                        if mitigation:
+                            print(f"      Mitigation: {mitigation}")
                     print()
             print()
 
@@ -1045,10 +1166,11 @@ def display_resource_results(
             print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
 
             findings = resource.get("findings", [])
-            print(f"   Findings: {len(findings)}")
+            display_findings = _iter_display_findings(findings)
+            print(f"   Findings: {_finding_count(findings)}")
 
-            if detailed and findings:
-                for j, finding in enumerate(findings, 1):
+            if detailed and display_findings:
+                for j, finding in enumerate(display_findings, 1):
                     print(f"   {j}. {finding.get('summary', 'No summary')}")
                     print(f"      Severity: {finding.get('severity', 'Unknown')}")
                     print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
@@ -1064,8 +1186,7 @@ def display_resource_results(
                         print(f"      Threats: {threats}")
 
                     # Display MCP Taxonomy if available
-                    mcp_taxonomy = finding.get("mcp_taxonomy")
-                    if mcp_taxonomy:
+                    for mcp_taxonomy in _taxonomies_for_display(finding):
                         aitech = mcp_taxonomy.get("aitech")
                         aitech_name = mcp_taxonomy.get("aitech_name")
                         aisubtech = mcp_taxonomy.get("aisubtech")
@@ -1080,6 +1201,9 @@ def display_resource_results(
                             )
                         if description:
                             print(f"      Description: {description}")
+                        mitigation = mcp_taxonomy.get("mitigation")
+                        if mitigation:
+                            print(f"      Mitigation: {mitigation}")
                     print()
             print()
 
@@ -1217,10 +1341,11 @@ def display_instructions_results(
                 print(f"   Instructions: {preview}")
 
             findings = instr.get("findings", [])
-            print(f"   Findings: {len(findings)}")
+            display_findings = _iter_display_findings(findings)
+            print(f"   Findings: {_finding_count(findings)}")
 
-            if detailed and findings:
-                for j, finding in enumerate(findings, 1):
+            if detailed and display_findings:
+                for j, finding in enumerate(display_findings, 1):
                     print(f"   {j}. {finding.get('summary', 'No summary')}")
                     print(f"      Severity: {finding.get('severity', 'Unknown')}")
                     print(f"      Analyzer: {finding.get('analyzer', 'Unknown')}")
@@ -1235,8 +1360,7 @@ def display_instructions_results(
                         )
                         print(f"      Threats: {threats}")
 
-                    mcp_taxonomy = finding.get("mcp_taxonomy")
-                    if mcp_taxonomy:
+                    for mcp_taxonomy in _taxonomies_for_display(finding):
                         aitech = mcp_taxonomy.get("aitech")
                         aitech_name = mcp_taxonomy.get("aitech_name")
                         aisubtech = mcp_taxonomy.get("aisubtech")
@@ -1251,6 +1375,9 @@ def display_instructions_results(
                             )
                         if description:
                             print(f"      Description: {description}")
+                        mitigation = mcp_taxonomy.get("mitigation")
+                        if mitigation:
+                            print(f"      Mitigation: {mitigation}")
                     print()
             print()
 
@@ -2484,14 +2611,9 @@ async def main():
                         "total_findings": 1,
                         "mcp_taxonomies": [],
                     }
-                    # Add MCP taxonomy if available
-                    if finding.details:
-                        taxonomy = {}
-                        for key in ("aitech", "aitech_name", "aisubtech", "aisubtech_name", "taxonomy_description"):
-                            if key in finding.details:
-                                taxonomy[key.replace("taxonomy_description", "description")] = finding.details[key]
-                        if taxonomy:
-                            analyzer_finding["mcp_taxonomies"].append(taxonomy)
+                    taxonomy = _taxonomy_from_details(finding.details)
+                    if taxonomy:
+                        analyzer_finding["mcp_taxonomies"].append(taxonomy)
 
                     results.append({
                         "tool_name": file_path,
@@ -2753,13 +2875,9 @@ async def main():
                         "total_findings": 1,
                         "mcp_taxonomies": [],
                     }
-                    if finding.details:
-                        taxonomy = {}
-                        for key in ("aitech", "aitech_name", "aisubtech", "aisubtech_name", "taxonomy_description"):
-                            if key in finding.details:
-                                taxonomy[key.replace("taxonomy_description", "description")] = finding.details[key]
-                        if taxonomy:
-                            analyzer_finding["mcp_taxonomies"].append(taxonomy)
+                    taxonomy = _taxonomy_from_details(finding.details)
+                    if taxonomy:
+                        analyzer_finding["mcp_taxonomies"].append(taxonomy)
 
                     aliases = finding.details.get("aliases", []) if finding.details else []
                     desc = finding.details.get("description", "") if finding.details else ""
@@ -2991,24 +3109,12 @@ async def main():
         elif args.scan_known_configs:
             server_label = "well-known-configs"
 
-        # Handle prompts, resources, and instructions differently
-        if hasattr(args, "cmd") and args.cmd == "prompts":
-            if args.format == "table":
-                display_prompt_results_table(results, server_label)
-            else:
-                display_prompt_results(results, server_label, detailed=False)
-            return
-        elif hasattr(args, "cmd") and args.cmd == "resources":
-            if args.format == "table":
-                display_resource_results_table(results, server_label)
-            else:
-                display_resource_results(results, server_label, detailed=False)
-            return
-        elif hasattr(args, "cmd") and args.cmd == "instructions":
-            if args.format == "table":
-                display_instructions_results_table(results, server_label)
-            else:
-                display_instructions_results(results, server_label, detailed=False)
+        # Handle prompts, resources, and instructions differently.
+        # --format detailed uses the same view as --detailed. Summary stays
+        # the short listing.
+        if _display_content_scan_results(
+            getattr(args, "cmd", ""), results, server_label, args.format
+        ):
             return
 
         is_vuln_pkg_scan = hasattr(args, "cmd") and args.cmd == "vulnerable-package"

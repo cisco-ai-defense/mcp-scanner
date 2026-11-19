@@ -142,6 +142,9 @@ class SecurityFinding:
 
             # Look up in threat mapping
             mapping = ThreatMapping.get_threat_mapping(analyzer_key, threat_name)
+            mitigation = mapping.get("mitigation")
+            if mitigation and "mitigation" not in self.details:
+                self.details["mitigation"] = mitigation
             return {
                 "scanner_category": mapping.get("scanner_category"),
                 "aitech": mapping.get("aitech"),
@@ -149,6 +152,7 @@ class SecurityFinding:
                 "aisubtech": mapping.get("aisubtech"),
                 "aisubtech_name": mapping.get("aisubtech_name"),
                 "description": mapping.get("description"),
+                "mitigation": mitigation,
             }
         except (ValueError, KeyError, AttributeError) as e:
             # If threat not found in mapping, return None

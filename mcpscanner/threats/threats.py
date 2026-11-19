@@ -517,7 +517,8 @@ class ThreatMapping:
             threat_name: The threat name from the analyzer
 
         Returns:
-            Dictionary containing the threat mapping information including severity
+            Dictionary containing the threat mapping information, including
+            severity and the mitigation for that sub-technique
 
         Raises:
             ValueError: If analyzer or threat_name is not found
@@ -545,6 +546,188 @@ class ThreatMapping:
             )
 
         return threats[threat_upper]
+
+
+# =============================================================================
+# MITIGATIONS
+# =============================================================================
+#
+# One mitigation per MCP taxonomy sub-technique. The catalog ids and the
+# defensive action for each follow the MCP Scanner threat-detection catalog
+# in the explainability knowledge base. Sub-techniques that the catalog does
+# not list still get a mitigation in the same style, including the scanner's
+# tool-shadowing id (AISubtech-12.1.5) alongside the catalog id
+# (AISubtech-12.1.4).
+
+
+_DESCRIPTION_MISMATCH_MITIGATION = (
+    "Add the missing description or docstring so the documented purpose "
+    "matches the implementation. No further control is required when the "
+    "code itself stays within that purpose."
+)
+
+
+_TOOL_SHADOWING_MITIGATION = (
+    "Pin tool identity before agents can call a tool. Reject registrations "
+    "that claim to replace or intercept a known tool, and review duplicate "
+    "or similar names before they enter the registry."
+)
+
+
+THREAT_MITIGATIONS: Dict[str, str] = {
+    "AISubtech-1.1.1": (
+        "Treat tool names, descriptions, schemas, prompts, and resources as "
+        "untrusted data. Do not let that metadata override the system prompt, "
+        "and keep parameters that carry user text as data rather than "
+        "instructions."
+    ),
+    "AISubtech-1.2.1": (
+        "Treat content fetched from files, web pages, and other tools as "
+        "data. Do not merge it into the system prompt or follow instructions "
+        "found inside it."
+    ),
+    "AISubtech-1.3.2": (
+        "Keep tool chaining and prompt composition on the documented purpose. "
+        "Reject control-flow templates that let caller text replace the goal."
+    ),
+    "AISubtech-3.1.1": (
+        "Constrain generation to the tool's stated purpose, and apply output "
+        "guardrails that refuse dangerous or illegal content."
+    ),
+    "AISubtech-4.1.1": (
+        "Cap the input size and the context sent to the model, and reject "
+        "payloads that try to exhaust the context window. Enforce rate "
+        "limits and quotas on repeated calls."
+    ),
+    "AISubtech-8.2.1": (
+        "Minimize what the tool returns. Redact secrets, credentials, and "
+        "private data from outputs, and do not echo configuration or "
+        "environment contents."
+    ),
+    "AISubtech-8.2.3": (
+        "Allowlist outbound destinations, and do not let a tool read secrets "
+        "or private files that its documented purpose does not need. Cloud "
+        "and authentication tools may handle credentials only for the "
+        "service they document."
+    ),
+    "AISubtech-9.1.1": (
+        "Do not pass tool parameters into eval, exec, compile, or unsafe "
+        "deserialization. Use a safe parser such as json.loads or "
+        "ast.literal_eval, and sandbox any interpreter the tool documents."
+    ),
+    "AISubtech-9.1.2": (
+        "Scope filesystem, process, and environment access to the paths and "
+        "variables the tool documents. Do not read secret files or "
+        "credential environment variables for an unrelated purpose."
+    ),
+    "AISubtech-9.1.3": (
+        "Allowlist outbound URLs. Reject user-controlled targets that point "
+        "at internal addresses, cloud metadata, or non-HTTP schemes unless "
+        "the tool documents that access."
+    ),
+    "AISubtech-9.1.4": (
+        "Build shell commands as argument lists without a shell, and use "
+        "parameterized SQL. Allowlist input before it reaches a command, "
+        "query, or expression sink."
+    ),
+    "AISubtech-9.1.5": (
+        "Render static templates with autoescape, and pass user input only "
+        "as escaped data values, never as template syntax."
+    ),
+    "AISubtech-9.2.2": (
+        "Remove hidden triggers, encoded payloads, and persistence. Keep "
+        "conditional behavior limited to documented feature flags and "
+        "configuration."
+    ),
+    "AISubtech-9.3.1": (
+        "Pin dependencies from trusted registries, verify hashes, and reject "
+        "unexpected packages or bundled binaries before agents can use them."
+    ),
+    "AISubtech-11.1.2": (
+        "Keep tool operations inside the intended sandbox. Do not use "
+        "namespace escape, ctypes privilege changes, or process spawning "
+        "that breaks isolation."
+    ),
+    "AISubtech-12.1.2": (
+        "Make the implementation match the documented purpose. Remove hidden "
+        "instructions, trigger-gated behavior, and output that hides "
+        "privileged data."
+    ),
+    "AISubtech-12.1.3": (
+        "Canonicalize paths and confine file and browser actions to an "
+        "application directory. Do not write to startup files, SSH keys, or "
+        "other system locations from user-controlled paths."
+    ),
+    "AISubtech-12.1.4": _TOOL_SHADOWING_MITIGATION,
+    "AISubtech-12.1.5": _TOOL_SHADOWING_MITIGATION,
+    "AISubtech-13.1.1": (
+        "Set timeouts, rate limits, and size caps. Require recursive and "
+        "loop logic to have a termination condition and a bound on input "
+        "size."
+    ),
+    "AISubtech-15.1.8": (
+        "Apply content guardrails and refuse requests to generate "
+        "harassment or targeted abuse. Discussion of the topic that does "
+        "not produce abusive output can stay."
+    ),
+    "AISubtech-15.1.9": (
+        "Refuse generation of slurs or targeted hate. Analysis of hate "
+        "speech as a subject, without producing it, can stay."
+    ),
+    "AISubtech-15.1.11": (
+        "Refuse generation of profane or vulgar output. Discussion of the "
+        "words as a subject can stay."
+    ),
+    "AISubtech-15.1.14": (
+        "Refuse sexual, exploitative, or non-consensual content. Clinical "
+        "or policy discussion that does not generate explicit material can "
+        "stay."
+    ),
+    "AISubtech-15.1.15": (
+        "Refuse content written to inflame hostility between groups. "
+        "Balanced reporting of a contested topic can stay."
+    ),
+    "AISubtech-15.1.17": (
+        "Refuse actionable instructions for violence, weapons, or attacks. "
+        "Discussion of prevention and safety can stay."
+    ),
+}
+
+
+def _attach_threat_mitigations() -> None:
+    """Copy each sub-technique mitigation onto the analyzer threat tables."""
+    tables = (
+        ThreatMapping.LLM_THREATS,
+        ThreatMapping.YARA_THREATS,
+        ThreatMapping.BEHAVIORAL_THREATS,
+        ThreatMapping.VIRUSTOTAL_THREATS,
+        ThreatMapping.VULNERABLE_PACKAGE_THREATS,
+        ThreatMapping.AI_DEFENSE_THREATS,
+        ThreatMapping.PROMPT_DEFENSE_THREATS,
+    )
+    missing = []
+    for table in tables:
+        for name, info in table.items():
+            code = info.get("aisubtech")
+            text = THREAT_MITIGATIONS.get(code or "")
+            if not text:
+                missing.append(f"{name} ({code})")
+                continue
+            info["mitigation"] = text
+    # This INFO finding shares the tool-poisoning sub-technique, but it is
+    # a documentation mismatch. Keep its mitigation specific to that case.
+    mismatch = ThreatMapping.BEHAVIORAL_THREATS.get(
+        "GENERAL DESCRIPTION-CODE MISMATCH"
+    )
+    if mismatch is not None:
+        mismatch["mitigation"] = _DESCRIPTION_MISMATCH_MITIGATION
+    if missing:
+        raise RuntimeError(
+            "Threat mappings missing a mitigation: " + ", ".join(missing)
+        )
+
+
+_attach_threat_mitigations()
 
 
 # =============================================================================
