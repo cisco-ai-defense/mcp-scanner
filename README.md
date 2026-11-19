@@ -272,6 +272,9 @@ async def main():
     # Print tool results. Instructions are not a tool.
     for result in tool_results:
         print(f"Tool: {result.tool_name}, Safe: {result.is_safe}")
+    # None means the scan was clean, the server sent no instructions, or
+    # no applicable analyzer ran. It is not a stored clean verdict.
+    # scan_remote_server_tool does not scan instructions.
     instructions = scanner.instructions_result
     if instructions is not None:
         print(

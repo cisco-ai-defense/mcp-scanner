@@ -201,10 +201,12 @@ class Scanner:
             MetaAnalyzer(config) if (config.llm_provider_api_key or is_bedrock) else None
         )
         self._custom_analyzers = custom_analyzers or []
-        # Latest server-instruction scan. Kept off the tool list so callers
-        # that read ``tool_name`` keep working. Prompt and resource scans do
-        # not fill this; a registration that calls all three would otherwise
-        # report the same instructions three times.
+        # Latest reportable instruction scan from an all-tools remote or
+        # stdio scan. None means nothing was retained: the instructions were
+        # clean, the server sent none, or no applicable analyzer ran. None
+        # is not a stored clean verdict. Single-tool scans do not fill this.
+        # Prompt and resource scans do not either; a registration that calls
+        # all three would otherwise report the same instructions three times.
         self.instructions_result: Optional[InstructionsScanResult] = None
         self.instructions_results: List[InstructionsScanResult] = []
         # Set when tools/list fails after an instruction result was recorded.
@@ -2610,11 +2612,14 @@ class Scanner:
 
         Returns:
             List[ToolScanResult]: One result per advertised tool. Server
-            instructions are not part of this list. When they produce
-            findings, an analyzer error, or a meta-analysis audit, read
-            ``scanner.instructions_result``. A tool-analysis failure returns
-            the tools that finished and an incomplete result for the tool
-            that failed. A tools/list failure after that result is recorded
+            instructions are not part of this list. This all-tools scan
+            analyzes them. ``scan_remote_server_tool`` does not. When they
+            produce findings, an analyzer error, or a meta-analysis audit,
+            read ``scanner.instructions_result``. That attribute is None
+            when the scan is clean, the server sent no instructions, or no
+            applicable analyzer ran. None is not a stored clean verdict.
+            A tool-analysis failure returns the tools that finished and an
+            incomplete result for the tool that failed. A tools/list failure after that result is recorded
             returns no tools, leaves the attribute set, and sets
             ``scanner.tool_scan_error``. The report shows that tool list as
             incomplete. A server that exposes no tools returns an empty list
@@ -2839,7 +2844,12 @@ class Scanner:
             errlog: Optional file-like object for stderr redirection
 
         Returns:
-            List[ToolScanResult]: List of tool scan results
+            List[ToolScanResult]: One result per advertised tool. This
+            all-tools scan analyzes server instructions.
+            ``scan_stdio_server_tool`` does not. A reportable result is
+            ``scanner.instructions_result``. That attribute is None when
+            the scan is clean, the server sent no instructions, or no
+            applicable analyzer ran. None is not a stored clean verdict.
         """
         if timeout is None:
             timeout = self._config.stdio_timeout

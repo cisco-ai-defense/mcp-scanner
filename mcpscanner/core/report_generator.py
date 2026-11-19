@@ -839,7 +839,15 @@ class ReportGenerator:
                     severity = data.get("severity", "SAFE")
                     threat_summary = data.get("threat_summary", "N/A")
                     audit_line = data.get("meta_audit")
-                    if audit_line and data.get("total_findings", 0) == 0:
+                    # A failed or unknown analyzer keeps its own summary.
+                    # The audit-only line is for a completed safe entry.
+                    audit_only = (
+                        audit_line
+                        and data.get("total_findings", 0) == 0
+                        and data.get("status") not in {"error", "partial"}
+                        and data.get("severity") != "UNKNOWN"
+                    )
+                    if audit_only:
                         output.append(
                             f"  • {tool_name} ({severity}): {audit_line}"
                         )

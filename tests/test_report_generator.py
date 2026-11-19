@@ -315,6 +315,42 @@ class TestReportGenerator:
         assert "Meta-analysis filtered" not in clean_output
         assert "meta-analysis audit" not in clean_output
 
+    def test_by_analyzer_keeps_failure_summary_beside_meta_audit(self):
+        """An analyzer error stays visible when the row also has an audit."""
+        row = {
+            "item_type": "instructions",
+            "status": "partial",
+            "is_safe": None,
+            "findings": {
+                "yara_analyzer": {
+                    "severity": "SAFE",
+                    "total_findings": 0,
+                    "threat_summary": "No threats detected",
+                },
+                "llm_analyzer": {
+                    "severity": "UNKNOWN",
+                    "total_findings": 0,
+                    "status": "error",
+                    "threat_summary": "Analysis failed",
+                },
+            },
+            "meta_analysis": {
+                "filtered_count": 1,
+                "filtered_findings": [{"analyzer": "YARA"}],
+            },
+        }
+        output = ReportGenerator(
+            {"server_url": "http://test-server.com", "scan_results": [row]}
+        ).format_output(OutputFormat.BY_ANALYZER)
+
+        assert "instructions (SAFE): Meta-analysis filtered 1 finding(s)" in output
+        llm_section = output.split("LLM ANALYZER", maxsplit=1)[1]
+        assert "instructions (UNKNOWN): Analysis failed" in llm_section
+        assert "Meta-analysis filtered 1 finding(s)" in llm_section
+        assert llm_section.index("Analysis failed") < llm_section.index(
+            "Meta-analysis filtered"
+        )
+
     def test_report_generator_format_output_raw(self):
         """Test formatting output as raw."""
         findings = [
