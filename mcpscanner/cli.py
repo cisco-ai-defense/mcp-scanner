@@ -92,17 +92,64 @@ console = Console(soft_wrap=True, emoji=False, highlight=False)
 error_console = Console(stderr=True, soft_wrap=True, emoji=False, highlight=False)
 
 
+def _ensure_encodable_stdio() -> None:
+    """Keep report output from crashing on a narrow stdout/stderr encoding.
+
+    When stdout is redirected to a file or pipe (``> report.txt``, ``| tee``,
+    a CI log collector), Python encodes it with the locale code page instead
+    of the console's UTF-8 -- e.g. cp1252 on English Windows or cp950 on
+    Traditional Chinese Windows. The report formats use emoji severity
+    markers that those code pages cannot represent, so ``print()`` raised
+    ``UnicodeEncodeError`` after the scan had already finished.
+
+    Only streams that are not UTF-8 and whose error handler raises on
+    unencodable characters (``strict``, or ``surrogateescape`` which Python
+    may pick for redirected stdio) are touched; their encoding is kept, and
+    characters it cannot represent are written as ``?`` instead of aborting
+    the run.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        encoding = (getattr(stream, "encoding", None) or "").lower()
+        if encoding.replace("-", "").replace("_", "") in ("utf8", "utf8sig"):
+            continue
+        errors = getattr(stream, "errors", None) or "strict"
+        if errors not in ("strict", "surrogateescape", "surrogatepass"):
+            continue
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            # Stream already closed or not reconfigurable; leave it as is.
+            pass
+
+
 def _get_endpoint_from_env() -> str:
     return os.environ.get("MCP_SCANNER_ENDPOINT", "")
+
+
+def _status_marker(icon: str, text: str) -> str:
+    """Return ``icon``, or the ASCII ``text`` when stdout cannot encode it.
+
+    On a narrow stdout (cp1252, cp950, ...) _ensure_encodable_stdio() writes
+    every unencodable icon as ``?``, so different statuses would look alike.
+    """
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        icon.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return text
+    return icon
 
 
 def _safety_status_icon(is_safe: Optional[bool]) -> str:
     """Render safe, unsafe, and unknown outcomes distinctly."""
     if is_safe is True:
-        return "✅"
+        return _status_marker("✅", "[SAFE]")
     if is_safe is False:
-        return "⚠️"
-    return "❌"
+        return _status_marker("⚠️", "[UNSAFE]")
+    return _status_marker("❌", "[UNKNOWN]")
 
 
 def _parse_custom_headers(header_list: Optional[List[str]]) -> Dict[str, str]:
@@ -830,9 +877,9 @@ def display_resource_results_table(
         if status in {"completed", "partial"}:
             status_icon = _safety_status_icon(result.get("is_safe"))
         elif status == "skipped":
-            status_icon = "⏭️"
+            status_icon = _status_marker("⏭️", "[SKIPPED]")
         else:
-            status_icon = "❌"
+            status_icon = _status_marker("❌", "[FAILED]")
 
         resource_name = result.get("resource_name", "Unknown")
         uri = result.get("resource_uri", "N/A")
@@ -1222,6 +1269,24 @@ def display_instructions_results(
                 )
                 print(f"   Instructions: {preview}")
             print()
+
+
+def _static_scan_label(args: argparse.Namespace) -> str:
+    """Report label for ``static`` scans: the files that were scanned.
+
+    ``static`` reads local JSON files and never contacts a server, so the
+    global ``--server-url`` default must not be shown as the scan target.
+    """
+    files = [
+        path
+        for path in (
+            getattr(args, "tools", None),
+            getattr(args, "prompts", None),
+            getattr(args, "resources", None),
+        )
+        if path
+    ]
+    return f"static:{','.join(files)}"
 
 
 async def main():
@@ -2910,6 +2975,8 @@ async def main():
             if getattr(args, "version", None):
                 pkg_spec = f"{args.package}@{args.version}"
             server_label = f"npm:{pkg_spec}"
+        elif hasattr(args, "cmd") and args.cmd == "static":
+            server_label = _static_scan_label(args)
         elif AnalyzerEnum.BEHAVIORAL in selected_analyzers and args.source_path:
             server_label = f"behavioral:{args.source_path}"
         elif args.stdio_command:
@@ -3043,6 +3110,8 @@ async def main():
             server_label = f"npm:{pkg_spec}"
         elif hasattr(args, "cmd") and args.cmd == "vulnerable-package":
             server_label = f"vulnerable-package:{args.scan_path}"
+        elif hasattr(args, "cmd") and args.cmd == "static":
+            server_label = _static_scan_label(args)
 
         # Handle prompts, resources, and instructions with detailed view
         if hasattr(args, "cmd") and args.cmd == "prompts":
@@ -3069,6 +3138,8 @@ def cli_entry_point():
     import sys
     import logging
     import warnings
+
+    _ensure_encodable_stdio()
 
     # Suppress warnings from MCP library cleanup issues
     warnings.filterwarnings(
@@ -3109,4 +3180,5 @@ def cli_entry_point():
 
 
 if __name__ == "__main__":
+    _ensure_encodable_stdio()
     asyncio.run(main())
