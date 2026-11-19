@@ -768,22 +768,38 @@ class ReportGenerator:
             output.append("No results match the specified filters.\n")
             return "\n".join(output)
 
-        # Group by analyzer
+        # Group by analyzer. A meta-only row has no active findings, so
+        # copy its audit onto the analyzer entry or it disappears below.
         analyzer_results = {}
         for result in results:
             findings = result.get("findings", {})
+            audit = _meta_audit_text(result)
+            if audit and not findings:
+                findings = {
+                    "meta_analyzer": {
+                        "severity": "SAFE",
+                        "total_findings": 0,
+                        "threat_summary": audit,
+                        "meta_audit": audit,
+                    }
+                }
             for analyzer, data in findings.items():
                 if analyzer_filter and analyzer_filter != analyzer:
+                    continue
+                if not isinstance(data, dict):
                     continue
 
                 if analyzer not in analyzer_results:
                     analyzer_results[analyzer] = []
 
+                entry = dict(data)
+                if audit:
+                    entry["meta_audit"] = audit
                 analyzer_results[analyzer].append(
                     {
                         "tool_name": _report_item_name(result),
                         "item_type": result.get("item_type", "tool"),
-                        "data": data,
+                        "data": entry,
                     }
                 )
 
@@ -802,22 +818,37 @@ class ReportGenerator:
 
             output.append(f"Severity breakdown: {dict(severity_counts)}")
 
-            # Show failed analyzer invocations even without findings.
+            # Show failures, active findings, and meta-only audits.
+            # A genuinely clean entry has none of these and stays hidden.
             tools_to_show = [
                 t
                 for t in tools
                 if t["data"].get("total_findings", 0) > 0
                 or t["data"].get("status") in {"error", "partial"}
                 or t["data"].get("severity") == "UNKNOWN"
+                or t["data"].get("meta_audit")
             ]
             if tools_to_show:
-                output.append("Tools with findings or incomplete analysis:")
+                output.append(
+                    "Items with findings, incomplete analysis, "
+                    "or a meta-analysis audit:"
+                )
                 for tool in tools_to_show:
                     tool_name = tool["tool_name"]
                     data = tool["data"]
                     severity = data.get("severity", "SAFE")
                     threat_summary = data.get("threat_summary", "N/A")
-                    output.append(f"  • {tool_name} ({severity}): {threat_summary}")
+                    audit_line = data.get("meta_audit")
+                    if audit_line and data.get("total_findings", 0) == 0:
+                        output.append(
+                            f"  • {tool_name} ({severity}): {audit_line}"
+                        )
+                    else:
+                        output.append(
+                            f"  • {tool_name} ({severity}): {threat_summary}"
+                        )
+                        if audit_line:
+                            output.append(f"    {audit_line}")
 
             output.append("")
 

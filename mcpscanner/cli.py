@@ -691,13 +691,24 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
 
     console.print(f"Server URL: {escape(str(results.get('server_url', 'N/A')))}")
 
-    # Display scan results
-    scan_results = results.get("scan_results", [])
-    console.print(f"Tools scanned: {len(scan_results)}")
+    # Instructions and a failed tool list are not advertised tools. The
+    # type-aware formatter prints those rows after the tool counts.
+    tool_rows = []
+    extra_rows = []
+    for row in results.get("scan_results", []):
+        if isinstance(row, dict) and row.get("item_type") in (
+            "instructions",
+            "tool_scan",
+        ):
+            extra_rows.append(row)
+        else:
+            tool_rows.append(row)
 
-    safe_tools = [tool for tool in scan_results if tool.get("is_safe") is True]
-    unsafe_tools = [tool for tool in scan_results if tool.get("is_safe") is False]
-    incomplete_tools = [tool for tool in scan_results if tool.get("is_safe") is None]
+    console.print(f"Tools scanned: {len(tool_rows)}")
+
+    safe_tools = [tool for tool in tool_rows if tool.get("is_safe") is True]
+    unsafe_tools = [tool for tool in tool_rows if tool.get("is_safe") is False]
+    incomplete_tools = [tool for tool in tool_rows if tool.get("is_safe") is None]
 
     console.print(f"[green]Safe tools: {len(safe_tools)}[/green]")
     console.print(
@@ -818,6 +829,15 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                         console.print()
                         finding_num += 1
             console.print()
+
+    if extra_rows:
+        extra = ReportGenerator(
+            {
+                "server_url": results.get("server_url", "N/A"),
+                "scan_results": extra_rows,
+            }
+        )
+        print(extra.format_output(format_type=OutputFormat.DETAILED))
 
 
 def _partition_instruction_rows(

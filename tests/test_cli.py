@@ -764,6 +764,66 @@ class TestDisplayResults:
             ]
             assert tables == []
 
+    def test_display_results_separates_instructions_and_tool_list(self, capsys):
+        """--detailed must not count instructions or a failed tool list as tools."""
+        results = {
+            "server_url": "https://test.com",
+            "scan_results": [
+                {
+                    "item_type": "tool",
+                    "tool_name": "read_file",
+                    "is_safe": True,
+                    "findings": {},
+                },
+                {
+                    "item_type": "instructions",
+                    "status": "completed",
+                    "is_safe": False,
+                    "findings": {
+                        "yara_analyzer": {
+                            "total_findings": 1,
+                            "severity": "HIGH",
+                            "threat_summary": "Poisoned discover instructions",
+                            "threat_names": ["prompt_injection"],
+                        }
+                    },
+                    "meta_analysis": {
+                        "filtered_count": 1,
+                        "filtered_findings": [],
+                    },
+                },
+                {
+                    "item_type": "tool_scan",
+                    "status": "failed",
+                    "is_safe": None,
+                    "findings": {},
+                    "analyzer_errors": [
+                        {
+                            "analyzer": "tools",
+                            "content_type": "tools/list",
+                            "message": "RuntimeError during tools/list",
+                        }
+                    ],
+                },
+            ],
+        }
+
+        display_results(results, detailed=True)
+        output = capsys.readouterr().out
+        tool_section, detailed = output.split(
+            "=== MCP Scanner Detailed Results ===", maxsplit=1
+        )
+
+        assert "Tools scanned: 1" in tool_section
+        assert "Safe tools: 1" in tool_section
+        assert "Unsafe tools: 0" in tool_section
+        assert "Unknown" not in tool_section
+        assert "Instructions 1: server instructions" in detailed
+        assert "Poisoned discover instructions" in detailed
+        assert "Meta-analysis filtered 1 finding(s)" in detailed
+        assert "Tool scan 2: tool list" in detailed
+        assert "Analyzer error: tools on tools/list" in detailed
+
 
 class TestStaticSubcommandCLI:
     """Test cases for the static subcommand CLI integration."""
@@ -903,8 +963,9 @@ class TestStaticSubcommandCLI:
 
             captured = capsys.readouterr()
             assert "MCP Scanner Results" in captured.out
-            # Static subcommand uses unified output format - prompts appear as scanned items
-            assert "Total tools scanned: 1" in captured.out
+            # Prompts are scanned items, not advertised tools.
+            assert "Total tools scanned: 0" in captured.out
+            assert "test_prompt (prompt)" in captured.out
             assert "Safe items: 1" in captured.out
 
     @pytest.mark.asyncio
@@ -964,8 +1025,9 @@ class TestStaticSubcommandCLI:
 
             captured = capsys.readouterr()
             assert "MCP Scanner Results" in captured.out
-            # Static subcommand uses unified output format - resources appear as scanned items
-            assert "Total tools scanned: 1" in captured.out
+            # Resources are scanned items, not advertised tools.
+            assert "Total tools scanned: 0" in captured.out
+            assert "test_resource (resource)" in captured.out
             assert "Safe items: 1" in captured.out
 
 
