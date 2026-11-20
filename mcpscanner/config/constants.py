@@ -130,6 +130,13 @@ class MCPScannerConstants:
     # Stdio server connection timeout
     DEFAULT_STDIO_TIMEOUT: int = int(os.getenv("MCP_SCANNER_STDIO_TIMEOUT", "60"))
 
+    # Resource MIME types read and analyzed when the caller does not choose.
+    DEFAULT_RESOURCE_MIME_TYPES: tuple = (
+        "text/plain",
+        "text/html",
+        "application/json",
+    )
+
     # LLM Prompt Configuration
     PROMPT_LENGTH_THRESHOLD: int = int(
         os.getenv("MCP_SCANNER_PROMPT_LENGTH_THRESHOLD", "75000")

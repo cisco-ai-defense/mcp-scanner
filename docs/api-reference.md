@@ -359,7 +359,7 @@ Scan a specific resource on an MCP server.
 - `server_url` (required): URL of the MCP server
 - `resource_uri` (required): URI of the resource to scan
 - `analyzers`: List of analyzers to use (API, LLM)
-- `allowed_mime_types`: List of MIME types to scan (default: ["text/plain"])
+- `allowed_mime_types`: List of MIME types to scan (default: ["text/plain", "text/html", "application/json"])
 - `auth`: Authentication configuration (optional)
 
 **Example:**
@@ -380,7 +380,7 @@ Scan all resources available on an MCP server.
 **Parameters:**
 - `server_url` (required): URL of the MCP server
 - `analyzers`: List of analyzers to use (API, LLM)
-- `allowed_mime_types`: List of MIME types to scan (default: ["text/plain"])
+- `allowed_mime_types`: List of MIME types to scan (default: ["text/plain", "text/html", "application/json"])
 - `auth`: Authentication configuration (optional)
 
 **Example:**
