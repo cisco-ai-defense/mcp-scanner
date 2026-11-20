@@ -123,6 +123,10 @@ def _enrich_function_context_from_supplemental(
             list(flow.get("reaches_calls") or []),
             list(sflow.get("reaches_calls") or []),
         )
+        flow["external_sinks"] = _merge_unique_preserve_order(
+            list(flow.get("external_sinks") or []),
+            list(sflow.get("external_sinks") or []),
+        )
 
     if supplemental.dataflow_summary:
         pri_summary = dict(primary.dataflow_summary or {})
@@ -844,6 +848,9 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
         file_path = context.get("file_path", "unknown")
         findings = []
         func_contexts = []
+        # Errored coverage is per file. A previous file's failed function
+        # must not mark a later file's same-named function inconclusive.
+        self.alignment_orchestrator.errored_function_names.clear()
 
         # Determine file type
         file_ext = Path(file_path).suffix.lower()
@@ -1153,6 +1160,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     "security_implications": analysis.get("security_implications"),
                     "confidence": analysis.get("confidence"),
                     "dataflow_evidence": analysis.get("dataflow_evidence"),
+                    "reachability_evidence": analysis.get("reachability_evidence"),
                     # Reachability vs intent. Distinct from
                     # threat_vulnerability_classification, which is the
                     # second-pass label and does not carry this value.

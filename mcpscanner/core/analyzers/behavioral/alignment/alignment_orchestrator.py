@@ -44,7 +44,11 @@ from .....utils.log_format import sanitize_log_value, truncate
 from ....static_analysis.context_extractor import FunctionContext
 from .alignment_prompt_builder import AlignmentPromptBuilder
 from .alignment_llm_client import AlignmentLLMClient
-from .alignment_response_validator import AlignmentResponseValidator, is_unanalysed
+from .alignment_response_validator import (
+    AlignmentResponseValidator,
+    apply_capability_risk_contract,
+    is_unanalysed,
+)
 from .threat_vulnerability_classifier import ThreatVulnerabilityClassifier
 
 
@@ -85,6 +89,28 @@ class AlignmentOrchestrator:
         self.errored_function_names: Set[str] = set()
 
         self.logger.debug("AlignmentOrchestrator initialized")
+
+    def _capability_risk_rejected(
+        self, result: Dict[str, Any], func_context: FunctionContext
+    ) -> bool:
+        """Reject CAPABILITY_RISK that the function's own flows do not support.
+
+        The function is recorded as errored so callers do not synthesize
+        a safe result for it.
+        """
+        if apply_capability_risk_contract(result, func_context):
+            return False
+        self.stats["skipped_invalid_response"] += 1
+        name = getattr(func_context, "name", None)
+        if name:
+            self.errored_function_names.add(name)
+        self.logger.warning(
+            "alignment capability_risk_unsupported function=%s "
+            "-- parameter-to-sink evidence is missing or does not match "
+            "deterministic flows; not treating the function as clean",
+            name or "<unknown>",
+        )
+        return True
 
     def _record_skipped_error(
         self, exc: BaseException, *, context: str = "llm"
@@ -167,7 +193,14 @@ class AlignmentOrchestrator:
                     self.errored_function_names.add(name)
                 return None
 
-            # Step 4: Return analysis if mismatch detected
+            # Step 4: Return analysis if mismatch detected.
+            # Unsupported CAPABILITY_RISK is errored coverage, not a
+            # clean pass and not a security finding.
+            if result.get("mismatch_detected") and self._capability_risk_rejected(
+                result, func_context
+            ):
+                return None
+
             if result.get("mismatch_detected"):
                 check_ms = int((time.perf_counter() - check_start) * 1000)
                 self.logger.info(
@@ -377,6 +410,9 @@ class AlignmentOrchestrator:
                         continue
 
                     if result and result.get("mismatch_detected"):
+                        if self._capability_risk_rejected(result, func_context):
+                            batch_unanalysed += 1
+                            continue
                         self.stats["mismatches_detected"] += 1
                         batch_mismatches += 1
                         

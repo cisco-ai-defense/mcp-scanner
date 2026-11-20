@@ -225,7 +225,7 @@ Parameter Flow Tracking:
                             param_parts.append(
                                 f"    Line {line}: {op.get('target')} = {op.get('value')}\n"
                             )
-                        elif op_type == "function_call":
+                        elif op_type in ("function_call", "call"):
                             param_parts.append(
                                 f"    Line {line}: {op.get('function')}({op.get('argument')})\n"
                             )
@@ -237,6 +237,13 @@ Parameter Flow Tracking:
                 if flow.get("reaches_calls"):
                     param_parts.append(
                         f"  Reaches function calls: {', '.join(flow['reaches_calls'][:self.MAX_REACHES_CALLS])}\n"
+                    )
+
+                if flow.get("external_sinks"):
+                    param_parts.append(
+                        "  Reaches external sinks: "
+                        + ", ".join(flow["external_sinks"][: self.MAX_REACHES_CALLS])
+                        + "\n"
                     )
 
                 if flow.get("reaches_external"):
