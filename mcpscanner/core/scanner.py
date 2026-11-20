@@ -20,6 +20,7 @@ This module contains the unified scanner class that combines API and YARA analyz
 """
 
 import asyncio
+import copy
 import json
 import logging as stdlib_logging
 import os
@@ -97,6 +98,36 @@ from .result import (
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
 
 logger = get_logger(__name__)
+
+
+def _auth_with_config_headers(
+    auth: Optional[Auth], headers: Optional[Dict[str, str]]
+) -> Optional[Auth]:
+    """Add a remote server's configured ``headers`` to the auth used to reach it.
+
+    Headers set by the explicit ``auth`` (bearer token, API key header or
+    custom headers) win over a config header with the same name, compared
+    case-insensitively. The caller's ``auth`` object is not modified.
+    """
+    if not headers:
+        return auth
+    if auth is None:
+        return Auth(custom_headers=dict(headers))
+
+    explicit: Dict[str, str] = {}
+    if auth.type == AuthType.BEARER and getattr(auth, "bearer_token", None):
+        explicit["Authorization"] = ""
+    if auth.type == AuthType.APIKEY and getattr(auth, "api_key_header", None):
+        explicit[auth.api_key_header] = ""
+    explicit.update(auth.custom_headers or {})
+    taken = {name.lower() for name in explicit}
+
+    merged = copy.copy(auth)
+    merged.custom_headers = {
+        name: value for name, value in headers.items() if name.lower() not in taken
+    }
+    merged.custom_headers.update(auth.custom_headers or {})
+    return merged
 
 
 class CoverageLimitExceeded(Exception):
@@ -2521,6 +2552,7 @@ class Scanner:
                 command=resolved_exe,
                 args=cmd_args,
                 env=merged_env,
+                cwd=server_config.cwd or None,
             )
 
             # Create client context and session with proper error handling
@@ -2836,7 +2868,11 @@ class Scanner:
                         # Scan remote server
                         try:
                             results = await self.scan_remote_server_tools(
-                                server_config.url, auth=auth, analyzers=analyzers
+                                server_config.url,
+                                auth=_auth_with_config_headers(
+                                    auth, server_config.headers
+                                ),
+                                analyzers=analyzers,
                             )
                             # Add server name and source to each result
                             for result in results:
@@ -2946,7 +2982,9 @@ class Scanner:
                     # Scan remote server
                     try:
                         results = await self.scan_remote_server_tools(
-                            server_config.url, auth=auth, analyzers=analyzers
+                            server_config.url,
+                            auth=_auth_with_config_headers(auth, server_config.headers),
+                            analyzers=analyzers,
                         )
                         # Add server name and source to each result
                         for result in results:
