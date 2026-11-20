@@ -186,6 +186,17 @@ class MCPScannerConstants:
         os.getenv("MCP_SCANNER_MCP_CONTENT_READ_TIMEOUT_SECONDS", "30")
     )
 
+    # Inventory discovery has its own limits, independent of content reads.
+    MCP_LIST_PAGE_TIMEOUT_SECONDS: float = float(
+        os.getenv("MCP_SCANNER_MCP_LIST_PAGE_TIMEOUT_SECONDS", "30")
+    )
+    MAX_MCP_LIST_PAGES: int = int(
+        os.getenv("MCP_SCANNER_MAX_MCP_LIST_PAGES", "1000")
+    )
+    MAX_MCP_LIST_ITEMS: int = int(
+        os.getenv("MCP_SCANNER_MAX_MCP_LIST_ITEMS", "10000")
+    )
+
     # AWS Configuration Defaults
     DEFAULT_AWS_REGION: str = os.getenv("AWS_REGION", "us-east-1")
 
