@@ -527,6 +527,23 @@ class AllToolsScanResponse(BaseModel):
 
     server_url: str
     scan_results: List[ToolScanResult]
+    instructions_scan: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Result of scanning server/discover or initialize instructions. "
+            "Omitted from the tool list so it is not counted as a tool. "
+            "Present when instructions produced findings, analyzer errors, "
+            "or a meta-analysis audit."
+        ),
+    )
+    tool_scan_error: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Set when tools/list fails after instructions were recorded. "
+            "The message is the exception type only. An empty tool list "
+            "without this field means the server exposes no tools."
+        ),
+    )
 
 
 class FormattedToolScanResponse(BaseModel):
@@ -539,3 +556,17 @@ class FormattedToolScanResponse(BaseModel):
     output_format: str
     formatted_output: Union[str, dict, List[dict]]
     raw_results: Optional[List[ToolScanResult]] = None
+    instructions_scan: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Instructions scan kept separate from raw_results. Present when "
+            "instructions produced findings, analyzer errors, or a meta audit."
+        ),
+    )
+    tool_scan_error: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Set when tools/list fails after instructions were recorded. "
+            "The message is the exception type only."
+        ),
+    )

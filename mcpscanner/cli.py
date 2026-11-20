@@ -50,6 +50,7 @@ from mcpscanner.core.report_generator import (
     SeverityFilter,
     results_to_json,
 )
+from mcpscanner.core.result import ToolListFailure
 from mcpscanner.utils.logging_config import set_verbose_logging, set_log_level
 from mcpscanner.core.auth import Auth
 from mcpscanner.core.mcp_models import StdioServer
@@ -590,6 +591,57 @@ def _display_scan_error(
     )
 
 
+def _tool_list_failures(
+    scanner, *, from_config: bool = False, config_path: Optional[str] = None
+):
+    """Build incomplete tool-list rows for the report.
+
+    The rows are not advertised tools. A server that exposes no tools has
+    no entry here.
+    """
+    if from_config:
+        errors = list(getattr(scanner, "tool_scan_errors", None) or [])
+        if config_path is not None:
+            errors = [
+                item
+                for item in errors
+                if item.get("server_source") == config_path
+            ]
+    else:
+        error = getattr(scanner, "tool_scan_error", None)
+        errors = [error] if error else []
+    return [
+        ToolListFailure(
+            item.get("message") or "Error during tools/list",
+            server_source=item.get("server_source") or None,
+            server_name=item.get("server_name") or None,
+        )
+        for item in errors
+        if item
+    ]
+
+
+def _with_reported_instructions(
+    results, scanner, *, from_config: bool = False, config_path: Optional[str] = None
+):
+    """Add instruction scans to a report without changing the tool list."""
+    if from_config:
+        extra = list(getattr(scanner, "instructions_results", None) or [])
+        if config_path is not None:
+            extra = [
+                item
+                for item in extra
+                if getattr(item, "server_source", None) == config_path
+            ]
+    else:
+        latest = getattr(scanner, "instructions_result", None)
+        extra = [latest] if latest is not None else []
+    failures = _tool_list_failures(
+        scanner, from_config=from_config, config_path=config_path
+    )
+    return [*results, *extra, *failures]
+
+
 async def scan_mcp_server_direct(
     server_url: str,
     analyzers: List[AnalyzerEnum],
@@ -636,8 +688,10 @@ async def scan_mcp_server_direct(
                 f"✅ Scan completed in {elapsed_time:.2f}s - Found {len(results)} tools"
             )
 
-        # Normalize ScanResult objects
-        json_results = await results_to_json(results)
+        # Normalize ScanResult objects. Instructions stay out of the tool list.
+        json_results = await results_to_json(
+            _with_reported_instructions(results, scanner)
+        )
 
         if output_file:
             with open(output_file, "w", encoding="utf-8") as f:
@@ -684,13 +738,24 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
 
     console.print(f"Server URL: {escape(str(results.get('server_url', 'N/A')))}")
 
-    # Display scan results
-    scan_results = results.get("scan_results", [])
-    console.print(f"Tools scanned: {len(scan_results)}")
+    # Instructions and a failed tool list are not advertised tools. The
+    # type-aware formatter prints those rows after the tool counts.
+    tool_rows = []
+    extra_rows = []
+    for row in results.get("scan_results", []):
+        if isinstance(row, dict) and row.get("item_type") in (
+            "instructions",
+            "tool_scan",
+        ):
+            extra_rows.append(row)
+        else:
+            tool_rows.append(row)
 
-    safe_tools = [tool for tool in scan_results if tool.get("is_safe") is True]
-    unsafe_tools = [tool for tool in scan_results if tool.get("is_safe") is False]
-    incomplete_tools = [tool for tool in scan_results if tool.get("is_safe") is None]
+    console.print(f"Tools scanned: {len(tool_rows)}")
+
+    safe_tools = [tool for tool in tool_rows if tool.get("is_safe") is True]
+    unsafe_tools = [tool for tool in tool_rows if tool.get("is_safe") is False]
+    incomplete_tools = [tool for tool in tool_rows if tool.get("is_safe") is None]
 
     console.print(f"[green]Safe tools: {len(safe_tools)}[/green]")
     console.print(
@@ -812,6 +877,86 @@ def display_results(results: Dict[str, Any], detailed: bool = False) -> None:
                         finding_num += 1
             console.print()
 
+    if extra_rows:
+        extra = ReportGenerator(
+            {
+                "server_url": results.get("server_url", "N/A"),
+                "scan_results": extra_rows,
+            }
+        )
+        print(extra.format_output(format_type=OutputFormat.DETAILED))
+
+
+def _partition_instruction_rows(
+    results: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Keep server instructions out of prompt and resource counts."""
+    entities: List[Dict[str, Any]] = []
+    instructions: List[Dict[str, Any]] = []
+    for result in results:
+        if result.get("item_type") == "instructions":
+            instructions.append(result)
+        else:
+            entities.append(result)
+    return entities, instructions
+
+
+def _print_instruction_rows(rows: List[Dict[str, Any]]) -> None:
+    """Print an instructions result without the instruction body."""
+    if not rows:
+        return
+    print("\n=== Server instructions ===\n")
+    for row in rows:
+        print(f"Status: {row.get('status', 'unknown')}")
+        print(f"Safe: {row.get('is_safe')}")
+        for error in row.get("analyzer_errors") or []:
+            analyzer = error.get("analyzer", "Unknown")
+            print(f"   {analyzer} analyzer failed")
+        meta = row.get("meta_analysis") or {}
+        filtered_count = meta.get("filtered_count")
+        if filtered_count:
+            print(f"   Meta-analysis filtered {filtered_count} finding(s)")
+        for finding in row.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            severity = finding.get("severity", "UNKNOWN")
+            summary = finding.get("summary", "")
+            print(f"   {severity}: {summary}")
+
+
+def _instruction_cli_row(result: Any) -> Dict[str, Any]:
+    """Convert an instructions result for CLI display."""
+    from mcpscanner.core.analyzers.meta_analyzer import build_meta_audit_payload
+
+    row: Dict[str, Any] = {
+        "item_type": "instructions",
+        "server_name": result.server_name,
+        "protocol_version": result.protocol_version,
+        "status": result.status,
+        "is_safe": result.is_safe,
+        "analyzer_errors": result.analyzer_errors,
+        "findings": [
+            {
+                "severity": finding.severity,
+                "summary": finding.summary,
+                "analyzer": finding.analyzer,
+                "details": finding.details,
+                "mcp_taxonomy": (
+                    finding.mcp_taxonomy
+                    if hasattr(finding, "mcp_taxonomy")
+                    else None
+                ),
+            }
+            for finding in result.findings
+        ],
+    }
+    meta_audit = build_meta_audit_payload(
+        getattr(result, "meta_filtered_findings", None) or []
+    )
+    if meta_audit is not None:
+        row["meta_analysis"] = meta_audit
+    return row
+
 
 def display_prompt_results_table(
     results: List[Dict[str, Any]], server_url: str
@@ -825,6 +970,7 @@ def display_prompt_results_table(
         display_prompt_results(results, server_url, detailed=False)
         return
 
+    results, instruction_rows = _partition_instruction_rows(results)
     print("\n=== MCP Prompt Scanner Results (Table) ===\n")
     print(f"Server URL: {server_url}\n")
 
@@ -844,6 +990,7 @@ def display_prompt_results_table(
 
     headers = ["Status", "Prompt Name", "Description", "Findings", "Scan Status"]
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
+    _print_instruction_rows(instruction_rows)
 
     # Summary
     safe = sum(1 for r in results if r.get("is_safe") is True)
@@ -866,6 +1013,7 @@ def display_resource_results_table(
         display_resource_results(results, server_url, detailed=False)
         return
 
+    results, instruction_rows = _partition_instruction_rows(results)
     print("\n=== MCP Resource Scanner Results (Table) ===\n")
     print(f"Server URL: {server_url}\n")
 
@@ -897,6 +1045,7 @@ def display_resource_results_table(
 
     headers = ["Status", "Resource Name", "URI", "MIME Type", "Findings", "Scan Status"]
     print(tabulate(table_data, headers=headers, tablefmt="grid"))
+    _print_instruction_rows(instruction_rows)
 
     # Summary
     completed = [r for r in results if r.get("status") == "completed"]
@@ -924,6 +1073,7 @@ def display_prompt_results(
         server_url: The server URL that was scanned
         detailed: Whether to show detailed results
     """
+    results, instruction_rows = _partition_instruction_rows(results)
     print("\n=== MCP Prompt Scanner Results ===\n")
     print(f"Server URL: {server_url}")
     print(f"Prompts scanned: {len(results)}")
@@ -1002,6 +1152,8 @@ def display_prompt_results(
                 print(f"   Description: {desc[:80]}{'...' if len(desc) > 80 else ''}")
             print()
 
+    _print_instruction_rows(instruction_rows)
+
 
 def display_resource_results(
     results: List[Dict[str, Any]], server_url: str, detailed: bool = False
@@ -1014,6 +1166,7 @@ def display_resource_results(
         server_url: The server URL that was scanned
         detailed: Whether to show detailed results
     """
+    results, instruction_rows = _partition_instruction_rows(results)
     print("\n=== MCP Resource Scanner Results ===\n")
     print(f"Server URL: {server_url}")
     print(f"Resources found: {len(results)}")
@@ -1109,6 +1262,8 @@ def display_resource_results(
             print(f"   URI: {resource.get('resource_uri', 'N/A')}")
             print(f"   MIME Type: {resource.get('resource_mime_type', 'unknown')}")
             print()
+
+    _print_instruction_rows(instruction_rows)
 
 
 def display_instructions_results_table(
@@ -2157,7 +2312,9 @@ async def main():
             results_raw = await scanner.scan_remote_server_tools(
                 args.server_url, auth=auth, analyzers=selected_analyzers
             )
-            results = await results_to_json(results_raw)
+            results = await results_to_json(
+                _with_reported_instructions(results_raw, scanner)
+            )
 
         elif args.cmd == "stdio":
             cfg = _build_config(selected_analyzers)
@@ -2196,7 +2353,9 @@ async def main():
                     scan_results = await scanner.scan_stdio_server_tools(
                         stdio, analyzers=selected_analyzers, errlog=errlog
                     )
-                    results = await results_to_json(scan_results)
+                    results = await results_to_json(
+                        _with_reported_instructions(scan_results, scanner)
+                    )
             finally:
                 if errlog:
                     errlog.close()
@@ -2218,7 +2377,11 @@ async def main():
             finally:
                 if errlog:
                     errlog.close()
-            results = await results_to_json(scan_results)
+            results = await results_to_json(
+                _with_reported_instructions(
+                    scan_results, scanner, from_config=True
+                )
+            )
 
         elif args.cmd == "known-configs":
             cfg = _build_config(selected_analyzers)
@@ -2239,13 +2402,24 @@ async def main():
             if args.raw:
                 output = {}
                 for cfg_path, scan_results in results_by_cfg.items():
-                    output[cfg_path] = await results_to_json(scan_results)
+                    output[cfg_path] = await results_to_json(
+                        _with_reported_instructions(
+                            scan_results,
+                            scanner,
+                            from_config=True,
+                            config_path=cfg_path,
+                        )
+                    )
                 print(json.dumps(output, indent=2))
                 return
             flattened = []
             for scan_results in results_by_cfg.values():
                 flattened.extend(scan_results)
-            results = await results_to_json(flattened)
+            results = await results_to_json(
+                _with_reported_instructions(
+                    flattened, scanner, from_config=True
+                )
+            )
 
         elif args.cmd == "prompts":
             cfg = _build_config(selected_analyzers)
@@ -2295,30 +2469,36 @@ async def main():
                     auth=auth,
                     analyzers=selected_analyzers,
                 )
-                results = [
-                    {
-                        "prompt_name": r.prompt_name,
-                        "prompt_description": r.prompt_description,
-                        "status": r.status,
-                        "is_safe": r.is_safe,
-                        "analyzer_errors": r.analyzer_errors,
-                        "findings": [
-                            {
-                                "severity": f.severity,
-                                "summary": f.summary,
-                                "analyzer": f.analyzer,
-                                "details": f.details,
-                                "mcp_taxonomy": (
-                                    f.mcp_taxonomy
-                                    if hasattr(f, "mcp_taxonomy")
-                                    else None
-                                ),
-                            }
-                            for f in r.findings
-                        ],
-                    }
-                    for r in prompt_results
-                ]
+                from mcpscanner.core.result import InstructionsScanResult
+
+                results = []
+                for r in prompt_results:
+                    if isinstance(r, InstructionsScanResult):
+                        results.append(_instruction_cli_row(r))
+                        continue
+                    results.append(
+                        {
+                            "prompt_name": r.prompt_name,
+                            "prompt_description": r.prompt_description,
+                            "status": r.status,
+                            "is_safe": r.is_safe,
+                            "analyzer_errors": r.analyzer_errors,
+                            "findings": [
+                                {
+                                    "severity": f.severity,
+                                    "summary": f.summary,
+                                    "analyzer": f.analyzer,
+                                    "details": f.details,
+                                    "mcp_taxonomy": (
+                                        f.mcp_taxonomy
+                                        if hasattr(f, "mcp_taxonomy")
+                                        else None
+                                    ),
+                                }
+                                for f in r.findings
+                            ],
+                        }
+                    )
 
         elif args.cmd == "resources":
             cfg = _build_config(selected_analyzers)
@@ -2374,31 +2554,37 @@ async def main():
                     analyzers=selected_analyzers,
                     allowed_mime_types=allowed_mime_types,
                 )
-                results = [
-                    {
-                        "resource_uri": str(r.resource_uri),
-                        "resource_name": r.resource_name,
-                        "resource_mime_type": r.resource_mime_type,
-                        "status": r.status,
-                        "is_safe": r.is_safe,
-                        "analyzer_errors": r.analyzer_errors,
-                        "findings": [
-                            {
-                                "severity": f.severity,
-                                "summary": f.summary,
-                                "analyzer": f.analyzer,
-                                "details": f.details,
-                                "mcp_taxonomy": (
-                                    f.mcp_taxonomy
-                                    if hasattr(f, "mcp_taxonomy")
-                                    else None
-                                ),
-                            }
-                            for f in r.findings
-                        ],
-                    }
-                    for r in resource_results
-                ]
+                from mcpscanner.core.result import InstructionsScanResult
+
+                results = []
+                for r in resource_results:
+                    if isinstance(r, InstructionsScanResult):
+                        results.append(_instruction_cli_row(r))
+                        continue
+                    results.append(
+                        {
+                            "resource_uri": str(r.resource_uri),
+                            "resource_name": r.resource_name,
+                            "resource_mime_type": r.resource_mime_type,
+                            "status": r.status,
+                            "is_safe": r.is_safe,
+                            "analyzer_errors": r.analyzer_errors,
+                            "findings": [
+                                {
+                                    "severity": f.severity,
+                                    "summary": f.summary,
+                                    "analyzer": f.analyzer,
+                                    "details": f.details,
+                                    "mcp_taxonomy": (
+                                        f.mcp_taxonomy
+                                        if hasattr(f, "mcp_taxonomy")
+                                        else None
+                                    ),
+                                }
+                                for f in r.findings
+                            ],
+                        }
+                    )
 
         elif args.cmd == "instructions":
             cfg = _build_config(selected_analyzers)
@@ -2850,7 +3036,9 @@ async def main():
                     scan_results = await scanner.scan_stdio_server_tools(
                         stdio, analyzers=selected_analyzers, errlog=errlog
                     )
-                    results = await results_to_json(scan_results)
+                    results = await results_to_json(
+                        _with_reported_instructions(scan_results, scanner)
+                    )
             finally:
                 if errlog:
                     errlog.close()
@@ -2873,7 +3061,11 @@ async def main():
                 finally:
                     if errlog:
                         errlog.close()
-                results = await results_to_json(scan_results)
+                results = await results_to_json(
+                    _with_reported_instructions(
+                        scan_results, scanner, from_config=True
+                    )
+                )
             else:
                 auth = Auth.bearer(args.bearer_token) if args.bearer_token else None
                 try:
@@ -2889,7 +3081,14 @@ async def main():
                 if args.raw:
                     output = {}
                     for cfg_path, scan_results in results_by_cfg.items():
-                        output[cfg_path] = await results_to_json(scan_results)
+                        output[cfg_path] = await results_to_json(
+                            _with_reported_instructions(
+                                scan_results,
+                                scanner,
+                                from_config=True,
+                                config_path=cfg_path,
+                            )
+                        )
                     print(json.dumps(output, indent=2))
                     return
                 flattened = []
@@ -2902,7 +3101,11 @@ async def main():
                         )
                         result.server_source = f"{config_name}"
                     flattened.extend(scan_results)
-                results = await results_to_json(flattened)
+                results = await results_to_json(
+                    _with_reported_instructions(
+                        flattened, scanner, from_config=True
+                    )
+                )
 
         else:
             # Check if behavioral analyzer with source path
@@ -2919,7 +3122,9 @@ async def main():
                         auth=Auth.bearer(args.bearer_token),
                         analyzers=selected_analyzers,
                     )
-                    results = await results_to_json(results_raw)
+                    results = await results_to_json(
+                        _with_reported_instructions(results_raw, scanner)
+                    )
                 else:
                     cfg = _build_config(
                         selected_analyzers, endpoint_url=args.endpoint_url
@@ -2929,7 +3134,9 @@ async def main():
                     results_raw = await scanner.scan_remote_server_tools(
                         args.server_url, auth=auth, analyzers=selected_analyzers
                     )
-                    results = await results_to_json(results_raw)
+                    results = await results_to_json(
+                        _with_reported_instructions(results_raw, scanner)
+                    )
 
     except Exception as e:
         _display_scan_error(

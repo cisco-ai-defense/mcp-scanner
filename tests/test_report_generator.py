@@ -19,7 +19,12 @@ from unittest.mock import Mock, patch, mock_open
 from typing import List, Dict, Any
 
 from mcpscanner.core.report_generator import ReportGenerator, results_to_json
-from mcpscanner.core.result import ToolScanResult, PromptScanResult, ResourceScanResult
+from mcpscanner.core.result import (
+    InstructionsScanResult,
+    PromptScanResult,
+    ResourceScanResult,
+    ToolScanResult,
+)
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.models import OutputFormat, SeverityFilter
 from mcpscanner.config.constants import SeverityLevel
@@ -265,6 +270,86 @@ class TestReportGenerator:
         assert "=== Results by Analyzer ===" in output
         assert "YARA ANALYZER" in output
         assert "API ANALYZER" in output
+
+    @pytest.mark.asyncio
+    async def test_by_analyzer_keeps_meta_only_instruction_audit(self):
+        """A fully filtered instruction stays visible, without its body."""
+        body = "instruction-body-must-stay-out-of-the-report"
+        dropped = SecurityFinding(
+            SeverityLevel.HIGH,
+            "filtered injection",
+            "YARA",
+            "prompt_injection",
+            details={"meta_reason": "false positive"},
+        )
+        audited = InstructionsScanResult(
+            instructions=body,
+            server_name="poisoned",
+            protocol_version="2026-07-28",
+            status="completed",
+            analyzers=["YARA"],
+            findings=[],
+        )
+        audited.meta_filtered_findings = [dropped]
+        clean = InstructionsScanResult(
+            instructions=body,
+            server_name="clean",
+            protocol_version="2026-07-28",
+            status="completed",
+            analyzers=["YARA"],
+            findings=[],
+        )
+
+        rows = await results_to_json([audited])
+        output = ReportGenerator(
+            {"server_url": "http://test-server.com", "scan_results": rows}
+        ).format_output(OutputFormat.BY_ANALYZER)
+        assert "instructions (SAFE): Meta-analysis filtered 1 finding(s)" in output
+        assert body not in output
+        assert "Tools analyzed: 0" in output
+
+        clean_rows = await results_to_json([clean])
+        clean_output = ReportGenerator(
+            {"server_url": "http://test-server.com", "scan_results": clean_rows}
+        ).format_output(OutputFormat.BY_ANALYZER)
+        assert "Meta-analysis filtered" not in clean_output
+        assert "meta-analysis audit" not in clean_output
+
+    def test_by_analyzer_keeps_failure_summary_beside_meta_audit(self):
+        """An analyzer error stays visible when the row also has an audit."""
+        row = {
+            "item_type": "instructions",
+            "status": "partial",
+            "is_safe": None,
+            "findings": {
+                "yara_analyzer": {
+                    "severity": "SAFE",
+                    "total_findings": 0,
+                    "threat_summary": "No threats detected",
+                },
+                "llm_analyzer": {
+                    "severity": "UNKNOWN",
+                    "total_findings": 0,
+                    "status": "error",
+                    "threat_summary": "Analysis failed",
+                },
+            },
+            "meta_analysis": {
+                "filtered_count": 1,
+                "filtered_findings": [{"analyzer": "YARA"}],
+            },
+        }
+        output = ReportGenerator(
+            {"server_url": "http://test-server.com", "scan_results": [row]}
+        ).format_output(OutputFormat.BY_ANALYZER)
+
+        assert "instructions (SAFE): Meta-analysis filtered 1 finding(s)" in output
+        llm_section = output.split("LLM ANALYZER", maxsplit=1)[1]
+        assert "instructions (UNKNOWN): Analysis failed" in llm_section
+        assert "Meta-analysis filtered 1 finding(s)" in llm_section
+        assert llm_section.index("Analysis failed") < llm_section.index(
+            "Meta-analysis filtered"
+        )
 
     def test_report_generator_format_output_raw(self):
         """Test formatting output as raw."""
