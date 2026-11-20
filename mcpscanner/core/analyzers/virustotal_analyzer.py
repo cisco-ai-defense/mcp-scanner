@@ -40,7 +40,11 @@ import httpx
 
 from ...threats.threats import ThreatMapping
 from .base import SecurityFinding
-from ...utils.file_magic import detect_magic
+from ...utils.file_magic import (
+    detect_magic,
+    file_contains_executable_signature,
+    file_has_uuencode_header,
+)
 from ...utils.path_safety import filter_safe_paths, safe_resolve_root
 
 logger = logging.getLogger(__name__)
@@ -585,16 +589,24 @@ class VirusTotalAnalyzer:
         Check if magic bytes indicate the file is NOT text.
 
         Returns:
-            True  → magic says non-text (scan it).
-            False → magic says text, no signature, or puremagic unavailable.
+            True  → magic says non-text, or an ELF/Mach-O signature appears
+                    in the first 64KiB. A named binary signature with an
+                    empty MIME counts as non-text.
+            False → magic says text and no embedded executable signature
+                    was found. puremagic being unavailable does not hide
+                    an ELF/Mach-O signature in that window.
         """
         try:
+            # A complete ``begin 644 name`` header is text/x-uuencode, which
+            # would otherwise be skipped. A bare ``begin`` is not this header.
+            if file_has_uuencode_header(file_path):
+                return True
             result = detect_magic(file_path)
-            if result is None:
-                return False  # No signature found → likely text
-            if result.content_family in _TEXT_ONLY_FAMILIES:
-                return False  # Confirmed text
-            return True  # Magic disagrees — non-text content
+            if result is not None and result.content_family not in _TEXT_ONLY_FAMILIES:
+                return True  # Magic disagrees — non-text content
+            # Confirmed text, or no magic result. A short text prefix hides
+            # an ELF/Mach-O header from puremagic; look for one directly.
+            return file_contains_executable_signature(file_path)
         except Exception:
             return False  # Fail open — trust the extension
 

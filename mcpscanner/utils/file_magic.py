@@ -46,8 +46,9 @@ try:
 
     _PUREMAGIC_AVAILABLE = True
 except ImportError:
-    logger.debug(
+    logger.warning(
         "puremagic is not installed — magic-byte detection disabled. "
+        "Files with a text extension will be skipped without a content check. "
         "Install with: pip install puremagic"
     )
 
@@ -138,6 +139,145 @@ class MagicResult:
     content_family: str  # "text", "image", "audio", "video", "application", "unknown"
 
 
+# Names puremagic gives text files when it leaves the MIME empty.
+# "UTF8 file" is one of these; treating every empty-MIME name as a binary
+# made a normal BOM text file look like an executable.
+_TEXT_MAGIC_NAMES = frozenset(
+    {
+        "utf8 file",
+        "utf-8 file",
+        "text file",
+        "ascii file",
+        "unicode text file",
+    }
+)
+
+# Signatures that stay distinctive inside a text prefix. MZ/PK are not here:
+# those two-byte values show up in ordinary prose.
+_EMBEDDED_EXECUTABLE_SIGNATURES = (
+    b"\x7fELF",  # ELF
+    b"\xfe\xed\xfa\xce",  # Mach-O 32-bit
+    b"\xfe\xed\xfa\xcf",  # Mach-O 64-bit
+    b"\xce\xfa\xed\xfe",  # Mach-O 32-bit, reversed
+    b"\xcf\xfa\xed\xfe",  # Mach-O 64-bit, reversed
+    b"\xca\xfe\xba\xbe",  # Mach-O fat / Java class
+    b"\xbe\xba\xfe\xca",  # Mach-O fat, reversed
+)
+# How far past the start a text prefix can hide one of those signatures.
+_EMBEDDED_SCAN_BYTES = 65536
+
+
+def _family_for_empty_mime(name: str) -> str:
+    """Classify a named puremagic hit that did not include a MIME type."""
+    lowered = name.lower()
+    if lowered in _TEXT_MAGIC_NAMES or lowered.startswith("utf"):
+        return "text"
+    return "application"
+
+
+def _is_bare_uuencode_match(mime: str, name: str) -> bool:
+    """True for puremagic's malformed ``begin`` hit.
+
+    The byte string ``begin`` with no following space is reported as
+    ``UUencoded file`` and an empty MIME. A real header (``begin 644 ``)
+    is a different match, ``text/x-uuencode``, and must not be folded into
+    this one.
+    """
+    return not mime and name.lower() == "uuencoded file"
+
+
+def file_has_uuencode_header(file_path: str) -> bool:
+    """Return True when the file starts with ``begin <octal-mode> <name>``.
+
+    Mode is 3 or 4 octal digits. The filename must be non-empty and the
+    header line must end with a newline inside the bytes read. ``begin``,
+    ``begin the …``, ``begin 644`` with no name, and ``begin 644 name``
+    with no newline do not match.
+    """
+    try:
+        with open(file_path, "rb") as handle:
+            header = handle.read(128)
+    except OSError:
+        return False
+    if not header.startswith(b"begin "):
+        return False
+    rest = header[6:]
+    mode_len = 0
+    while mode_len < len(rest) and rest[mode_len : mode_len + 1] in b"01234567":
+        mode_len += 1
+    if mode_len not in (3, 4):
+        return False
+    if mode_len >= len(rest) or rest[mode_len : mode_len + 1] != b" ":
+        return False
+    remainder = rest[mode_len + 1 :]
+    if b"\n" not in remainder:
+        return False
+    name = remainder.split(b"\n", 1)[0]
+    return bool(name.strip(b" \t"))
+
+
+def file_contains_executable_signature(
+    file_path: str, limit: int = _EMBEDDED_SCAN_BYTES
+) -> bool:
+    """Return True if a binary signature appears in the first ``limit`` bytes.
+
+    puremagic stops at the text prefix and reports ``text/plain``, so an ELF
+    or Mach-O header a few bytes in is invisible to ``detect_magic``.
+    """
+    try:
+        with open(file_path, "rb") as handle:
+            blob = handle.read(limit)
+    except OSError:
+        return False
+    return any(signature in blob for signature in _EMBEDDED_EXECUTABLE_SIGNATURES)
+
+
+def _result_from_matches(matches) -> Optional[MagicResult]:
+    """Turn puremagic matches into a MagicResult.
+
+    A best match that has a name or extension but no MIME is kept and
+    classified as non-text. puremagic reports ELF that way ("ELF executable",
+    empty MIME). Discarding it made ``detect_magic`` return None, and the
+    VirusTotal selector then treated a ``.txt`` file as confirmed text.
+    """
+    if not matches:
+        return None
+
+    best = matches[0]
+    mime = best.mime_type or ""
+    ext = best.extension or ""
+    name = best.name or ""
+    # The bare ``begin`` hit has a name and no MIME. Keeping it would mark
+    # a .txt file as a binary. Drop only that hit; a later text/x-uuencode
+    # match, when present, still describes a real uuencode header.
+    if not mime and (name or ext) and not _is_bare_uuencode_match(mime, name):
+        return MagicResult(
+            mime_type="",
+            extension=ext,
+            name=name,
+            content_family=_family_for_empty_mime(name),
+        )
+    if not mime or _is_bare_uuencode_match(mime, name):
+        for later in matches[1:]:
+            later_mime = later.mime_type or ""
+            later_name = later.name or ""
+            if not later_mime or _is_bare_uuencode_match(later_mime, later_name):
+                continue
+            return MagicResult(
+                mime_type=later_mime,
+                extension=later.extension or "",
+                name=later_name,
+                content_family=_classify_family(later_mime),
+            )
+        return None
+    return MagicResult(
+        mime_type=mime,
+        extension=ext,
+        name=name,
+        content_family=_classify_family(mime),
+    )
+
+
 def detect_magic(file_path: str) -> Optional[MagicResult]:
     """
     Detect file type using magic bytes via puremagic.
@@ -148,31 +288,14 @@ def detect_magic(file_path: str) -> Optional[MagicResult]:
     Returns:
         MagicResult if a signature was found, None otherwise.
         Returns None when puremagic is not installed (graceful fallback).
+        A named signature with an empty MIME is still a result, classified
+        as non-text.
     """
     if not _PUREMAGIC_AVAILABLE:
         return None
 
     try:
-        matches = puremagic.magic_file(file_path)
-        if not matches:
-            return None
-
-        # puremagic returns a list of matches sorted by confidence; take the best
-        best = matches[0]
-        mime = best.mime_type or ""
-        ext = best.extension or ""
-        name = best.name or ""
-
-        # If MIME is empty, the match is low-confidence — treat as no match
-        if not mime:
-            return None
-
-        return MagicResult(
-            mime_type=mime,
-            extension=ext,
-            name=name,
-            content_family=_classify_family(mime),
-        )
+        return _result_from_matches(puremagic.magic_file(file_path))
     except Exception as exc:
         logger.debug("Magic-byte detection failed for %s: %s", file_path, exc)
         return None
@@ -192,21 +315,7 @@ def detect_magic_bytes(data: bytes) -> Optional[MagicResult]:
         return None
 
     try:
-        matches = puremagic.magic_string(data)
-        if not matches:
-            return None
-
-        best = matches[0]
-        mime = best.mime_type or ""
-        ext = best.extension or ""
-        name = best.name or ""
-
-        return MagicResult(
-            mime_type=mime,
-            extension=ext,
-            name=name,
-            content_family=_classify_family(mime),
-        )
+        return _result_from_matches(puremagic.magic_string(data))
     except Exception as exc:
         logger.debug("Magic-byte detection failed for bytes: %s", exc)
         return None
