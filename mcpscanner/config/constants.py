@@ -182,8 +182,59 @@ class MCPScannerConstants:
     MAX_PROMPT_RESOURCE_AGGREGATE_CHARS: int = int(
         os.getenv("MCP_SCANNER_MAX_PROMPT_RESOURCE_AGGREGATE_CHARS", "1000000")
     )
+    # Prompt bodies and resource reads. Same default as a remote catalog so
+    # a slow ``prompts/get`` or ``resources/read`` is not failed at 30s
+    # while ``tools/list`` is allowed 120s.
     MCP_CONTENT_READ_TIMEOUT_SECONDS: float = float(
-        os.getenv("MCP_SCANNER_MCP_CONTENT_READ_TIMEOUT_SECONDS", "30")
+        os.getenv("MCP_SCANNER_MCP_CONTENT_READ_TIMEOUT_SECONDS", "120")
+    )
+    # Remote session handshake, including TLS and token exchange. A hung
+    # connect used to wait on the MCP SDK read timeout (300s).
+    MCP_SESSION_TIMEOUT_SECONDS: float = float(
+        os.getenv("MCP_SCANNER_MCP_SESSION_TIMEOUT_SECONDS", "60")
+    )
+    # Remote tools/prompts/resources list. One budget covers every page.
+    # A later page that hits this budget keeps the pages already read and
+    # marks the scan incomplete. Stdio lists pass the stdio connection
+    # timeout instead of this value.
+    MCP_LIST_TIMEOUT_SECONDS: float = float(
+        os.getenv("MCP_SCANNER_MCP_LIST_TIMEOUT_SECONDS", "120")
+    )
+    # tools/list, prompts/list, and resources/list are followed until the
+    # cursor is empty. The list timeout covers every page together. A
+    # repeated cursor, or more pages than this, keeps the pages already
+    # read and marks the scan incomplete.
+    MCP_LIST_PAGE_LIMIT: int = int(
+        os.getenv("MCP_SCANNER_MCP_LIST_PAGE_LIMIT", "100")
+    )
+    # How many resource reads, prompt fetches, tool analyses, or analyzers
+    # inside one item may run at once. Byte and count budgets are still
+    # committed in list order. A fetch already started can finish, and its
+    # body is not scanned once an earlier item has exhausted the budget.
+    REMOTE_SCAN_CONCURRENCY: int = int(
+        os.getenv("MCP_SCANNER_REMOTE_SCAN_CONCURRENCY", "8")
+    )
+    # Streaming scans. The queue bounds memory while a client is slow.
+    # Heartbeats are written when no result arrives, including during an
+    # LLM call, so a gap timeout can tell a live scan from a dead one.
+    STREAM_QUEUE_SIZE: int = int(os.getenv("MCP_SCANNER_STREAM_QUEUE_SIZE", "8"))
+    STREAM_HEARTBEAT_SECONDS: float = float(
+        os.getenv("MCP_SCANNER_STREAM_HEARTBEAT_SECONDS", "15")
+    )
+    # Process-wide cap on in-flight LLM requests (threat, meta, readiness,
+    # and alignment). The gate reads this once per event loop.
+    LLM_REQUEST_CONCURRENCY: int = int(
+        os.getenv("MCP_SCANNER_LLM_REQUEST_CONCURRENCY", "8")
+    )
+    # Shared budget for one item: every analyzer call and the meta pass
+    # that follows it. Time spent waiting for a scan slot does not count.
+    # Earlier findings are kept when the budget runs out. The first LLM
+    # call on the item may also use one provider budget, covering
+    # transport retries and empty-reply follow-ups, when that is longer
+    # than the time left. Later calls use only the time left.
+    # 0 disables the deadline.
+    ITEM_DEADLINE_SECONDS: float = float(
+        os.getenv("MCP_SCANNER_ITEM_DEADLINE_SECONDS", "180")
     )
 
     # AWS Configuration Defaults

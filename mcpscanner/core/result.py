@@ -89,12 +89,21 @@ class ScanResult:
         """Check if the scan result indicates the item is safe.
 
         Returns:
-            bool | None: False when findings exist, True when a complete scan
-                found none, and None when coverage is incomplete.
+            bool | None: False when a threat finding exists, True when a
+                complete scan found none, and None when coverage is incomplete.
+                Analyzer-infrastructure findings alone are incomplete, not clean.
         """
-        if self.findings:
+        threats = [
+            finding
+            for finding in self.findings
+            if getattr(finding, "threat_category", None) != "ANALYZER INFRASTRUCTURE"
+        ]
+        if threats:
             return False
-        if self.status != "completed" or self.analyzer_errors:
+        # An infrastructure-only result is incomplete, not a clean scan
+        # and not a confirmed threat. Meta must not be able to erase it
+        # into is_safe True.
+        if self.status != "completed" or self.analyzer_errors or self.findings:
             return None
         return True
 
@@ -725,7 +734,11 @@ def format_results_as_json(
                 elif analyzer_severity == "SAFE":
                     threat_summary = "No threats detected"
                 elif len(threat_names) == 0:
-                    threat_summary = "No specific threats identified"
+                    threat_summary = (
+                        summaries[0]
+                        if summaries
+                        else "No specific threats identified"
+                    )
                 else:
                     # Use first summary as threat_summary (analyzers should provide consistent summaries)
                     threat_summary = summaries[0] if summaries else "Threats detected"
