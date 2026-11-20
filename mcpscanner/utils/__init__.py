@@ -16,7 +16,20 @@
 
 """Utilities module for MCP Scanner."""
 
+from .bedrock import (
+    BedrockDependencyError,
+    ensure_bedrock_dependencies,
+    is_bedrock_model,
+)
 from .di_container import DIContainer
 from .logging_config import setup_logger, set_log_level, set_verbose_logging
 
-__all__ = ["DIContainer", "setup_logger", "set_log_level", "set_verbose_logging"]
+__all__ = [
+    "DIContainer",
+    "setup_logger",
+    "set_log_level",
+    "set_verbose_logging",
+    "BedrockDependencyError",
+    "ensure_bedrock_dependencies",
+    "is_bedrock_model",
+]
