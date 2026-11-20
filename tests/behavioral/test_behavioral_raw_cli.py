@@ -10,7 +10,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mcpscanner.cli import _build_behavioral_results, main
+from mcpscanner.cli import (
+    _behavioral_result_visible,
+    _build_behavioral_results,
+    main,
+)
 from mcpscanner.core.analyzers.base import SecurityFinding
 from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
 
@@ -154,19 +158,93 @@ def test_build_and_threat_filter_non_raw_when_analyzed_functions_empty():
     analyzer.analyzed_functions = []
 
     results = _build_behavioral_results(analyzer, [finding], source_path="/tmp/pkg")
-    filtered = []
-    for result in results:
-        if result.get("is_safe", False):
-            filtered.append(result)
-            continue
-        classification = (
-            result.get("findings", {})
-            .get("behavioral_analyzer", {})
-            .get("threat_vulnerability_classification")
-            or ""
-        ).upper()
-        if classification == "THREAT":
-            filtered.append(result)
+    filtered = [row for row in results if _behavioral_result_visible(row)]
 
     assert len(filtered) == 1
     assert filtered[0]["tool_name"] == "exfil"
+
+
+@pytest.mark.asyncio
+async def test_raw_cli_keeps_unknown_verification_rows(capsys):
+    """A failed alignment check must remain in --raw output."""
+    mcp_code = "pass\n"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(mcp_code)
+        f.flush()
+        temp_path = f.name
+
+    try:
+
+        async def fake_analyze(self, content, context):
+            self.analyzed_functions = []
+            return [
+                SecurityFinding(
+                    severity="UNKNOWN",
+                    summary="Alignment check did not complete",
+                    threat_category="",
+                    analyzer="Behavioral",
+                    details={
+                        "function_name": "unchecked",
+                        "source_file": temp_path,
+                        "analysis_status": "errored",
+                    },
+                )
+            ]
+
+        with patch.object(
+            BehavioralCodeAnalyzer, "analyze", fake_analyze
+        ), patch.dict(
+            os.environ,
+            {
+                "MCP_SCANNER_LLM_API_KEY": "test-key",
+                "MCP_SCANNER_LLM_PROVIDER": "openai",
+            },
+            clear=False,
+        ):
+            test_args = ["mcp-scanner", "behavioral", temp_path, "--raw"]
+            with restore_mcpscanner_logging():
+                with patch("sys.argv", test_args):
+                    await main()
+
+        payload = json.loads(capsys.readouterr().out)
+        rows = [row for row in payload if row.get("tool_name") == "unchecked"]
+        assert len(rows) == 1
+        assert rows[0]["is_safe"] is False
+        assert (
+            rows[0]["findings"]["behavioral_analyzer"]["severity"] == "UNKNOWN"
+        )
+    finally:
+        os.unlink(temp_path)
+
+
+def test_behavioral_filter_keeps_error_and_drops_vulnerability_only():
+    analyzer = MagicMock()
+    analyzer.analyzed_functions = []
+    findings = [
+        SecurityFinding(
+            severity="ERROR",
+            summary="verification unavailable",
+            threat_category="",
+            analyzer="Behavioral",
+            details={
+                "function_name": "broken",
+                "source_file": "/tmp/pkg/tool.py",
+            },
+        ),
+        SecurityFinding(
+            severity="MEDIUM",
+            summary="Vulnerability only",
+            threat_category="",
+            analyzer="Behavioral",
+            details={
+                "function_name": "vuln_tool",
+                "source_file": "/tmp/pkg/tool.py",
+                "threat_vulnerability_classification": "VULNERABILITY",
+            },
+        ),
+    ]
+    results = _build_behavioral_results(analyzer, findings, source_path="/tmp/pkg")
+    visible = [row for row in results if _behavioral_result_visible(row)]
+    names = {row["tool_name"] for row in visible}
+    assert "broken" in names
+    assert "vuln_tool" not in names

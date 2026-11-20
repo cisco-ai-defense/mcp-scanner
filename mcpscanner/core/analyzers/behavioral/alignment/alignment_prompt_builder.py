@@ -29,7 +29,7 @@ import json
 import logging
 import secrets
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .....config.constants import MCPScannerConstants
 from ....static_analysis.context_extractor import FunctionContext
@@ -41,7 +41,10 @@ _ANALYSIS_TRUNCATION_SUFFIX = (
 _TEMPLATE_TRUNCATION_SUFFIX = (
     "\n\n... (alignment instructions truncated to fit model context budget)\n"
 )
-_MIN_ANALYSIS_CHARS = 500
+# The entry-point block is written before source and dataflow. A 500
+# character floor kept the header and dropped the code. 8000 leaves room
+# for that header plus the 2000-character source cap and some dataflow.
+_MIN_ANALYSIS_CHARS = 8000
 # Newlines joining template, prefix, delimiter tags, and analysis body.
 _PROMPT_FRAME_CHARS = 5
 _SOURCE_TRUNCATION_LIMIT = 2000
@@ -155,6 +158,13 @@ class AlignmentPromptBuilder:
         Returns:
             Formatted prompt string with evidence
         """
+        system, user = self._function_prompt_parts(func_context)
+        return self._join_prompt_parts(system, user)
+
+    def _function_prompt_parts(
+        self, func_context: FunctionContext
+    ) -> Tuple[str, str]:
+        """Return ``(system_template, user_payload)`` for one function."""
         # Generate random delimiter tags to prevent prompt injection
         random_id = secrets.token_hex(16)
         start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
@@ -455,7 +465,7 @@ Parameter Flow Tracking:
             )
 
         # Wrap the untrusted content with randomized delimiters
-        prompt = self._assemble_prompt(
+        system, user = self._assemble_prompt_parts(
             template=self._template,
             prefix=_UNTRUSTED_INPUT_INSTRUCTION,
             analysis_content=analysis_content,
@@ -463,7 +473,7 @@ Parameter Flow Tracking:
             end_tag=end_tag,
             log_label=f"function={func_context.name}",
         )
-        return prompt
+        return system, user
 
     def build_batch_analysis_content(
         self, func_contexts: List[FunctionContext]
@@ -526,6 +536,15 @@ Parameter Flow Tracking:
         analysis_content: str,
     ) -> str:
         """Wrap pre-built batch content with fresh anti-injection delimiters."""
+        system, user = self._batch_prompt_parts(func_contexts, analysis_content)
+        return self._join_prompt_parts(system, user)
+
+    def _batch_prompt_parts(
+        self,
+        func_contexts: List[FunctionContext],
+        analysis_content: str,
+    ) -> Tuple[str, str]:
+        """Return ``(system_template, user_payload)`` for a function batch."""
         random_id = secrets.token_hex(16)
         start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
         end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
@@ -549,7 +568,7 @@ For each function with mismatch_detected=true, include all required fields (thre
 For functions with no issues, just include function_index, function_name, and mismatch_detected=false.
 
 """
-        return self._assemble_prompt(
+        system, user = self._assemble_prompt_parts(
             template=self._template,
             prefix=batch_instructions,
             analysis_content=analysis_content,
@@ -557,6 +576,42 @@ For functions with no issues, just include function_index, function_name, and mi
             end_tag=end_tag,
             log_label=f"batch_functions={len(func_contexts)}",
         )
+        return system, user
+
+    def build_prompt_parts(
+        self, func_context: FunctionContext
+    ) -> Tuple[str, str]:
+        """Build the alignment prompt as a (system_template, user_payload) split.
+
+        The 73 KB framework template was previously concatenated into the
+        single ``user`` message returned by :meth:`build_prompt`. That shape
+        works fine for OpenAI/Azure but causes Bedrock-hosted Anthropic
+        models to short-circuit and return ``{}`` — see
+        ``alignment_orchestrator`` docs and the regression test in
+        ``tests/behavioral/test_validator_failure_emits_error.py``.
+
+        Splitting the template into the ``system`` slot and keeping only
+        the per-function evidence in the ``user`` slot is the canonical
+        Anthropic-style messages layout and restores the model's ability
+        to actually emit the structured analysis JSON.
+
+        Returns:
+            Tuple ``(system_template, user_payload)``:
+
+            * ``system_template`` — the static framework template loaded
+              from ``code_alignment_threat_analysis_prompt.md``. Callers
+              should send this in the ``system`` role.
+            * ``user_payload`` — the delimited per-function evidence (the
+              same content that :meth:`build_prompt` appends after the
+              template). Callers should send this in the ``user`` role.
+
+        The parts come from the same assembly step as :meth:`build_prompt`.
+        The framework text is returned directly, including when the
+        alignment budget truncates it. It is not recovered by splitting
+        the joined string, because truncation would make that prefix
+        match fail and put the template back in the user message.
+        """
+        return self._function_prompt_parts(func_context)
 
     def build_batch_prompt(self, func_contexts: List[FunctionContext]) -> str:
         """Build a batched prompt for analyzing multiple functions in one LLM call.
@@ -570,7 +625,13 @@ For functions with no issues, just include function_index, function_name, and mi
         analysis_content = self.build_batch_analysis_content(func_contexts)
         return self.wrap_batch_prompt(func_contexts, analysis_content)
 
-    def _assemble_prompt(
+    def _join_prompt_parts(self, template_used: str, user_payload: str) -> str:
+        """Join the system template and user evidence for legacy callers."""
+        if template_used and user_payload:
+            return f"{template_used}\n\n{user_payload}".strip()
+        return (template_used or user_payload).strip()
+
+    def _assemble_prompt_parts(
         self,
         *,
         template: str,
@@ -579,8 +640,13 @@ For functions with no issues, just include function_index, function_name, and mi
         end_tag: str,
         log_label: str,
         prefix: str = "",
-    ) -> str:
-        """Build the final prompt and enforce the alignment context budget."""
+    ) -> Tuple[str, str]:
+        """Return ``(system_template, user_payload)`` under the alignment cap.
+
+        The framework template stays in the system part even when it is
+        truncated. The hard cap shortens the user part only, so a later
+        join cannot move framework text back into the user message.
+        """
         # Budget the *total* prompt against ALIGNMENT_MAX_PROMPT_CHARS (hard cap
         # for Bedrock/Haiku), not the softer PROMPT_LENGTH_THRESHOLD warning.
         # The markdown template alone is ~72 KiB, so it may need truncation too.
@@ -619,32 +685,59 @@ For functions with no issues, just include function_index, function_name, and mi
                 max_analysis,
                 max_total,
             )
-            analysis_content = analysis_content[:max_analysis] + _ANALYSIS_TRUNCATION_SUFFIX
+            analysis_content = (
+                analysis_content[:max_analysis] + _ANALYSIS_TRUNCATION_SUFFIX
+            )
 
-        prompt = f"""{template_used}
-
-{prefix}{start_tag}
-{analysis_content}
-{end_tag}
-"""
-        prompt = prompt.strip()
-        if len(prompt) > max_total:
+        user_payload = (
+            f"{prefix}{start_tag}\n{analysis_content}\n{end_tag}"
+        ).strip()
+        separator_len = 2 if template_used and user_payload else 0
+        joined_len = len(template_used) + separator_len + len(user_payload)
+        if joined_len > max_total:
             self.logger.warning(
                 "prompt exceeds alignment cap after assembly label=%s "
                 "prompt_length=%d budget=%d -- hard truncating",
                 log_label,
-                len(prompt),
+                joined_len,
                 max_total,
             )
-            prompt = prompt[:max_total]
+            # Shrink the framework text first. Cutting the user payload
+            # here would drop the evidence the budget just reserved.
+            overflow = joined_len - max_total
+            if template_used and overflow < len(template_used):
+                keep = len(template_used) - overflow
+                suffix = _TEMPLATE_TRUNCATION_SUFFIX
+                if keep > len(suffix):
+                    template_used = template_used[: keep - len(suffix)] + suffix
+                else:
+                    template_used = template_used[:keep]
+            else:
+                template_used = ""
+                if len(user_payload) > max_total:
+                    user_payload = user_payload[:max_total]
 
         self.logger.debug(
             "prompt built label=%s prompt_length=%d analysis_content_length=%d",
             log_label,
-            len(prompt),
+            len(template_used) + separator_len + len(user_payload),
             len(analysis_content),
         )
-        return prompt
+        return template_used, user_payload
+
+    def build_batch_prompt_parts(
+        self, func_contexts: List[FunctionContext]
+    ) -> Tuple[str, str]:
+        """Batch counterpart to :meth:`build_prompt_parts`.
+
+        Returns:
+            Tuple ``(system_template, user_payload)`` where the framework
+            template lives in the system slot and the per-batch
+            instructions + delimited function dump live in the user slot.
+            See :meth:`build_prompt_parts` for the rationale.
+        """
+        analysis_content = self.build_batch_analysis_content(func_contexts)
+        return self._batch_prompt_parts(func_contexts, analysis_content)
 
     def _format_call_chain(self, chain: List[Dict[str, Any]], indent: int = 0) -> str:
         """Format call chain recursively for display.

@@ -791,12 +791,21 @@ class ReportGenerator:
         # concrete finding would have already been bucketed into the
         # concrete bucket; surfacing UNKNOWN-only items at the bottom keeps
         # the eye on confirmed risk first.
-        severity_order = ["HIGH", "MEDIUM", "LOW", "INFO", "SAFE", "UNKNOWN"]
+        severity_order = [
+            "HIGH",
+            "MEDIUM",
+            "LOW",
+            "INFO",
+            "ERROR",
+            "SAFE",
+            "UNKNOWN",
+        ]
         severity_emojis = {
             "HIGH": "🔴",
             "MEDIUM": "🟠",
             "LOW": "🟡",
             "INFO": "🔵",
+            "ERROR": "🟣",
             "SAFE": "🟢",
             "UNKNOWN": "🟣",
         }
@@ -990,6 +999,8 @@ class ReportGenerator:
                 "UNKNOWN": 0,
                 "MEDIUM": 0,
                 "LOW": 0,
+                "INFO": 0,
+                "ERROR": 0,
                 "SAFE": 0,
             },
             "analyzer_stats": {
