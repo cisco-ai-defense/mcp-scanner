@@ -278,7 +278,10 @@ The analyzer includes comprehensive error handling:
 ## Programmatic Usage
 
 ```python
-from mcpscanner import Config, Scanner
+import asyncio
+
+from mcpscanner import Config
+from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
 
 # Configure LLM
 config = Config(
@@ -287,44 +290,60 @@ config = Config(
     llm_temperature=0.1,
 )
 
-# Create scanner
-scanner = Scanner(config=config)
+# Create the behavioral analyzer
+analyzer = BehavioralCodeAnalyzer(config)
 
-# Scan with behavioral analyzer
-results = scanner.scan_source_code(
-    source_path="/path/to/mcp_server.py",
-    analyzers=["behavioral_analyzer"],
+# Scan a file or directory. analyze() returns one SecurityFinding per MCP tool;
+# tools with no mismatch are returned with severity "SAFE".
+source_path = "/path/to/mcp_server.py"
+findings = asyncio.run(
+    analyzer.analyze(source_path, context={"file_path": source_path})
 )
 
 # Process results
-for result in results:
-    if not result.is_safe:
-        print(f"⚠️  {result.tool_name}: {result.findings['behavioral_analyzer']['severity']}")
-        print(f"   {result.findings['behavioral_analyzer']['threat_summary']}")
+for finding in findings:
+    if finding.severity != "SAFE":
+        print(f"⚠️  {finding.details.get('function_name')}: {finding.severity}")
+        print(f"   {finding.summary}")
 ```
 
 ### Filtering Results
 
+The helpers in `mcpscanner.core.result` work on scan result objects, so wrap the
+findings of each tool in a `ToolScanResult` first:
+
 ```python
-from mcpscanner.result import filter_results_by_severity
+from mcpscanner.core.result import ToolScanResult, filter_results_by_severity
+
+results = [
+    ToolScanResult(
+        tool_name=finding.details.get("function_name", "unknown"),
+        tool_description="",
+        status="completed",
+        analyzers=[finding.analyzer],
+        findings=[] if finding.severity == "SAFE" else [finding],
+    )
+    for finding in findings
+]
 
 # Get only HIGH severity findings
 high_severity = filter_results_by_severity(results, "high")
 
-# Get MEDIUM and above
-medium_and_above = filter_results_by_severity(results, "medium")
+# Get only MEDIUM severity findings
+medium_severity = filter_results_by_severity(results, "medium")
 ```
 
 ### Custom Output Formatting
 
 ```python
-from mcpscanner.result import format_results_as_json, format_results_by_analyzer
+from mcpscanner.core.result import format_results_as_json, format_results_by_analyzer
 
-# JSON output
+# JSON output (takes the whole list)
 json_output = format_results_as_json(results)
 
-# Grouped by analyzer
-analyzer_output = format_results_by_analyzer(results)
+# Grouped by analyzer (takes one result at a time)
+for result in results:
+    print(format_results_by_analyzer(result))
 ```
 
 ## Best Practices
