@@ -641,7 +641,9 @@ THREAT_MITIGATIONS: Dict[str, str] = {
     ),
     "AISubtech-9.3.1": (
         "Pin dependencies from trusted registries, verify hashes, and reject "
-        "unexpected packages or bundled binaries before agents can use them."
+        "unexpected packages or bundled binaries before agents can use them. "
+        "Upgrade a known-vulnerable version to a fixed release, or remove or "
+        "replace the dependency when no fix exists."
     ),
     "AISubtech-11.1.2": (
         "Keep tool operations inside the intended sandbox. Do not use "
