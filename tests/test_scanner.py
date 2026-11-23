@@ -1418,6 +1418,18 @@ def test_should_fallback_to_initialize_covers_legacy_shapes(config):
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32600, "Bad Request: Invalid session ID"), legacy_http=True
     )
+    unsupported_http_version = _mcp_error(
+        -32600,
+        "Bad Request: Unsupported protocol version: 2026-07-28. "
+        "Supported versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25",
+    )
+    assert not scanner._should_fallback_to_initialize(unsupported_http_version)
+    assert scanner._should_fallback_to_initialize(
+        unsupported_http_version, legacy_http=True
+    )
+    assert not scanner._should_fallback_to_initialize(
+        _mcp_error(-32600, "Bad Request: Unsupported Content-Type"), legacy_http=True
+    )
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32602, "params._meta is invalid"), legacy_stdio=True
     )
