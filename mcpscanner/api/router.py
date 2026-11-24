@@ -48,6 +48,7 @@ from ..core.result import (
     group_findings_by_analyzer,
 )
 from ..core.scanner import Scanner, ScannerFactory
+from ..config.constants import MCPScannerConstants
 from ..utils.logging_config import get_logger
 from ..core.auth import AuthType
 
@@ -790,7 +791,9 @@ async def scan_resource_endpoint(
                 auth = Auth.custom(request.auth.custom_headers)
 
         # Use allowed MIME types from request or default
-        allowed_mime_types = request.allowed_mime_types or ["text/plain", "text/html"]
+        allowed_mime_types = request.allowed_mime_types or list(
+            MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES
+        )
 
         result = await scanner.scan_remote_server_resource(
             server_url=request.server_url,
@@ -876,7 +879,7 @@ async def scan_all_resources_endpoint(
                 auth = Auth.custom(request.auth.custom_headers)
 
         # Default allowed MIME types
-        allowed_mime_types = ["text/plain", "text/html"]
+        allowed_mime_types = list(MCPScannerConstants.DEFAULT_RESOURCE_MIME_TYPES)
 
         results = await scanner.scan_remote_server_resources(
             server_url=request.server_url,
@@ -899,6 +902,7 @@ async def scan_all_resources_endpoint(
                     "resource_uri": result.resource_uri,
                     "resource_name": result.resource_name,
                     "resource_mime_type": result.resource_mime_type,
+                    "is_template": getattr(result, "is_template", False),
                     "status": result.status,
                     "is_safe": result.is_safe,
                     "findings": grouped_findings,
@@ -915,6 +919,7 @@ async def scan_all_resources_endpoint(
                         "resource_uri": result.resource_uri,
                         "resource_name": result.resource_name,
                         "resource_mime_type": result.resource_mime_type,
+                        "is_template": getattr(result, "is_template", False),
                         "status": result.status,
                         "is_safe": None,
                         "findings": {},

@@ -207,6 +207,10 @@ class ResourceScanResult(ScanResult):
             analyzers saw. The artifact serializers do not include this
             field, so retention does not bloat JSON / Markdown reports
             or API responses.
+        is_template (bool): True when this entry is a resource template.
+            ``resource_uri`` is then the URI template, such as
+            ``ticket://{ticket_id}``, and the analyzed text is the
+            template's advertised metadata, not a resource body.
     """
 
     def __init__(
@@ -222,6 +226,7 @@ class ResourceScanResult(ScanResult):
         resource_description: Optional[str] = None,
         resource_text: Optional[str] = None,
         analyzer_errors: Optional[List[Dict[str, str]]] = None,
+        is_template: bool = False,
     ):
         """Initialize a new ResourceScanResult instance.
 
@@ -248,6 +253,7 @@ class ResourceScanResult(ScanResult):
         # truthiness / ``str`` operations without ``getattr(..., "") or ""``.
         self.resource_description = resource_description or ""
         self.resource_text = resource_text or ""
+        self.is_template = bool(is_template)
         super().__init__(
             status, analyzers, findings, server_source, server_name, analyzer_errors
         )
@@ -490,6 +496,7 @@ def filter_results_by_severity(
                     or "",
                     resource_text=getattr(result, "resource_text", "") or "",
                     analyzer_errors=result.analyzer_errors,
+                    is_template=getattr(result, "is_template", False),
                 )
             elif isinstance(result, InstructionsScanResult):
                 filtered_result = InstructionsScanResult(
@@ -610,6 +617,7 @@ def format_results_as_json(
                 "resource_uri": scan_result.resource_uri,
                 "resource_name": scan_result.resource_name,
                 "resource_mime_type": scan_result.resource_mime_type,
+                "is_template": getattr(scan_result, "is_template", False),
                 "status": scan_result.status,
                 "findings": {},
                 "is_safe": scan_result.is_safe,
