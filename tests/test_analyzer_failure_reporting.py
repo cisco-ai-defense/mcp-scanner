@@ -465,6 +465,40 @@ async def test_meta_analyzer_error_log_does_not_echo_provider_message():
 
 
 @pytest.mark.asyncio
+async def test_meta_failure_result_stays_incomplete():
+    class SoftFailure:
+        async def analyze_findings(self, findings, analyzers_used, entity_context):
+            return MetaAnalysisResult(failure=RuntimeError("provider down"))
+
+    scanner = _scanner()
+    scanner._meta_analyzer = SoftFailure()
+    result = ToolScanResult(
+        tool_name="example",
+        tool_description="Example tool",
+        status="completed",
+        analyzers=[AnalyzerEnum.YARA],
+        findings=[
+            SecurityFinding(
+                severity="HIGH",
+                summary="Threat detected",
+                analyzer="YARA",
+                threat_category="TEST",
+                details={},
+            )
+        ],
+    )
+
+    enriched = await scanner._meta_analyze_one_tool(result, asyncio.Semaphore(1))
+
+    assert enriched.status == "partial"
+    assert enriched.is_safe is False
+    assert len(enriched.findings) == 1
+    assert enriched.analyzer_errors[-1]["analyzer"] == "META"
+    assert enriched.analyzer_errors[-1]["message"] == "RuntimeError during analysis"
+    assert "provider down" not in enriched.analyzer_errors[-1]["message"]
+
+
+@pytest.mark.asyncio
 async def test_api_analyzer_log_does_not_echo_provider_message(monkeypatch):
     class CrashingClient:
         async def __aenter__(self):

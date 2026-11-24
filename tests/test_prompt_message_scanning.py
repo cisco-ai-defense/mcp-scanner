@@ -1,5 +1,6 @@
 """Tests for prompts/get message inclusion in prompt scanning."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -24,7 +25,10 @@ def config():
     [
         ("plain text", "plain text"),
         (TextContent(type="text", text="hello"), "hello"),
-        ([TextContent(type="text", text="a"), TextContent(type="text", text="b")], "a\nb"),
+        (
+            [TextContent(type="text", text="a"), TextContent(type="text", text="b")],
+            "a\nb",
+        ),
     ],
 )
 def test_coerce_prompt_message_content(content, expected):
@@ -54,7 +58,9 @@ def test_extract_prompt_messages_text_joins_roles():
 @pytest.mark.asyncio
 async def test_analyze_prompt_passes_messages_to_llm(config):
     scanner = Scanner(config)
-    prompt = MCPPrompt(name="pii_test_prompt", description="metadata only", arguments=[])
+    prompt = MCPPrompt(
+        name="pii_test_prompt", description="metadata only", arguments=[]
+    )
 
     captured = []
 
@@ -140,11 +146,14 @@ async def test_scan_remote_server_prompts_fetches_get_prompt(config):
         ]
     )
 
-    with patch.object(scanner, "_get_mcp_session", AsyncMock(return_value=(AsyncMock(), session))), patch.object(
-        scanner, "_close_mcp_session", AsyncMock()
-    ), patch.object(scanner, "_server_supports_capability", return_value=True), patch.object(
-        scanner, "_analyze_prompt", AsyncMock()
-    ) as mock_analyze:
+    with (
+        patch.object(
+            scanner, "_get_mcp_session", AsyncMock(return_value=(AsyncMock(), session))
+        ),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+        patch.object(scanner, "_server_supports_capability", return_value=True),
+        patch.object(scanner, "_analyze_prompt", AsyncMock()) as mock_analyze,
+    ):
         await scanner.scan_remote_server_prompts(
             "https://example.com/mcp",
             analyzers=[AnalyzerEnum.YARA],
@@ -165,11 +174,14 @@ async def test_get_prompt_failure_marks_prompt_failed(config):
     session.list_prompts.return_value = SimpleNamespace(prompts=[prompt])
     session.get_prompt.side_effect = RuntimeError("prompts/get unavailable")
 
-    with patch.object(scanner, "_get_mcp_session", AsyncMock(return_value=(AsyncMock(), session))), patch.object(
-        scanner, "_close_mcp_session", AsyncMock()
-    ), patch.object(scanner, "_server_supports_capability", return_value=True), patch.object(
-        scanner, "_analyze_prompt", AsyncMock()
-    ) as mock_analyze:
+    with (
+        patch.object(
+            scanner, "_get_mcp_session", AsyncMock(return_value=(AsyncMock(), session))
+        ),
+        patch.object(scanner, "_close_mcp_session", AsyncMock()),
+        patch.object(scanner, "_server_supports_capability", return_value=True),
+        patch.object(scanner, "_analyze_prompt", AsyncMock()) as mock_analyze,
+    ):
         results = await scanner.scan_remote_server_prompts(
             "https://example.com/mcp",
             analyzers=[AnalyzerEnum.YARA],
@@ -192,12 +204,20 @@ async def test_analyze_prompt_failure_preserves_messages_text(config):
 
     scanner._analyze_prompt = boom
 
-    collected = [(prompt, "fetched body", None)]
-    results = await scanner._analyze_collected_prompts(
-        collected, [AnalyzerEnum.YARA]
+    result = await scanner._analyze_one_prompt_for_scan(
+        prompt,
+        [AnalyzerEnum.YARA],
+        None,
+        "fetched body",
+        None,
+        asyncio.Semaphore(1),
+        asyncio.Semaphore(1),
     )
-    assert results[0].status == "failed"
-    assert results[0].prompt_messages_text == "fetched body"
+    assert result.status == "failed"
+    assert result.prompt_messages_text == "fetched body"
+    assert result.is_safe is None
+    assert result.findings[0].threat_category == "ANALYZER INFRASTRUCTURE"
+    assert "analyzer blew up" not in result.findings[0].summary
 
 
 @pytest.mark.asyncio
@@ -324,12 +344,8 @@ async def test_prompt_count_budget_stops_further_fetches(config, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prompt_count_budget_does_not_schedule_every_prompt(
-    config, monkeypatch
-):
+async def test_prompt_count_budget_does_not_schedule_every_prompt(config, monkeypatch):
     """Only prompts inside the count budget become analysis tasks."""
-    import asyncio
-
     monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPTS_PER_SCAN", 1)
     scanner = Scanner(config)
     prompts = [
@@ -347,25 +363,22 @@ async def test_prompt_count_budget_does_not_schedule_every_prompt(
             )
         ]
     )
-    scheduled = []
-    real_gather = asyncio.gather
+    analyzed = []
+    real_analyze = scanner._analyze_prompt
 
-    async def counting_gather(*args, **kwargs):
-        scheduled.append(args)
-        return await real_gather(*args, **kwargs)
+    async def counting_analyze(*args, **kwargs):
+        analyzed.append(args[0].name if args else kwargs.get("prompt"))
+        return await real_analyze(*args, **kwargs)
 
+    scanner._analyze_prompt = counting_analyze
     patches = _patch_prompt_session(scanner, session)
-    with patches[0], patches[1], patches[2], patch(
-        "mcpscanner.core.scanner.asyncio.gather", counting_gather
-    ):
+    with patches[0], patches[1], patches[2]:
         results = await scanner.scan_remote_server_prompts(
             "https://example.com/mcp",
             analyzers=[AnalyzerEnum.YARA],
         )
     assert session.get_prompt.await_count == 1
-    assert len(scheduled) == 1
-    assert len(scheduled[0]) == 1
-    assert [result.prompt_name for result in results] == ["first", "second", "third"]
+    assert analyzed == ["first"]
     assert results[0].status == "completed"
     assert results[1].status == "failed"
     assert results[2].status == "failed"
@@ -402,6 +415,7 @@ async def test_within_limit_prompt_keeps_name_and_body(config):
 @pytest.mark.asyncio
 async def test_prompt_aggregate_budget_stops_further_fetches(config, monkeypatch):
     monkeypatch.setattr(MCPScannerConstants, "MAX_PROMPT_RESOURCE_AGGREGATE_CHARS", 2)
+    monkeypatch.setattr(MCPScannerConstants, "REMOTE_SCAN_CONCURRENCY", 1)
     scanner = Scanner(config)
     prompts = [
         MCPPrompt(name="first", description="d", arguments=[]),

@@ -81,7 +81,8 @@ class Config:
             llm_temperature (float, optional): Temperature for LLM responses (0.0-1.0). Defaults from constants.
             llm_api_version (str, optional): API version for LLM provider (if required).
             llm_rate_limit_delay (float, optional): Delay in seconds between LLM API calls. Defaults to 1.0.
-            llm_max_retries (int, optional): Maximum number of retries for failed LLM API calls. Defaults to 3.
+            llm_max_retries (int, optional): Maximum number of retries for failed LLM API calls.
+                Defaults to MCP_SCANNER_LLM_MAX_RETRIES.
             aws_region_name (str, optional): AWS region name for Bedrock (e.g., 'us-east-1'). Falls back to AWS_REGION or AWS_DEFAULT_REGION env vars.
             aws_session_token (str, optional): AWS session token for temporary credentials. Falls back to AWS_SESSION_TOKEN env var.
             aws_profile_name (str, optional): AWS profile name from ~/.aws/credentials. Falls back to AWS_PROFILE env var.
@@ -111,7 +112,11 @@ class Config:
         self._llm_rate_limit_delay = (
             llm_rate_limit_delay if llm_rate_limit_delay is not None else 1.0
         )
-        self._llm_max_retries = llm_max_retries if llm_max_retries is not None else 3
+        self._llm_max_retries = (
+            llm_max_retries
+            if llm_max_retries is not None
+            else CONSTANTS.LLM_MAX_RETRIES
+        )
 
         # AWS Bedrock configuration with environment variable fallbacks
         self._aws_region_name = (
