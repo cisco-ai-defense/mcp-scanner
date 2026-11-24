@@ -40,6 +40,9 @@ from typing import Any, Dict, List, Optional
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
 from ....threats.threats import ThreatMapping
+from ...static_analysis.interprocedural.treesitter_call_graph import (
+    TreeSitterCallGraphAnalyzer,
+)
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 from .alignment.alignment_response_validator import normalize_finding_class
@@ -56,6 +59,28 @@ _JS_EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
 _SKIP_DIRS = frozenset(
     {"node_modules", "dist", "build", "out", ".git", ".next", ".turbo", "coverage"}
 )
+
+# Aggregate budgets for directory-wide JS/TS call-graph construction.
+_JS_CALL_GRAPH_MAX_FILES = 200
+_JS_CALL_GRAPH_MAX_TOTAL_BYTES = MCPScannerConstants.MAX_FILE_SIZE_BYTES * 50
+
+# Budgets for source discovery itself, applied before any file is read.
+# ``_JS_MAX_DIR_ENTRIES`` bounds the walk of a hostile directory tree;
+# ``_JS_MAX_FILES`` bounds how many matches are analysed.
+_JS_MAX_FILES = 2_000
+_JS_MAX_DIR_ENTRIES = 100_000
+
+# Keep in sync with ``BehavioralCodeAnalyzer._EXT_TO_TS_LANGUAGE`` for JS/TS.
+_EXT_TO_TS_LANGUAGE = {
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+}
 
 
 class JSBehavioralCodeAnalyzer(BaseAnalyzer):
@@ -80,6 +105,8 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         # ``analysis_scan_status`` reads it to downgrade such scans to
         # ``error`` instead of reporting ``is_safe=True``.
         self.analysis_errors = 0
+        self._source_cache: Dict[str, str] = {}
+        self._call_graph_partial = False
         self.logger.debug(
             "JSBehavioralCodeAnalyzer initialised with alignment orchestrator"
         )
@@ -100,6 +127,8 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
             confirms.
         """
         self.analysis_errors = 0
+        self._source_cache = {}
+        self._call_graph_partial = False
         try:
             if os.path.isdir(content):
                 return await self._analyze_directory(content, context)
@@ -128,10 +157,30 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         self.logger.debug(
             "js behavioural scan root=%s files=%d", directory, len(files)
         )
+        call_graphs = self._build_directory_call_graphs(files)
+        if self._call_graph_partial:
+            context = context.copy()
+            context["call_graph_partial"] = True
         findings: List[SecurityFinding] = []
-        for path in files:
-            file_findings = await self._analyze_file(path, context)
-            findings.extend(file_findings)
+        try:
+            for path in files:
+                file_context = context.copy()
+                lang = self._language_for_path(path)
+                if lang:
+                    file_context["cross_file_analyzer"] = call_graphs.get(lang)
+                file_findings = await self._analyze_file(path, file_context)
+                findings.extend(file_findings)
+        finally:
+            # Parse trees and source bytes are retained for the whole
+            # directory scan because cross-file handler and endpoint-table
+            # resolution reads them per file. Release once the last file is
+            # done rather than holding a copy of the package until the
+            # analyzer itself is collected.
+            for analyzer in call_graphs.values():
+                try:
+                    analyzer.release_parsed_sources()
+                except Exception:  # noqa: BLE001 - cleanup must not fail a scan
+                    self.logger.debug("js behavioural call_graph release_failed")
         return findings
 
     async def _analyze_file(
@@ -149,8 +198,11 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                     file_size,
                 )
                 return []
-            with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
-                source_code = fh.read()
+            if file_path in self._source_cache:
+                source_code = self._source_cache.pop(file_path)
+            else:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+                    source_code = fh.read()
         except OSError as e:
             self.analysis_errors += 1
             self.logger.warning(
@@ -165,11 +217,44 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         return findings
 
     def _find_js_files(self, directory: str) -> List[str]:
-        """Return absolute paths of every JS/TS file under ``directory``,
-        skipping vendored deps and build artefacts."""
+        """Return absolute paths of JS/TS files under ``directory``,
+        skipping vendored deps and build artefacts.
+
+        Enumeration is bounded on two axes: how many matching files are
+        returned, and how many directory entries are examined to find
+        them. The second matters because a hostile package can bury a few
+        sources under a very large tree, making the walk itself expensive
+        even though the match count stays small. Hitting either bound
+        marks the scan partial -- the filter rules still mirror
+        ``count_source_files``, so the reported total stays truthful while
+        the partial flag records that not all of it was analysed.
+        """
         out: List[str] = []
         root = Path(directory)
+        examined = 0
         for path in root.rglob("*"):
+            examined += 1
+            if examined > _JS_MAX_DIR_ENTRIES:
+                self._call_graph_partial = True
+                self.logger.warning(
+                    "js behavioural discovery entry_budget_exceeded examined=%d "
+                    "limit=%d matched=%d root=%s",
+                    examined,
+                    _JS_MAX_DIR_ENTRIES,
+                    len(out),
+                    directory,
+                )
+                break
+            if len(out) >= _JS_MAX_FILES:
+                self._call_graph_partial = True
+                self.logger.warning(
+                    "js behavioural discovery file_budget_exceeded matched=%d "
+                    "limit=%d root=%s",
+                    len(out),
+                    _JS_MAX_FILES,
+                    directory,
+                )
+                break
             if not path.is_file():
                 continue
             if path.suffix.lower() not in _JS_EXTENSIONS:
@@ -190,6 +275,98 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                 continue
             out.append(str(path))
         return sorted(out)
+
+    @staticmethod
+    def _language_for_path(file_path: str) -> Optional[str]:
+        """Map a source path to its tree-sitter language id."""
+        return _EXT_TO_TS_LANGUAGE.get(Path(file_path).suffix.lower())
+
+    def _build_directory_call_graphs(
+        self, files: List[str]
+    ) -> Dict[str, TreeSitterCallGraphAnalyzer]:
+        """Build per-language cross-file call graphs for a directory scan.
+
+        ``NativeAnalyzer`` needs these to resolve imported endpoint tables
+        (``tool.alias`` loops backed by ``api.endpoints`` in sibling modules).
+        Enforces aggregate file and byte budgets so untrusted packages cannot
+        exhaust memory before behavioural analysis begins.
+        """
+        analyzers: Dict[str, TreeSitterCallGraphAnalyzer] = {}
+        files_added = 0
+        total_bytes = 0
+        for path in files:
+            if files_added >= _JS_CALL_GRAPH_MAX_FILES:
+                self._call_graph_partial = True
+                self.logger.warning(
+                    "js behavioural call_graph budget_exceeded files=%d limit=%d",
+                    files_added,
+                    _JS_CALL_GRAPH_MAX_FILES,
+                )
+                break
+            lang = self._language_for_path(path)
+            if not lang:
+                continue
+            try:
+                file_size = os.path.getsize(path)
+                if file_size > MCPScannerConstants.MAX_FILE_SIZE_BYTES * 5:
+                    self.logger.error(
+                        "js behavioural skip call_graph file=%s size=%d -- too large",
+                        path,
+                        file_size,
+                    )
+                    continue
+                if total_bytes + file_size > _JS_CALL_GRAPH_MAX_TOTAL_BYTES:
+                    self._call_graph_partial = True
+                    self.logger.warning(
+                        "js behavioural call_graph byte_budget_exceeded bytes=%d limit=%d",
+                        total_bytes,
+                        _JS_CALL_GRAPH_MAX_TOTAL_BYTES,
+                    )
+                    break
+                if path in self._source_cache:
+                    source_code = self._source_cache[path]
+                else:
+                    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                        source_code = fh.read()
+                    self._source_cache[path] = source_code
+            except OSError as e:
+                self.logger.warning(
+                    "js behavioural call_graph read_failed file=%s error=%s",
+                    path,
+                    e,
+                )
+                continue
+
+            if lang not in analyzers:
+                analyzers[lang] = TreeSitterCallGraphAnalyzer(lang)
+            analyzers[lang].add_file(Path(path), source_code)
+            files_added += 1
+            total_bytes += file_size
+
+        for lang, analyzer in analyzers.items():
+            try:
+                call_graph = analyzer.build_call_graph()
+                # A node/function/edge/time budget hit inside the builder is
+                # partial coverage too, not just the file and byte budgets
+                # enforced above.
+                if getattr(analyzer, "budget_exceeded", False):
+                    self._call_graph_partial = True
+                self.logger.debug(
+                    "js behavioural call_graph_built language=%s functions=%d "
+                    "partial=%s",
+                    lang,
+                    len(call_graph.functions),
+                    getattr(analyzer, "budget_exceeded", False),
+                )
+            except Exception as e:  # noqa: BLE001
+                # A failed build is unanalysed, not clean.
+                self._call_graph_partial = True
+                self.logger.warning(
+                    "js behavioural call_graph_build_failed language=%s error=%s",
+                    lang,
+                    e,
+                )
+        return analyzers
 
     # ------------------------------------------------------------------
     # Per-source orchestrator call

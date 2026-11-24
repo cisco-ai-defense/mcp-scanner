@@ -312,8 +312,8 @@ asyncio.run(main())
 
 - **remote**: scan a remote MCP server (SSE or streamable HTTP). Supports `--server-url`, optional `--bearer-token`, `--header`.
 - **stdio**: launch and scan a stdio MCP server. Requires `--stdio-command`; accepts `--stdio-args`, `--stdio-env`, optional `--stdio-tool`, `--stdio-timeout`.
-- **config**: scan servers from a specific MCP config file. Requires `--config-path`; optional `--bearer-token`.
-- **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`.
+- **config**: scan servers from a specific MCP config file. Requires `--config-path`; optional `--bearer-token`, `--stderr-file`.
+- **known-configs**: scan servers from well-known client config locations on this machine; optional `--bearer-token`, `--stderr-file`.
 - **prompts**: scan prompts on an MCP server. Requires `--server-url`; optional `--prompt-name`, `--bearer-token`, `--header`.
 - **resources**: scan resources on an MCP server. Requires `--server-url`; optional `--resource-uri`, `--mime-types`, `--bearer-token`, `--header`.
 - **instructions**: scan server instructions from the connect handshake (`DiscoverResult` on mcp 2.0, `InitializeResult` on legacy servers). Requires `--server-url`; optional `--bearer-token`.

@@ -1418,6 +1418,18 @@ def test_should_fallback_to_initialize_covers_legacy_shapes(config):
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32600, "Bad Request: Invalid session ID"), legacy_http=True
     )
+    unsupported_http_version = _mcp_error(
+        -32600,
+        "Bad Request: Unsupported protocol version: 2026-07-28. "
+        "Supported versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25",
+    )
+    assert not scanner._should_fallback_to_initialize(unsupported_http_version)
+    assert scanner._should_fallback_to_initialize(
+        unsupported_http_version, legacy_http=True
+    )
+    assert not scanner._should_fallback_to_initialize(
+        _mcp_error(-32600, "Bad Request: Unsupported Content-Type"), legacy_http=True
+    )
     assert not scanner._should_fallback_to_initialize(
         _mcp_error(-32602, "params._meta is invalid"), legacy_stdio=True
     )
@@ -1486,3 +1498,39 @@ def test_session_connect_metadata_reads_modern_session_fields(config):
     assert instructions == "modern instructions"
     assert server_info.name == "modern-server"
     assert protocol_version == "2026-07-28"
+
+
+async def _stdio_client_errlog(config, **session_kwargs):
+    """Run _get_stdio_session with a stubbed stdio_client and return its errlog."""
+    import sys
+
+    scanner = Scanner(config)
+    server = StdioServer(command=sys.executable, args=["-c", "pass"])
+    client_context = MagicMock()
+    client_context.__aenter__ = AsyncMock(side_effect=RuntimeError("stop here"))
+    client_context.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "mcpscanner.core.scanner.stdio_client", return_value=client_context
+    ) as mock_stdio_client:
+        with pytest.raises(MCPConnectionError):
+            await scanner._get_stdio_session(server, timeout=5, **session_kwargs)
+
+    mock_stdio_client.assert_called_once()
+    return mock_stdio_client.call_args.kwargs["errlog"]
+
+
+@pytest.mark.asyncio
+async def test_get_stdio_session_passes_errlog_to_stdio_client(config):
+    import io
+
+    sink = io.StringIO()
+    assert await _stdio_client_errlog(config, errlog=sink) is sink
+
+
+@pytest.mark.asyncio
+async def test_get_stdio_session_errlog_defaults_to_sys_stderr(config):
+    import sys
+
+    assert await _stdio_client_errlog(config) is sys.stderr
+    assert await _stdio_client_errlog(config, errlog=None) is sys.stderr
