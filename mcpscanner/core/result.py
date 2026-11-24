@@ -797,7 +797,9 @@ def format_results_as_json(
                 elif len(threat_names) == 0:
                     threat_summary = "No specific threats identified"
                 else:
-                    # Use first summary as threat_summary (analyzers should provide consistent summaries)
+                    # Keep the first summary in threat_summary. Every distinct
+                    # summary stays in threat_summaries so a second finding
+                    # from the same analyzer is not dropped.
                     threat_summary = summaries[0] if summaries else "Threats detected"
 
                 analyzer_finding = {
@@ -806,6 +808,8 @@ def format_results_as_json(
                     "threat_names": list(set(threat_names)),  # Deduplicate threat names
                     "threat_summary": threat_summary,
                 }
+                if len(summaries) > 1:
+                    analyzer_finding["threat_summaries"] = summaries
 
                 # Add threat/vulnerability classification if available
                 if threat_vuln_classification:

@@ -717,16 +717,26 @@ def _iter_display_findings(findings: Any) -> List[Dict[str, Any]]:
                 data
             ):
                 continue
-            records.append(
-                {
-                    "summary": data.get("threat_summary", "No summary"),
-                    "severity": data.get("severity", "Unknown"),
-                    "analyzer": str(analyzer_name).replace("_analyzer", "").upper(),
-                    "details": {"primary_threats": data.get("threat_names") or []},
-                    "mcp_taxonomies": data.get("mcp_taxonomies") or [],
-                    "mcp_taxonomy": data.get("mcp_taxonomy"),
-                }
-            )
+            summaries = data.get("threat_summaries")
+            if not isinstance(summaries, list) or not summaries:
+                summaries = [data.get("threat_summary", "No summary")]
+            for index, summary in enumerate(summaries):
+                records.append(
+                    {
+                        "summary": summary,
+                        "severity": data.get("severity", "Unknown"),
+                        "analyzer": str(analyzer_name)
+                        .replace("_analyzer", "")
+                        .upper(),
+                        "details": {"primary_threats": data.get("threat_names") or []},
+                        "mcp_taxonomies": (
+                            data.get("mcp_taxonomies") or [] if index == 0 else []
+                        ),
+                        "mcp_taxonomy": (
+                            data.get("mcp_taxonomy") if index == 0 else None
+                        ),
+                    }
+                )
         return records
     if isinstance(findings, list):
         return [item for item in findings if isinstance(item, dict)]

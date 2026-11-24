@@ -555,9 +555,8 @@ class ThreatMapping:
 # One mitigation per MCP taxonomy sub-technique. The catalog ids and the
 # defensive action for each follow the MCP Scanner threat-detection catalog
 # in the explainability knowledge base. Sub-techniques that the catalog does
-# not list still get a mitigation in the same style, including the scanner's
-# tool-shadowing id (AISubtech-12.1.5) alongside the catalog id
-# (AISubtech-12.1.4).
+# not list still get a mitigation in the same style. Tool shadowing is
+# AISubtech-12.1.5.
 
 
 _DESCRIPTION_MISMATCH_MITIGATION = (
@@ -612,8 +611,8 @@ THREAT_MITIGATIONS: Dict[str, str] = {
     ),
     "AISubtech-9.1.1": (
         "Do not pass tool parameters into eval, exec, compile, or unsafe "
-        "deserialization. Use a safe parser such as json.loads or "
-        "ast.literal_eval, and sandbox any interpreter the tool documents."
+        "deserialization. Parse untrusted input with a bounded JSON parser "
+        "such as json.loads, and sandbox any interpreter the tool documents."
     ),
     "AISubtech-9.1.2": (
         "Scope filesystem, process, and environment access to the paths and "
@@ -660,7 +659,6 @@ THREAT_MITIGATIONS: Dict[str, str] = {
         "application directory. Do not write to startup files, SSH keys, or "
         "other system locations from user-controlled paths."
     ),
-    "AISubtech-12.1.4": _TOOL_SHADOWING_MITIGATION,
     "AISubtech-12.1.5": _TOOL_SHADOWING_MITIGATION,
     "AISubtech-13.1.1": (
         "Set timeouts, rate limits, and size caps. Require recursive and "

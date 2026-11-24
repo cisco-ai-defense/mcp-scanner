@@ -45,7 +45,7 @@ CATALOG_THREATS = (
     "AISubtech-11.1.2",
     "AISubtech-12.1.2",
     "AISubtech-12.1.3",
-    "AISubtech-12.1.4",
+    "AISubtech-12.1.5",
     "AISubtech-13.1.1",
     "AISubtech-15.1.8",
     "AISubtech-15.1.9",
@@ -85,6 +85,9 @@ def test_every_scanner_threat_has_its_mitigation():
         assert THREAT_MITIGATIONS[code].strip()
     assert set(CATALOG_THREATS) <= set(THREAT_MITIGATIONS)
     assert "AISubtech-12.1.5" in seen
+    assert "AISubtech-12.1.4" not in THREAT_MITIGATIONS
+    assert "literal_eval" not in THREAT_MITIGATIONS["AISubtech-9.1.1"]
+    assert "json.loads" in THREAT_MITIGATIONS["AISubtech-9.1.1"]
 
 
 def test_description_mismatch_does_not_reuse_tool_poisoning_advice():
@@ -359,3 +362,55 @@ def test_same_mitigation_keeps_both_descriptions():
     assert len(subtechs) == 1
     assert manipulation_description in subtechs[0]["description"]
     assert unicode_description in subtechs[0]["description"]
+
+
+def test_one_analyzer_keeps_each_finding_summary(capsys):
+    first = SecurityFinding(
+        severity="HIGH",
+        summary="ignore previous instructions",
+        analyzer="YARA",
+        threat_category="PROMPT INJECTION",
+        details={"threat_type": "PROMPT INJECTION"},
+    )
+    second = SecurityFinding(
+        severity="LOW",
+        summary="eval in the prompt body",
+        analyzer="YARA",
+        threat_category="CODE EXECUTION",
+        details={"threat_type": "CODE EXECUTION"},
+    )
+    result = ToolScanResult(
+        "tool",
+        "description",
+        "completed",
+        ["yara"],
+        [first, second],
+    )
+    payload = json.loads(format_results_as_json([result]))
+    finding = payload["scan_results"][0]["findings"]["yara_analyzer"]
+    assert finding["total_findings"] == 2
+    assert finding["threat_summaries"] == [
+        "ignore previous instructions",
+        "eval in the prompt body",
+    ]
+
+    rows = asyncio.run(results_to_json([result]))
+    row = rows[0]["findings"]["yara_analyzer"]
+    assert row["threat_summaries"] == finding["threat_summaries"]
+
+    display_prompt_results(
+        [
+            {
+                "prompt_name": "evil_prompt",
+                "is_safe": False,
+                "status": "completed",
+                "findings": {"yara_analyzer": finding},
+            }
+        ],
+        "http://example.test/mcp",
+        detailed=True,
+    )
+    output = capsys.readouterr().out
+    assert "Findings: 2" in output
+    assert "1. ignore previous instructions" in output
+    assert "2. eval in the prompt body" in output

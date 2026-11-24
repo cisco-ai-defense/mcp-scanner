@@ -164,8 +164,12 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
             if data["total_findings"] > 0:
                 summaries = summaries_by_analyzer.get(analyzer, [])
                 if summaries:
-                    # Use first summary as threat_summary (analyzers provide consistent summaries)
+                    # Keep the first summary in threat_summary. Every distinct
+                    # summary stays in threat_summaries so a second finding
+                    # from the same analyzer is not dropped.
                     data["threat_summary"] = summaries[0]
+                    if len(summaries) > 1:
+                        data["threat_summaries"] = summaries
                 else:
                     # Fallback to threat_names based summary
                     threat_names = data["threat_names"]
