@@ -279,6 +279,7 @@ The analyzer includes comprehensive error handling:
 
 ```python
 import asyncio
+import os
 
 from mcpscanner import Config
 from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
@@ -293,43 +294,73 @@ config = Config(
 # Create the behavioral analyzer
 analyzer = BehavioralCodeAnalyzer(config)
 
-# Scan a file or directory. analyze() returns one SecurityFinding per MCP tool;
-# tools with no mismatch are returned with severity "SAFE".
+# analyze() treats a string that is not an existing file or directory as
+# inline source code, so check the path first.
 source_path = "/path/to/mcp_server.py"
+if not os.path.exists(source_path):
+    raise FileNotFoundError(source_path)
+
+# Scan a file or directory. analyze() returns one SecurityFinding per MCP tool:
+# severity "SAFE" when there is no mismatch, and "UNKNOWN" (with
+# details["analysis_status"] == "errored") when the alignment check failed.
 findings = asyncio.run(
     analyzer.analyze(source_path, context={"file_path": source_path})
 )
 
-# Process results
+# analyze() does not raise when a file cannot be read or parsed. It counts the
+# failure in analysis_errors, so check it before trusting the results.
+if analyzer.analysis_errors:
+    raise RuntimeError(f"Scan incomplete: {analyzer.analysis_errors} analysis error(s)")
+
+# An empty list means no MCP tool was found. It does not mean the code is safe.
+if not findings:
+    print("No MCP tools found")
+
+# Process results. details["source_file"] tells apart tools with the same
+# function name in different files of a directory scan.
 for finding in findings:
-    if finding.severity != "SAFE":
-        print(f"⚠️  {finding.details.get('function_name')}: {finding.severity}")
+    tool = f"{finding.details['source_file']}:{finding.details['function_name']}"
+    if finding.details.get("analysis_status") == "errored":
+        print(f"❓ {tool}: not analyzed ({finding.summary})")
+    elif finding.severity != "SAFE":
+        print(f"⚠️  {tool}: {finding.severity}")
         print(f"   {finding.summary}")
 ```
 
 ### Filtering Results
 
 The helpers in `mcpscanner.core.result` work on scan result objects, so wrap the
-findings of each tool in a `ToolScanResult` first:
+finding of each tool in a `ToolScanResult` first. Give a tool whose analysis
+errored a status other than `"completed"`, so it is reported as incomplete
+instead of as a threat, and stays visible in every severity filter:
 
 ```python
 from mcpscanner.core.result import ToolScanResult, filter_results_by_severity
 
-results = [
-    ToolScanResult(
-        tool_name=finding.details.get("function_name", "unknown"),
-        tool_description="",
-        status="completed",
-        analyzers=[finding.analyzer],
-        findings=[] if finding.severity == "SAFE" else [finding],
-    )
-    for finding in findings
-]
 
-# Get only HIGH severity findings
+def to_result(finding):
+    details = finding.details
+    errored = details.get("analysis_status") == "errored"
+    return ToolScanResult(
+        tool_name=f"{details['source_file']}:{details['function_name']}",
+        tool_description="",
+        status="failed" if errored else "completed",
+        analyzers=[] if errored else [finding.analyzer],
+        findings=[] if errored or finding.severity == "SAFE" else [finding],
+        analyzer_errors=(
+            [{"analyzer": finding.analyzer, "content_type": "source", "message": finding.summary}]
+            if errored
+            else []
+        ),
+    )
+
+
+results = [to_result(finding) for finding in findings]
+
+# Get only HIGH severity findings (plus tools whose analysis errored)
 high_severity = filter_results_by_severity(results, "high")
 
-# Get only MEDIUM severity findings
+# Get only MEDIUM severity findings (plus tools whose analysis errored)
 medium_severity = filter_results_by_severity(results, "medium")
 ```
 
@@ -377,7 +408,7 @@ for result in results:
 
 ### Current Limitations
 
-1. **Python Only**: Currently supports Python MCP servers only
+1. **Language Coverage**: Only files in the [supported languages](#supported-languages) are scanned
 2. **LLM Dependency**: Requires LLM API access and credits
 3. **Analysis Time**: Slower than pattern-based approaches
 4. **Dynamic Behavior**: Cannot detect runtime-only behaviors
@@ -385,7 +416,6 @@ for result in results:
 
 ### Future Enhancements
 
-- Multi-language support (JavaScript, TypeScript)
 - Integration with static analysis tools
 
 ### Debug Mode
