@@ -23,6 +23,16 @@ from urllib.parse import urlsplit
 
 from .base import BaseAnalyzer, SecurityFinding
 
+# Public JSON Schema dialect documents are controls, not external content.
+_WELL_KNOWN_SCHEMA_HOSTS = frozenset({"json-schema.org", "www.json-schema.org"})
+_CLOUD_METADATA_HOSTS = frozenset({"metadata.google.internal"})
+_CLOUD_METADATA_ADDRESSES = frozenset(
+    {
+        ipaddress.ip_address("169.254.169.254"),
+        ipaddress.ip_address("169.254.170.2"),
+    }
+)
+
 
 class SchemaReferenceAnalyzer(BaseAnalyzer):
     """Inspect advertised input/output schemas for indirect content sources."""
@@ -109,14 +119,19 @@ class SchemaReferenceAnalyzer(BaseAnalyzer):
             return "HIGH", "local-file"
         if parsed.scheme in ("http", "https") or parsed.netloc:
             if host:
+                lowered = host.lower().rstrip(".")
+                if lowered in _WELL_KNOWN_SCHEMA_HOSTS:
+                    return None
                 try:
-                    address = ipaddress.ip_address(host)
+                    address = ipaddress.ip_address(lowered)
                 except ValueError:
                     address = None
+                if _is_cloud_metadata(lowered, address):
+                    return "HIGH", "cloud-metadata"
                 if (
-                    host.lower() == "localhost"
-                    or host.lower().endswith(".localhost")
-                    or host.lower().endswith(".local")
+                    lowered == "localhost"
+                    or lowered.endswith(".localhost")
+                    or lowered.endswith(".local")
                     or (address is not None and not address.is_global)
                 ):
                     return "HIGH", "private-network"
@@ -124,3 +139,10 @@ class SchemaReferenceAnalyzer(BaseAnalyzer):
         if parsed.scheme:
             return "INFO", "non-HTTP URI"
         return "INFO", "relative"
+
+
+def _is_cloud_metadata(host: str, address: Optional[object]) -> bool:
+    """True for literal cloud metadata targets. Hostnames are not resolved."""
+    if host in _CLOUD_METADATA_HOSTS or host.endswith(".metadata.google.internal"):
+        return True
+    return address in _CLOUD_METADATA_ADDRESSES
