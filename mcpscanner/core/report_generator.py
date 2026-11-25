@@ -39,18 +39,23 @@ def _report_item_name(
 ) -> str:
     """Name a report row without treating instructions as a tool.
 
-    Grouped views pass with_server so two instruction rows from a config
-    scan stay distinct. The table keeps the plain name and its own server
-    column. The instruction body is never part of the label.
+    Grouped views pass with_server so two instruction rows, or two failed
+    tool lists, from a config scan stay distinct. The table keeps the plain
+    name and its own server column. The instruction body is never part of
+    the label.
     """
     item_type = result.get("item_type", "tool")
-    if item_type == "instructions":
-        server_name = result.get("server_name")
+    server_name = result.get("server_name")
+
+    def _named(label: str) -> str:
         if with_server and server_name:
-            return f"instructions ({server_name})"
-        return "instructions"
+            return f"{label} ({server_name})"
+        return label
+
+    if item_type == "instructions":
+        return _named("instructions")
     if item_type == "tool_scan":
-        return "tool list"
+        return _named("tool list")
     if item_type == "prompt":
         return result.get("prompt_name", "Unknown")
     if item_type == "resource":

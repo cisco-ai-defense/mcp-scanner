@@ -23,6 +23,7 @@ from mcpscanner.core.result import (
     InstructionsScanResult,
     PromptScanResult,
     ResourceScanResult,
+    ToolListFailure,
     ToolScanResult,
 )
 from mcpscanner.core.analyzers.base import SecurityFinding
@@ -412,6 +413,48 @@ class TestReportGenerator:
         assert "instructions (poisoned)" not in table
         assert "instructions (clean)" not in table
         assert body not in table
+
+    @pytest.mark.asyncio
+    async def test_grouped_tool_list_labels_keep_the_server(self):
+        """Grouped tool-list failures name the server; the table does not."""
+        rows = await results_to_json(
+            [
+                ToolListFailure(
+                    "RuntimeError",
+                    server_source="config:servers.json",
+                    server_name="alpha",
+                ),
+                ToolListFailure(
+                    "RuntimeError",
+                    server_source="config:servers.json",
+                    server_name="beta",
+                ),
+                ToolListFailure("RuntimeError"),
+            ]
+        )
+        report = ReportGenerator(
+            {"server_url": "http://test-server.com", "scan_results": rows}
+        )
+        by_tool = report.format_output(OutputFormat.BY_TOOL)
+        by_analyzer = report.format_output(OutputFormat.BY_ANALYZER)
+        by_severity = report.format_output(OutputFormat.BY_SEVERITY)
+        table = report.format_output(OutputFormat.TABLE)
+
+        assert "tool list (alpha)" in by_tool
+        assert "tool list (beta)" in by_tool
+        assert "⚠️ tool list (INCOMPLETE)" in by_tool
+        assert "tool list (alpha) (UNKNOWN): Analysis failed" in by_analyzer
+        assert "tool list (beta) (UNKNOWN): Analysis failed" in by_analyzer
+        assert (
+            "tool list (alpha) [tools_analyzer]: Analysis failed" in by_severity
+        )
+        assert (
+            "tool list (beta) [tools_analyzer]: Analysis failed" in by_severity
+        )
+        assert "tool list (alpha)" not in table
+        assert "tool list (beta)" not in table
+        assert "alpha" in table
+        assert "beta" in table
 
     def test_report_generator_format_output_raw(self):
         """Test formatting output as raw."""
