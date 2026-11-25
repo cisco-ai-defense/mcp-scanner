@@ -34,10 +34,20 @@ from .result import (
 )
 
 
-def _report_item_name(result: Dict[str, Any]) -> str:
-    """Name a report row without treating instructions as a tool."""
+def _report_item_name(
+    result: Dict[str, Any], *, with_server: bool = False
+) -> str:
+    """Name a report row without treating instructions as a tool.
+
+    Grouped views pass with_server so two instruction rows from a config
+    scan stay distinct. The table keeps the plain name and its own server
+    column. The instruction body is never part of the label.
+    """
     item_type = result.get("item_type", "tool")
     if item_type == "instructions":
+        server_name = result.get("server_name")
+        if with_server and server_name:
+            return f"instructions ({server_name})"
         return "instructions"
     if item_type == "tool_scan":
         return "tool list"
@@ -715,7 +725,7 @@ class ReportGenerator:
             return "\n".join(output)
 
         for result in results:
-            tool_name = _report_item_name(result)
+            tool_name = _report_item_name(result, with_server=True)
             is_safe = result.get("is_safe", True)
             findings = result.get("findings", {})
 
@@ -797,7 +807,9 @@ class ReportGenerator:
                     entry["meta_audit"] = audit
                 analyzer_results[analyzer].append(
                     {
-                        "tool_name": _report_item_name(result),
+                        "tool_name": _report_item_name(
+                            result, with_server=True
+                        ),
                         "item_type": result.get("item_type", "tool"),
                         "data": entry,
                     }
@@ -894,9 +906,12 @@ class ReportGenerator:
 
                 severity_groups[severity].append(
                     {
-                        "tool_name": _report_item_name(result),
+                        "tool_name": _report_item_name(
+                            result, with_server=True
+                        ),
                         "analyzer": analyzer,
                         "data": data,
+                        "meta_audit": _meta_audit_text(result),
                     }
                 )
 
@@ -931,7 +946,11 @@ class ReportGenerator:
                 tool_name = item["tool_name"]
                 analyzer = item["analyzer"]
                 threat_summary = item["data"].get("threat_summary", "N/A")
-                output.append(f"  • {tool_name} [{analyzer}]: {threat_summary}")
+                audit = item.get("meta_audit") or ""
+                suffix = f"; {audit}" if audit else ""
+                output.append(
+                    f"  • {tool_name} [{analyzer}]: {threat_summary}{suffix}"
+                )
 
             output.append("")
 
@@ -939,7 +958,9 @@ class ReportGenerator:
             output.append(f"⚠️ INCOMPLETE SCANS ({len(incomplete_items)} items)")
             for result in incomplete_items:
                 output.append(
-                    f"  • {_report_item_name(result)}: scan incomplete"
+                    "  • "
+                    f"{_report_item_name(result, with_server=True)}: "
+                    "scan incomplete"
                 )
             output.append("")
 
@@ -1091,6 +1112,9 @@ class ReportGenerator:
                 llm_severity = get_analyzer_status("llm_analyzer")[:6]
                 row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
             output.append(row)
+            audit = _meta_audit_text(result)
+            if audit:
+                output.append(f"    {audit}")
 
         return "\n".join(output)
 

@@ -304,7 +304,10 @@ class TestReportGenerator:
         output = ReportGenerator(
             {"server_url": "http://test-server.com", "scan_results": rows}
         ).format_output(OutputFormat.BY_ANALYZER)
-        assert "instructions (SAFE): Meta-analysis filtered 1 finding(s)" in output
+        assert (
+            "instructions (poisoned) (SAFE): "
+            "Meta-analysis filtered 1 finding(s)" in output
+        )
         assert body not in output
         assert "Tools analyzed: 0" in output
 
@@ -350,6 +353,65 @@ class TestReportGenerator:
         assert llm_section.index("Analysis failed") < llm_section.index(
             "Meta-analysis filtered"
         )
+
+    @pytest.mark.asyncio
+    async def test_severity_and_table_show_instruction_audit_and_server(self):
+        """Severity and table views keep the audit and the server label."""
+        body = "instruction-body-must-stay-out-of-the-report"
+        dropped = SecurityFinding(
+            SeverityLevel.HIGH,
+            "filtered injection",
+            "YARA",
+            "prompt_injection",
+            details={"meta_reason": "false positive"},
+        )
+        audited = InstructionsScanResult(
+            instructions=body,
+            server_name="poisoned",
+            protocol_version="2026-07-28",
+            status="completed",
+            analyzers=["YARA"],
+            findings=[],
+            server_source="config:servers.json",
+        )
+        audited.meta_filtered_findings = [dropped]
+        clean = InstructionsScanResult(
+            instructions=body,
+            server_name="clean",
+            protocol_version="2026-07-28",
+            status="completed",
+            analyzers=["YARA"],
+            findings=[],
+            server_source="config:servers.json",
+        )
+        rows = await results_to_json([audited, clean])
+        report = ReportGenerator(
+            {"server_url": "http://test-server.com", "scan_results": rows}
+        )
+        by_tool = report.format_output(OutputFormat.BY_TOOL)
+        by_severity = report.format_output(OutputFormat.BY_SEVERITY)
+        table = report.format_output(OutputFormat.TABLE)
+
+        assert "instructions (poisoned)" in by_tool
+        assert "instructions (clean)" in by_tool
+        assert body not in by_tool
+        assert (
+            "instructions (poisoned) [yara_analyzer]: No threats detected; "
+            "Meta-analysis filtered 1 finding(s)" in by_severity
+        )
+        assert (
+            "instructions (clean) [yara_analyzer]: No threats detected"
+            in by_severity
+        )
+        assert "Meta-analysis filtered 1 finding(s)" not in by_severity.split(
+            "instructions (clean)", maxsplit=1
+        )[1]
+        assert body not in by_severity
+        assert "Meta-analysis filtered 1 finding(s)" in table
+        assert table.count("Meta-analysis filtered 1 finding(s)") == 1
+        assert "instructions (poisoned)" not in table
+        assert "instructions (clean)" not in table
+        assert body not in table
 
     def test_report_generator_format_output_raw(self):
         """Test formatting output as raw."""
