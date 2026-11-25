@@ -121,6 +121,71 @@ class CoverageLimitExceeded(Exception):
         self.limit = limit
 
 
+def _advertised_schema_text(tool_data: Dict[str, Any]) -> str:
+    """Render input and output schemas. The strings are not fetched."""
+    chunks = []
+    for label, key in (
+        ("Parameters Schema", "inputSchema"),
+        ("Output Schema", "outputSchema"),
+    ):
+        schema = tool_data.get(key)
+        if schema not in (None, "", [], {}):
+            chunks.append(f"{label}:\n{json.dumps(schema, indent=2)}")
+    return "\n".join(chunks)
+
+
+def _text_with_schemas(
+    text: Optional[str],
+    schema_text: str,
+    extra_text: str = "",
+    tool_name: str = "",
+) -> str:
+    """Append the name, schemas, and other fields. Nothing is fetched."""
+    parts = []
+    if tool_name:
+        parts.append(f"Tool Name: {tool_name}")
+    parts.extend(part for part in (text or "", schema_text, extra_text) if part)
+    return "\n".join(parts)
+
+
+def _extra_fields_text(data: Dict[str, Any], shown: set) -> str:
+    """Render advertised fields that are not already shown. Nothing is fetched."""
+    extra = {
+        key: value
+        for key, value in data.items()
+        if key not in shown and value is not None
+    }
+    if not extra:
+        return ""
+    return "Additional Fields:\n" + json.dumps(extra, indent=2)
+
+
+def _resource_extra_text(resource: Any) -> str:
+    """Render resource fields other than name, URI, description, and MIME type."""
+    try:
+        data = json.loads(resource.model_dump_json(by_alias=True))
+    except (json.JSONDecodeError, AttributeError, TypeError, ValueError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return _extra_fields_text(
+        data, {"name", "uri", "description", "mimeType"}
+    )
+
+
+def _with_extra_text(text: Optional[str], extra_text: str) -> str:
+    """Append advertised fields without dropping the original text."""
+    parts = [part for part in (text or "", extra_text) if part]
+    return "\n".join(parts)
+
+
+def _additional_tool_fields(tool_data: Dict[str, Any]) -> str:
+    """Render tool fields other than name, description, and the two schemas."""
+    return _extra_fields_text(
+        tool_data, {"name", "description", "inputSchema", "outputSchema"}
+    )
+
+
 class Scanner:
     """Unified scanner class that combines API and YARA analyzers.
 
@@ -708,23 +773,175 @@ class Scanner:
         return "\n\n".join(parts)
 
     @staticmethod
+    def _meta_plain(value: Any) -> str:
+        """Return text for a meta-analysis field. Nothing is logged."""
+        if isinstance(value, str):
+            return value.strip()
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    @staticmethod
+    def _elide_for_meta(text: str, budget: int, label: str) -> str:
+        """Keep the start, the middle, and the end inside ``budget``.
+
+        A prefix-only cut hides a payload that sits past the opening. A
+        budget too small for three windows keeps the start and the end.
+        The notice stays inside the budget. Nothing is logged.
+        """
+        if budget < 1:
+            return ""
+        if len(text) <= budget:
+            return text
+        windowed = Scanner._elide_three_windows(text, budget, label)
+        if windowed is not None:
+            return windowed
+        return Scanner._elide_ends(text, budget, label)
+
+    @staticmethod
+    def _elide_three_windows(text: str, budget: int, label: str) -> Optional[str]:
+        """Return start, middle, and end, or None when the notices do not fit."""
+        notice = f"... [{label} truncated, 0 bytes elided] ..."
+        for _ in range(4):
+            room = budget - (2 * len(notice))
+            if room < 3:
+                return None
+            window = room // 3
+            extra = room - (3 * window)
+            head_len = window
+            mid_len = window
+            tail_len = window + extra
+            elided = len(text) - (head_len + mid_len + tail_len)
+            if elided <= 0:
+                return text
+            updated = f"... [{label} truncated, {elided} bytes elided] ..."
+            if updated == notice:
+                mid_start = (len(text) - mid_len) // 2
+                return (
+                    text[:head_len]
+                    + notice
+                    + text[mid_start : mid_start + mid_len]
+                    + notice
+                    + text[-tail_len:]
+                )
+            notice = updated
+        room = budget - (2 * len(notice))
+        if room < 3:
+            return None
+        window = room // 3
+        extra = room - (3 * window)
+        mid_len = window
+        tail_len = window + extra
+        mid_start = (len(text) - mid_len) // 2
+        return (
+            text[:window]
+            + notice
+            + text[mid_start : mid_start + mid_len]
+            + notice
+            + text[-tail_len:]
+        )
+
+    @staticmethod
+    def _elide_ends(text: str, budget: int, label: str) -> str:
+        """Keep the start and the end when three windows do not fit."""
+        notice = f"... [{label} truncated, 0 bytes elided] ..."
+        for _ in range(4):
+            room = budget - len(notice)
+            if room < 2:
+                break
+            head_len = room // 2
+            tail_len = room - head_len
+            elided = len(text) - head_len - tail_len
+            if elided <= 0:
+                return text
+            updated = f"... [{label} truncated, {elided} bytes elided] ..."
+            if updated == notice:
+                return text[:head_len] + notice + text[-tail_len:]
+            notice = updated
+        mark = "..."
+        if budget <= len(mark):
+            return text[-budget:]
+        room = budget - len(mark)
+        head_len = room // 2
+        tail_len = room - head_len
+        return text[:head_len] + mark + text[-tail_len:]
+
+    @staticmethod
+    def _allocate_meta_shares(lengths: List[int], room: int) -> List[int]:
+        """Split ``room`` across parts. A short part does not take a full half."""
+        count = len(lengths)
+        if count == 0:
+            return []
+        if room < 0:
+            room = 0
+        if sum(lengths) <= room:
+            return list(lengths)
+        shares = [0] * count
+        pending = set(range(count))
+        remaining = room
+        while pending and remaining > 0:
+            share = remaining // len(pending)
+            finished = [index for index in pending if lengths[index] <= share]
+            if not finished:
+                extra = remaining - (share * len(pending))
+                for offset, index in enumerate(list(pending)):
+                    shares[index] = share + (1 if offset < extra else 0)
+                break
+            for index in finished:
+                shares[index] = lengths[index]
+                remaining -= lengths[index]
+                pending.remove(index)
+        return shares
+
+    @staticmethod
+    def _untrusted_meta_fits(parts: List[str], budget: int, extra: int = 0) -> bool:
+        """True when description, body, and advertised fields fit in one cap."""
+        present = [part for part in parts if part]
+        if not present:
+            return True
+        total = sum(len(part) for part in present)
+        total += 2 * (len(present) - 1)
+        total += extra
+        return total <= budget
+
+    @staticmethod
+    def _fit_meta_text(text: str, budget: Optional[int], label: str) -> str:
+        """Elide text that is longer than ``budget``. A missing budget is uncapped."""
+        if budget is None or len(text) <= budget:
+            return text
+        return Scanner._elide_for_meta(text, budget, label)
+
+    @staticmethod
     def _build_prompt_description_for_meta(
-        result: PromptScanResult, budget: int = 8000
+        result: PromptScanResult, budget: Optional[int] = None
     ) -> str:
         """Synthesize prompt context for meta-analysis (description + message bodies)."""
-        description = (getattr(result, "prompt_description", "") or "").strip()
-        text = (getattr(result, "prompt_messages_text", "") or "").strip()
+        if budget is None:
+            budget = MCPScannerConstants.MAX_PROMPT_BODY_CHARS
+        description = Scanner._meta_plain(getattr(result, "prompt_description", ""))
+        text = Scanner._meta_plain(getattr(result, "prompt_messages_text", ""))
         if not description and not text:
             return "N/A"
-        combined = Scanner._combine_prompt_analysis_text(description, text)
-        if len(combined) <= budget:
-            return combined
-        elided = len(combined) - budget
-        return combined[:budget] + f"... [prompt context truncated, {elided} bytes elided]"
+        # One cap for every part. A long description keeps its own share
+        # and leaves the rest for the message, including its start.
+        pieces = []
+        lengths = []
+        if description:
+            pieces.append(("description", description))
+            lengths.append(len(description))
+        if text:
+            pieces.append(("prompt context", text))
+            lengths.append(len(text))
+        room = budget - (2 * (len(pieces) - 1))
+        shares = Scanner._allocate_meta_shares(lengths, room)
+        rendered = []
+        for (label, value), share in zip(pieces, shares):
+            rendered.append(Scanner._fit_meta_text(value, share, label))
+        return "\n\n".join(part for part in rendered if part)
 
     @staticmethod
     def _build_resource_description_for_meta(
-        result: ResourceScanResult, budget: int = 8000
+        result: ResourceScanResult, budget: Optional[int] = None
     ) -> str:
         """Synthesize a description string for the meta-analyzer entity context.
 
@@ -735,51 +952,79 @@ class Scanner:
 
         Args:
             result: The ResourceScanResult to summarize.
-            budget: Combined character cap for description + content. Default
-                ~8 KB stays well inside any modern LLM's per-call budget while
-                preserving enough context for FP triage.
+            budget: Character cap for the description and the body together.
+                The default is the live body cap, so a static file is not
+                posted whole. A part that exceeds its share keeps the start,
+                the middle, and the end.
 
         Returns:
-            A string of the form ``"<description>\\n\\n--- Content (first N chars) ---\\n<text>[truncated, X bytes]"``.
-            Returns ``"N/A"`` if both description and text are empty.
+            The description plus a content section. Returns ``"N/A"`` if
+            both description and text are empty.
         """
-        description = (getattr(result, "resource_description", "") or "").strip()
-        text = (getattr(result, "resource_text", "") or "").strip()
+        if budget is None:
+            budget = MCPScannerConstants.MAX_RESOURCE_BODY_CHARS
+        description = Scanner._meta_plain(getattr(result, "resource_description", ""))
+        text = Scanner._meta_plain(getattr(result, "resource_text", ""))
 
         if not description and not text:
             return "N/A"
 
-        # Reserve up to half the budget for the description; in practice the
-        # description is short (≤500 chars) so almost all of the budget
-        # ends up available for content.
-        desc_budget = min(len(description), budget // 2) if description else 0
-        # Need a minimum of 256 chars of content to be meaningful for FP
-        # triage; if the budget can't accommodate that after description,
-        # we shrink the description rather than emit useless content.
-        text_budget = max(budget - desc_budget, 256) if text else 0
-
-        parts = []
+        # One cap covers both parts. A short description leaves the rest
+        # of the cap for the body.
+        pieces: List[tuple] = []
         if description:
-            if len(description) > desc_budget:
-                parts.append(
-                    description[:desc_budget]
-                    + f"... [description truncated, {len(description) - desc_budget} bytes elided]"
-                )
-            else:
-                parts.append(description)
-
+            pieces.append(("description", description, len(description)))
         if text:
-            text_total = len(text)
-            if text_total > text_budget:
-                snippet = (
-                    text[:text_budget]
-                    + f"... [content truncated, {text_total - text_budget} bytes elided]"
-                )
+            header = f"--- Content (first {len(text)} chars) ---\n"
+            pieces.append(("content", text, len(text) + len(header)))
+        room = budget - (2 * (len(pieces) - 1))
+        shares = Scanner._allocate_meta_shares(
+            [size for _label, _value, size in pieces], room
+        )
+        rendered = []
+        for (label, value, _size), share in zip(pieces, shares):
+            if label == "content":
+                rendered.append(Scanner._render_meta_content(value, share))
             else:
-                snippet = text
-            parts.append(f"--- Content (first {min(text_total, text_budget)} chars) ---\n{snippet}")
+                rendered.append(Scanner._fit_meta_text(value, share, label))
+        return "\n\n".join(part for part in rendered if part)
 
-        return "\n\n".join(parts)
+    @staticmethod
+    def _render_meta_content(text: str, share: int) -> str:
+        """Render a body block that stays within ``share``."""
+        if share < 1 or not text:
+            return ""
+        verbatim = f"--- Content (first {len(text)} chars) ---\n{text}"
+        if len(verbatim) <= share:
+            return verbatim
+        snippet_budget = max(share - 80, 1)
+        header = ""
+        snippet = text
+        for _ in range(3):
+            header = (
+                "--- Content (first, middle, and last chars, budget "
+                f"{snippet_budget}) ---\n"
+            )
+            snippet_budget = max(share - len(header), 1)
+        if len(text) > snippet_budget:
+            snippet = Scanner._elide_for_meta(text, snippet_budget, "content")
+        header = (
+            "--- Content (first, middle, and last chars, budget "
+            f"{snippet_budget}) ---\n"
+        )
+        block = header + snippet
+        if len(block) <= share:
+            return block
+        snippet_budget = max(share - len(header), 1)
+        snippet = Scanner._elide_for_meta(text, snippet_budget, "content")
+        header = (
+            "--- Content (first, middle, and last chars, budget "
+            f"{snippet_budget}) ---\n"
+        )
+        block = header + snippet
+        if len(block) <= share:
+            return block
+        return block[:share]
 
     # P1-2: cap concurrent LLM round-trips during meta-analysis. With this
     # cap a 30-tool server completes in ~30/8 ≈ 4 sequential waves instead
@@ -804,10 +1049,25 @@ class Scanner:
             result.meta_filtered_findings = []
             return result
 
+        description = Scanner._meta_plain(result.tool_description)
+        advertised = Scanner._meta_plain(getattr(result, "advertised_text", ""))
+        extra = len("\n**Advertised Fields:**\n") if advertised else 0
+        # An incomplete window can hide the evidence and drop a real finding.
+        # Keep the findings instead of posting a partial context.
+        if not Scanner._untrusted_meta_fits(
+            [description, advertised],
+            MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
+            extra,
+        ):
+            logger.info("Meta-analysis skipped for tool: context exceeds cap")
+            result.meta_filtered_findings = []
+            return result
+
         entity_context = {
             "type": "tool",
             "name": result.tool_name,
-            "description": result.tool_description,
+            "description": description,
+            "advertised": advertised,
         }
         tool_analyzers = list({f.analyzer for f in result.findings})
 
@@ -828,6 +1088,7 @@ class Scanner:
                     server_source=result.server_source,
                     server_name=result.server_name,
                     analyzer_errors=result.analyzer_errors,
+                    advertised_text=getattr(result, "advertised_text", "") or "",
                 )
                 enriched.meta_filtered_findings = dropped
                 return enriched
@@ -850,10 +1111,24 @@ class Scanner:
             result.meta_filtered_findings = []
             return result
 
+        description = Scanner._meta_plain(getattr(result, "prompt_description", ""))
+        messages = Scanner._meta_plain(getattr(result, "prompt_messages_text", ""))
+        advertised = Scanner._meta_plain(getattr(result, "advertised_text", ""))
+        extra = len("\n**Advertised Fields:**\n") if advertised else 0
+        if not Scanner._untrusted_meta_fits(
+            [description, messages, advertised],
+            MCPScannerConstants.MAX_PROMPT_BODY_CHARS,
+            extra,
+        ):
+            logger.info("Meta-analysis skipped for prompt: context exceeds cap")
+            result.meta_filtered_findings = []
+            return result
+
         entity_context = {
             "type": "prompt",
             "name": result.prompt_name,
             "description": self._build_prompt_description_for_meta(result),
+            "advertised": advertised,
         }
         prompt_analyzers = list({f.analyzer for f in result.findings})
 
@@ -876,6 +1151,7 @@ class Scanner:
                     prompt_messages_text=getattr(result, "prompt_messages_text", "")
                     or "",
                     analyzer_errors=result.analyzer_errors,
+                    advertised_text=getattr(result, "advertised_text", "") or "",
                 )
                 enriched.meta_filtered_findings = dropped
                 return enriched
@@ -899,12 +1175,27 @@ class Scanner:
         # meta-analyzer. Previously the meta-analyzer was asked to FP-filter
         # resource findings with only name/uri/mime_type for context,
         # making FP filtering on resources essentially unsupervised.
+        description = Scanner._meta_plain(getattr(result, "resource_description", ""))
+        body = Scanner._meta_plain(getattr(result, "resource_text", ""))
+        advertised = Scanner._meta_plain(getattr(result, "advertised_text", ""))
+        extra = len(f"--- Content (first {len(body)} chars) ---\n") if body else 0
+        if advertised:
+            extra += len("\n**Advertised Fields:**\n")
+        if not Scanner._untrusted_meta_fits(
+            [description, body, advertised],
+            MCPScannerConstants.MAX_RESOURCE_BODY_CHARS,
+            extra,
+        ):
+            logger.info("Meta-analysis skipped for resource: context exceeds cap")
+            result.meta_filtered_findings = []
+            return result
         entity_context = {
             "type": "resource",
             "name": result.resource_name,
             "uri": result.resource_uri,
             "mime_type": result.resource_mime_type,
             "description": self._build_resource_description_for_meta(result),
+            "advertised": advertised,
         }
         res_analyzers = list({f.analyzer for f in result.findings})
 
@@ -934,6 +1225,7 @@ class Scanner:
                     # the evidence the analyzers saw.
                     resource_description=getattr(result, "resource_description", "") or "",
                     resource_text=getattr(result, "resource_text", "") or "",
+                    advertised_text=getattr(result, "advertised_text", "") or "",
                 )
                 enriched.meta_filtered_findings = dropped
                 return enriched
@@ -1121,6 +1413,16 @@ class Scanner:
             return result
 
         if not result.findings:
+            result.meta_filtered_findings = []
+            return result
+
+        instructions = Scanner._meta_plain(getattr(result, "instructions", ""))
+        # Same default as ``_build_instructions_description_for_meta``.
+        # A prefix of a longer body is not evidence enough to drop a finding.
+        if len(instructions) > 8000:
+            logger.info(
+                "Meta-analysis skipped for instructions: context exceeds cap"
+            )
             result.meta_filtered_findings = []
             return result
 
@@ -1482,6 +1784,8 @@ class Scanner:
         description = tool.description
         tool_json = tool.model_dump_json(by_alias=True)
         tool_data = json.loads(tool_json)
+        schema_text = _advertised_schema_text(tool_data)
+        additional_fields = _additional_tool_fields(tool_data)
 
         # An external schema $ref is part of the advertised tool. Inspect it
         # on every tool scan, including callers that did not select SCHEMA.
@@ -1501,11 +1805,14 @@ class Scanner:
                 )
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
-            # Run API analysis on the description
+            # Run API analysis on the description, schemas, and other fields.
             try:
                 api_context = {"tool_name": name, "content_type": "description"}
                 api_findings = await self._api_analyzer.analyze(
-                    description, api_context
+                    _text_with_schemas(
+                        description, schema_text, additional_fields, name
+                    ),
+                    api_context,
                 )
                 for finding in api_findings:
                     finding.analyzer = "API"
@@ -1534,10 +1841,13 @@ class Scanner:
 
             # Run YARA analysis on the tool parameters
             try:
-                # Remove description from the JSON as it is already analyzed
-                if "description" in tool_data:
-                    del tool_data["description"]
-                tool_json_str = json.dumps(tool_data)
+                # Copy so readiness still sees the description.
+                parameter_data = {
+                    key: value
+                    for key, value in tool_data.items()
+                    if key != "description"
+                }
+                tool_json_str = json.dumps(parameter_data)
                 yara_params_context = {"tool_name": name, "content_type": "parameters"}
                 yara_params_findings = await self._yara_analyzer.analyze(
                     tool_json_str, yara_params_context
@@ -1558,7 +1868,17 @@ class Scanner:
                 analysis_content = f"Tool Name: {name}\n"
                 analysis_content += f"Description: {description}\n"
                 if "inputSchema" in tool_data:
-                    analysis_content += f"Parameters Schema: {json.dumps(tool_data['inputSchema'], indent=2)}\n"
+                    analysis_content += (
+                        "Parameters Schema: "
+                        f"{json.dumps(tool_data['inputSchema'], indent=2)}\n"
+                    )
+                if "outputSchema" in tool_data:
+                    analysis_content += (
+                        "Output Schema: "
+                        f"{json.dumps(tool_data['outputSchema'], indent=2)}\n"
+                    )
+                if additional_fields:
+                    analysis_content += additional_fields + "\n"
 
                 llm_context = {"tool_name": name, "content_type": "comprehensive"}
                 llm_findings = await self._llm_analyzer.analyze(
@@ -1602,6 +1922,8 @@ class Scanner:
             # Run PROMPT_DEFENSE analysis on the tool description
             try:
                 pd_context = {"tool_name": name, "content_type": "description"}
+                # A name or title of "must not" is a defense phrase.
+                # Scoring it here would hide a description that has no safeguard.
                 pd_findings = await self._prompt_defense_analyzer.analyze(
                     description, pd_context
                 )
@@ -1622,7 +1944,12 @@ class Scanner:
                 # Add HTTP headers to context for custom analyzers
                 if http_headers:
                     custom_context["http_headers"] = http_headers
-                findings = await analyzer.analyze(description, custom_context)
+                findings = await analyzer.analyze(
+                    _text_with_schemas(
+                        description, schema_text, additional_fields, name
+                    ),
+                    custom_context,
+                )
                 for finding in findings:
                     finding.analyzer = analyzer.name
                 all_findings.extend(findings)
@@ -1647,6 +1974,7 @@ class Scanner:
             analyzers=all_analyzers,
             findings=all_findings,
             analyzer_errors=analyzer_errors,
+            advertised_text=_with_extra_text(schema_text, additional_fields),
         )
 
     async def _analyze_prompt(
@@ -1690,18 +2018,36 @@ class Scanner:
         try:
             prompt_json = prompt.model_dump_json()
             prompt_data = json.loads(prompt_json)
-        except (json.JSONDecodeError, AttributeError, TypeError) as e:
+        except (json.JSONDecodeError, AttributeError, TypeError):
             logger.warning(
-                f"Error parsing prompt '{name}' data: {e}. Using minimal data."
+                "Error parsing prompt '%s' data: %s. Using minimal data.",
+                name,
+                "parse failure",
             )
             prompt_data = {"name": name, "description": description}
+        argument_text = ""
+        if "arguments" in prompt_data and prompt_data["arguments"] is not None:
+            argument_text = (
+                "Arguments: " + json.dumps(prompt_data["arguments"], indent=2)
+            )
+        prompt_extra = _extra_fields_text(
+            prompt_data, {"name", "description", "arguments"}
+        )
+        # Arguments are advertised prompt text. Prompt defense stays on
+        # the description and message bodies, so a "must not" argument
+        # cannot clear a missing-defense finding.
+        advertised_text = _with_extra_text(argument_text, prompt_extra)
+        analyzer_text = _with_extra_text(
+            f"Prompt Name: {name}\n{combined_content or description}",
+            advertised_text,
+        )
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on description + rendered prompt messages
             try:
                 api_context = {"prompt_name": name, "content_type": "prompt_content"}
                 api_findings = await self._api_analyzer.analyze(
-                    combined_content or description, api_context
+                    analyzer_text, api_context
                 )
                 for finding in api_findings:
                     finding.analyzer = "API"
@@ -1717,7 +2063,7 @@ class Scanner:
             try:
                 yara_desc_context = {"prompt_name": name, "content_type": "prompt_content"}
                 yara_desc_findings = await self._yara_analyzer.analyze(
-                    combined_content or description, yara_desc_context
+                    analyzer_text, yara_desc_context
                 )
                 for finding in yara_desc_findings:
                     finding.analyzer = "YARA"
@@ -1730,10 +2076,13 @@ class Scanner:
 
             # Run YARA analysis on the prompt arguments/structure
             try:
-                # Remove description from the JSON as it is already analyzed
-                if "description" in prompt_data:
-                    del prompt_data["description"]
-                prompt_json_str = json.dumps(prompt_data)
+                # Copy so the description remains available to later analyzers.
+                parameter_data = {
+                    key: value
+                    for key, value in prompt_data.items()
+                    if key != "description"
+                }
+                prompt_json_str = json.dumps(parameter_data)
                 yara_params_context = {"prompt_name": name, "content_type": "arguments"}
                 yara_params_findings = await self._yara_analyzer.analyze(
                     prompt_json_str, yara_params_context
@@ -1757,10 +2106,10 @@ class Scanner:
                 # rendered prompt messages may contain that sequence.
                 analysis_content = f"Prompt Name: {name}\n"
                 analysis_content += f"Description: {description}\n"
-                if "arguments" in prompt_data and prompt_data["arguments"]:
-                    analysis_content += (
-                        f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
-                    )
+                if argument_text:
+                    analysis_content += argument_text + "\n"
+                if prompt_extra:
+                    analysis_content += prompt_extra + "\n"
                 if prompt_messages_text:
                     analysis_content += f"Messages:\n{prompt_messages_text}\n"
 
@@ -1810,7 +2159,7 @@ class Scanner:
                 if http_headers:
                     custom_context["http_headers"] = http_headers
                 findings = await analyzer.analyze(
-                    combined_content or description, custom_context
+                    analyzer_text, custom_context
                 )
                 for finding in findings:
                     finding.analyzer = analyzer.name
@@ -1835,6 +2184,7 @@ class Scanner:
             findings=all_findings,
             prompt_messages_text=prompt_messages_text,
             analyzer_errors=analyzer_errors,
+            advertised_text=advertised_text,
         )
 
     async def _analyze_instructions(
@@ -3455,6 +3805,7 @@ class Scanner:
         resource_mime_type: str,
         analyzers: List[AnalyzerEnum],
         http_headers: Optional[dict] = None,
+        extra_text: str = "",
     ) -> ResourceScanResult:
         """Analyze a single MCP resource using specified analyzers.
 
@@ -3513,7 +3864,21 @@ class Scanner:
                 )
                 analysis_content = resource_content
 
-        # Only API and LLM analyzers are used for resources
+        # Name, URI, and description are part of the advertised resource.
+        # Prompt defense still scores only the body, so "must not" in a
+        # description cannot clear a missing-defense finding.
+        scanned_content = "\n".join(
+            part
+            for part in (
+                f"Resource URI: {resource_uri}",
+                f"Resource Name: {resource_name}",
+                f"Description: {resource_description}" if resource_description else "",
+                f"MIME Type: {resource_mime_type}",
+                extra_text,
+                analysis_content,
+            )
+            if part
+        )
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the resource content
             try:
@@ -3524,7 +3889,7 @@ class Scanner:
                     "mime_type": resource_mime_type,
                 }
                 api_findings = await self._api_analyzer.analyze(
-                    analysis_content, api_context
+                    scanned_content, api_context
                 )
                 for finding in api_findings:
                     finding.analyzer = "API"
@@ -3543,7 +3908,7 @@ class Scanner:
                     "content_type": "resource_content",
                 }
                 yara_findings = await self._yara_analyzer.analyze(
-                    analysis_content, yara_context
+                    scanned_content, yara_context
                 )
                 for finding in yara_findings:
                     finding.analyzer = "YARA"
@@ -3563,8 +3928,10 @@ class Scanner:
                 if resource_description:
                     llm_content += f"Description: {resource_description}\n"
                 llm_content += f"MIME Type: {resource_mime_type}\n"
+                if extra_text:
+                    llm_content += extra_text + "\n"
                 llm_content += (
-                    f"Content:\n{analysis_content[:2000]}\n"  # Limit content size
+                    f"Content:\n{analysis_content}\n"
                 )
 
                 llm_context = {
@@ -3622,7 +3989,7 @@ class Scanner:
                 # Add HTTP headers to context for custom analyzers
                 if http_headers:
                     custom_context["http_headers"] = http_headers
-                findings = await analyzer.analyze(analysis_content, custom_context)
+                findings = await analyzer.analyze(scanned_content, custom_context)
                 for finding in findings:
                     finding.analyzer = analyzer.name
                 all_findings.extend(findings)
@@ -3652,6 +4019,7 @@ class Scanner:
             # received above.
             resource_description=resource_description,
             resource_text=analysis_content,
+            advertised_text=extra_text,
         )
 
     def _resource_coverage_limit_result(
@@ -3920,6 +4288,7 @@ class Scanner:
                             effective_mime,
                             analyzers,
                             http_headers,
+                            extra_text=_resource_extra_text(resource),
                         )
                         results.append(result)
                     except Exception as e:
@@ -4183,6 +4552,7 @@ class Scanner:
                     effective_mime,
                     analyzers,
                     http_headers,
+                    extra_text=_resource_extra_text(target_resource),
                 )
 
                 # Run meta-analysis if enabled

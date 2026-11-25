@@ -229,6 +229,34 @@ class TestReadinessCombinedWithOtherAnalyzers:
         # YARA findings should be the same
         assert len(yara_findings) == len(combined_yara_findings)
 
+    @pytest.mark.asyncio
+    async def test_yara_scan_keeps_description_for_readiness(self):
+        """YARA must not strip the description before readiness checks it."""
+        config = Config()
+        scanner = Scanner(config)
+        description = "This operation handles everything requested by the operator."
+
+        mock_tool = MagicMock()
+        mock_tool.name = "catalog"
+        mock_tool.description = description
+        mock_tool.model_dump_json.return_value = json.dumps(
+            {"name": "catalog", "description": description}
+        )
+
+        result = await scanner._analyze_tool(
+            mock_tool, [AnalyzerEnum.YARA, AnalyzerEnum.READINESS]
+        )
+        rule_ids = [
+            finding.details.get("rule_id")
+            for finding in result.findings
+            if finding.details
+        ]
+
+        assert "HEUR-010" in rule_ids
+        assert not any(
+            "has no description" in finding.summary for finding in result.findings
+        )
+
 
 class TestReadinessToolDefinitionParsing:
     """Test tool definition parsing in readiness context."""

@@ -324,6 +324,11 @@ class StaticAnalyzer:
         for tool_data in data["tools"]:
             tool_name = tool_data.get("name", "unknown")
             tool_description = tool_data.get("description", "")
+            if tool_description is not None and not isinstance(tool_description, str):
+                try:
+                    tool_description = json.dumps(tool_description)
+                except (TypeError, ValueError):
+                    tool_description = ""
 
             all_findings = []
             outcome: Dict[str, Any] = {"analyzers": [], "analyzer_errors": []}
@@ -336,25 +341,21 @@ class StaticAnalyzer:
                 )
                 all_findings.extend(desc_findings)
 
-            # Keep the established YARA/LLM/API parameter scope for tools
-            # with inputSchema. Only the schema-reference analyzer inspects
-            # an outputSchema-only tool; expanding every analyzer here would
-            # change unrelated static scan results.
-            if "inputSchema" in tool_data or "outputSchema" in tool_data:
-                # Remove description to avoid duplicate analysis
-                params_data = {k: v for k, v in tool_data.items() if k != "description"}
+            # Name, schemas, title, annotations, and any other advertised
+            # field are tool content, even when no schema key is present.
+            # Reference strings are classified locally and never fetched.
+            params_data = {
+                key: value
+                for key, value in tool_data.items()
+                if key != "description"
+            }
+            advertised_text = ""
+            if params_data:
                 params_json = json.dumps(params_data)
+                advertised_text = params_json
 
                 params_context = {"tool_name": tool_name, "content_type": "parameters"}
-                params_analyzers = (
-                    None
-                    if "inputSchema" in tool_data
-                    else [
-                        analyzer
-                        for analyzer in self.analyzers
-                        if isinstance(analyzer, SchemaReferenceAnalyzer)
-                    ]
-                )
+                params_analyzers = None
                 params_findings = await self._analyze_content(
                     params_json,
                     params_context,
@@ -376,9 +377,23 @@ class StaticAnalyzer:
             result = {
                 "tool_name": tool_name,
                 "tool_description": tool_description,
+                "advertised_text": advertised_text,
                 "findings": all_findings,
                 **self._scan_outcome(all_findings, outcome),
             }
+            # Analyzers still see an output-only schema, so a real threat is
+            # reported. No findings stays "not assessed": a plain output
+            # schema used to be skipped, and a rule that does not match it
+            # is not a clean bill of health.
+            output_only = (
+                not tool_description
+                and "inputSchema" not in tool_data
+                and "outputSchema" in tool_data
+            )
+            if output_only and not all_findings and not outcome["analyzer_errors"]:
+                result["is_safe"] = None
+                result["status"] = "skipped"
+                result["analyzers"] = []
 
             results.append(result)
 
@@ -430,13 +445,34 @@ class StaticAnalyzer:
             prompt_description = prompt_data.get("description", "")
             outcome: Dict[str, Any] = {"analyzers": [], "analyzer_errors": []}
 
-            # Analyze prompt content
+            # Analyze prompt content. Title and other fields are included.
+            # The strings are not fetched.
             analysis_content = f"Prompt Name: {prompt_name}\n"
             analysis_content += f"Description: {prompt_description}\n"
 
             if "arguments" in prompt_data:
                 analysis_content += (
                     f"Arguments: {json.dumps(prompt_data['arguments'], indent=2)}\n"
+                )
+            extra = {
+                key: value
+                for key, value in prompt_data.items()
+                if key not in {"name", "description", "arguments"}
+                and value is not None
+            }
+            if extra:
+                analysis_content += (
+                    "Additional Fields:\n" + json.dumps(extra, indent=2) + "\n"
+                )
+            advertised_parts = []
+            if "arguments" in prompt_data:
+                advertised_parts.append(
+                    "Arguments: "
+                    + json.dumps(prompt_data["arguments"], indent=2)
+                )
+            if extra:
+                advertised_parts.append(
+                    "Additional Fields:\n" + json.dumps(extra, indent=2)
                 )
 
             context = {"prompt_name": prompt_name, "content_type": "prompt"}
@@ -448,6 +484,7 @@ class StaticAnalyzer:
             result = {
                 "prompt_name": prompt_name,
                 "prompt_description": prompt_description,
+                "advertised_text": "\n".join(advertised_parts),
                 "findings": findings,
                 **self._scan_outcome(findings, outcome),
             }
@@ -584,13 +621,148 @@ class StaticAnalyzer:
                 continue
             if item is resource_data:
                 continue
-            text = item.get("text")
-            if isinstance(text, str):
-                text_parts.append(text)
+            for key in ("text", "content"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    text_parts.append(value)
             if item.get("blob"):
                 saw_blob = True
 
         return "\n".join(text_parts), saw_blob
+
+    @staticmethod
+    def _resource_text_segments(
+        resource_data: Dict[str, Any],
+        content_items: List[Dict[str, Any]],
+    ) -> List[tuple]:
+        """Return ``(mime, text)`` for each text segment.
+
+        A segment keeps the MIME type of the object it came from. A joined
+        item does not relabel the list entry's own text. An item with no
+        type inherits the list type. Blob bytes are not included.
+        """
+        list_mime = ""
+        listed = resource_data.get("mimeType")
+        if listed not in (None, "", [], {}):
+            list_mime = str(listed)
+        segments = []
+        for key in ("text", "content"):
+            value = resource_data.get(key)
+            if isinstance(value, str) and value:
+                segments.append((list_mime, value))
+        for item in content_items:
+            if not isinstance(item, dict) or item is resource_data:
+                continue
+            raw = item.get("mimeType")
+            item_mime = list_mime if raw in (None, "", [], {}) else str(raw)
+            for key in ("text", "content"):
+                value = item.get(key)
+                if isinstance(value, str) and value:
+                    segments.append((item_mime, value))
+        return segments
+
+    @staticmethod
+    def _resource_advertised_text(
+        resource_data: Dict[str, Any],
+        content_items: List[Dict[str, Any]],
+        resource_uri: str,
+        resource_name: str,
+        resource_description: str,
+        resource_mime: str,
+    ) -> str:
+        """Render fields that are not the body.
+
+        Fields on a joined read item are included. Blob bytes and body
+        text are not. Nothing is fetched.
+        """
+        body_keys = {"text", "content", "blob", "contents"}
+        extra = {}
+        for key, value in resource_data.items():
+            if key in body_keys or value is None:
+                continue
+            if key in {"uri", "name", "description"}:
+                continue
+            if key == "mimeType" and str(value) == resource_mime:
+                continue
+            extra[key] = value
+        header = {
+            "uri": resource_uri,
+            "name": resource_name,
+            "description": resource_description,
+            "mimeType": resource_mime,
+        }
+        joined = []
+        for item in content_items:
+            if not isinstance(item, dict) or item is resource_data:
+                continue
+            fields = {}
+            for key, value in item.items():
+                if key in body_keys or value is None:
+                    continue
+                if key in header and value == header[key]:
+                    continue
+                fields[key] = value
+            if fields:
+                joined.append(fields)
+        parts = []
+        if extra:
+            parts.append("Additional Fields:\n" + json.dumps(extra, indent=2))
+        if joined:
+            parts.append("Joined Content Fields:\n" + json.dumps(joined, indent=2))
+        return "\n".join(parts)
+
+    async def _skipped_body_result(
+        self,
+        resource_data: Dict[str, Any],
+        resource_uri: str,
+        resource_name: str,
+        resource_description: str,
+        resource_mime: str,
+        advertised_text: str,
+    ) -> Dict[str, Any]:
+        """Skip an unscanned body without calling that resource safe.
+
+        Title and other advertised fields are still scanned. They are not fetched.
+        """
+        result = {
+            "resource_uri": resource_uri,
+            "resource_name": resource_name,
+            "resource_mime_type": resource_mime,
+            "resource_description": resource_description,
+            # The body was not scanned. Keeping it here would hand the
+            # excluded text to meta-analysis.
+            "resource_text": "",
+            "is_safe": None,
+            "findings": [],
+            "status": "skipped",
+            "analyzers": [],
+            "advertised_text": advertised_text,
+        }
+        # The body stays out of this scan. Name and description are still
+        # scanned, and a clean description does not make the body safe.
+        analysis_content = (
+            f"Resource URI: {resource_uri}\n"
+            f"Name: {resource_name}\n"
+            f"Description: {resource_description}\n"
+            f"MIME Type: {resource_mime}\n"
+        )
+        if advertised_text:
+            analysis_content += advertised_text + "\n"
+        context = {
+            "resource_uri": resource_uri,
+            "resource_name": resource_name,
+            "content_type": "resource",
+            "has_resource_content": False,
+        }
+        outcome: Dict[str, Any] = {"analyzers": [], "analyzer_errors": []}
+        findings = await self._analyze_content(
+            analysis_content, context, outcome=outcome
+        )
+        if not findings and not outcome["analyzer_errors"]:
+            return result
+        result["findings"] = findings
+        result.update(self._scan_outcome(findings, outcome))
+        return result
 
     async def _scan_resource_data(
         self,
@@ -611,65 +783,102 @@ class StaticAnalyzer:
             resource_data.get("name") or first_content.get("name") or resource_uri
         )
         resource_description = resource_data.get("description", "")
-        text_content, saw_blob = self._resource_text_content(
+        if resource_description in (None, "", [], {}):
+            for item in content_items:
+                if not isinstance(item, dict) or item is resource_data:
+                    continue
+                candidate = item.get("description")
+                if candidate in (None, "", [], {}):
+                    continue
+                resource_description = (
+                    candidate
+                    if isinstance(candidate, str)
+                    else json.dumps(candidate)
+                )
+                break
+        _raw_text, saw_blob = self._resource_text_content(
             resource_data, content_items
         )
-        resource_mime = resource_data.get("mimeType") or first_content.get("mimeType")
-        if not resource_mime:
-            resource_mime = "text/plain" if text_content else "application/octet-stream"
-
-        # H5 fix: strip HTML on the static path so ``resource_text``
-        # produced here byte-matches what ``Scanner._analyze_resource``
-        # produces on the remote path. Without this, a ``text/html``
-        # resource scanned from a JSON file shipped raw markup to the
-        # meta-analyzer while the same resource scanned via
-        # ``scan-remote-server`` shipped extracted text — divergent
-        # prompts → divergent FP-filter decisions for the same content.
-        text_content = _extract_html_text_if_needed(text_content, resource_mime)
+        segments = self._resource_text_segments(resource_data, content_items)
+        allowed = None
+        if allowed_mime_types:
+            allowed = {_normalize_mime_type(mime) for mime in allowed_mime_types}
+        included_parts = []
+        included_mimes: List[str] = []
+        for segment_mime, segment_text in segments:
+            chosen = segment_mime or "text/plain"
+            normalized = _normalize_mime_type(chosen) or "text/plain"
+            if allowed is not None and normalized not in allowed:
+                continue
+            extracted = _extract_html_text_if_needed(segment_text, chosen)
+            if extracted:
+                included_parts.append(extracted)
+                included_mimes.append(chosen)
+        text_content = "\n".join(included_parts)
+        if included_mimes:
+            resource_mime = included_mimes[0]
+        else:
+            listed = resource_data.get("mimeType")
+            if listed not in (None, "", [], {}):
+                resource_mime = str(listed)
+            elif segments:
+                resource_mime = segments[0][0] or "application/octet-stream"
+            else:
+                resource_mime = (
+                    "text/plain" if _raw_text else "application/octet-stream"
+                )
+        advertised_text = self._resource_advertised_text(
+            resource_data,
+            content_items,
+            resource_uri,
+            resource_name,
+            resource_description if isinstance(resource_description, str) else "",
+            resource_mime,
+        )
+        # Every text segment belonged to a filtered MIME type. Skipping
+        # the body must not mark that unread text safe.
+        if not included_parts and segments and allowed is not None:
+            return await self._skipped_body_result(
+                resource_data,
+                resource_uri,
+                resource_name,
+                resource_description,
+                resource_mime,
+                advertised_text,
+            )
 
         if skip_blob_only and saw_blob and not text_content:
-            return {
-                "resource_uri": resource_uri,
-                "resource_name": resource_name,
-                "resource_mime_type": resource_mime,
-                # Surface the MCP-advertised description and the text we
-                # would have analysed even on the skip path; downstream
-                # ``ResourceScanResult`` construction can persist them
-                # verbatim, and the meta-analyzer can second-guess
-                # follow-up reads of the same resource against the same
-                # evidence the primary pass saw.
-                "resource_description": resource_description,
-                "resource_text": text_content,
-                "is_safe": True,
-                "findings": [],
-                "status": "skipped",
-                "analyzers": [],
-            }
+            return await self._skipped_body_result(
+                resource_data,
+                resource_uri,
+                resource_name,
+                resource_description,
+                resource_mime,
+                advertised_text,
+            )
 
-        # Check MIME type filter — resource isn't scanned, return a "skipped"
-        # result that matches the shape used by the skip_blob_only branch above.
-        # Bug fix: previously this branch referenced an undefined `findings`
-        # variable, since `findings` is only assigned by the analysis path below.
+        # A disallowed MIME type skips the body. Advertised fields are
+        # still scanned, and the skip is not reported as safe.
         if allowed_mime_types and _normalize_mime_type(resource_mime) not in {
             _normalize_mime_type(m) for m in allowed_mime_types
         }:
-            return {
-                "resource_uri": resource_uri,
-                "resource_name": resource_name,
-                "resource_mime_type": resource_mime,
-                "resource_description": resource_description,
-                "resource_text": text_content,
-                "is_safe": True,
-                "findings": [],
-                "status": "skipped",
-                "analyzers": [],
-            }
+            return await self._skipped_body_result(
+                resource_data,
+                resource_uri,
+                resource_name,
+                resource_description,
+                resource_mime,
+                advertised_text,
+            )
 
         # Analyze resource metadata and text content when present.
         analysis_content = f"Resource URI: {resource_uri}\n"
         analysis_content += f"Name: {resource_name}\n"
         analysis_content += f"Description: {resource_description}\n"
         analysis_content += f"MIME Type: {resource_mime}\n"
+        if advertised_text:
+            # Title, annotations, and joined read-item fields are not fetched.
+            analysis_content += advertised_text + "\n"
         if text_content:
             analysis_content += f"Content:\n{text_content}\n"
 
@@ -707,6 +916,7 @@ class StaticAnalyzer:
             # ``Scanner._build_resource_description_for_meta``).
             "resource_description": resource_description,
             "resource_text": text_content,
+            "advertised_text": advertised_text,
             "findings": findings,
             **self._scan_outcome(findings, outcome),
         }

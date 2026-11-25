@@ -2063,6 +2063,7 @@ async def main():
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
                         analyzer_errors=r.get("analyzer_errors", []),
+                        advertised_text=r.get("advertised_text", ""),
                     )
                     all_results.append(tool_result)
 
@@ -2079,6 +2080,7 @@ async def main():
                         analyzers=r.get("analyzers", []),
                         findings=r["findings"],
                         analyzer_errors=r.get("analyzer_errors", []),
+                        advertised_text=r.get("advertised_text", ""),
                     )
                     all_results.append(prompt_result)
 
@@ -2110,6 +2112,7 @@ async def main():
                         # on file-based resources is unsupervised.
                         resource_description=r.get("resource_description", ""),
                         resource_text=r.get("resource_text", ""),
+                        advertised_text=r.get("advertised_text", ""),
                     )
                     all_results.append(resource_result)
 

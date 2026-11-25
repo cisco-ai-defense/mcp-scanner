@@ -276,6 +276,87 @@ class TestMetaAnalyzerPrompts:
         assert "validated_findings" not in prompt
         assert "priority_order" not in prompt
 
+    def test_build_user_prompt_includes_uri_and_advertised_fields(self):
+        """Meta-analysis sees the URI and fields that are not the body."""
+        config = _make_config()
+        analyzer = MetaAnalyzer(config)
+        metadata = "http://169.254.169.254/latest/meta-data/"
+        prompt = analyzer._build_user_prompt(
+            entity_context={
+                "type": "resource",
+                "name": "notes",
+                "description": "Operator notes",
+                "uri": metadata,
+                "mime_type": "text/plain",
+                "advertised": "Additional Fields:\n" + json.dumps({"title": metadata}),
+            },
+            findings_data=json.dumps([{"_index": 0}]),
+            num_findings=1,
+            analyzers_used=["API"],
+            start_tag="<S>",
+            end_tag="<E>",
+        )
+        assert f"**URI:** {metadata}" in prompt
+        assert "Operator notes" in prompt
+        assert metadata in prompt
+        assert "title" in prompt
+
+    def test_tool_meta_context_includes_schema_and_title(self):
+        """A tool finding is reviewed against the schema and title."""
+        import asyncio
+
+        from mcpscanner.core.analyzers.base import SecurityFinding
+        from mcpscanner.core.result import ToolScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        metadata = "http://169.254.169.254/latest/meta-data/"
+        advertised = (
+            "Output Schema:\n"
+            + json.dumps({"$ref": metadata})
+            + '\nAdditional Fields:\n{"title": "hidden instructions"}'
+        )
+        seen = {}
+
+        async def _capture(findings, analyzers_used, entity_context):
+            seen["context"] = entity_context
+            return MetaAnalysisResult()
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+        scanner._meta_analyzer.analyze_findings = _capture
+        result = ToolScanResult(
+            tool_name="get_customer",
+            tool_description="Look up a customer",
+            status="completed",
+            analyzers=["API"],
+            findings=[
+                SecurityFinding(
+                    severity="HIGH",
+                    summary="metadata url",
+                    analyzer="API",
+                    threat_category="X",
+                )
+            ],
+            advertised_text=advertised,
+        )
+        out = asyncio.run(
+            scanner._meta_analyze_one_tool(result, asyncio.Semaphore(1))
+        )
+        assert metadata in seen["context"]["advertised"]
+        assert "hidden instructions" in seen["context"]["advertised"]
+        assert out.advertised_text == advertised
+        prompt = MetaAnalyzer(_make_config())._build_user_prompt(
+            entity_context=seen["context"],
+            findings_data=json.dumps([{"_index": 0}]),
+            num_findings=1,
+            analyzers_used=["API"],
+            start_tag="<S>",
+            end_tag="<E>",
+        )
+        assert metadata in prompt
+        assert "hidden instructions" in prompt
+        assert "Look up a customer" in prompt
+
     def test_build_user_prompt_includes_parameters(self):
         """User prompt includes parameters schema when provided."""
         config = _make_config()
@@ -1368,19 +1449,179 @@ class TestResourceDescriptionForMeta:
         # marker text itself).
         assert len(out) < 8500
 
+    def test_truncated_content_keeps_the_tail(self):
+        """A payload past the opening is still shown to meta-analysis."""
+        from mcpscanner.core.scanner import Scanner
+
+        payload = "subprocess.run(['id'])"
+        text = ("A" * 20_000) + payload
+        out = Scanner._build_resource_description_for_meta(
+            self._resource(text=text), budget=8000
+        )
+        assert payload in out
+        assert len(out) < 8500
+
+    def test_body_within_scan_cap_is_not_cut_to_a_prefix(self):
+        """The default budget matches the resource body cap."""
+        from mcpscanner.core.scanner import Scanner
+
+        payload = "subprocess.run(['id'])"
+        text = ("A" * 9000) + payload
+        out = Scanner._build_resource_description_for_meta(self._resource(text=text))
+        assert payload in out
+        assert "[content truncated" not in out
+
+    def test_long_description_does_not_hide_the_middle_of_the_body(self):
+        """A long description shares the cap and leaves the body a window."""
+        from mcpscanner.core.scanner import Scanner
+
+        payload = "subprocess.run(['id'])"
+        head = (100_000 - len(payload)) // 2
+        tail = 100_000 - len(payload) - head
+        text = ("A" * head) + payload + ("B" * tail)
+        out = Scanner._build_resource_description_for_meta(
+            self._resource(description="D" * 50_000, text=text)
+        )
+        assert payload in out
+        assert "[content truncated" in out
+        assert "D" * 1000 in out
+        assert len(out) <= 100_000
+
+    def test_static_body_over_the_scan_cap_keeps_the_middle(self):
+        """The meta-analysis window keeps the middle and stays within the cap."""
+        from mcpscanner.core.scanner import Scanner
+
+        payload = "subprocess.run(['id'])"
+        text = ("A" * 60_000) + payload + ("B" * 60_000)
+        out = Scanner._build_resource_description_for_meta(
+            self._resource(description="Operator notes", text=text)
+        )
+        assert len(text) > 100_000
+        assert payload in out
+        assert "[content truncated" in out
+        assert "first, middle, and last" in out
+        assert ("A" * 60_000) not in out
+        assert len(out) <= 100_000
+
+    def test_prompt_tail_is_kept_for_meta(self):
+        """A payload at the end of a long prompt body stays in meta context."""
+        from mcpscanner.core.result import PromptScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        payload = "subprocess.run(['id'])"
+        result = PromptScanResult(
+            prompt_name="summarize",
+            prompt_description="Summarize a record",
+            status="completed",
+            analyzers=["API"],
+            findings=[],
+            prompt_messages_text=("A" * 20_000) + payload,
+        )
+        out = Scanner._build_prompt_description_for_meta(result, budget=8000)
+        assert payload in out
+        assert "[prompt context truncated" in out
+        full = Scanner._build_prompt_description_for_meta(result)
+        assert payload in full
+        assert "[prompt context truncated" not in full
+
+    def test_long_prompt_description_does_not_hide_the_message_start(self):
+        """A long description leaves the start of the message inside the cap."""
+        from mcpscanner.core.result import PromptScanResult
+        from mcpscanner.core.scanner import Scanner
+
+        payload = "subprocess.run(['id'])"
+        result = PromptScanResult(
+            prompt_name="summarize",
+            prompt_description="D" * 40_000,
+            status="completed",
+            analyzers=["API"],
+            findings=[],
+            prompt_messages_text=payload + ("A" * 20_000) + ("B" * 70_000),
+        )
+        out = Scanner._build_prompt_description_for_meta(result)
+        assert payload in out
+        assert out.startswith("D" * 1000)
+        assert len(out) <= 100_000
+
     def test_description_is_truncated_when_pathologically_long(self):
         from mcpscanner.core.scanner import Scanner
 
         # Description shouldn't normally be >500 chars but defending
         # against a hostile/buggy MCP server that ships a 1 MB description.
-        long_desc = "y" * 100_000
+        long_desc = ("y" * 100_000) + "DESC-TAIL"
         out = Scanner._build_resource_description_for_meta(
             self._resource(description=long_desc, text="some content"),
             budget=1000,
         )
         assert "[description truncated" in out
-        # And content still gets at least the floor (256 chars).
         assert "--- Content (first" in out
+        assert "some content" in out
+        assert "DESC-TAIL" in out
+        assert len(out) <= 1000
+
+    def test_small_budget_keeps_the_tail(self):
+        """A budget too small for three windows still shows the end."""
+        from mcpscanner.core.scanner import Scanner
+
+        payload = "TAILPAYLOAD"
+        text = "HEAD" + ("M" * 80) + payload
+        out = Scanner._elide_for_meta(text, 20, "content")
+        assert len(out) <= 20
+        assert out.endswith(payload[-6:])
+
+    def test_over_cap_context_keeps_findings(self):
+        """A body past the cap is not used to drop a finding."""
+        import asyncio
+
+        from mcpscanner.core.scanner import Scanner
+
+        called = {"n": 0}
+
+        async def _capture(findings, analyzers_used, entity_context):
+            called["n"] += 1
+            return MetaAnalysisResult(
+                false_positives=[
+                    {"_index": 0, "false_positive_reason": "benign"}
+                ]
+            )
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+        scanner._meta_analyzer.analyze_findings = _capture
+        finding = _make_finding(summary="command execution")
+        result = self._resource(description="Operator notes", text="A" * 120_000)
+        result.findings = [finding]
+        result.advertised_text = "title " + ("Z" * 50_000)
+        out = asyncio.run(
+            scanner._meta_analyze_one_resource(result, asyncio.Semaphore(1))
+        )
+        assert called["n"] == 0
+        assert out.findings == [finding]
+        assert out.meta_filtered_findings == []
+
+    def test_advertised_fields_within_the_cap_are_sent(self):
+        """Advertised fields are part of the same cap and are sent when they fit."""
+        import asyncio
+
+        from mcpscanner.core.scanner import Scanner
+
+        seen = {}
+
+        async def _capture(findings, analyzers_used, entity_context):
+            seen["context"] = entity_context
+            return MetaAnalysisResult()
+
+        scanner = Scanner.__new__(Scanner)
+        scanner._meta_analyzer = MagicMock()
+        scanner._meta_analyzer.analyze_findings = _capture
+        result = self._resource(description="Operator notes", text="hello")
+        result.findings = [_make_finding(summary="command execution")]
+        result.advertised_text = "title hidden instructions"
+        asyncio.run(
+            scanner._meta_analyze_one_resource(result, asyncio.Semaphore(1))
+        )
+        assert seen["context"]["advertised"] == "title hidden instructions"
+        assert "hello" in seen["context"]["description"]
 
     def test_meta_path_threads_description_into_entity_context(self):
         """End-to-end: _run_meta_analysis_on_resource_results passes

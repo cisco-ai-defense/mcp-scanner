@@ -121,6 +121,7 @@ class ToolScanResult(ScanResult):
         server_source: str = None,
         server_name: str = None,
         analyzer_errors: Optional[List[Dict[str, str]]] = None,
+        advertised_text: str = "",
     ):
         """Initialize a new ToolScanResult instance.
 
@@ -135,6 +136,7 @@ class ToolScanResult(ScanResult):
         """
         self.tool_name = tool_name
         self.tool_description = tool_description
+        self.advertised_text = advertised_text or ""
         super().__init__(
             status, analyzers, findings, server_source, server_name, analyzer_errors
         )
@@ -163,6 +165,7 @@ class PromptScanResult(ScanResult):
         server_name: str = None,
         prompt_messages_text: str = "",
         analyzer_errors: Optional[List[Dict[str, str]]] = None,
+        advertised_text: str = "",
     ):
         """Initialize a new PromptScanResult instance.
 
@@ -180,6 +183,7 @@ class PromptScanResult(ScanResult):
         self.prompt_name = prompt_name
         self.prompt_description = prompt_description
         self.prompt_messages_text = prompt_messages_text or ""
+        self.advertised_text = advertised_text or ""
         super().__init__(
             status, analyzers, findings, server_source, server_name, analyzer_errors
         )
@@ -222,6 +226,7 @@ class ResourceScanResult(ScanResult):
         resource_description: Optional[str] = None,
         resource_text: Optional[str] = None,
         analyzer_errors: Optional[List[Dict[str, str]]] = None,
+        advertised_text: str = "",
     ):
         """Initialize a new ResourceScanResult instance.
 
@@ -248,6 +253,7 @@ class ResourceScanResult(ScanResult):
         # truthiness / ``str`` operations without ``getattr(..., "") or ""``.
         self.resource_description = resource_description or ""
         self.resource_text = resource_text or ""
+        self.advertised_text = advertised_text or ""
         super().__init__(
             status, analyzers, findings, server_source, server_name, analyzer_errors
         )
@@ -462,6 +468,7 @@ def filter_results_by_severity(
                     server_source=result.server_source,
                     server_name=result.server_name,
                     analyzer_errors=result.analyzer_errors,
+                    advertised_text=getattr(result, "advertised_text", "") or "",
                 )
             elif isinstance(result, PromptScanResult):
                 filtered_result = PromptScanResult(
@@ -475,6 +482,7 @@ def filter_results_by_severity(
                     prompt_messages_text=getattr(result, "prompt_messages_text", "")
                     or "",
                     analyzer_errors=result.analyzer_errors,
+                    advertised_text=getattr(result, "advertised_text", "") or "",
                 )
             elif isinstance(result, ResourceScanResult):
                 filtered_result = ResourceScanResult(
@@ -490,6 +498,7 @@ def filter_results_by_severity(
                     or "",
                     resource_text=getattr(result, "resource_text", "") or "",
                     analyzer_errors=result.analyzer_errors,
+                    advertised_text=getattr(result, "advertised_text", "") or "",
                 )
             elif isinstance(result, InstructionsScanResult):
                 filtered_result = InstructionsScanResult(
