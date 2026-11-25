@@ -1483,15 +1483,22 @@ class Scanner:
         tool_json = tool.model_dump_json(by_alias=True)
         tool_data = json.loads(tool_json)
 
-        if AnalyzerEnum.SCHEMA in analyzers:
+        # An external schema $ref is part of the advertised tool. Inspect it
+        # on every tool scan, including callers that did not select SCHEMA.
+        # The analyzer classifies the reference string and does not fetch it.
+        schema_analyzer = getattr(self, "_schema_analyzer", None)
+        if schema_analyzer is not None:
             try:
-                schema_findings = await self._schema_analyzer.analyze(
+                schema_findings = await schema_analyzer.analyze(
                     tool_json, {"tool_name": name, "content_type": "parameters"}
                 )
                 all_findings.extend(schema_findings)
-                successful_analyzers.append(AnalyzerEnum.SCHEMA)
+                if schema_findings or AnalyzerEnum.SCHEMA in analyzers:
+                    successful_analyzers.append(AnalyzerEnum.SCHEMA)
             except Exception as e:
-                self._record_analyzer_error(analyzer_errors, "SCHEMA", "parameters", e)
+                self._record_analyzer_error(
+                    analyzer_errors, "SCHEMA", "parameters", e
+                )
 
         if AnalyzerEnum.API in analyzers and self._api_analyzer:
             # Run API analysis on the description

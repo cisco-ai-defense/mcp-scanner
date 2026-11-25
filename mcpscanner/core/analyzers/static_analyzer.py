@@ -223,6 +223,39 @@ class StaticAnalyzer:
 
         return all_findings
 
+    async def _inspect_schema_references(
+        self,
+        params_json: str,
+        params_context: Dict[str, Any],
+        all_findings: List[SecurityFinding],
+        outcome: Dict[str, Any],
+    ) -> None:
+        """Classify schema $ref values when the caller did not select SCHEMA.
+
+        The reference string is inspected locally and is never fetched.
+        """
+        try:
+            schema_findings = await SchemaReferenceAnalyzer().analyze(
+                params_json, params_context
+            )
+        except Exception as error:
+            error_type = type(error).__name__
+            outcome["analyzer_errors"].append(
+                {
+                    "analyzer": "SCHEMA",
+                    "content_type": "parameters",
+                    "message": f"{error_type} during analysis",
+                }
+            )
+            logger.error(
+                "SCHEMA analysis failed on parameters: %s",
+                error_type,
+            )
+            return
+        all_findings.extend(schema_findings)
+        if schema_findings and "SCHEMA" not in outcome["analyzers"]:
+            outcome["analyzers"].append("SCHEMA")
+
     @staticmethod
     def _scan_outcome(
         findings: List[SecurityFinding], outcome: Dict[str, Any]
@@ -329,6 +362,16 @@ class StaticAnalyzer:
                     outcome=outcome,
                 )
                 all_findings.extend(params_findings)
+                selected = (
+                    self.analyzers if params_analyzers is None else params_analyzers
+                )
+                if not any(
+                    isinstance(analyzer, SchemaReferenceAnalyzer)
+                    for analyzer in selected
+                ):
+                    await self._inspect_schema_references(
+                        params_json, params_context, all_findings, outcome
+                    )
 
             result = {
                 "tool_name": tool_name,
