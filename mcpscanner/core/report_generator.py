@@ -26,7 +26,58 @@ from typing import Any, Dict, List, Optional, Union
 
 from .analyzers.meta_analyzer import build_meta_audit_payload
 from .models import OutputFormat, SeverityFilter
-from .result import analyzer_result_key, get_highest_severity
+from .result import (
+    InstructionsScanResult,
+    ToolListFailure,
+    analyzer_result_key,
+    get_highest_severity,
+)
+
+
+def _report_item_name(
+    result: Dict[str, Any], *, with_server: bool = False
+) -> str:
+    """Name a report row without treating instructions as a tool.
+
+    Grouped views pass with_server so two instruction rows, or two failed
+    tool lists, from a config scan stay distinct. The table keeps the plain
+    name and its own server column. The instruction body is never part of
+    the label.
+    """
+    item_type = result.get("item_type", "tool")
+    server_name = result.get("server_name")
+
+    def _named(label: str) -> str:
+        if with_server and server_name:
+            return f"{label} ({server_name})"
+        return label
+
+    if item_type == "instructions":
+        return _named("instructions")
+    if item_type == "tool_scan":
+        return _named("tool list")
+    if item_type == "prompt":
+        return result.get("prompt_name", "Unknown")
+    if item_type == "resource":
+        return (
+            result.get("resource_name")
+            or result.get("resource_uri")
+            or "Unknown"
+        )
+    return result.get("tool_name", result.get("package_name", "Unknown"))
+
+
+def _meta_audit_text(result: Dict[str, Any]) -> str:
+    """One line describing findings meta-analysis removed."""
+    meta = result.get("meta_analysis") or {}
+    count = meta.get("filtered_count") or 0
+    if not count:
+        return ""
+    return f"Meta-analysis filtered {count} finding(s)"
+
+
+def _is_tool_report_row(result: Dict[str, Any]) -> bool:
+    return result.get("item_type", "tool") == "tool"
 
 
 async def results_to_json(scan_results) -> List[Dict[str, Any]]:
@@ -181,8 +232,14 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
         if meta_audit is not None:
             result_dict["meta_analysis"] = meta_audit
 
-        # Add type-specific fields
-        if hasattr(result, "tool_name"):
+        # Add type-specific fields. Instructions stay their own item so a
+        # poisoned discover reply is not counted as an advertised tool.
+        if isinstance(result, ToolListFailure):
+            result_dict["item_type"] = "tool_scan"
+        elif isinstance(result, InstructionsScanResult):
+            result_dict["item_type"] = "instructions"
+            result_dict["protocol_version"] = result.protocol_version
+        elif hasattr(result, "tool_name"):
             # ToolScanResult
             result_dict["tool_name"] = result.tool_name
             result_dict["tool_description"] = result.tool_description
@@ -312,10 +369,15 @@ class ReportGenerator:
         filtered = []
 
         for result in self.scan_results:
-            # Tool name filter
+            # Tool name filter. An instructions result has no tool name, so a
+            # tool filter does not hide it.
             if (
                 tool_filter
-                and tool_filter.lower() not in result.get("tool_name", result.get("package_name", "")).lower()
+                and result.get("item_type") not in ("instructions", "tool_scan")
+                and tool_filter.lower()
+                not in result.get(
+                    "tool_name", result.get("package_name", "")
+                ).lower()
             ):
                 continue
 
@@ -412,7 +474,12 @@ class ReportGenerator:
             scan_target = self.server_url
 
         output.append(f"Scan Target: {scan_target}")
-        output.append(f"Total tools scanned: {len(self.scan_results)}")
+        tool_count = sum(
+            1
+            for item in self.scan_results
+            if item.get("item_type", "tool") == "tool"
+        )
+        output.append(f"Total tools scanned: {tool_count}")
 
         if not results:
             output.append("No results match the specified filters.\n")
@@ -444,6 +511,10 @@ class ReportGenerator:
                 item_name = result.get("prompt_name", "Unknown")
             elif item_type == "resource":
                 item_name = result.get("resource_name", "Unknown")
+            elif item_type == "instructions":
+                item_name = "server instructions"
+            elif item_type == "tool_scan":
+                item_name = "tool list"
             else:
                 item_name = "Unknown"
 
@@ -461,15 +532,19 @@ class ReportGenerator:
                 for analyzer_data in findings.values()
             )
 
+            audit = _meta_audit_text(result)
+            audit_suffix = f"; {audit}" if audit else ""
             if "server_name" in result and result["server_name"]:
                 return (
                     f"{idx}. {item_name} ({item_type}) "
                     f"(Server: {result['server_name']}) - "
                     f"{highest_severity} ({total_findings} findings)"
+                    f"{audit_suffix}"
                 )
             return (
                 f"{idx}. {item_name} ({item_type}) - "
                 f"{highest_severity} ({total_findings} findings)"
+                f"{audit_suffix}"
             )
 
         if unsafe_results:
@@ -525,6 +600,12 @@ class ReportGenerator:
             elif item_type == "resource":
                 item_name = result.get("resource_name", "Unknown")
                 item_label = "Resource"
+            elif item_type == "instructions":
+                item_name = "server instructions"
+                item_label = "Instructions"
+            elif item_type == "tool_scan":
+                item_name = "tool list"
+                item_label = "Tool scan"
             else:
                 item_name = "Unknown"
                 item_label = "Item"
@@ -546,6 +627,9 @@ class ReportGenerator:
             output.append(f"Status: {status}")
             safety = "Unknown" if is_safe is None else "Yes" if is_safe else "No"
             output.append(f"Safe: {safety}")
+            audit = _meta_audit_text(result)
+            if audit:
+                output.append(audit)
             for error in result.get("analyzer_errors", []):
                 output.append(
                     f"Analyzer error: {error.get('analyzer', 'Unknown')} "
@@ -646,7 +730,7 @@ class ReportGenerator:
             return "\n".join(output)
 
         for result in results:
-            tool_name = result.get("tool_name", result.get("package_name", "Unknown"))
+            tool_name = _report_item_name(result, with_server=True)
             is_safe = result.get("is_safe", True)
             findings = result.get("findings", {})
 
@@ -678,8 +762,11 @@ class ReportGenerator:
                     if data.get("total_findings", 0) > 0:
                         threat_summary = data.get("threat_summary", "N/A")
                         output.append(f"   {analyzer}: {threat_summary}")
-            else:
+            elif not _meta_audit_text(result):
                 output.append("   No security issues detected")
+            audit = _meta_audit_text(result)
+            if audit:
+                output.append(f"   {audit}")
 
             output.append("")
 
@@ -696,24 +783,49 @@ class ReportGenerator:
             output.append("No results match the specified filters.\n")
             return "\n".join(output)
 
-        # Group by analyzer
+        # Group by analyzer. A meta-only row has no active findings, so
+        # copy its audit onto the analyzer entry or it disappears below.
         analyzer_results = {}
         for result in results:
             findings = result.get("findings", {})
+            audit = _meta_audit_text(result)
+            if audit and not findings:
+                findings = {
+                    "meta_analyzer": {
+                        "severity": "SAFE",
+                        "total_findings": 0,
+                        "threat_summary": audit,
+                        "meta_audit": audit,
+                    }
+                }
             for analyzer, data in findings.items():
                 if analyzer_filter and analyzer_filter != analyzer:
+                    continue
+                if not isinstance(data, dict):
                     continue
 
                 if analyzer not in analyzer_results:
                     analyzer_results[analyzer] = []
 
+                entry = dict(data)
+                if audit:
+                    entry["meta_audit"] = audit
                 analyzer_results[analyzer].append(
-                    {"tool_name": result.get("tool_name", result.get("package_name", "Unknown")), "data": data}
+                    {
+                        "tool_name": _report_item_name(
+                            result, with_server=True
+                        ),
+                        "item_type": result.get("item_type", "tool"),
+                        "data": entry,
+                    }
                 )
 
         for analyzer, tools in analyzer_results.items():
             output.append(f"🔍 {analyzer.upper().replace('_', ' ')}")
-            output.append(f"Tools analyzed: {len(tools)}")
+            tool_count = sum(
+                1 for tool in tools if tool.get("item_type", "tool") == "tool"
+            )
+            output.append(f"Tools analyzed: {tool_count}")
 
             # Count by severity
             severity_counts = {}
@@ -723,22 +835,45 @@ class ReportGenerator:
 
             output.append(f"Severity breakdown: {dict(severity_counts)}")
 
-            # Show failed analyzer invocations even without findings.
+            # Show failures, active findings, and meta-only audits.
+            # A genuinely clean entry has none of these and stays hidden.
             tools_to_show = [
                 t
                 for t in tools
                 if t["data"].get("total_findings", 0) > 0
                 or t["data"].get("status") in {"error", "partial"}
                 or t["data"].get("severity") == "UNKNOWN"
+                or t["data"].get("meta_audit")
             ]
             if tools_to_show:
-                output.append("Tools with findings or incomplete analysis:")
+                output.append(
+                    "Items with findings, incomplete analysis, "
+                    "or a meta-analysis audit:"
+                )
                 for tool in tools_to_show:
                     tool_name = tool["tool_name"]
                     data = tool["data"]
                     severity = data.get("severity", "SAFE")
                     threat_summary = data.get("threat_summary", "N/A")
-                    output.append(f"  • {tool_name} ({severity}): {threat_summary}")
+                    audit_line = data.get("meta_audit")
+                    # A failed or unknown analyzer keeps its own summary.
+                    # The audit-only line is for a completed safe entry.
+                    audit_only = (
+                        audit_line
+                        and data.get("total_findings", 0) == 0
+                        and data.get("status") not in {"error", "partial"}
+                        and data.get("severity") != "UNKNOWN"
+                    )
+                    if audit_only:
+                        output.append(
+                            f"  • {tool_name} ({severity}): {audit_line}"
+                        )
+                    else:
+                        output.append(
+                            f"  • {tool_name} ({severity}): {threat_summary}"
+                        )
+                        if audit_line:
+                            output.append(f"    {audit_line}")
 
             output.append("")
 
@@ -776,9 +911,12 @@ class ReportGenerator:
 
                 severity_groups[severity].append(
                     {
-                        "tool_name": result.get("tool_name", result.get("package_name", "Unknown")),
+                        "tool_name": _report_item_name(
+                            result, with_server=True
+                        ),
                         "analyzer": analyzer,
                         "data": data,
+                        "meta_audit": _meta_audit_text(result),
                     }
                 )
 
@@ -813,18 +951,22 @@ class ReportGenerator:
                 tool_name = item["tool_name"]
                 analyzer = item["analyzer"]
                 threat_summary = item["data"].get("threat_summary", "N/A")
-                output.append(f"  • {tool_name} [{analyzer}]: {threat_summary}")
+                audit = item.get("meta_audit") or ""
+                suffix = f"; {audit}" if audit else ""
+                output.append(
+                    f"  • {tool_name} [{analyzer}]: {threat_summary}{suffix}"
+                )
 
             output.append("")
 
         if incomplete_items:
             output.append(f"⚠️ INCOMPLETE SCANS ({len(incomplete_items)} items)")
             for result in incomplete_items:
-                tool_name = result.get(
-                    "tool_name",
-                    result.get("package_name", result.get("prompt_name", "Unknown")),
+                output.append(
+                    "  • "
+                    f"{_report_item_name(result, with_server=True)}: "
+                    "scan incomplete"
                 )
-                output.append(f"  • {tool_name}: scan incomplete")
             output.append("")
 
         return "\n".join(output)
@@ -900,10 +1042,10 @@ class ReportGenerator:
                     target_server = result["server_name"][:18]
                 else:
                     target_server = "unknown"
-                tool_name = result.get("tool_name", result.get("package_name", "Unknown"))[:16]
+                tool_name = _report_item_name(result)[:16]
             else:
                 # Direct server scan: no target server column
-                tool_name = result.get("tool_name", result.get("package_name", "Unknown"))[:18]
+                tool_name = _report_item_name(result)[:18]
             is_safe = result.get("is_safe", True)
             if is_safe is None:
                 status = "UNKNOWN"
@@ -975,13 +1117,21 @@ class ReportGenerator:
                 llm_severity = get_analyzer_status("llm_analyzer")[:6]
                 row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
             output.append(row)
+            audit = _meta_audit_text(result)
+            if audit:
+                output.append(f"    {audit}")
 
         return "\n".join(output)
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get statistics about the scan results."""
+        tool_rows = [
+            result
+            for result in self.scan_results
+            if _is_tool_report_row(result)
+        ]
         stats = {
-            "total_tools": len(self.scan_results),
+            "total_tools": len(tool_rows),
             "safe_tools": 0,
             "unsafe_tools": 0,
             "incomplete_tools": 0,
@@ -1002,12 +1152,13 @@ class ReportGenerator:
         }
 
         for result in self.scan_results:
-            if result.get("is_safe", True) is True:
-                stats["safe_tools"] += 1
-            elif result.get("is_safe", True) is False:
-                stats["unsafe_tools"] += 1
-            else:
-                stats["incomplete_tools"] += 1
+            if _is_tool_report_row(result):
+                if result.get("is_safe", True) is True:
+                    stats["safe_tools"] += 1
+                elif result.get("is_safe", True) is False:
+                    stats["unsafe_tools"] += 1
+                else:
+                    stats["incomplete_tools"] += 1
 
             findings = result.get("findings", {})
             for analyzer, data in findings.items():

@@ -50,26 +50,40 @@ async def main():
         print(f"Scanning all tools on server {server_url}...")
         results = await scanner.scan_remote_server_tools(server_url)
 
-        # Print scan summary
-        print(f"\nScan completed. Found {len(results)} tools.")
+        # Print scan summary. An empty list with tool_scan_error is an
+        # incomplete tool list, not a server that exposes no tools.
+        instructions = scanner.instructions_result
+        if instructions is not None:
+            print(
+                f"Instructions: safe={instructions.is_safe}, "
+                f"findings={len(instructions.findings)}"
+            )
+        tool_error = scanner.tool_scan_error
+        if tool_error:
+            message = tool_error.get("message") or "Error during tools/list"
+            print(f"\nTool list incomplete: {message}")
+        else:
+            print(f"\nScan completed. Found {len(results)} tools.")
 
-        # Count safe and unsafe tools
-        safe_tools = [r for r in results if r.is_safe]
-        unsafe_tools = [r for r in results if not r.is_safe]
+            # Incomplete analysis is neither safe nor unsafe.
+            safe_tools = [r for r in results if r.is_safe is True]
+            unsafe_tools = [r for r in results if r.is_safe is False]
+            incomplete_tools = [r for r in results if r.is_safe is None]
 
-        print(f"Safe tools: {len(safe_tools)}")
-        print(f"Unsafe tools: {len(unsafe_tools)}")
+            print(f"Safe tools: {len(safe_tools)}")
+            print(f"Unsafe tools: {len(unsafe_tools)}")
+            if incomplete_tools:
+                print(f"Incomplete tools: {len(incomplete_tools)}")
 
-        # Print details for unsafe tools
-        if unsafe_tools:
-            print("\nDetails for unsafe tools:")
-            for result in unsafe_tools:
-                print(f"\nTool: {result.tool_name}")
-                print(f"Status: {result.status}")
-                print(f"Security Findings: {len(result.findings)}")
+            if unsafe_tools:
+                print("\nDetails for unsafe tools:")
+                for result in unsafe_tools:
+                    print(f"\nTool: {result.tool_name}")
+                    print(f"Status: {result.status}")
+                    print(f"Security Findings: {len(result.findings)}")
 
-                for i, finding in enumerate(result.findings, 1):
-                    print(f"  Security Finding #{i}:{finding}")
+                    for i, finding in enumerate(result.findings, 1):
+                        print(f"  Security Finding #{i}:{finding}")
 
     except ValueError as e:
         print(f"Error: {e}")

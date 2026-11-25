@@ -44,6 +44,7 @@ from ..core.result import (
     PromptScanResult,
     ResourceScanResult,
     InstructionsScanResult,
+    ToolListFailure,
     get_highest_severity,
     group_findings_by_analyzer,
 )
@@ -331,6 +332,56 @@ def _group_findings_for_api(
     return grouped_findings
 
 
+def _tool_scan_error_payload(scanner: Scanner) -> Optional[Dict[str, str]]:
+    """Copy a tools/list failure without the exception text."""
+    error = getattr(scanner, "tool_scan_error", None)
+    if not error:
+        return None
+    payload = {
+        "phase": str(error.get("phase") or "tools/list"),
+        "message": str(error.get("message") or ""),
+    }
+    server_name = error.get("server_name")
+    server_source = error.get("server_source")
+    if server_name:
+        payload["server_name"] = str(server_name)
+    if server_source:
+        payload["server_source"] = str(server_source)
+    return payload
+
+
+def _partition_scan_results(
+    results: List[Any],
+) -> tuple[List[Any], Optional[InstructionsScanResult]]:
+    """Split an instructions result off the entity list."""
+    entities: List[Any] = []
+    instructions: Optional[InstructionsScanResult] = None
+    for result in results:
+        if isinstance(result, InstructionsScanResult):
+            instructions = result
+        else:
+            entities.append(result)
+    return entities, instructions
+
+
+def _instructions_api_payload(
+    result: InstructionsScanResult, scanner: Scanner
+) -> Dict[str, Any]:
+    """Serialize an instructions result without copying the instruction text."""
+    payload: Dict[str, Any] = {
+        "server_name": result.server_name,
+        "protocol_version": result.protocol_version,
+        "status": result.status,
+        "is_safe": result.is_safe,
+        "findings": _group_findings_for_api(result, scanner),
+        "analyzer_errors": result.analyzer_errors,
+    }
+    meta_audit = _build_meta_analysis_audit(result)
+    if meta_audit is not None:
+        payload["meta_analysis"] = meta_audit
+    return payload
+
+
 def _convert_scanner_result_to_tool_api_result(
     scanner_result: ScanResult, scanner: Scanner
 ) -> ToolScanResult:
@@ -526,20 +577,44 @@ async def scan_all_tools_endpoint(
             http_headers=http_headers,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned {len(results)} tools")
+        tool_results, instructions_result = _partition_scan_results(results)
+        if instructions_result is None:
+            instructions_result = getattr(scanner, "instructions_result", None)
+        logger.debug(f"Scanner completed - scanned {len(tool_results)} tools")
 
         api_results = [
-            _convert_scanner_result_to_tool_api_result(res, scanner) for res in results
+            _convert_scanner_result_to_tool_api_result(res, scanner)
+            for res in tool_results
         ]
+        instructions_payload = (
+            _instructions_api_payload(instructions_result, scanner)
+            if instructions_result is not None
+            else None
+        )
+        tool_scan_payload = _tool_scan_error_payload(scanner)
 
         if request.output_format == OutputFormat.RAW:
             logger.debug("Returning raw API results")
             return AllToolsScanResponse(
-                server_url=request.server_url, scan_results=api_results
+                server_url=request.server_url,
+                scan_results=api_results,
+                instructions_scan=instructions_payload,
+                tool_scan_error=tool_scan_payload,
             )
 
+        format_results = list(tool_results)
+        if instructions_result is not None:
+            format_results.append(instructions_result)
+        if tool_scan_payload is not None:
+            format_results.append(
+                ToolListFailure(
+                    tool_scan_payload["message"],
+                    server_source=tool_scan_payload.get("server_source"),
+                    server_name=tool_scan_payload.get("server_name"),
+                )
+            )
         formatted_output = await _format_tool_scan_results(
-            results=results,
+            results=format_results,
             output_format=request.output_format,
             server_url=request.server_url,
             severity_filter=request.severity_filter,
@@ -556,10 +631,13 @@ async def scan_all_tools_endpoint(
             raw_results=(
                 api_results if request.output_format != OutputFormat.RAW else None
             ),
+            instructions_scan=instructions_payload,
+            tool_scan_error=tool_scan_payload,
         )
 
         logger.debug(
-            f"Full server scan completed successfully - {len(results)} tools processed"
+            "Full server scan completed successfully - "
+            f"{len(tool_results)} tools processed"
         )
 
         return response
@@ -702,11 +780,12 @@ async def scan_all_prompts_endpoint(
             http_headers=http_headers,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned {len(results)} prompts")
+        prompt_rows, instructions_result = _partition_scan_results(results)
+        logger.debug(f"Scanner completed - scanned {len(prompt_rows)} prompts")
 
         # Convert results to API format
         prompt_results = []
-        for result in results:
+        for result in prompt_rows:
             # Use helper function to group findings
             grouped_findings = _group_findings_for_api(result, scanner)
 
@@ -725,15 +804,20 @@ async def scan_all_prompts_endpoint(
 
         response = {
             "server_url": request.server_url,
-            "total_prompts": len(results),
-            "safe_prompts": sum(1 for r in results if r.is_safe is True),
-            "unsafe_prompts": sum(1 for r in results if r.is_safe is False),
-            "incomplete_prompts": sum(1 for r in results if r.is_safe is None),
+            "total_prompts": len(prompt_rows),
+            "safe_prompts": sum(1 for r in prompt_rows if r.is_safe is True),
+            "unsafe_prompts": sum(1 for r in prompt_rows if r.is_safe is False),
+            "incomplete_prompts": sum(1 for r in prompt_rows if r.is_safe is None),
             "prompts": prompt_results,
         }
+        if instructions_result is not None:
+            response["instructions_scan"] = _instructions_api_payload(
+                instructions_result, scanner
+            )
 
         logger.debug(
-            f"Prompt scan completed successfully - {len(results)} prompts processed"
+            "Prompt scan completed successfully - "
+            f"{len(prompt_rows)} prompts processed"
         )
         return response
 
@@ -886,11 +970,12 @@ async def scan_all_resources_endpoint(
             allowed_mime_types=allowed_mime_types,
             **_hybrid_routing_kwargs(request),
         )
-        logger.debug(f"Scanner completed - scanned {len(results)} resources")
+        resource_rows, instructions_result = _partition_scan_results(results)
+        logger.debug(f"Scanner completed - scanned {len(resource_rows)} resources")
 
         # Convert results to API format
         resource_results = []
-        for result in results:
+        for result in resource_rows:
             if result.status in {"completed", "partial", "failed"}:
                 # Use helper function to group findings
                 grouped_findings = _group_findings_for_api(result, scanner)
@@ -922,23 +1007,34 @@ async def scan_all_resources_endpoint(
                     }
                 )
 
-        completed = [r for r in results if r.status in {"completed", "partial"}]
+        completed = [r for r in resource_rows if r.status in {"completed", "partial"}]
         response = {
             "server_url": request.server_url,
-            "total_resources": len(results),
+            "total_resources": len(resource_rows),
             "scanned_resources": len(completed),
-            "skipped_resources": sum(1 for r in results if r.status == "skipped"),
-            "failed_resources": sum(1 for r in results if r.status == "failed"),
-            "partial_resources": sum(1 for r in results if r.status == "partial"),
-            "safe_resources": sum(1 for r in results if r.is_safe is True),
-            "unsafe_resources": sum(1 for r in results if r.is_safe is False),
-            "incomplete_resources": sum(1 for r in results if r.is_safe is None),
+            "skipped_resources": sum(
+                1 for r in resource_rows if r.status == "skipped"
+            ),
+            "failed_resources": sum(1 for r in resource_rows if r.status == "failed"),
+            "partial_resources": sum(
+                1 for r in resource_rows if r.status == "partial"
+            ),
+            "safe_resources": sum(1 for r in resource_rows if r.is_safe is True),
+            "unsafe_resources": sum(1 for r in resource_rows if r.is_safe is False),
+            "incomplete_resources": sum(
+                1 for r in resource_rows if r.is_safe is None
+            ),
             "allowed_mime_types": allowed_mime_types,
             "resources": resource_results,
         }
+        if instructions_result is not None:
+            response["instructions_scan"] = _instructions_api_payload(
+                instructions_result, scanner
+            )
 
         logger.debug(
-            f"Resource scan completed successfully - {len(results)} resources processed"
+            "Resource scan completed successfully - "
+            f"{len(resource_rows)} resources processed"
         )
         return response
 
