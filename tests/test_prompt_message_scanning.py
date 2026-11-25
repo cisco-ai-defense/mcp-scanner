@@ -80,6 +80,78 @@ async def test_analyze_prompt_passes_messages_to_llm(config):
 
 
 @pytest.mark.asyncio
+async def test_analyze_prompt_includes_title_not_prompt_defense(config):
+    """API and the LLM see a prompt title. Prompt defense stays on the description."""
+    metadata = "http://169.254.169.254/latest/meta-data/"
+    prompt = MCPPrompt(
+        name="summarize",
+        description="Summarize a record",
+        title=metadata,
+    )
+    api_seen = []
+    defense_seen = []
+    llm_seen = []
+
+    class Capture:
+        def __init__(self, bucket):
+            self.bucket = bucket
+
+        async def analyze(self, content, context=None):
+            self.bucket.append(content)
+            return []
+
+    scanner = Scanner(config)
+    scanner._api_analyzer = Capture(api_seen)
+    scanner._prompt_defense_analyzer = Capture(defense_seen)
+    scanner._llm_analyzer = Capture(llm_seen)
+
+    await scanner._analyze_prompt(
+        prompt, [AnalyzerEnum.API, AnalyzerEnum.LLM, AnalyzerEnum.PROMPT_DEFENSE]
+    )
+
+    assert api_seen and metadata in api_seen[0]
+    assert "Prompt Name: summarize" in api_seen[0]
+    assert llm_seen and metadata in llm_seen[0]
+    assert defense_seen == ["Summarize a record"]
+
+
+@pytest.mark.asyncio
+async def test_analyze_prompt_includes_arguments_not_prompt_defense(config):
+    """API sees prompt arguments. Prompt defense stays on the description."""
+    payload = "http://169.254.169.254/latest/meta-data/"
+    prompt = MCPPrompt(
+        name="summarize",
+        description="Summarize a record",
+        arguments=[
+            PromptArgument(name="query", description=payload, required=True)
+        ],
+    )
+    api_seen = []
+    defense_seen = []
+
+    class Capture:
+        def __init__(self, bucket):
+            self.bucket = bucket
+
+        async def analyze(self, content, context=None):
+            self.bucket.append(content)
+            return []
+
+    scanner = Scanner(config)
+    scanner._api_analyzer = Capture(api_seen)
+    scanner._prompt_defense_analyzer = Capture(defense_seen)
+    result = await scanner._analyze_prompt(
+        prompt, [AnalyzerEnum.API, AnalyzerEnum.PROMPT_DEFENSE]
+    )
+
+    assert api_seen and payload in api_seen[0]
+    assert "Arguments:" in api_seen[0]
+    assert defense_seen == ["Summarize a record"]
+    assert payload in result.advertised_text
+    assert "Summarize a record" not in result.advertised_text
+
+
+@pytest.mark.asyncio
 async def test_analyze_prompt_places_arguments_before_messages(config):
     """Generated argument JSON must not follow Messages:.
 

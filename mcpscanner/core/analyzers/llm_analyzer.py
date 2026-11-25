@@ -44,6 +44,11 @@ class SecurityError(Exception):
     pass
 
 
+def _json_value_present(value: Any) -> bool:
+    """True when a JSON value is worth showing to an analyzer."""
+    return value not in (None, "", [], {})
+
+
 class LLMAnalyzer(BaseAnalyzer):
     """Analyzer class for analyzing MCP tools using any LLM-supported model.
 
@@ -161,9 +166,12 @@ class LLMAnalyzer(BaseAnalyzer):
         self,
         entity_name: str,
         description: str = None,
-        parameters: Dict[str, Any] = None,
+        parameters: Any = None,
         entity_kind: str = "tool",
         body_text: str = None,
+        output_schema: Any = None,
+        input_schema: Any = None,
+        remainder: Any = None,
         _context: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, bool]:
         """Create a threat analysis prompt for tools, resources, or prompts.
@@ -194,22 +202,56 @@ class LLMAnalyzer(BaseAnalyzer):
             analysis_content += "Parameters:\n  Not applicable\n"
         else:
             # Format parameters for display
-            if parameters:
+            if isinstance(parameters, dict) and parameters:
                 param_list = []
                 for param_name, param_info in parameters.items():
-                    param_type = param_info.get("type", "unknown")
-                    param_desc = param_info.get("description", "No description")
-                    param_list.append(
-                        f"  - {param_name} ({param_type}): {param_desc}"
-                    )
+                    if isinstance(param_info, dict):
+                        try:
+                            rendered = json.dumps(param_info)
+                        except (TypeError, ValueError):
+                            rendered = type(param_info).__name__
+                        param_list.append(f"  - {param_name}: {rendered}")
+                        continue
+                    try:
+                        rendered = json.dumps(param_info)
+                    except (TypeError, ValueError):
+                        rendered = type(param_info).__name__
+                    param_list.append(f"  - {param_name}: {rendered}")
                 params_text = "\n".join(param_list)
+            elif _json_value_present(parameters):
+                try:
+                    rendered = json.dumps(parameters)
+                except (TypeError, ValueError):
+                    rendered = type(parameters).__name__
+                params_text = f"  {rendered}"
             else:
                 params_text = "  No parameters"
 
             analysis_content = f"Tool Name: {entity_name}\n"
-            if description:
-                analysis_content += f"Description: {description}\n"
+            if _json_value_present(description):
+                if isinstance(description, str):
+                    rendered_description = description
+                else:
+                    try:
+                        rendered_description = json.dumps(description)
+                    except (TypeError, ValueError):
+                        rendered_description = type(description).__name__
+                analysis_content += f"Description: {rendered_description}\n"
             analysis_content += f"Parameters:\n{params_text}"
+            if _json_value_present(input_schema):
+                analysis_content += (
+                    "\nInput Schema:\n" + json.dumps(input_schema, indent=2)
+                )
+            if _json_value_present(output_schema):
+                analysis_content += (
+                    "\nOutput Schema:\n"
+                    + json.dumps(output_schema, indent=2)
+                )
+            if _json_value_present(remainder):
+                analysis_content += (
+                    "\nAdditional Fields:\n"
+                    + json.dumps(remainder, indent=2)
+                )
 
         # Security validation: Check that the untrusted input doesn't contain our delimiter tags
         prompt_injection_detected = False
@@ -443,7 +485,13 @@ class LLMAnalyzer(BaseAnalyzer):
             if entity_kind in ("resource", "prompt"):
                 body_text = self._extract_mcp_entity_body(content, entity_kind)
                 metadata_text = content.split("Content:\n")[0].split("Messages:\n")[0].strip()
-            has_tool_fields = tool_info.get("description") or tool_info.get("parameters")
+            has_tool_fields = (
+                tool_info.get("description")
+                or tool_info.get("parameters")
+                or tool_info.get("input_schema")
+                or tool_info.get("output_schema")
+                or tool_info.get("remainder")
+            )
             has_body = bool(body_text.strip())
             if has_tool_fields or has_body:
                 threat_prompt, prompt_injection_detected = (
@@ -455,6 +503,9 @@ class LLMAnalyzer(BaseAnalyzer):
                             else tool_info.get("description")
                         ),
                         parameters=tool_info.get("parameters"),
+                        output_schema=tool_info.get("output_schema"),
+                        input_schema=tool_info.get("input_schema"),
+                        remainder=tool_info.get("remainder"),
                         entity_kind=entity_kind,
                         body_text=body_text if entity_kind in ("resource", "prompt") else None,
                         _context=context,
@@ -569,25 +620,80 @@ class LLMAnalyzer(BaseAnalyzer):
         Returns:
             Dict[str, Any]: Parsed tool information with description and parameters.
         """
-        tool_info = {"description": "", "parameters": {}}
+        tool_info = {
+            "description": "",
+            "parameters": {},
+            "input_schema": None,
+            "output_schema": None,
+            "remainder": None,
+        }
 
-        # Handle None or empty content
-        if not content:
+        # Handle None or empty content. A list or object is rendered to
+        # JSON so a non-string description is still analyzed.
+        if not _json_value_present(content):
             return tool_info
+        if not isinstance(content, str):
+            try:
+                content = json.dumps(content)
+            except (TypeError, ValueError):
+                tool_info["description"] = type(content).__name__
+                return tool_info
 
         try:
             # Try to parse as JSON first (for structured tool definitions)
             parsed_content = json.loads(content)
 
             if isinstance(parsed_content, dict):
-                tool_info["description"] = parsed_content.get("description", "")
+                tool_keys = (
+                    "description",
+                    "parameters",
+                    "inputSchema",
+                    "outputSchema",
+                )
+                # An object that is not a tool document is the description.
+                # Treating it as an empty tool drops the text.
+                if not any(key in parsed_content for key in tool_keys):
+                    if _json_value_present(parsed_content):
+                        tool_info["description"] = parsed_content
+                else:
+                    description = parsed_content.get("description", "")
+                    if "description" in parsed_content and description is not None:
+                        tool_info["description"] = description
 
-                # Extract parameters from various possible structures
-                if "parameters" in parsed_content:
-                    tool_info["parameters"] = parsed_content["parameters"]
-                elif "inputSchema" in parsed_content:
-                    properties = parsed_content["inputSchema"].get("properties", {})
-                    tool_info["parameters"] = properties
+                    # A missing or non-object input schema must not drop the
+                    # output schema or abort the rest of this parse.
+                    parameters = parsed_content.get("parameters")
+                    input_schema = parsed_content.get("inputSchema")
+                    if isinstance(parameters, dict):
+                        tool_info["parameters"] = parameters
+                    elif (
+                        "parameters" in parsed_content and parameters is not None
+                    ):
+                        tool_info["parameters"] = parameters
+                    elif isinstance(input_schema, dict):
+                        properties = input_schema.get("properties", {})
+                        if isinstance(properties, dict):
+                            tool_info["parameters"] = properties
+                    if (
+                        "inputSchema" in parsed_content
+                        and input_schema is not None
+                    ):
+                        tool_info["input_schema"] = input_schema
+                    output_schema = parsed_content.get("outputSchema")
+                    if (
+                        "outputSchema" in parsed_content
+                        and output_schema is not None
+                    ):
+                        tool_info["output_schema"] = output_schema
+                    remainder = {
+                        key: value
+                        for key, value in parsed_content.items()
+                        if key not in tool_keys and value is not None
+                    }
+                    if _json_value_present(remainder):
+                        tool_info["remainder"] = remainder
+            elif _json_value_present(parsed_content):
+                tool_info["description"] = parsed_content
 
         except json.JSONDecodeError:
             # If not JSON, treat as plain text (likely a docstring or description)

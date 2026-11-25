@@ -545,8 +545,12 @@ class TestResourcesScanning:
         assert len(results) == 1
         assert results[0]["resource_uri"] == "file:///documents/image.png"
         assert results[0]["status"] == "skipped"
+        assert results[0]["is_safe"] is None
         assert results[0]["analyzers"] == []
-        assert marker.seen == []
+        assert marker.seen
+        assert "iVBORw0KGgo=" not in "".join(
+            content for content, _context in marker.seen
+        )
 
     @pytest.mark.asyncio
     async def test_scan_resources_read_content_with_mime_filter(self, temp_json_file):
@@ -572,8 +576,12 @@ class TestResourcesScanning:
 
         assert len(results) == 1
         assert results[0]["status"] == "skipped"
+        assert results[0]["is_safe"] is None
         assert results[0]["analyzers"] == []
-        assert marker.seen == []
+        assert marker.seen
+        assert all(
+            "subprocess.run" not in content for content, _context in marker.seen
+        )
 
     @pytest.mark.asyncio
     async def test_scan_resource_dict_includes_description_and_text(
@@ -938,17 +946,30 @@ async def test_failed_static_analyzer_never_reports_safe(
     assert row["status"] == "failed"
     assert row["is_safe"] is None
     assert row["analyzers"] == []
-    assert row["analyzer_errors"] == [
-        {
-            "analyzer": "YARA",
-            "content_type": (
-                "description"
-                if scan_method == "scan_tools_file"
-                else "prompt" if scan_method == "scan_prompts_file" else "resource"
-            ),
-            "message": "RuntimeError during analysis",
-        }
-    ]
+    if scan_method == "scan_tools_file":
+        expected_errors = [
+            {
+                "analyzer": "YARA",
+                "content_type": "description",
+                "message": "RuntimeError during analysis",
+            },
+            {
+                "analyzer": "YARA",
+                "content_type": "parameters",
+                "message": "RuntimeError during analysis",
+            },
+        ]
+    else:
+        expected_errors = [
+            {
+                "analyzer": "YARA",
+                "content_type": (
+                    "prompt" if scan_method == "scan_prompts_file" else "resource"
+                ),
+                "message": "RuntimeError during analysis",
+            }
+        ]
+    assert row["analyzer_errors"] == expected_errors
     assert "secret-token-must-not-leak" not in caplog.text
     assert "secret-token-must-not-leak" not in json.dumps(row)
 
@@ -1018,7 +1039,7 @@ async def test_partial_static_scan_preserves_confirmed_findings(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_output_schema_only_without_schema_analyzer_is_unscanned(tmp_path):
+async def test_output_schema_only_is_scanned(tmp_path):
     path = tmp_path / "tools.json"
     path.write_text(
         json.dumps({"tools": [{"name": "lookup", "outputSchema": {"type": "object"}}]}),
@@ -1028,7 +1049,708 @@ async def test_output_schema_only_without_schema_analyzer_is_unscanned(tmp_path)
 
     row = (await StaticAnalyzer([marker]).scan_tools_file(path))[0]
 
-    assert marker.seen == []
+    assert len(marker.seen) == 1
+    assert marker.seen[0][1]["content_type"] == "parameters"
+    assert "outputSchema" in marker.seen[0][0]
     assert row["status"] == "skipped"
     assert row["is_safe"] is None
     assert row["analyzers"] == []
+    assert row["findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_output_schema_only_threat_is_reported(tmp_path):
+    path = tmp_path / "tools.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "outputSchema": {
+                            "type": "object",
+                            "description": "subprocess.run(['id'])",
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_tools_file(path))[0]
+
+    assert row["status"] == "completed"
+    assert row["is_safe"] is False
+    assert row["analyzers"] == ["Marker"]
+    assert len(row["findings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_non_string_description_is_scanned(tmp_path):
+    path = tmp_path / "tools.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "description": ["subprocess.run(['id'])"],
+                        "inputSchema": {"type": "object"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_tools_file(path))[0]
+
+    assert any("subprocess.run" in seen[0] for seen in marker.seen)
+    assert row["is_safe"] is False
+    assert len(row["findings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_title_without_schema_is_scanned(tmp_path):
+    """A benign description does not hide a payload in title or annotations."""
+    path = tmp_path / "tools.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "lookup",
+                        "description": "Look up a customer record",
+                        "title": "subprocess.run(['id'])",
+                        "annotations": {"title": "hidden instructions"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_tools_file(path))[0]
+
+    parameter_scans = [
+        content
+        for content, context in marker.seen
+        if context.get("content_type") == "parameters"
+    ]
+    assert parameter_scans
+    assert "subprocess.run" in parameter_scans[0]
+    assert "hidden instructions" in parameter_scans[0]
+    assert row["status"] == "completed"
+    assert row["is_safe"] is False
+    assert row["analyzers"] == ["Marker"]
+    assert len(row["findings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_name_without_schema_is_scanned(tmp_path):
+    """A benign description does not hide a payload in the tool name."""
+    path = tmp_path / "tools.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "subprocess.run(['id'])",
+                        "description": "Look up a customer record",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_tools_file(path))[0]
+
+    parameter_scans = [
+        content
+        for content, context in marker.seen
+        if context.get("content_type") == "parameters"
+    ]
+    assert parameter_scans
+    assert "subprocess.run" in parameter_scans[0]
+    assert "subprocess.run" in row["advertised_text"]
+    assert row["status"] == "completed"
+    assert row["is_safe"] is False
+    assert len(row["findings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_prompt_title_is_scanned(tmp_path):
+    """A benign prompt description does not hide a payload in the title."""
+    path = tmp_path / "prompts.json"
+    path.write_text(
+        json.dumps(
+            {
+                "prompts": [
+                    {
+                        "name": "summarize",
+                        "description": "Summarize a record",
+                        "title": "subprocess.run(['id'])",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_prompts_file(path))[0]
+
+    assert any("subprocess.run" in content for content, _context in marker.seen)
+    assert row["is_safe"] is False
+    assert len(row["findings"]) == 1
+    assert "subprocess.run" in row["advertised_text"]
+
+
+@pytest.mark.asyncio
+async def test_prompt_arguments_are_kept_for_meta(tmp_path):
+    """Argument text is retained for meta-analysis after the static scan."""
+    path = tmp_path / "prompts.json"
+    payload = "http://169.254.169.254/latest/meta-data/"
+    path.write_text(
+        json.dumps(
+            {
+                "prompts": [
+                    {
+                        "name": "summarize",
+                        "description": "Summarize a record",
+                        "arguments": [{"name": "query", "description": payload}],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = (await StaticAnalyzer([]).scan_prompts_file(path))[0]
+
+    assert payload in row["advertised_text"]
+    assert "Summarize a record" not in row["advertised_text"]
+
+
+@pytest.mark.asyncio
+async def test_resource_title_and_annotations_are_scanned(tmp_path):
+    """A benign resource description does not hide title or annotations."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///notes.txt",
+                        "name": "notes",
+                        "description": "Operator notes",
+                        "mimeType": "text/plain",
+                        "title": "subprocess.run(['id'])",
+                        "annotations": {"title": "hidden instructions"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_resources_file(path))[0]
+
+    assert any("subprocess.run" in content for content, _context in marker.seen)
+    assert any(
+        "hidden instructions" in content for content, _context in marker.seen
+    )
+    assert row["is_safe"] is False
+    assert len(row["findings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_filtered_mime_title_is_scanned(tmp_path):
+    """A skipped body does not hide a payload in the resource title."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///data.bin",
+                        "name": "binary",
+                        "description": "Operator notes",
+                        "mimeType": "application/octet-stream",
+                        "title": "subprocess.run(['id'])",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (
+        await StaticAnalyzer([marker]).scan_resources_file(
+            path, allowed_mime_types=["text/plain"]
+        )
+    )[0]
+
+    assert any("subprocess.run" in content for content, _context in marker.seen)
+    assert row["is_safe"] is False
+    assert row["status"] == "completed"
+    assert len(row["findings"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_filtered_mime_body_is_not_kept(tmp_path):
+    """A MIME filter keeps the body out of the scan and out of meta context."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///data.bin",
+                        "name": "binary",
+                        "description": "Operator notes",
+                        "mimeType": "application/octet-stream",
+                        "title": "subprocess.run(['id'])",
+                        "text": "UNREAD-BODY",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (
+        await StaticAnalyzer([marker]).scan_resources_file(
+            path, allowed_mime_types=["text/plain"]
+        )
+    )[0]
+
+    seen = "".join(content for content, _context in marker.seen)
+    assert "subprocess.run" in seen
+    assert "UNREAD-BODY" not in seen
+    assert row["resource_text"] == ""
+    assert "UNREAD-BODY" not in row["advertised_text"]
+
+
+@pytest.mark.asyncio
+async def test_joined_content_fields_are_scanned(tmp_path):
+    """A benign list entry does not hide fields on the matching read item."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///notes",
+                        "name": "notes",
+                        "description": "Operator notes",
+                        "mimeType": "text/plain",
+                    }
+                ],
+                "contents": [
+                    {
+                        "uri": "file:///notes",
+                        "mimeType": "text/plain",
+                        "text": "hello",
+                        "title": "subprocess.run(['id'])",
+                        "description": "curl http://169.254.169.254/",
+                        "blob": "iVBORw0KGgo=",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_resources_file(path))[0]
+
+    seen = "".join(content for content, _context in marker.seen)
+    assert "subprocess.run" in seen
+    assert "169.254.169.254" in seen
+    assert "iVBORw0KGgo=" not in seen
+    assert "subprocess.run" in row["advertised_text"]
+    assert "169.254.169.254" in row["advertised_text"]
+    assert row["is_safe"] is False
+    assert row["resource_text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_joined_content_description_fills_empty_list_description(tmp_path):
+    """A description that exists only on the read item is scanned."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///notes",
+                        "name": "notes",
+                        "mimeType": "text/plain",
+                    }
+                ],
+                "contents": [
+                    {
+                        "uri": "file:///notes",
+                        "text": "hello",
+                        "description": "subprocess.run(['id'])",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_resources_file(path))[0]
+
+    seen = "".join(content for content, _context in marker.seen)
+    assert "subprocess.run" in seen
+    assert row["resource_description"] == "subprocess.run(['id'])"
+    assert row["is_safe"] is False
+
+
+@pytest.mark.asyncio
+async def test_joined_content_alias_is_scanned(tmp_path):
+    """A body under content on a joined read item is scanned."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///notes",
+                        "name": "notes",
+                        "description": "Operator notes",
+                        "mimeType": "text/plain",
+                    }
+                ],
+                "contents": [
+                    {
+                        "uri": "file:///notes",
+                        "content": "subprocess.run(['id'])",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_resources_file(path))[0]
+
+    seen = "".join(content for content, _context in marker.seen)
+    assert "subprocess.run" in seen
+    assert row["resource_text"] == "subprocess.run(['id'])"
+    assert row["is_safe"] is False
+
+
+@pytest.mark.asyncio
+async def test_filtered_mime_content_alias_is_not_kept(tmp_path):
+    """A MIME filter still excludes a body stored under content."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///data.bin",
+                        "name": "binary",
+                        "description": "Operator notes",
+                        "mimeType": "application/octet-stream",
+                    }
+                ],
+                "contents": [
+                    {
+                        "uri": "file:///data.bin",
+                        "content": "UNREAD-BODY",
+                        "title": "subprocess.run(['id'])",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (
+        await StaticAnalyzer([marker]).scan_resources_file(
+            path, allowed_mime_types=["text/plain"]
+        )
+    )[0]
+
+    seen = "".join(content for content, _context in marker.seen)
+    assert "subprocess.run" in seen
+    assert "UNREAD-BODY" not in seen
+    assert row["resource_text"] == ""
+
+
+@pytest.mark.asyncio
+async def test_read_mime_wins_over_list_mime(tmp_path):
+    """The read item's MIME type decides whether its body is scanned."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///notes",
+                        "name": "notes",
+                        "description": "Operator notes",
+                        "mimeType": "application/octet-stream",
+                    }
+                ],
+                "contents": [
+                    {
+                        "uri": "file:///notes",
+                        "mimeType": "text/plain",
+                        "content": "subprocess.run(['id'])",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (
+        await StaticAnalyzer([marker]).scan_resources_file(
+            path, allowed_mime_types=["text/plain", "text/html"]
+        )
+    )[0]
+
+    seen = "".join(content for content, _context in marker.seen)
+    assert "subprocess.run" in seen
+    assert row["resource_mime_type"] == "text/plain"
+    assert row["resource_text"] == "subprocess.run(['id'])"
+    assert row["is_safe"] is False
+
+
+@pytest.mark.asyncio
+async def test_read_plain_text_is_not_parsed_as_list_html(tmp_path):
+    """A list type of text/html does not strip a plain-text read body."""
+    path = tmp_path / "resources.json"
+    body = "<!-- subprocess.run(['id']) -->"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///notes",
+                        "name": "notes",
+                        "description": "Operator notes",
+                        "mimeType": "text/html",
+                    }
+                ],
+                "contents": [
+                    {
+                        "uri": "file:///notes",
+                        "mimeType": "text/plain",
+                        "text": body,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (
+        await StaticAnalyzer([marker]).scan_resources_file(
+            path, allowed_mime_types=["text/plain", "text/html"]
+        )
+    )[0]
+
+    assert row["resource_mime_type"] == "text/plain"
+    assert row["resource_text"] == body
+    assert "subprocess.run" in "".join(
+        content for content, _context in marker.seen
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_text_is_not_governed_by_joined_mime(tmp_path):
+    """A joined MIME type does not skip or rewrite the list entry's text."""
+    path = tmp_path / "resources.json"
+    body = "<!-- subprocess.run(['id']) -->"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///notes",
+                        "name": "notes",
+                        "description": "Operator notes",
+                        "mimeType": "text/plain",
+                        "text": body,
+                    }
+                ],
+                "contents": [
+                    {
+                        "uri": "file:///notes",
+                        "mimeType": "application/octet-stream",
+                        "blob": "iVBORw0KGgo=",
+                    },
+                    {
+                        "uri": "file:///notes",
+                        "mimeType": "text/html",
+                        "text": "hello",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (
+        await StaticAnalyzer([marker]).scan_resources_file(
+            path, allowed_mime_types=["text/plain", "text/html"]
+        )
+    )[0]
+
+    seen = "".join(content for content, _context in marker.seen)
+    assert "subprocess.run" in seen
+    assert body in row["resource_text"]
+    assert "iVBORw0KGgo=" not in seen
+    assert row["is_safe"] is False
+
+
+@pytest.mark.asyncio
+async def test_allowed_read_text_survives_a_different_read_type(tmp_path):
+    """One disallowed read item does not hide an allowed read item."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///notes",
+                        "name": "notes",
+                        "description": "Operator notes",
+                        "mimeType": (
+                            "application/vnd.custom; "
+                            "note=subprocess.run(['id'])"
+                        ),
+                    }
+                ],
+                "contents": [
+                    {
+                        "uri": "file:///notes",
+                        "mimeType": "text/plain",
+                        "text": "hello",
+                    },
+                    {
+                        "uri": "file:///notes",
+                        "mimeType": "application/octet-stream",
+                        "content": "UNREAD-BODY",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (
+        await StaticAnalyzer([marker]).scan_resources_file(
+            path, allowed_mime_types=["text/plain", "text/html"]
+        )
+    )[0]
+
+    seen = "".join(content for content, _context in marker.seen)
+    assert "hello" in seen
+    assert "UNREAD-BODY" not in seen
+    assert "subprocess.run" in seen
+    assert row["resource_text"] == "hello"
+    assert row["is_safe"] is False
+
+
+@pytest.mark.asyncio
+async def test_filtered_mime_description_is_scanned(tmp_path):
+    """A skipped body does not hide a payload that is only in the description."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "resources": [
+                    {
+                        "uri": "file:///data.bin",
+                        "name": "binary",
+                        "description": "subprocess.run(['id'])",
+                        "mimeType": "application/octet-stream",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (
+        await StaticAnalyzer([marker]).scan_resources_file(
+            path, allowed_mime_types=["text/plain"]
+        )
+    )[0]
+
+    assert any("subprocess.run" in content for content, _context in marker.seen)
+    assert row["is_safe"] is False
+    assert row["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_blob_only_title_is_scanned_and_clean_skip_is_not_safe(tmp_path):
+    """A blob with no text is not safe, and its title is still scanned."""
+    path = tmp_path / "resources.json"
+    path.write_text(
+        json.dumps(
+            {
+                "contents": [
+                    {
+                        "uri": "file:///documents/image.png",
+                        "mimeType": "image/png",
+                        "blob": "iVBORw0KGgo=",
+                        "title": "subprocess.run(['id'])",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    marker = MarkerAnalyzer()
+
+    row = (await StaticAnalyzer([marker]).scan_resources_file(path))[0]
+
+    assert any("subprocess.run" in content for content, _context in marker.seen)
+    assert "iVBORw0KGgo=" not in "".join(content for content, _ in marker.seen)
+    assert row["is_safe"] is False
+
+    clean = tmp_path / "clean.json"
+    clean.write_text(
+        json.dumps(
+            {
+                "contents": [
+                    {
+                        "uri": "file:///documents/image.png",
+                        "mimeType": "image/png",
+                        "blob": "iVBORw0KGgo=",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    clean_row = (
+        await StaticAnalyzer([MarkerAnalyzer()]).scan_resources_file(clean)
+    )[0]
+    assert clean_row["status"] == "skipped"
+    assert clean_row["is_safe"] is None

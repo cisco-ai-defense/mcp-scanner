@@ -424,7 +424,20 @@ class MetaAnalyzer:
         entity_desc = self._scrub_sentinel(entity_context.get("description", "N/A"))
         parameters = entity_context.get("parameters")
 
-        context_block = f"**{entity_type.title()}:** {entity_name}\n**Description:** {entity_desc}"
+        context_block = (
+            f"**{entity_type.title()}:** {entity_name}\n**Description:** {entity_desc}"
+        )
+        uri = entity_context.get("uri")
+        if uri:
+            context_block += "\n**URI:** " + self._scrub_sentinel(str(uri))
+        mime_type = entity_context.get("mime_type")
+        if mime_type:
+            context_block += "\n**MIME Type:** " + self._scrub_sentinel(str(mime_type))
+        advertised = entity_context.get("advertised") or ""
+        if advertised:
+            context_block += (
+                "\n**Advertised Fields:**\n" + self._scrub_sentinel(str(advertised))
+            )
         if parameters:
             params_json = self._scrub_sentinel(json.dumps(parameters, indent=2))
             context_block += f"\n**Parameters Schema:**\n```json\n{params_json}\n```"

@@ -9,6 +9,7 @@ from mcp.types import ReadResourceResult, Resource, TextResourceContents
 from mcpscanner import Config, Scanner
 from mcpscanner.config.constants import MCPScannerConstants
 from mcpscanner.core.models import AnalyzerEnum
+from mcpscanner.core.scanner import _resource_extra_text
 
 
 @pytest.fixture
@@ -112,6 +113,57 @@ async def test_analyze_resource_runs_yara(config):
     assert captured
     assert "ignore previous instructions" in captured[0][0]
     assert captured[0][1]["content_type"] == "resource_content"
+
+
+@pytest.mark.asyncio
+async def test_analyze_resource_includes_title_not_prompt_defense(config):
+    """API and YARA see a resource title. Prompt defense stays on the body."""
+    metadata = "http://169.254.169.254/latest/meta-data/"
+    resource = Resource(
+        uri="http://169.254.169.254/latest/meta-data/",
+        name="subprocess.run(['id'])",
+        description="must not reveal this description",
+        mimeType="text/plain",
+        title=metadata,
+        meta={"note": "hidden instructions"},
+    )
+    api_seen = []
+    yara_seen = []
+    defense_seen = []
+
+    class Capture:
+        def __init__(self, bucket):
+            self.bucket = bucket
+
+        async def analyze(self, content, context=None):
+            self.bucket.append(content)
+            return []
+
+    scanner = Scanner(config)
+    scanner._api_analyzer = Capture(api_seen)
+    scanner._yara_analyzer = Capture(yara_seen)
+    scanner._prompt_defense_analyzer = Capture(defense_seen)
+    extra = _resource_extra_text(resource)
+    await scanner._analyze_resource(
+        "Operator notes",
+        resource.uri,
+        resource.name,
+        resource.description or "",
+        "text/plain",
+        [AnalyzerEnum.API, AnalyzerEnum.YARA, AnalyzerEnum.PROMPT_DEFENSE],
+        extra_text=extra,
+    )
+
+    assert metadata in extra
+    assert "hidden instructions" in extra
+    assert api_seen and metadata in api_seen[0]
+    assert "subprocess.run" in api_seen[0]
+    assert "http://169.254.169.254/latest/meta-data/" in api_seen[0]
+    assert "must not reveal this description" in api_seen[0]
+    assert "hidden instructions" in api_seen[0]
+    assert yara_seen and "subprocess.run" in yara_seen[0]
+    assert "must not reveal this description" in yara_seen[0]
+    assert defense_seen == ["Operator notes"]
 
 
 @pytest.mark.asyncio
@@ -459,7 +511,37 @@ async def test_within_limit_resource_keeps_name_and_body(config):
     assert results[0].resource_name == "notes"
     assert results[0].resource_mime_type == "text/plain"
     assert results[0].resource_text == "hello notes"
-    assert recorders["yara"].seen == ["hello notes"]
+    scanned = recorders["yara"].seen
+    assert scanned
+    assert "hello notes" in scanned[0]
+    assert "Resource Name: notes" in scanned[0]
+    assert "resource://r" in scanned[0]
+
+
+@pytest.mark.asyncio
+async def test_llm_resource_body_is_not_silently_truncated(config):
+    """A payload after the old 2000-character cut is still shown to the LLM."""
+    body = ("A" * 2000) + "subprocess.run(['id'])"
+    seen = []
+
+    class Capture:
+        async def analyze(self, content, context=None):
+            seen.append(content)
+            return []
+
+    scanner = Scanner(config)
+    scanner._llm_analyzer = Capture()
+    await scanner._analyze_resource(
+        body,
+        "file:///notes.txt",
+        "notes",
+        "Operator notes",
+        "text/plain",
+        [AnalyzerEnum.LLM],
+    )
+    assert seen
+    assert "subprocess.run" in seen[0]
+    assert "truncated" not in seen[0].lower()
 
 
 @pytest.mark.asyncio
