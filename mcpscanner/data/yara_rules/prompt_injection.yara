@@ -37,6 +37,16 @@ rule prompt_injection{
         // Advanced command override patterns (from advanced analyzer)
         $advanced_overrides = /\b(disregard\s+(all\s+)?safety\s+guidelines|forget\s+(everything|all)\s+(before|above)|system\s*prompt\s*override)\b/i
 
+        // "Override" as an instruction-override verb. It is kept separate from
+        // $instruction_overrides, with its own restricted noun set, because
+        // "override" is a common benign technical verb: "override the default
+        // response", "overrides the input encoding", "override the message
+        // template" must stay clean. Only instruction-class targets
+        // (instructions, directives, guardrails, safety guidelines/rules/checks,
+        // system prompt) are treated as an override here, not the broad noun
+        // group that ignore/disregard/forget use.
+        $override_directives = /\b(overrid(e|es|ing))\s+((all|any|each|every)\s+(of\s+)?)?((your|the|my|our)\s+)?((previous|prior|above|earlier|preceding|current|existing|default|system)\s+)?(instruction|directive|guardrail|safety\s+(guideline|rule|check)|system\s*prompt)(s)?\b/i
+
         // Role redefinition attempts
         $role_redefinition = /\bnew\s+(instructions|directive|guidelines)s?\s*:\s*you\s+are\b/i
 
@@ -82,6 +92,9 @@ rule prompt_injection{
 
         // Advanced command override patterns
         $advanced_overrides or
+
+        // "Override" + instruction-class target
+        $override_directives or
 
         // Role redefinition attempts
         $role_redefinition or
