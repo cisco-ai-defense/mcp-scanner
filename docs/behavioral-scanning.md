@@ -278,7 +278,11 @@ The analyzer includes comprehensive error handling:
 ## Programmatic Usage
 
 ```python
-from mcpscanner import Config, Scanner
+import asyncio
+import os
+
+from mcpscanner import Config
+from mcpscanner.core.analyzers.behavioral import BehavioralCodeAnalyzer
 
 # Configure LLM
 config = Config(
@@ -287,44 +291,90 @@ config = Config(
     llm_temperature=0.1,
 )
 
-# Create scanner
-scanner = Scanner(config=config)
+# Create the behavioral analyzer
+analyzer = BehavioralCodeAnalyzer(config)
 
-# Scan with behavioral analyzer
-results = scanner.scan_source_code(
-    source_path="/path/to/mcp_server.py",
-    analyzers=["behavioral_analyzer"],
+# analyze() treats a string that is not an existing file or directory as
+# inline source code, so check the path first.
+source_path = "/path/to/mcp_server.py"
+if not os.path.exists(source_path):
+    raise FileNotFoundError(source_path)
+
+# Scan a file or directory. analyze() returns one SecurityFinding per MCP tool:
+# severity "SAFE" when there is no mismatch, and "UNKNOWN" (with
+# details["analysis_status"] == "errored") when the alignment check failed.
+findings = asyncio.run(
+    analyzer.analyze(source_path, context={"file_path": source_path})
 )
 
-# Process results
-for result in results:
-    if not result.is_safe:
-        print(f"⚠️  {result.tool_name}: {result.findings['behavioral_analyzer']['severity']}")
-        print(f"   {result.findings['behavioral_analyzer']['threat_summary']}")
+# analyze() does not raise when a file cannot be read or parsed. It counts the
+# failure in analysis_errors, so check it before trusting the results.
+if analyzer.analysis_errors:
+    raise RuntimeError(f"Scan incomplete: {analyzer.analysis_errors} analysis error(s)")
+
+# An empty list means no MCP tool was found. It does not mean the code is safe.
+if not findings:
+    print("No MCP tools found")
+
+# Process results. details["source_file"] tells apart tools with the same
+# function name in different files of a directory scan.
+for finding in findings:
+    tool = f"{finding.details['source_file']}:{finding.details['function_name']}"
+    if finding.details.get("analysis_status") == "errored":
+        print(f"❓ {tool}: not analyzed ({finding.summary})")
+    elif finding.severity != "SAFE":
+        print(f"⚠️  {tool}: {finding.severity}")
+        print(f"   {finding.summary}")
 ```
 
 ### Filtering Results
 
-```python
-from mcpscanner.result import filter_results_by_severity
+The helpers in `mcpscanner.core.result` work on scan result objects, so wrap the
+finding of each tool in a `ToolScanResult` first. Give a tool whose analysis
+errored a status other than `"completed"`, so it is reported as incomplete
+instead of as a threat, and stays visible in every severity filter:
 
-# Get only HIGH severity findings
+```python
+from mcpscanner.core.result import ToolScanResult, filter_results_by_severity
+
+
+def to_result(finding):
+    details = finding.details
+    errored = details.get("analysis_status") == "errored"
+    return ToolScanResult(
+        tool_name=f"{details['source_file']}:{details['function_name']}",
+        tool_description="",
+        status="failed" if errored else "completed",
+        analyzers=[] if errored else [finding.analyzer],
+        findings=[] if errored or finding.severity == "SAFE" else [finding],
+        analyzer_errors=(
+            [{"analyzer": finding.analyzer, "content_type": "source", "message": finding.summary}]
+            if errored
+            else []
+        ),
+    )
+
+
+results = [to_result(finding) for finding in findings]
+
+# Get only HIGH severity findings (plus tools whose analysis errored)
 high_severity = filter_results_by_severity(results, "high")
 
-# Get MEDIUM and above
-medium_and_above = filter_results_by_severity(results, "medium")
+# Get only MEDIUM severity findings (plus tools whose analysis errored)
+medium_severity = filter_results_by_severity(results, "medium")
 ```
 
 ### Custom Output Formatting
 
 ```python
-from mcpscanner.result import format_results_as_json, format_results_by_analyzer
+from mcpscanner.core.result import format_results_as_json, format_results_by_analyzer
 
-# JSON output
+# JSON output (takes the whole list)
 json_output = format_results_as_json(results)
 
-# Grouped by analyzer
-analyzer_output = format_results_by_analyzer(results)
+# Grouped by analyzer (takes one result at a time)
+for result in results:
+    print(format_results_by_analyzer(result))
 ```
 
 ## Best Practices
@@ -358,7 +408,7 @@ analyzer_output = format_results_by_analyzer(results)
 
 ### Current Limitations
 
-1. **Python Only**: Currently supports Python MCP servers only
+1. **Language Coverage**: Only files in the [supported languages](#supported-languages) are scanned
 2. **LLM Dependency**: Requires LLM API access and credits
 3. **Analysis Time**: Slower than pattern-based approaches
 4. **Dynamic Behavior**: Cannot detect runtime-only behaviors
@@ -366,7 +416,6 @@ analyzer_output = format_results_by_analyzer(results)
 
 ### Future Enhancements
 
-- Multi-language support (JavaScript, TypeScript)
 - Integration with static analysis tools
 
 ### Debug Mode
