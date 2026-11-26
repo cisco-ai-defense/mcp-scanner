@@ -1003,6 +1003,31 @@ def test_count_source_files_parity_docker_vs_sdk(tmp_path: Path):
     assert sdk_count == docker_count == 2
 
 
+def test_count_js_files_counts_dist_only_package(tmp_path: Path):
+    """A package that ships only compiled JS under dist/ is what the
+    analyzer falls back to scanning, so both counters must report it
+    instead of ``0`` files."""
+    from mcpscanner.core.analyzers.behavioral.js_code_analyzer import (
+        _JS_EXTENSIONS,
+        effective_js_skip_dirs,
+    )
+    from mcpscanner.core.package_sandbox import count_source_files
+
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.js").write_text("")
+    (tmp_path / "dist" / "lib.js").write_text("")
+    (tmp_path / "node_modules" / "foo").mkdir(parents=True)
+    (tmp_path / "node_modules" / "foo" / "index.js").write_text("")
+
+    sdk_count = NPMPackageScanner._count_js_files(tmp_path)
+    docker_count = count_source_files(
+        tmp_path,
+        extensions=_JS_EXTENSIONS,
+        skip_dirs=effective_js_skip_dirs(tmp_path),
+    )
+    assert sdk_count == docker_count == 2
+
+
 # ---------------------------------------------------------------------------
 # Atomic partial-write semantics (L6)
 # ---------------------------------------------------------------------------

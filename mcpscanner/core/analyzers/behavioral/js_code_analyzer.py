@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from ....config.config import Config
 from ....config.constants import MCPScannerConstants
@@ -43,6 +43,7 @@ from ....threats.threats import ThreatMapping
 from ...static_analysis.interprocedural.treesitter_call_graph import (
     TreeSitterCallGraphAnalyzer,
 )
+from ...package_sandbox import count_source_files
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
 from .alignment.alignment_response_validator import normalize_finding_class
@@ -59,6 +60,28 @@ _JS_EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
 _SKIP_DIRS = frozenset(
     {"node_modules", "dist", "build", "out", ".git", ".next", ".turbo", "coverage"}
 )
+
+# Build-output directories in ``_SKIP_DIRS``. In a source checkout they only
+# hold compiled copies of ``src/``, but many published npm packages ship
+# *only* compiled JavaScript under one of them (``package/dist/index.js``).
+# When nothing is found outside them, discovery falls back to scanning them
+# rather than reporting a package with no analysed code as safe.
+_BUILD_OUTPUT_DIRS = frozenset({"dist", "build", "out"})
+_FALLBACK_SKIP_DIRS = _SKIP_DIRS - _BUILD_OUTPUT_DIRS
+
+
+def effective_js_skip_dirs(source_root: Union[str, Path]) -> frozenset:
+    """Return the skip list JS/TS discovery applies under ``source_root``.
+
+    ``_SKIP_DIRS`` normally; ``_FALLBACK_SKIP_DIRS`` (build output allowed)
+    when no JS/TS file exists outside the build-output directories. File
+    counters use this so reported counts match what the analyzer reads.
+    """
+    if count_source_files(
+        Path(source_root), extensions=_JS_EXTENSIONS, skip_dirs=_SKIP_DIRS
+    ):
+        return _SKIP_DIRS
+    return _FALLBACK_SKIP_DIRS
 
 # Aggregate budgets for directory-wide JS/TS call-graph construction.
 _JS_CALL_GRAPH_MAX_FILES = 200
@@ -229,6 +252,23 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
         ``count_source_files``, so the reported total stays truthful while
         the partial flag records that not all of it was analysed.
         """
+        files = self._walk_js_files(directory, _SKIP_DIRS)
+        if not files and not self._call_graph_partial:
+            # Nothing outside build output: likely a published package that
+            # ships only compiled JS (e.g. ``dist/index.js``). Analyse that
+            # instead of returning an empty, "clean" result.
+            files = self._walk_js_files(directory, _FALLBACK_SKIP_DIRS)
+            if files:
+                self.logger.info(
+                    "js behavioural discovery using build output dirs "
+                    "files=%d root=%s",
+                    len(files),
+                    directory,
+                )
+        return files
+
+    def _walk_js_files(self, directory: str, skip_dirs: frozenset) -> List[str]:
+        """Bounded walk behind :meth:`_find_js_files` for one skip list."""
         out: List[str] = []
         root = Path(directory)
         examined = 0
@@ -268,7 +308,7 @@ class JSBehavioralCodeAnalyzer(BaseAnalyzer):
                 rel_parts = path.relative_to(root).parts
             except ValueError:  # pragma: no cover - rglob stays under root
                 rel_parts = path.parts
-            if any(part in _SKIP_DIRS for part in rel_parts):
+            if any(part in skip_dirs for part in rel_parts):
                 continue
             # Skip hidden dotfiles / dotted dirs within the package.
             if any(part.startswith(".") for part in rel_parts):

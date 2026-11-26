@@ -518,11 +518,11 @@ class NPMPackageScanner:
         execution modes."""
         from .analyzers.behavioral.js_code_analyzer import (
             _JS_EXTENSIONS,
-            _SKIP_DIRS,
+            effective_js_skip_dirs,
         )
 
         return count_source_files(
             source_root,
             extensions=_JS_EXTENSIONS,
-            skip_dirs=_SKIP_DIRS,
+            skip_dirs=effective_js_skip_dirs(source_root),
         )
