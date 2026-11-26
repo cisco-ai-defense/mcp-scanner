@@ -375,7 +375,19 @@ class MCPScannerConstants:
             return {
                 "windsurf": ["~/.codeium/windsurf/mcp_config.json"],
                 "cursor": ["~/.cursor/mcp.json"],
-                "vscode": ["~/.vscode/mcp.json", "~/.config/Code/User/settings.json"],
+                "vscode": [
+                    "~/.vscode/mcp.json",
+                    "~/.config/Code/User/mcp.json",
+                    "~/.config/Code/User/settings.json",
+                ],
+                "vscode-insiders": [
+                    "~/.config/Code - Insiders/User/mcp.json",
+                    "~/.config/Code - Insiders/User/settings.json",
+                ],
+                "vscodium": [
+                    "~/.config/VSCodium/User/mcp.json",
+                    "~/.config/VSCodium/User/settings.json",
+                ],
             }
         elif sys.platform == "darwin":
             return {
@@ -386,7 +398,16 @@ class MCPScannerConstants:
                 ],
                 "vscode": [
                     "~/.vscode/mcp.json",
+                    "~/Library/Application Support/Code/User/mcp.json",
                     "~/Library/Application Support/Code/User/settings.json",
+                ],
+                "vscode-insiders": [
+                    "~/Library/Application Support/Code - Insiders/User/mcp.json",
+                    "~/Library/Application Support/Code - Insiders/User/settings.json",
+                ],
+                "vscodium": [
+                    "~/Library/Application Support/VSCodium/User/mcp.json",
+                    "~/Library/Application Support/VSCodium/User/settings.json",
                 ],
             }
         elif sys.platform == "win32":
@@ -396,7 +417,16 @@ class MCPScannerConstants:
                 "claude": ["~/AppData/Roaming/Claude/claude_desktop_config.json"],
                 "vscode": [
                     "~/.vscode/mcp.json",
+                    "~/AppData/Roaming/Code/User/mcp.json",
                     "~/AppData/Roaming/Code/User/settings.json",
+                ],
+                "vscode-insiders": [
+                    "~/AppData/Roaming/Code - Insiders/User/mcp.json",
+                    "~/AppData/Roaming/Code - Insiders/User/settings.json",
+                ],
+                "vscodium": [
+                    "~/AppData/Roaming/VSCodium/User/mcp.json",
+                    "~/AppData/Roaming/VSCodium/User/settings.json",
                 ],
             }
         else:
