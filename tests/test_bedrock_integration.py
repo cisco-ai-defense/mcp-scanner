@@ -207,8 +207,15 @@ class TestBedrockErrorHandling:
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_bedrock_access_denied_error(self, mock_completion):
-        """Test handling of Bedrock AccessDenied errors."""
-        # Mock AccessDenied error
+        """Bedrock AccessDenied must surface as an infrastructure finding.
+
+        Pre-fix this asserted ``len(findings) == 0`` — that locked the
+        silent-failure contract for Bedrock-specific errors. The finding
+        is severity INFO with category ANALYZER INFRASTRUCTURE, so a
+        misconfigured AWS account or revoked Bedrock model access is
+        never silently reported as "tool is clean". Retry behaviour is
+        unchanged.
+        """
         mock_completion.side_effect = Exception("BedrockException: AccessDenied")
 
         config = Config(
@@ -233,8 +240,13 @@ class TestBedrockErrorHandling:
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_bedrock_throttling_error(self, mock_completion):
-        """Test handling of Bedrock ThrottlingException errors."""
-        # Mock ThrottlingException error
+        """Bedrock ThrottlingException must surface as an infrastructure finding.
+
+        Same contract as ``test_bedrock_access_denied_error``: rate
+        limiting that exhausts retries is reported as severity INFO,
+        category ANALYZER INFRASTRUCTURE, rather than silently treated
+        as "tool is clean". Retry/backoff behaviour is unchanged.
+        """
         mock_completion.side_effect = Exception("ThrottlingException: Rate exceeded")
 
         config = Config(

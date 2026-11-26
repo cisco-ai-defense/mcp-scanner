@@ -313,7 +313,15 @@ class TestLLMAnalyzer:
     @pytest.mark.asyncio
     @patch("mcpscanner.core.analyzers.llm_analyzer.acompletion")
     async def test_analyze_api_failure(self, mock_completion):
-        """Test analysis when LLM API fails."""
+        """LLM transport failure must surface as an infrastructure finding.
+
+        Pre-fix this test asserted ``len(findings) == 0`` — that locked
+        the silent-failure bug as the contract: any LLM transport
+        error (rate limit, timeout, model id invalid, network outage)
+        produced an empty findings list, which downstream code treated
+        as "the LLM cleared this tool". The finding is severity INFO
+        with threat category ANALYZER INFRASTRUCTURE.
+        """
         config = Config(llm_provider_api_key="test-api-key")
         analyzer = LLMAnalyzer(config)
 

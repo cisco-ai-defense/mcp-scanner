@@ -51,6 +51,9 @@ from mcpscanner.core.result import get_highest_severity
         (["MEDIUM", "UNKNOWN"], "MEDIUM"),
         (["HIGH", "UNKNOWN"], "HIGH"),
         # Highest concrete severity wins.
+        (["ERROR"], "ERROR"),
+        (["ERROR", "SAFE"], "ERROR"),
+        (["ERROR", "LOW"], "LOW"),
         (["INFO", "SAFE"], "INFO"),
         (["INFO", "LOW"], "LOW"),
         (["SAFE", "MEDIUM"], "MEDIUM"),
@@ -112,7 +115,7 @@ def test_post_analysis_rollup_is_never_unknown_when_anything_concrete() -> None:
     analyzer produced a concrete severity. Only fully-unknown input rolls
     up to UNKNOWN.
     """
-    concrete_only = ["HIGH", "MEDIUM", "LOW", "INFO", "SAFE"]
+    concrete_only = ["HIGH", "MEDIUM", "LOW", "INFO", "ERROR", "SAFE"]
     for sev in concrete_only:
         assert get_highest_severity([sev]) != "UNKNOWN"
         assert get_highest_severity([sev, "UNKNOWN"]) != "UNKNOWN"

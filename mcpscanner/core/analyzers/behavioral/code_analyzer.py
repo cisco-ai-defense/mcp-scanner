@@ -47,6 +47,7 @@ from ...static_analysis.interprocedural.treesitter_call_graph import (
 )
 from ..base import BaseAnalyzer, SecurityFinding
 from .alignment import AlignmentOrchestrator
+from .alignment.alignment_orchestrator import LLM_UNAVAILABLE_KEY
 from .alignment.alignment_response_validator import normalize_finding_class
 
 
@@ -960,7 +961,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                     func_contexts, batch_size=batch_size
                 )
                 for analysis, ctx in batch_results:
-                    finding = self._create_security_finding(analysis, ctx, file_path)
+                    finding = self._dispatch_finding(analysis, ctx, file_path)
                     if finding:
                         findings.append(finding)
             else:
@@ -988,7 +989,7 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
 
                     if result:
                         analysis, ctx = result
-                        finding = self._create_security_finding(analysis, ctx, file_path)
+                        finding = self._dispatch_finding(analysis, ctx, file_path)
                         if finding:
                             findings.append(finding)
 
@@ -1008,11 +1009,8 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
                 if not name or name in funcs_with_findings:
                     continue
                 decorator_types = getattr(fc, "decorator_types", None) or []
-                # An errored function is "unknown", not "safe". Synthesise
-                # an UNKNOWN-severity record (the only non-SAFE level the
-                # SecurityFinding framework accepts here) so the reporter
-                # doesn't claim we successfully analysed something we
-                # never did.
+                # An errored function is inconclusive. Emit UNKNOWN so the
+                # row is not reported as verified clean.
                 if name in errored_funcs:
                     findings.append(
                         SecurityFinding(
@@ -1070,6 +1068,27 @@ class BehavioralCodeAnalyzer(BaseAnalyzer):
             )
 
         return findings
+
+    def _dispatch_finding(
+        self, analysis: Dict[str, Any], func_context, file_path: str
+    ) -> Optional[SecurityFinding]:
+        """Build a finding from an alignment-orchestrator result tuple.
+
+        A real mismatch goes through threat mapping. A dict marked with
+        ``LLM_UNAVAILABLE_KEY`` is not a verdict: the function name is
+        recorded on ``errored_function_names`` and this returns ``None``.
+        The caller then emits ``severity="UNKNOWN"``, the same finding a
+        ``None`` result from ``check_alignment`` produces.
+
+        Returns ``None`` when verification did not complete or when the
+        mismatch has no recognised threat name.
+        """
+        if analysis.get(LLM_UNAVAILABLE_KEY):
+            name = getattr(func_context, "name", None)
+            if name:
+                self.alignment_orchestrator.errored_function_names.add(name)
+            return None
+        return self._create_security_finding(analysis, func_context, file_path)
 
     def _create_security_finding(
         self, analysis: Dict[str, Any], func_context, file_path: str

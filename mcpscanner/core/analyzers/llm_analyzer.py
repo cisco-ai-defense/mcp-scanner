@@ -157,7 +157,7 @@ class LLMAnalyzer(BaseAnalyzer):
             self.logger.error("Failed to load LLM prompt: %s", type(e).__name__)
             raise IOError(f"Could not load prompt {prompt_file_name}: {e}")
 
-    def _create_threat_analysis_prompt(
+    def _create_threat_analysis_prompt_parts(
         self,
         entity_name: str,
         description: str = None,
@@ -165,8 +165,12 @@ class LLMAnalyzer(BaseAnalyzer):
         entity_kind: str = "tool",
         body_text: str = None,
         _context: Optional[Dict[str, Any]] = None,
-    ) -> tuple[str, bool]:
-        """Create a threat analysis prompt for tools, resources, or prompts.
+    ) -> tuple[str, str, bool]:
+        """Build the threat-analysis prompt as (system, user, injection_flag).
+
+        The framework prompts stay in the system role. The user role
+        carries only the delimited evidence. Resource and prompt scans
+        use ``body_text`` instead of a tool parameter list.
 
         Args:
             entity_name: Name of the tool, resource, or prompt
@@ -177,10 +181,17 @@ class LLMAnalyzer(BaseAnalyzer):
             _context: Additional context (unused)
 
         Returns:
-            Tuple of (formatted prompt string, prompt_injection_detected)
-            prompt_injection_detected is True if delimiter injection was detected
+            Tuple ``(system_prompt, user_payload, prompt_injection_detected)``:
+
+            * ``system_prompt`` — protection rules + threat analysis
+              framework. Belongs in the ``system`` role.
+            * ``user_payload`` — the ``<!---UNTRUSTED_INPUT_*--->``-wrapped
+              per-tool evidence. Belongs in the ``user`` role.
+            * ``prompt_injection_detected`` — True if the untrusted
+              input contained one of our delimiter tags (the caller
+              short-circuits and emits a PROMPT INJECTION finding
+              instead of forwarding to the LLM).
         """
-        # Generate random delimiter tags to prevent prompt injection
         random_id = secrets.token_hex(16)
         start_tag = f"<!---UNTRUSTED_INPUT_START_{random_id}--->"
         end_tag = f"<!---UNTRUSTED_INPUT_END_{random_id}--->"
@@ -211,30 +222,127 @@ class LLMAnalyzer(BaseAnalyzer):
                 analysis_content += f"Description: {description}\n"
             analysis_content += f"Parameters:\n{params_text}"
 
-        # Security validation: Check that the untrusted input doesn't contain our delimiter tags
         prompt_injection_detected = False
         if start_tag in analysis_content or end_tag in analysis_content:
             self.logger.warning(
-                f"Potential prompt injection detected in {entity_kind} {entity_name}: "
-                "Input contains delimiter tags"
+                "Potential prompt injection detected in %s %s: "
+                "Input contains delimiter tags",
+                entity_kind,
+                entity_name,
             )
             prompt_injection_detected = True
 
-        # Create the updated protection rules with randomized delimiters
+        # Substitute the random delimiters into the protection rules so
+        # the rules' references like "anything between START and END is
+        # untrusted" line up with what we actually emit in the user role.
         updated_protection_rules = self._protection_rules.replace(
             "<!---UNTRUSTED_INPUT_START--->", start_tag
         ).replace("<!---UNTRUSTED_INPUT_END--->", end_tag)
 
-        prompt = f"""{updated_protection_rules}
+        system_prompt = (
+            f"{updated_protection_rules}\n\n{self._threat_analysis_prompt}"
+        ).strip()
+        user_payload = f"{start_tag}\n{analysis_content}\n{end_tag}"
 
-        {self._threat_analysis_prompt}
+        return system_prompt, user_payload, prompt_injection_detected
 
-        {start_tag}
-        {analysis_content}
-        {end_tag}
+    def _create_threat_analysis_prompt(
+        self,
+        tool_name: str,
+        description: str = None,
+        parameters: Dict[str, Any] = None,
+        entity_kind: str = "tool",
+        body_text: str = None,
+        _context: Optional[Dict[str, Any]] = None,
+    ) -> tuple[str, bool]:
+        """Backward-compatible wrapper around :meth:`_create_threat_analysis_prompt_parts`.
+
+        Returns the legacy single-string concatenated prompt (system
+        framework followed by the delimited user evidence). Callers
+        should prefer the parts API; this exists so external code that
+        hasn't migrated still works.
         """
-
+        system_prompt, user_payload, prompt_injection_detected = (
+            self._create_threat_analysis_prompt_parts(
+                tool_name,
+                description=description,
+                parameters=parameters,
+                entity_kind=entity_kind,
+                body_text=body_text,
+                _context=_context,
+            )
+        )
+        prompt = f"{system_prompt}\n\n{user_payload}"
         return prompt.strip(), prompt_injection_detected
+
+    @staticmethod
+    def _validate_threat_analysis_shape(parsed: Any) -> None:
+        """Confirm the parsed LLM response carries the expected schema.
+
+        Raises ``ValueError`` when the response is structurally unusable
+        (not a dict, missing ``threat_analysis``, or the two fields
+        downstream code reads have the wrong type). ``analyze`` turns
+        that into an analyzer-infrastructure finding (severity INFO).
+        A Bedrock ``{}`` short-circuit used to produce an empty findings
+        list, which looked the same as a clean verdict.
+
+        Notes:
+            * A *well-formed* clean response (``threat_analysis`` present
+              with ``malicious_content_detected=False`` and
+              ``primary_threats=[]``) passes this check and continues
+              through ``_create_findings_from_threat_analysis``, which
+              correctly emits zero findings — the legitimate clean case.
+            * Unknown extra keys are allowed; the LLM is welcome to
+              decorate the response.
+        """
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"LLM response is not a JSON object "
+                f"(got {type(parsed).__name__})"
+            )
+        threat_analysis = parsed.get("threat_analysis")
+        if threat_analysis is None:
+            raise ValueError(
+                "LLM response missing required 'threat_analysis' key "
+                f"(got keys: {sorted(parsed.keys())})"
+            )
+        if not isinstance(threat_analysis, dict):
+            raise ValueError(
+                f"LLM response 'threat_analysis' is not a JSON object "
+                f"(got {type(threat_analysis).__name__})"
+            )
+        # ``malicious_content_detected`` gates findings. A missing value
+        # or a non-bool (including the string ``"false"``, which is
+        # truthy) is not a verdict. ``primary_threats`` is iterated; a
+        # null or a string would either look clean or emit one finding
+        # per character.
+        detected = threat_analysis.get("malicious_content_detected")
+        if not isinstance(detected, bool):
+            raise ValueError(
+                "LLM response 'threat_analysis.malicious_content_detected' "
+                f"must be a boolean (got {type(detected).__name__})"
+            )
+        threats = threat_analysis.get("primary_threats")
+        if not isinstance(threats, list) or any(
+            not isinstance(item, str) for item in threats
+        ):
+            raise ValueError(
+                "LLM response 'threat_analysis.primary_threats' "
+                f"must be a list of strings (got {type(threats).__name__})"
+            )
+        # A true flag with an empty list, or a false flag with threats,
+        # is not a verdict. The finding builder would return no findings
+        # and the tool would look clean.
+        if detected and not threats:
+            raise ValueError(
+                "LLM response sets malicious_content_detected true "
+                "but primary_threats is empty"
+            )
+        if not detected and threats:
+            raise ValueError(
+                "LLM response sets malicious_content_detected false "
+                "but primary_threats is non-empty"
+            )
 
     @staticmethod
     def _completion_text(response: Any) -> str:
@@ -442,12 +550,16 @@ class LLMAnalyzer(BaseAnalyzer):
             metadata_text = ""
             if entity_kind in ("resource", "prompt"):
                 body_text = self._extract_mcp_entity_body(content, entity_kind)
-                metadata_text = content.split("Content:\n")[0].split("Messages:\n")[0].strip()
-            has_tool_fields = tool_info.get("description") or tool_info.get("parameters")
+                metadata_text = (
+                    content.split("Content:\n")[0].split("Messages:\n")[0].strip()
+                )
+            has_tool_fields = tool_info.get("description") or tool_info.get(
+                "parameters"
+            )
             has_body = bool(body_text.strip())
             if has_tool_fields or has_body:
-                threat_prompt, prompt_injection_detected = (
-                    self._create_threat_analysis_prompt(
+                system_prompt, user_payload, prompt_injection_detected = (
+                    self._create_threat_analysis_prompt_parts(
                         entity_name,
                         description=(
                             metadata_text
@@ -456,7 +568,11 @@ class LLMAnalyzer(BaseAnalyzer):
                         ),
                         parameters=tool_info.get("parameters"),
                         entity_kind=entity_kind,
-                        body_text=body_text if entity_kind in ("resource", "prompt") else None,
+                        body_text=(
+                            body_text
+                            if entity_kind in ("resource", "prompt")
+                            else None
+                        ),
                         _context=context,
                     )
                 )
@@ -478,14 +594,8 @@ class LLMAnalyzer(BaseAnalyzer):
                     findings.append(finding)
                 else:
                     messages = [
-                        {
-                            "role": "system",
-                            "content": (
-                                f"You are a security expert analyzing MCP {entity_kind}s "
-                                "for threats. Follow the analysis framework provided."
-                            ),
-                        },
-                        {"role": "user", "content": threat_prompt},
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_payload},
                     ]
                     max_attempts = self._max_retries + 1
                     threat_content = ""
@@ -537,6 +647,7 @@ class LLMAnalyzer(BaseAnalyzer):
                         )
                     else:
                         threat_analysis = self._parse_response(threat_content)
+                        self._validate_threat_analysis_shape(threat_analysis)
                         threat_findings = (
                             self._create_findings_from_threat_analysis(
                                 threat_analysis, entity_name
