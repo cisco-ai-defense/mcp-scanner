@@ -26,7 +26,35 @@ from typing import Any, Dict, List, Optional, Union
 
 from .analyzers.meta_analyzer import build_meta_audit_payload
 from .models import OutputFormat, SeverityFilter
-from .result import analyzer_result_key, get_highest_severity
+from .result import analyzer_result_key, append_unique_taxonomy, get_highest_severity
+
+
+def _taxonomy_records(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Prefer the distinct taxonomy list over the single combined object.
+
+    The singular ``mcp_taxonomy`` can repeat every action in one string.
+    Using it beside the list would print those actions twice.
+    """
+    plural = data.get("mcp_taxonomies") or []
+    if isinstance(plural, list):
+        records = [item for item in plural if isinstance(item, dict)]
+        if records:
+            return records
+    single = data.get("mcp_taxonomy")
+    if isinstance(single, dict):
+        return [single]
+    return []
+
+
+def _mitigation_texts(data: Dict[str, Any]) -> List[str]:
+    """Return the unique mitigations carried by an analyzer result."""
+    taxonomies = _taxonomy_records(data)
+    texts: List[str] = []
+    for taxonomy in taxonomies:
+        text = taxonomy.get("mitigation")
+        if text and text not in texts:
+            texts.append(text)
+    return texts
 
 
 async def results_to_json(scan_results) -> List[Dict[str, Any]]:
@@ -101,20 +129,10 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
                 findings_by_analyzer[analyzer]["mcp_taxonomies"] = []
 
             if hasattr(finding, "mcp_taxonomy") and finding.mcp_taxonomy:
-                # Check if this taxonomy is unique (based on aitech + aisubtech)
-                taxonomy_key = (
-                    finding.mcp_taxonomy.get("aitech"),
-                    finding.mcp_taxonomy.get("aisubtech"),
+                append_unique_taxonomy(
+                    findings_by_analyzer[analyzer]["mcp_taxonomies"],
+                    finding.mcp_taxonomy,
                 )
-                existing_keys = [
-                    (t.get("aitech"), t.get("aisubtech"))
-                    for t in findings_by_analyzer[analyzer]["mcp_taxonomies"]
-                ]
-
-                if taxonomy_key not in existing_keys:
-                    findings_by_analyzer[analyzer]["mcp_taxonomies"].append(
-                        finding.mcp_taxonomy
-                    )
 
         for error in result.analyzer_errors:
             analyzer_key = (
@@ -146,8 +164,12 @@ async def results_to_json(scan_results) -> List[Dict[str, Any]]:
             if data["total_findings"] > 0:
                 summaries = summaries_by_analyzer.get(analyzer, [])
                 if summaries:
-                    # Use first summary as threat_summary (analyzers provide consistent summaries)
+                    # Keep the first summary in threat_summary. Every distinct
+                    # summary stays in threat_summaries so a second finding
+                    # from the same analyzer is not dropped.
                     data["threat_summary"] = summaries[0]
+                    if len(summaries) > 1:
+                        data["threat_summaries"] = summaries
                 else:
                     # Fallback to threat_names based summary
                     threat_names = data["threat_names"]
@@ -462,15 +484,25 @@ class ReportGenerator:
             )
 
             if "server_name" in result and result["server_name"]:
-                return (
+                header = (
                     f"{idx}. {item_name} ({item_type}) "
                     f"(Server: {result['server_name']}) - "
                     f"{highest_severity} ({total_findings} findings)"
                 )
-            return (
-                f"{idx}. {item_name} ({item_type}) - "
-                f"{highest_severity} ({total_findings} findings)"
-            )
+            else:
+                header = (
+                    f"{idx}. {item_name} ({item_type}) - "
+                    f"{highest_severity} ({total_findings} findings)"
+                )
+            lines = [header]
+            seen: List[str] = []
+            for analyzer_data in findings.values():
+                for text in _mitigation_texts(analyzer_data):
+                    if text in seen:
+                        continue
+                    seen.append(text)
+                    lines.append(f"   Mitigation: {text}")
+            return "\n".join(lines)
 
         if unsafe_results:
             output.append("\n=== Unsafe Items ===")
@@ -569,8 +601,8 @@ class ReportGenerator:
                     )
                     output.append(f"    - Total Findings: {total_findings}")
 
-                    # Add MCP Taxonomy details if available
-                    mcp_taxonomies = data.get("mcp_taxonomies", [])
+                    # Add MCP Taxonomy details if available.
+                    mcp_taxonomies = _taxonomy_records(data)
                     if mcp_taxonomies and total_findings > 0:
                         if len(mcp_taxonomies) == 1:
                             output.append(f"    - MCP Taxonomy:")
@@ -598,6 +630,11 @@ class ReportGenerator:
                                     )
                                 else:
                                     output.append(f"      • Description: {desc}")
+                            if taxonomy.get("mitigation"):
+                                output.append(
+                                    "      • Mitigation: "
+                                    f"{taxonomy['mitigation']}"
+                                )
                         else:
                             # Multiple taxonomies - show them numbered
                             output.append(
@@ -629,6 +666,11 @@ class ReportGenerator:
                                         output.append(
                                             f"          • Description: {desc}"
                                         )
+                                if taxonomy.get("mitigation"):
+                                    output.append(
+                                        "          • Mitigation: "
+                                        f"{taxonomy['mitigation']}"
+                                    )
             else:
                 output.append("No findings.")
 
@@ -678,6 +720,8 @@ class ReportGenerator:
                     if data.get("total_findings", 0) > 0:
                         threat_summary = data.get("threat_summary", "N/A")
                         output.append(f"   {analyzer}: {threat_summary}")
+                        for text in _mitigation_texts(data):
+                            output.append(f"   Mitigation: {text}")
             else:
                 output.append("   No security issues detected")
 
@@ -739,6 +783,8 @@ class ReportGenerator:
                     severity = data.get("severity", "SAFE")
                     threat_summary = data.get("threat_summary", "N/A")
                     output.append(f"  • {tool_name} ({severity}): {threat_summary}")
+                    for text in _mitigation_texts(data):
+                        output.append(f"    Mitigation: {text}")
 
             output.append("")
 
@@ -814,6 +860,8 @@ class ReportGenerator:
                 analyzer = item["analyzer"]
                 threat_summary = item["data"].get("threat_summary", "N/A")
                 output.append(f"  • {tool_name} [{analyzer}]: {threat_summary}")
+                for text in _mitigation_texts(item["data"]):
+                    output.append(f"    Mitigation: {text}")
 
             output.append("")
 
@@ -868,6 +916,7 @@ class ReportGenerator:
 
         output.append(header)
         output.append("—" * (len(header) + 10))
+        mitigation_lines: List[str] = []
 
         for result in results:
             # Use server_source if available, otherwise fall back to server_url
@@ -975,6 +1024,24 @@ class ReportGenerator:
                 llm_severity = get_analyzer_status("llm_analyzer")[:6]
                 row = f"{scan_target_source:<30} {tool_name:<20} {status:<10} {api_severity:<8} {yara_severity:<8} {llm_severity:<8} {overall_severity:<10}"
             output.append(row)
+            item_name = result.get(
+                "tool_name",
+                result.get(
+                    "package_name",
+                    result.get("prompt_name", result.get("resource_name", "Unknown")),
+                ),
+            )
+            for data in findings.values():
+                for text in _mitigation_texts(data):
+                    line = f"{item_name}: {text}"
+                    if line not in mitigation_lines:
+                        mitigation_lines.append(line)
+
+        if mitigation_lines:
+            output.append("")
+            output.append("Mitigations:")
+            for line in mitigation_lines:
+                output.append(f"  {line}")
 
         return "\n".join(output)
 
