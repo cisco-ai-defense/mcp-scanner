@@ -97,6 +97,8 @@ mcp-scanner vulnerable-package /path/to/requirements.txt --output results.json -
 mcp-scanner vulnerable-package /path/to/requirements.txt --fix
 ```
 
+`--fix` is skipped, with a warning, when the target is an installed environment (a `.venv` or other `--path` scan). pip-audit upgrades packages with its own interpreter, so it would change a different environment than the one it scanned. Run `pip-audit --fix` with that environment's Python instead.
+
 ## Configuration
 
 The analyzer can be configured via environment variables:
@@ -114,9 +116,10 @@ The analyzer uses the following heuristics to determine how to scan a path:
 
 1. **File ending in `.txt` or `.in`**: Treated as a requirements file (`pip-audit -r <path>`)
 2. **Directory with `requirements.txt`**: Scans the requirements file
-3. **Directory with `pyproject.toml` and `.venv`**: Scans the installed environment via `--path .venv`
-4. **Directory with `pyproject.toml` (no `.venv`)**: Scans as a project directory via positional arg (`pip-audit <dir>`)
-5. **Other directories**: Uses `--path <directory>` to scan installed packages
+3. **Virtual environment root (contains `pyvenv.cfg`)**, including a project that is its own environment (`python -m venv .`): Scans its site-packages via `--path` (`lib/pythonX.Y/site-packages`, `lib/pypyX.Y/site-packages`, or `Lib\site-packages` on Windows). When `pyvenv.cfg` sets `include-system-site-packages = true`, the base interpreter's site-packages are scanned too. Only the site-packages for the Python version recorded in `pyvenv.cfg` is scanned, so a leftover directory from an older Python is skipped. The per-user site (`~/.local/lib/pythonX.Y/site-packages`) is not scanned, because it depends on the user running the interpreter rather than on the environment. If the environment has no site-packages, nothing is run and a warning is logged, rather than reporting an empty scan as clean
+4. **Directory with `pyproject.toml` and an environment in `.venv`, `venv` or `env`**: Scans that environment's site-packages the same way (`venv` and `env` must contain `pyvenv.cfg`)
+5. **Directory with `pyproject.toml` (no environment, or one without site-packages)**: Scans as a project directory via positional arg (`pip-audit <dir>`)
+6. **Other directories**: Uses `--path <directory>` to scan installed packages
 
 ### Dependency Resolution
 
