@@ -137,6 +137,99 @@ async def test_raw_cli_excludes_vulnerability_only_tools(capsys):
         os.unlink(temp_path)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stats,analysis_errors",
+    [
+        # Every alignment check failed at the LLM stage (e.g. 502s).
+        ({"skipped_error": 2}, 0),
+        # Sources never reached the orchestrator (parse/extract failure).
+        ({"skipped_error": 0}, 1),
+    ],
+)
+async def test_behavioral_cli_exits_nonzero_when_analysis_failed(
+    capsys, stats, analysis_errors
+):
+    """A scan with zero findings and only analysis failures must not exit 0
+    with an empty (clean-looking) result."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write("pass\n")
+        temp_path = f.name
+
+    try:
+
+        async def fake_analyze(self, content, context):
+            self.alignment_orchestrator = MagicMock()
+            self.alignment_orchestrator.get_statistics.return_value = stats
+            self.analysis_errors = analysis_errors
+            self.analyzed_functions = []
+            return []
+
+        with (
+            patch.object(BehavioralCodeAnalyzer, "analyze", fake_analyze),
+            patch.dict(
+                os.environ,
+                {
+                    "MCP_SCANNER_LLM_API_KEY": "test-key",
+                    "MCP_SCANNER_LLM_PROVIDER": "openai",
+                },
+                clear=False,
+            ),
+        ):
+            test_args = ["mcp-scanner", "behavioral", temp_path, "--raw"]
+            with restore_mcpscanner_logging():
+                with patch("sys.argv", test_args):
+                    with pytest.raises(SystemExit) as excinfo:
+                        await main()
+
+        assert excinfo.value.code == 1
+        captured = capsys.readouterr()
+        assert "could not be completed reliably" in captured.err
+        assert captured.out.strip() == ""
+    finally:
+        os.unlink(temp_path)
+
+
+@pytest.mark.asyncio
+async def test_behavioral_cli_clean_scan_still_exits_zero(capsys):
+    """No findings and no analysis errors is a genuine clean scan."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write("pass\n")
+        temp_path = f.name
+
+    try:
+
+        async def fake_analyze(self, content, context):
+            self.alignment_orchestrator = MagicMock()
+            self.alignment_orchestrator.get_statistics.return_value = {
+                "skipped_error": 0
+            }
+            self.analysis_errors = 0
+            self.analyzed_functions = []
+            return []
+
+        with (
+            patch.object(BehavioralCodeAnalyzer, "analyze", fake_analyze),
+            patch.dict(
+                os.environ,
+                {
+                    "MCP_SCANNER_LLM_API_KEY": "test-key",
+                    "MCP_SCANNER_LLM_PROVIDER": "openai",
+                },
+                clear=False,
+            ),
+        ):
+            test_args = ["mcp-scanner", "behavioral", temp_path, "--raw"]
+            with restore_mcpscanner_logging():
+                with patch("sys.argv", test_args):
+                    await main()
+
+        payload = json.loads(capsys.readouterr().out)
+        assert isinstance(payload, list)
+    finally:
+        os.unlink(temp_path)
+
+
 def test_build_and_threat_filter_non_raw_when_analyzed_functions_empty():
     """Non-raw output must keep THREAT rows even without analyzed_functions."""
     finding = SecurityFinding(

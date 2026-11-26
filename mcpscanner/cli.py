@@ -2551,6 +2551,20 @@ async def main():
                 source_path, context={"file_path": source_path}
             )
 
+            # Zero findings after every LLM call (or parse) failed is not a
+            # clean result. Use the same guard as pypi-scan / npm-scan so CI
+            # can't read a scan that analysed nothing as safe.
+            from mcpscanner.core.pypi_scanner import analysis_scan_status
+
+            if analysis_scan_status(analyzer, findings) == "error":
+                print(
+                    "Scan Error: behavioral scan could not be completed "
+                    "reliably: analysis failed for every function (see log); "
+                    "zero findings is not a safe verdict",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
             # Build a result entry for every analyzed MCP tool — including
             # tools with no findings (is_safe=True). This ensures the scan
             # output enumerates ALL tools detected during the scan, not only
