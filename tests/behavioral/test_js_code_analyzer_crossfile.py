@@ -195,6 +195,53 @@ def test_find_js_files_clean_tree_is_not_partial(
     assert analyzer._call_graph_partial is False
 
 
+def test_find_js_files_skips_build_output_next_to_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With real source present, compiled copies under dist/ stay skipped."""
+    monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "index.ts").write_text("export const x = 1;\n")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.js").write_text("exports.x = 1;\n")
+
+    analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
+    files = analyzer._find_js_files(str(tmp_path))
+
+    assert [Path(f).relative_to(tmp_path).as_posix() for f in files] == [
+        "src/index.ts"
+    ]
+    assert jmod.effective_js_skip_dirs(tmp_path) == jmod._SKIP_DIRS
+
+
+def test_find_js_files_falls_back_to_build_output_only_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A published package shipping only dist/ JS must still be analysed.
+
+    Vendored ``node_modules`` and hidden dirs remain excluded.
+    """
+    monkeypatch.setattr(jmod, "AlignmentOrchestrator", MagicMock())
+    (tmp_path / "package.json").write_text('{"main": "dist/index.js"}')
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.js").write_text("exports.x = 1;\n")
+    (tmp_path / "dist" / "lib.js").write_text("exports.y = 2;\n")
+    (tmp_path / "node_modules" / "dep").mkdir(parents=True)
+    (tmp_path / "node_modules" / "dep" / "index.js").write_text("// vendored\n")
+    (tmp_path / ".cache").mkdir()
+    (tmp_path / ".cache" / "x.js").write_text("// hidden\n")
+
+    analyzer = jmod.JSBehavioralCodeAnalyzer(_FakeConfig())
+    files = analyzer._find_js_files(str(tmp_path))
+
+    assert [Path(f).relative_to(tmp_path).as_posix() for f in files] == [
+        "dist/index.js",
+        "dist/lib.js",
+    ]
+    assert analyzer._call_graph_partial is False
+    assert jmod.effective_js_skip_dirs(tmp_path) == jmod._FALLBACK_SKIP_DIRS
+
+
 def test_call_graph_ast_budget_marks_partial(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cumulative AST size is capped even when byte budgets pass."""
     from mcpscanner.core.static_analysis.interprocedural import (

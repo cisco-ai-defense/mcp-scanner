@@ -104,7 +104,7 @@ async def main() -> None:
         from mcpscanner.config.constants import MCPScannerConstants as CONSTANTS
         from mcpscanner.core.analyzers.behavioral.js_code_analyzer import (
             _JS_EXTENSIONS,
-            _SKIP_DIRS,
+            effective_js_skip_dirs,
         )
         from mcpscanner.core.package_sandbox import (
             count_source_files,
@@ -198,7 +198,9 @@ async def main() -> None:
 
         findings, scan_status = await run_behavioral_analysis(source_root, config)
         js_files = count_source_files(
-            source_root, extensions=_JS_EXTENSIONS, skip_dirs=_SKIP_DIRS
+            source_root,
+            extensions=_JS_EXTENSIONS,
+            skip_dirs=effective_js_skip_dirs(source_root),
         )
 
         # A degraded scan (LLM unreachable, etc.) reports no findings but
