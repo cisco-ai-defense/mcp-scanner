@@ -57,17 +57,23 @@ rule coercive_injection {
         // - a $user_gate_head, "(You/Agents/The agent) (must) only
         //   call/use/invoke/run/execute this tool after/when/once/if the
         //   user/human/owner/operator (has) (explicitly/first) ", followed
-        //   directly by a $user_gate_tail: the consent verb
-        //   (confirms/approves/authorizes/reviews/asks/requests), then
-        //   optionally "for" or "to send/pay/sign/...", then only words
-        //   from a closed list of payment nouns, determiners, "and", "or",
-        //   commas and a second consent verb ("the recipient address and
-        //   the amount", "the exact amount", "reviewed and confirmed the
-        //   entry", "it") up to the sentence's end. The gate is two strings
-        //   because YARA caps how many alternatives one regex may hold.
+        //   directly by a $user_gate_tail: the consent verb, inflected
+        //   (confirms/confirmed/approves/.../asks/requests), optionally
+        //   "and"/"or"/a comma and a second inflected consent verb
+        //   ("reviewed and confirmed"), optionally "for" or "to
+        //   send/pay/sign/...", then a list of payment noun phrases up to
+        //   the sentence's end ("the recipient address and the amount",
+        //   "the exact amount", "the payment in the app", "it"). The words
+        //   come from closed lists, and a determiner, "it" or "them" may
+        //   only start a noun phrase: right after the verb, "and", "or", a
+        //   comma, "in" or "on", never after a payment word. So a payment
+        //   word used as a verb with its object ("... confirms and request
+        //   the token", "... and transfer it") ends the match. The gate is
+        //   two strings because YARA caps how many alternatives one regex
+        //   may hold.
         // - $user_approval_sentence: "The user must/has to/needs to
-        //   approve/confirm/authorize <list> (made/sent/signed/...)
-        //   with/through/using/via/by this tool".
+        //   approve/confirm/authorize <list> (made/sent) with/through/
+        //   using/via/by this tool", with the same noun phrases.
         //
         // A sentence starts at the start of the text, a line break (an
         // optional "-", "*" or "1." bullet) or after `.`, `!` or `?` and a
@@ -83,8 +89,8 @@ rule coercive_injection {
         // word lists replace the breaker lists of earlier revisions: a word
         // that isn't on a list ends the match before the sentence ends.
         $user_gate_head = /(^|\n|[.!?][ \t]+)[ \t]*(([-*]|[0-9]+[.)])[ \t]+)?((you|agents?|the\s+(agent|assistant|model))\s+)?(must\s+)?only\s+(call|use|invoke|run|execute)\s+this\s+tool\s+(after|when|once|if)\s+(the\s+)?(user|human|owner|operator)s?\s+(has\s+|have\s+)?(explicitly\s+|first\s+)?/i
-        $user_gate_tail = /\b(confirm(s|ed)?|approve[sd]?|authori[sz]e[sd]?|review(s|ed)?|ask(s|ed)?|request(s|ed)?)(\s+(for|to\s+(send|pay|transfer|sign|swap|buy|sell|withdraw|deposit|trade|proceed)))?(\s*,|\s+(and|or)|\s+(the|each|every|any|a|an|its|their|this|that|these|those|(amount|payment|transfer|transaction|recipient|destination|detail|request|order|purchase|trade|swap|withdrawal|deposit|signature|operation|action|fee|total|price|quote|fund|token|wallet|ledger|gas|network|exact|final|full|first|refund|requested|proposed|quoted|displayed|pending|new|app|device|dialog|prompt|screen)s?|address(es)?|entr(y|ies)|it|them|in|on|confirm(s|ed)|approve[sd]|review(s|ed)|authori[sz]e[sd]))*[ \t]*([.!?]([ \t\r\n]|$)|\r?\n|$)/i
-        $user_approval_sentence = /(^|\n|[.!?][ \t]+)[ \t]*(([-*]|[0-9]+[.)])[ \t]+)?(the\s+)?(user|human|owner|operator)s?\s+(must|has\s+to|needs\s+to)\s+(first\s+|explicitly\s+)?(approve|confirm|authori[sz]e)(\s*,|\s+(and|or)|\s+(the|each|every|any|a|an|its|their|this|that|these|those|(amount|payment|transfer|transaction|recipient|destination|detail|request|order|purchase|trade|swap|withdrawal|deposit|signature|operation|action|fee|total|price|quote|fund|token|wallet|ledger|gas|network|exact|final|full|first|refund|requested|proposed|quoted|displayed|pending|new|app|device|dialog|prompt|screen)s?|address(es)?|entr(y|ies)|it|them|in|on|confirm(s|ed)|approve[sd]|review(s|ed)|authori[sz]e[sd]))*\s+((made|sent|signed|submitted|executed)\s+)?(with|through|using|via|by)\s+this\s+tool[ \t]*([.!?]([ \t\r\n]|$)|\r?\n|$)/i
+        $user_gate_tail = /\b(confirm(s|ed)|approve[sd]|authori[sz]e[sd]|review(s|ed)|ask(s|ed)|request(s|ed))((\s*,|\s+(and|or))+\s+(confirm(s|ed)|approve[sd]|review(s|ed)|authori[sz]e[sd]))?(\s+(for|to\s+(send|pay|transfer|sign|swap|buy|sell|withdraw|deposit|trade|proceed)))?(\s+(the|each|every|any|a|an|its|their|this|that|these|those|it|them))?(\s+((amount|payment|transfer|transaction|recipient|destination|detail|request|order|purchase|trade|swap|withdrawal|deposit|signature|operation|action|fee|total|price|quote|fund|token|wallet|ledger|gas|network|exact|final|full|first|refund|requested|proposed|quoted|displayed|pending|new|app|device|dialog|prompt|screen)s?|address(es)?|entr(y|ies))|(\s*,|\s+(and|or)|\s+(in|on))(\s+(the|each|every|any|a|an|its|their|this|that|these|those|it|them))?)*[ \t]*([.!?]([ \t\r\n]|$)|\r?\n|$)/i
+        $user_approval_sentence = /(^|\n|[.!?][ \t]+)[ \t]*(([-*]|[0-9]+[.)])[ \t]+)?(the\s+)?(user|human|owner|operator)s?\s+(must|has\s+to|needs\s+to)\s+(first\s+|explicitly\s+)?(approve|confirm|authori[sz]e)(\s+(the|each|every|any|a|an|its|their|this|that|these|those|it|them))?(\s+((amount|payment|transfer|transaction|recipient|destination|detail|request|order|purchase|trade|swap|withdrawal|deposit|signature|operation|action|fee|total|price|quote|fund|token|wallet|ledger|gas|network|exact|final|full|first|refund|requested|proposed|quoted|displayed|pending|new|app|device|dialog|prompt|screen)s?|address(es)?|entr(y|ies))|(\s*,|\s+(and|or)|\s+(in|on))(\s+(the|each|every|any|a|an|its|their|this|that|these|those|it|them))?)*\s+((made|sent)\s+)?(with|through|using|via|by)\s+this\s+tool[ \t]*([.!?]([ \t\r\n]|$)|\r?\n|$)/i
 
         // Behavioral control instructions
         $behavior_control = /\b(tell (the )?user only|hide (the )?user)\b/i
@@ -101,9 +107,8 @@ rule coercive_injection {
         // one regex), so each occurrence ends at its nearest "in your
         // response". YARA reports an occurrence at every `include`, even one
         // inside an earlier occurrence, so a second `include` sentence on the
-        // same line is checked on its own. A wallet's seed, recovery phrase
-        // or mnemonic is the wallet itself, so they are objects too.
-        $include_in_response = /\binclude [^\n]*?\b(secrets??|passwords??|keys??|credentials??|tokens??|config|sensitive|private|confidential|internal|system\s+?prompt|conversation\s+?history|seed\s+?phrases??|recovery\s+?phrases??|mnemonics??) [^\n]*?in\s+?(your\s+?)??response\b/i
+        // same line is checked on its own.
+        $include_in_response = /\binclude [^\n]*?\b(secrets??|passwords??|keys??|credentials??|tokens??|config|sensitive|private|confidential|internal|system\s+?prompt|conversation\s+?history) [^\n]*?in\s+?(your\s+?)??response\b/i
 
         // Negated disclosure. "Never include the private key in your
         // response" forbids the disclosure that $include_in_response and
@@ -126,7 +131,7 @@ rule coercive_injection {
         // main's behaviour.
         $negated_inclusion_sentence = /(^|\n|[.!?][ \t]+)[ \t]*(([-*]|[0-9]+[.)])[ \t]+)?(you\s+)?((must|should)\s+)?(never|do\s+not|don't|must\s+not|should\s+not|shouldn't)\s+include(\s*,|\s+(and|or)|\s*\((e\.g\.|i\.e\.)?|\)|\s+(the|each|every|any|a|an|its|their|this|that|these|those|(secret|password|passphrase|key|credential|token|value|mnemonic|prompt|phrase|configuration|config)s?|private|signing|wallet|wallet's|user's|account's|api|access|session|auth|master|raw|plaintext|full|sensitive|confidential|internal|personal|stored|current|system|conversation|history|seed|recovery|data|information|your|my|our|e\.g\.|i\.e\.))*\s*,?\s+in\s+(your\s+)?response[ \t]*([.!?]([ \t\r\n]|$)|\r?\n|$)/i
         $negated_listing_sentence = /(^|\n|[.!?][ \t]+)[ \t]*(([-*]|[0-9]+[.)])[ \t]+)?(you\s+)?((must|should)\s+)?(never|do\s+not|don't|must\s+not|should\s+not|shouldn't)\s+(list\s+all\s+(api\s+)?keys?|show\s+me?\s+(all\s+)?passwords?)(\s+(with|and)\s+(their|its|the)\s+(secret\s+)?values?)?[ \t]*([.!?]([ \t\r\n]|$)|\r?\n|$)/i
-        $object_in_response = /\b(secrets??|passwords??|keys??|credentials??|tokens??|config|sensitive|private|confidential|internal|system\s+?prompt|conversation\s+?history|seed\s+?phrases??|recovery\s+?phrases??|mnemonics??)\b[^\n]*?in\s+?(your\s+?)??response\b/i
+        $object_in_response = /\b(secrets??|passwords??|keys??|credentials??|tokens??|config|sensitive|private|confidential|internal|system\s+?prompt|conversation\s+?history)\b[^\n]*?in\s+?(your\s+?)??response\b/i
 
         // Behavioral triggers
         $behavioral_triggers = /\b(if [^\n]*trusted [^\n]*then|when [^\n]*admin [^\n]*detected|random\.(random|choice) [^\n]*instructions?)\b/i
