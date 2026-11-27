@@ -19,6 +19,7 @@
 This module contains the YARA analyzer class for analyzing MCP tools using YARA rules.
 """
 
+import unicodedata
 from typing import Any, Dict, List, Optional, Union
 from importlib.resources.abc import Traversable
 from pathlib import Path
@@ -28,6 +29,38 @@ import yara
 from ...config.constants import MCPScannerConstants
 from ...threats.threats import YARA_THREAT_MAPPING
 from .base import BaseAnalyzer, SecurityFinding
+
+
+def _normalize_for_matching(content: str) -> str:
+    """Normalize Unicode obfuscation before YARA matching.
+
+    Instructions hidden in tool descriptions can evade keyword-based rules
+    through Unicode tricks that render identically (or invisibly) to humans:
+
+    - Compatibility characters, e.g. fullwidth letters ("ｉｇｎｏｒｅ" instead
+      of "ignore"), folded to their standard equivalents by NFKC.
+    - Invisible format characters (Unicode category Cf) inserted between
+      keyword letters or words, e.g. zero-width spaces ("ig\\u200bnore"),
+      zero-width joiners, word joiners and byte order marks, which break
+      literal and regex keyword matching.
+    - Unicode Tag characters (U+E0020..U+E007E) that carry ASCII code points
+      invisibly, known as "ASCII smuggling"; these are decoded back to the
+      ASCII they encode so the hidden text becomes matchable.
+
+    Args:
+        content: The original content.
+
+    Returns:
+        The normalized content used for rule matching. Benign text is
+        unchanged apart from compatibility folding; visible characters are
+        never removed.
+    """
+    normalized = unicodedata.normalize("NFKC", content)
+    decoded = "".join(
+        chr(ord(char) - 0xE0000) if 0xE0020 <= ord(char) <= 0xE007E else char
+        for char in normalized
+    )
+    return "".join(char for char in decoded if unicodedata.category(char) != "Cf")
 
 
 class YaraAnalyzer(BaseAnalyzer):
@@ -136,7 +169,19 @@ class YaraAnalyzer(BaseAnalyzer):
             return findings
 
         try:
-            matches = self._rules.match(data=content)
+            # Scan the original content and its normalized form, then merge by
+            # namespace and rule. Normalizing alone can remove a detection the
+            # raw scan makes (e.g. a trailing Unicode tag decodes to a letter
+            # and breaks a word boundary), so both views are needed.
+            matches = list(self._rules.match(data=content))
+            normalized = _normalize_for_matching(content)
+            if normalized != content:
+                seen = {(m.namespace, m.rule) for m in matches}
+                matches.extend(
+                    m
+                    for m in self._rules.match(data=normalized)
+                    if (m.namespace, m.rule) not in seen
+                )
             rule_names = []  # Collect rule names for summary
 
             # First pass: collect all rule names
