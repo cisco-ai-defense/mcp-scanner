@@ -169,7 +169,19 @@ class YaraAnalyzer(BaseAnalyzer):
             return findings
 
         try:
-            matches = self._rules.match(data=_normalize_for_matching(content))
+            # Scan the original content and its normalized form, then merge by
+            # namespace and rule. Normalizing alone can remove a detection the
+            # raw scan makes (e.g. a trailing Unicode tag decodes to a letter
+            # and breaks a word boundary), so both views are needed.
+            matches = list(self._rules.match(data=content))
+            normalized = _normalize_for_matching(content)
+            if normalized != content:
+                seen = {(m.namespace, m.rule) for m in matches}
+                matches.extend(
+                    m
+                    for m in self._rules.match(data=normalized)
+                    if (m.namespace, m.rule) not in seen
+                )
             rule_names = []  # Collect rule names for summary
 
             # First pass: collect all rule names
