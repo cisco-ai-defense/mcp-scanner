@@ -1495,6 +1495,47 @@ def test_should_fallback_to_initialize_rejects_modern_http_errors(
     )
 
 
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (_mcp_error(-32001, "Request timed out"), False),
+        (_mcp_error(-32602, "params._meta is invalid"), False),
+        (_mcp_error(-32603, "Internal error"), False),
+        (_mcp_error(-32603, "unsupported internal failure"), False),
+        (Exception("discover failed"), False),
+        (
+            SimpleNamespace(error={"code": -32020, "message": "unsupported header"}),
+            False,
+        ),
+        (
+            SimpleNamespace(
+                error={"code": -32021, "message": "unsupported capability"}
+            ),
+            False,
+        ),
+        (_mcp_error(32600, "Session terminated"), True),
+        (_mcp_error(32600, "Invalid request"), False),
+        (SimpleNamespace(http_status=400, error={"message": ""}), True),
+    ],
+    ids=[
+        "request-timeout",
+        "invalid-params-http",
+        "internal-error",
+        "internal-error-unsupported-text",
+        "no-code",
+        "dict-32020",
+        "dict-32021",
+        "session-terminated",
+        "32600-other-message",
+        "http-400-empty-body",
+    ],
+)
+def test_should_fallback_to_initialize_narrow_legacy_http(config, error, expected):
+    scanner = Scanner(config)
+
+    assert scanner._should_fallback_to_initialize(error, legacy_http=True) is expected
+
+
 @pytest.mark.asyncio
 async def test_negotiate_falls_back_for_stateless_http_server(config):
     scanner = Scanner(config)
@@ -1561,6 +1602,37 @@ async def test_negotiate_preexisting_fallbacks_do_not_warn(
         and "falling back to initialize()" in record.getMessage()
         for record in scanner_records
     )
+
+
+@pytest.mark.asyncio
+async def test_negotiate_http_warning_logs_code_not_server_message(
+    config, caplog, monkeypatch
+):
+    scanner = Scanner(config)
+    session = AsyncMock()
+    session.discover = AsyncMock(
+        side_effect=_mcp_error(-32600, STATELESS_HTTP_DISCOVER_REJECTION)
+    )
+    session.initialize = AsyncMock(
+        return_value=SimpleNamespace(protocol_version="2025-11-25")
+    )
+    scanner_logger = logging.getLogger("mcpscanner.core.scanner")
+    monkeypatch.setattr(scanner_logger, "propagate", True)
+
+    with caplog.at_level(logging.WARNING, logger="mcpscanner.core.scanner"):
+        await scanner._negotiate_mcp_session(session, legacy_http=True)
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "mcpscanner.core.scanner"
+        and record.levelno >= logging.WARNING
+    ]
+    assert warnings == [
+        "Legacy-shaped server/discover rejection over HTTP "
+        "(code=-32600); trying initialize()"
+    ]
+    assert STATELESS_HTTP_DISCOVER_REJECTION not in warnings[0]
 
 
 @pytest.mark.asyncio
