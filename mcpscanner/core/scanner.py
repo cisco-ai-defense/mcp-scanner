@@ -96,6 +96,10 @@ from .result import (
 
 ScannerFactory = Callable[[List[AnalyzerEnum], Optional[str]], "Scanner"]
 
+# JSON-RPC error codes defined by MCP 2026-07-28 (HeaderMismatch,
+# MissingRequiredClientCapability, UnsupportedProtocolVersion).
+MODERN_DISCOVER_ERROR_CODES = (-32020, -32021, UNSUPPORTED_PROTOCOL_VERSION)
+
 logger = get_logger(__name__)
 
 
@@ -1253,42 +1257,97 @@ class Scanner:
         return any(token in combined_message for token in tokens)
 
     @staticmethod
+    def _discover_error_code(error: Exception) -> tuple[Any, Any]:
+        """Return ``(code, error.error)``, reading dict-shaped errors too.
+
+        Same order as ``_is_missing_capability_error``: the exception's own
+        code, then ``error.error.code`` on an object or a dict.
+        """
+        code = getattr(error, "code", None)
+        rpc_error = getattr(error, "error", None)
+        if hasattr(rpc_error, "code") and getattr(rpc_error, "code") is not None:
+            code = code or rpc_error.code
+        elif isinstance(rpc_error, dict):
+            code = code or rpc_error.get("code")
+        return code, rpc_error
+
+    @staticmethod
+    def _discover_http_status(error: Exception, rpc_error: Any) -> Optional[int]:
+        """HTTP status if the caller attached one. ``MCPError`` does not."""
+        for source in (error, rpc_error):
+            if isinstance(source, dict):
+                values = (source.get("http_status"), source.get("status_code"))
+            elif source is None:
+                continue
+            else:
+                values = (
+                    getattr(source, "http_status", None),
+                    getattr(source, "status_code", None),
+                )
+            for value in values:
+                if isinstance(value, int):
+                    return value
+        return None
+
+    @staticmethod
+    def _is_legacy_http_400_rejection(
+        error: Exception, code: Any, rpc_error: Any
+    ) -> bool:
+        """True for a legacy HTTP 400-style ``server/discover`` rejection.
+
+        ``MCPError`` has no HTTP status. The streamable HTTP client keeps a
+        JSON-RPC body, and rewrites an empty or non-JSON body to ``-32603``
+        (``Server returned an error response``), which is indistinguishable
+        from a real internal error, so that code does not fall back. When a
+        status is present anyway, HTTP 400 with no JSON-RPC code is that
+        empty or unknown body. Otherwise only ``-32600``, the code mcp 1.x
+        uses for ``Bad Request``.
+        """
+        status = Scanner._discover_http_status(error, rpc_error)
+        if status == 400 and code is None:
+            return True
+        return code == -32600 and status in (None, 400)
+
+    @staticmethod
     def _should_fallback_to_initialize(
         error: Exception, *, legacy_stdio: bool = False, legacy_http: bool = False
     ) -> bool:
         """Return True when ``discover()`` failed in a way that ``initialize()`` may still work."""
-        rpc_error = getattr(error, "error", None)
-        code = getattr(error, "code", None)
-        if code is None:
-            code = getattr(rpc_error, "code", None)
-        # MCP 1.x streamable HTTP servers can reject pre-initialize discover
-        # with this exact missing-session response. It is safe to retry the
-        # legacy initialize handshake only for this known server shape.
-        # MCP TypeScript SDK servers that predate 2026-07-28 reject the
-        # discover request's MCP-Protocol-Version header with -32600
-        # "Bad Request: Unsupported protocol version: 2026-07-28. Supported
-        # versions: ..." and still accept initialize() (mcp.deepwiki.com).
+        code, rpc_error = Scanner._discover_error_code(error)
+        # Positive 32600 is a session termination only together with that
+        # text. Decide it before the legacy-HTTP gate so the gate cannot
+        # treat every 32600 as a 400.
+        if code == 32600:
+            return Scanner._is_missing_capability_error(error)
+        if legacy_http and Scanner._is_legacy_http_400_rejection(
+            error, code, rpc_error
+        ):
+            return True
+        # A timeout, a payload error, an internal error, or a missing code
+        # is not a 400-style rejection. Over HTTP those stay fatal even
+        # when the message looks like a missing capability.
+        if legacy_http and (code is None or code in (-32001, -32602, -32603)):
+            return False
+        if code in MODERN_DISCOVER_ERROR_CODES and code != UNSUPPORTED_PROTOCOL_VERSION:
+            return False
         if code == -32600:
-            message = getattr(rpc_error, "message", str(error))
-            return (
-                legacy_http
-                and getattr(rpc_error, "data", None) in (None, "")
-                and (
-                    message == "Bad Request: Missing session ID"
-                    or message.startswith(
-                        "Bad Request: Unsupported protocol version: "
-                    )
-                )
-            )
+            return False
         # MCP 1.x Python stdio servers use this exact generic error for an
         # unknown discover method. A modern server may use -32602 for a real
         # payload defect, so do not infer legacy support from the code alone.
         if code == -32602:
+            if isinstance(rpc_error, dict):
+                message = rpc_error.get("message") or str(error)
+                data = rpc_error.get("data", None)
+            else:
+                message = getattr(rpc_error, "message", None) or str(error)
+                data = None
+                if rpc_error is not None:
+                    data = getattr(rpc_error, "data", None)
             return (
                 legacy_stdio
-                and getattr(rpc_error, "message", str(error))
-                == "Invalid request parameters"
-                and getattr(rpc_error, "data", None) in (None, "")
+                and message == "Invalid request parameters"
+                and data in (None, "")
             )
         return (
             code == UNSUPPORTED_PROTOCOL_VERSION
@@ -1340,6 +1399,7 @@ class Scanner:
         the server only speaks handshake-era protocol versions. On mcp 1.x
         (no ``discover`` method), uses ``initialize()`` directly.
         """
+        discover_error = None
         if hasattr(session, "discover"):
             try:
                 connect_result = await session.discover()
@@ -1354,24 +1414,32 @@ class Scanner:
                     e, legacy_stdio=legacy_stdio, legacy_http=legacy_http
                 ):
                     raise
-                if getattr(e, "code", None) == -32602:
+                discover_error = e
+                code, _rpc_error = self._discover_error_code(e)
+                # Code and transport only. The server message is not logged.
+                if legacy_http and code == -32600:
                     logger.warning(
-                        "Legacy-shaped server/discover rejection over stdio; "
-                        "trying initialize() after: %s",
-                        e,
+                        "Legacy-shaped server/discover rejection over HTTP "
+                        "(code=%s); trying initialize()",
+                        code,
                     )
-                elif getattr(e, "code", None) == -32600:
+                elif code == -32602:
                     logger.warning(
-                        "Legacy-shaped server/discover rejection over HTTP; "
-                        "trying initialize() after: %s",
-                        e,
+                        "Legacy-shaped server/discover rejection over stdio "
+                        "(code=%s); trying initialize()",
+                        code,
                     )
                 logger.debug(
                     "server/discover unavailable (%s), falling back to initialize()",
                     e,
                 )
 
-        connect_result = await session.initialize()
+        try:
+            connect_result = await session.initialize()
+        except Exception as init_error:
+            if discover_error is None:
+                raise
+            raise init_error from discover_error
         session._init_result = connect_result
         protocol_version = getattr(
             connect_result,
